@@ -1,0 +1,81 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - img [ref=e6]
+      - generic [ref=e8]:
+        - strong [ref=e9]: 账号风格库
+        - generic [ref=e10]: 本地工作台
+    - navigation [ref=e11]:
+      - link "首页" [ref=e12] [cursor=pointer]:
+        - /url: /
+        - img [ref=e13]
+        - generic [ref=e16]: 首页
+      - link "账号库" [ref=e17] [cursor=pointer]:
+        - /url: /library
+        - img [ref=e18]
+        - generic [ref=e20]: 账号库
+      - link "项目库" [ref=e21] [cursor=pointer]:
+        - /url: /projects
+        - img [ref=e22]
+        - generic [ref=e26]: 项目库
+      - link "采集转写" [ref=e27] [cursor=pointer]:
+        - /url: /collect
+        - img [ref=e28]
+        - generic [ref=e35]: 采集转写
+      - link "对话写作" [ref=e36] [cursor=pointer]:
+        - /url: /writer
+        - img [ref=e37]
+        - generic [ref=e39]: 对话写作
+      - link "草稿" [ref=e40] [cursor=pointer]:
+        - /url: /drafts
+        - img [ref=e41]
+        - generic [ref=e44]: 草稿
+  - main [ref=e45]:
+    - generic [ref=e46]:
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - paragraph [ref=e49]: Collect
+          - heading "采集转写" [level=1] [ref=e50]
+          - paragraph [ref=e51]: 输入账号名采集爆款视频；时间区间会按发布时间筛选后写入本地库。
+        - button "检查环境" [ref=e52] [cursor=pointer]:
+          - img [ref=e53]
+          - text: 检查环境
+      - generic [ref=e57]:
+        - generic [ref=e58]:
+          - generic [ref=e59]:
+            - generic [ref=e60]: 平台
+            - combobox [ref=e61]:
+              - option "B站" [selected]
+              - option "抖音"
+          - generic [ref=e62]:
+            - generic [ref=e63]: 账号名
+            - textbox "例如：某某UP主" [ref=e64]
+          - generic [ref=e65]:
+            - button "只保存账号" [disabled] [ref=e66]:
+              - img [ref=e67]
+              - text: 只保存账号
+            - button "开始采集" [disabled] [ref=e68]:
+              - img [ref=e69]
+              - text: 开始采集
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - generic [ref=e73]: 数量
+            - spinbutton [ref=e74]: "20"
+          - generic [ref=e75]:
+            - generic [ref=e76]: 排序
+            - combobox [ref=e77]:
+              - option "播放优先" [selected]
+              - option "收藏优先"
+              - option "最新优先"
+          - generic [ref=e78]:
+            - generic [ref=e79]: 时间区间
+            - combobox [ref=e80]:
+              - option "不限" [selected]
+              - option "近 7 天"
+              - option "近 30 天"
+              - option "近 90 天"
+              - option "近半年"
+              - option "近一年"
+              - option "自定义"
+          - generic [ref=e81]: 按发布时间：不限

@@ -1,0 +1,73 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - img [ref=e6]
+      - generic [ref=e8]:
+        - strong [ref=e9]: 账号风格库
+        - generic [ref=e10]: 本地工作台
+    - navigation [ref=e11]:
+      - link "首页" [ref=e12] [cursor=pointer]:
+        - /url: /
+        - img [ref=e13]
+        - generic [ref=e16]: 首页
+      - link "账号库" [ref=e17] [cursor=pointer]:
+        - /url: /library
+        - img [ref=e18]
+        - generic [ref=e20]: 账号库
+      - link "项目库" [ref=e21] [cursor=pointer]:
+        - /url: /projects
+        - img [ref=e22]
+        - generic [ref=e26]: 项目库
+      - link "采集转写" [ref=e27] [cursor=pointer]:
+        - /url: /collect
+        - img [ref=e28]
+        - generic [ref=e35]: 采集转写
+      - link "对话写作" [ref=e36] [cursor=pointer]:
+        - /url: /writer
+        - img [ref=e37]
+        - generic [ref=e39]: 对话写作
+      - link "草稿" [ref=e40] [cursor=pointer]:
+        - /url: /drafts
+        - img [ref=e41]
+        - generic [ref=e44]: 草稿
+  - main [ref=e45]:
+    - generic [ref=e46]:
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - paragraph [ref=e49]: Projects
+          - heading "项目库" [level=1] [ref=e50]
+          - paragraph [ref=e51]: 把多个账号组合成项目风格卡，用在更稳定的选题和文案生成里。
+        - button "刷新" [ref=e52] [cursor=pointer]:
+          - img [ref=e53]
+          - text: 刷新
+      - generic [ref=e58]:
+        - generic [ref=e59]:
+          - heading "项目" [level=2] [ref=e61]
+          - paragraph [ref=e63]: 项目可以绑定多个参考账号，沉淀成一个独立风格卡。
+        - generic [ref=e64]:
+          - generic [ref=e65]:
+            - heading "新项目" [level=2] [ref=e66]
+            - generic [ref=e67]:
+              - button "保存项目" [disabled] [ref=e68]:
+                - img [ref=e69]
+                - text: 保存项目
+              - button "自动总结项目风格" [disabled] [ref=e73]:
+                - img [ref=e74]
+                - text: 自动总结项目风格
+          - generic [ref=e76]:
+            - generic [ref=e77]:
+              - generic [ref=e78]:
+                - generic [ref=e79]: 项目名
+                - textbox "例如：AI科普矩阵" [ref=e80]
+              - generic [ref=e81]:
+                - generic [ref=e82]: 项目说明
+                - textbox "内容方向、目标人群、账号矩阵定位..." [ref=e83]
+            - heading "参考账号" [level=3] [ref=e85]
+            - generic [ref=e86]:
+              - generic [ref=e87]:
+                - heading "项目风格卡" [level=3] [ref=e88]
+                - button "保存风格卡" [disabled] [ref=e89]:
+                  - img [ref=e90]
+                  - text: 保存风格卡
+              - textbox "自动总结后会写入 style-library/projects/项目名/style.md，也可以在这里手动编辑。" [ref=e94]

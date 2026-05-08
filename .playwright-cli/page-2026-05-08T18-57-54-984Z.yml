@@ -1,0 +1,56 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - img [ref=e6]
+        - generic [ref=e8]:
+          - strong [ref=e9]: 账号风格库
+          - generic [ref=e10]: 本地工作台
+      - navigation "主导航" [ref=e11]:
+        - link "首页" [ref=e12] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e16]: 首页
+        - link "账号库" [ref=e17] [cursor=pointer]:
+          - /url: /library
+          - img [ref=e18]
+          - generic [ref=e20]: 账号库
+        - link "项目库" [ref=e21] [cursor=pointer]:
+          - /url: /projects
+          - img [ref=e22]
+          - generic [ref=e26]: 项目库
+        - link "对话写作" [ref=e27] [cursor=pointer]:
+          - /url: /writer
+          - img [ref=e28]
+          - generic [ref=e30]: 对话写作
+        - link "草稿" [ref=e31] [cursor=pointer]:
+          - /url: /drafts
+          - img [ref=e32]
+          - generic [ref=e35]: 草稿
+    - main [ref=e36]:
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - paragraph [ref=e40]: Drafts
+            - heading "草稿管理" [level=1] [ref=e41]
+            - paragraph [ref=e42]: 所有草稿来自本地账号目录，可按引用账号回溯风格来源。
+          - generic [ref=e43]:
+            - generic [ref=e44]: 0 个草稿
+            - button "刷新" [ref=e45] [cursor=pointer]:
+              - img [ref=e46]
+              - text: 刷新
+        - generic [ref=e51]:
+          - complementary [ref=e52]:
+            - heading "草稿" [level=2] [ref=e54]
+            - generic [ref=e56]:
+              - generic [ref=e57]: 0 个草稿
+              - generic [ref=e58]: 按保存时间排序
+          - generic [ref=e59]:
+            - generic [ref=e60]:
+              - heading "草稿详情" [level=2] [ref=e61]
+              - button "复制" [disabled] [ref=e62]:
+                - img [ref=e63]
+                - text: 复制
+            - paragraph [ref=e67]: 选择一个草稿查看内容。
+  - alert [ref=e68]

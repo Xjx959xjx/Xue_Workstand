@@ -1,0 +1,116 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - img [ref=e6]
+      - generic [ref=e8]:
+        - strong [ref=e9]: 账号风格库
+        - generic [ref=e10]: 本地工作台
+    - navigation "主导航" [ref=e11]:
+      - link "首页" [ref=e12] [cursor=pointer]:
+        - /url: /
+        - img [ref=e13]
+        - generic [ref=e16]: 首页
+      - link "账号库" [ref=e17] [cursor=pointer]:
+        - /url: /library
+        - img [ref=e18]
+        - generic [ref=e20]: 账号库
+      - link "项目库" [ref=e21] [cursor=pointer]:
+        - /url: /projects
+        - img [ref=e22]
+        - generic [ref=e26]: 项目库
+      - link "对话写作" [ref=e27] [cursor=pointer]:
+        - /url: /writer
+        - img [ref=e28]
+        - generic [ref=e30]: 对话写作
+      - link "草稿" [ref=e31] [cursor=pointer]:
+        - /url: /drafts
+        - img [ref=e32]
+        - generic [ref=e35]: 草稿
+  - main [ref=e36]:
+    - generic [ref=e37]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - paragraph [ref=e40]: Library
+          - heading "账号风格库" [level=1] [ref=e41]
+          - paragraph [ref=e42]: 左侧选账号，中间看爆款，右侧整理转写稿与风格卡。
+        - generic [ref=e43]:
+          - button "添加账号" [ref=e44] [cursor=pointer]:
+            - img [ref=e45]
+            - text: 添加账号
+          - button "刷新" [ref=e46] [cursor=pointer]:
+            - img [ref=e47]
+            - text: 刷新
+      - generic [ref=e52]:
+        - complementary [ref=e53]:
+          - generic [ref=e54]:
+            - heading "账号" [level=2] [ref=e55]
+            - generic [ref=e56]:
+              - button "添加" [ref=e57] [cursor=pointer]:
+                - img [ref=e58]
+                - text: 添加
+              - button "管理" [ref=e59] [cursor=pointer]
+          - textbox "搜索账号" [ref=e61]:
+            - /placeholder: 搜索账号名、平台或 UID
+          - generic [ref=e62]:
+            - generic [ref=e63]:
+              - generic [ref=e64]: 0 / 0 个账号
+              - generic [ref=e65]: 0 份转写
+            - paragraph [ref=e66]: 没有匹配的账号。
+        - generic [ref=e67]:
+          - generic [ref=e68]:
+            - generic [ref=e69]:
+              - heading "视频" [level=2] [ref=e70]
+              - paragraph [ref=e71]: 0 条视频 · 0 已转写 · 0 待处理
+            - generic [ref=e72]:
+              - generic [ref=e73]: 排序
+              - combobox [ref=e74]:
+                - option "综合热度" [selected]
+                - option "播放最多"
+                - option "点赞最多"
+                - option "评论最多"
+                - option "收藏最多"
+                - option "发布时间"
+          - table [ref=e76]:
+            - rowgroup [ref=e77]:
+              - row "标题 数据表现 转写" [ref=e78] [cursor=pointer]:
+                - columnheader "标题" [ref=e79]
+                - columnheader "数据表现" [ref=e80]
+                - columnheader "转写" [ref=e81]
+            - rowgroup
+        - complementary [ref=e82]:
+          - heading "详情与风格" [level=2] [ref=e84]
+          - generic [ref=e85]:
+            - paragraph [ref=e86]: 选择一个视频查看详情。
+            - generic [ref=e87]:
+              - heading "账号自动化" [level=3] [ref=e88]
+              - generic [ref=e89]:
+                - generic [ref=e90]:
+                  - generic [ref=e91]: 爆款数量
+                  - combobox [ref=e92]:
+                    - option "前 3 条"
+                    - option "前 5 条" [selected]
+                    - option "前 10 条"
+                    - option "全部转写"
+                - button "转写并更新风格" [ref=e93] [cursor=pointer]:
+                  - generic [ref=e94]:
+                    - img [ref=e95]
+                    - text: 转写并更新风格
+            - generic [ref=e97]:
+              - generic [ref=e98]:
+                - heading "转写稿" [level=3] [ref=e99]
+                - paragraph [ref=e100]: 当前视频还没有转写稿。
+              - button "查看全文" [disabled] [ref=e102]:
+                - img [ref=e103]
+                - text: 查看全文
+            - generic [ref=e106]:
+              - generic [ref=e107]:
+                - heading "账号风格卡" [level=3] [ref=e108]
+                - paragraph [ref=e109]: 暂无风格卡
+              - generic [ref=e110]:
+                - button "自动总结" [ref=e111] [cursor=pointer]:
+                  - img [ref=e112]
+                  - text: 自动总结
+                - button "查看编辑" [ref=e114] [cursor=pointer]:
+                  - img [ref=e115]
+                  - text: 查看编辑

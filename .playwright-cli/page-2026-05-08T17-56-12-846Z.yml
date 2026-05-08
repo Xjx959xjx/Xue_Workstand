@@ -1,0 +1,309 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - img [ref=e6]
+        - generic [ref=e8]:
+          - strong [ref=e9]: 账号风格库
+          - generic [ref=e10]: 本地工作台
+      - navigation [ref=e11]:
+        - link "首页" [ref=e12] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e16]: 首页
+        - link "账号库" [ref=e17] [cursor=pointer]:
+          - /url: /library
+          - img [ref=e18]
+          - generic [ref=e20]: 账号库
+        - link "项目库" [ref=e21] [cursor=pointer]:
+          - /url: /projects
+          - img [ref=e22]
+          - generic [ref=e26]: 项目库
+        - link "对话写作" [ref=e27] [cursor=pointer]:
+          - /url: /writer
+          - img [ref=e28]
+          - generic [ref=e30]: 对话写作
+        - link "草稿" [ref=e31] [cursor=pointer]:
+          - /url: /drafts
+          - img [ref=e32]
+          - generic [ref=e35]: 草稿
+    - main [ref=e36]:
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - paragraph [ref=e40]: Library
+            - heading "账号风格库" [level=1] [ref=e41]
+            - paragraph [ref=e42]: 左侧选账号，中间看爆款，右侧整理转写稿与风格卡。
+          - button "刷新" [ref=e43] [cursor=pointer]:
+            - img [ref=e44]
+            - text: 刷新
+        - generic [ref=e49]:
+          - complementary [ref=e50]:
+            - generic [ref=e51]:
+              - heading "账号" [level=2] [ref=e52]
+              - generic [ref=e53]:
+                - button "添加" [ref=e54] [cursor=pointer]:
+                  - img [ref=e55]
+                  - text: 添加
+                - button "管理" [active] [ref=e56] [cursor=pointer]
+            - generic [ref=e307]:
+              - generic [ref=e308]: 已选 0
+              - button "删除" [disabled] [ref=e309]:
+                - img [ref=e310]
+                - text: 删除
+            - generic [ref=e57]:
+              - button "老青椒 B站 · 10 条 · 9 转写" [ref=e107] [cursor=pointer]:
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 老青椒
+                  - generic [ref=e110]: B站 · 10 条 · 9 转写
+              - button "差评君 B站 · 20 条 · 10 转写" [ref=e111] [cursor=pointer]:
+                - generic [ref=e112]:
+                  - generic [ref=e113]: 差评君
+                  - generic [ref=e114]: B站 · 20 条 · 10 转写
+              - button "薛定谔的机 B站 · 20 条 · 10 转写" [ref=e115] [cursor=pointer]:
+                - generic [ref=e116]:
+                  - generic [ref=e117]: 薛定谔的机
+                  - generic [ref=e118]: B站 · 20 条 · 10 转写
+          - generic [ref=e58]:
+            - generic [ref=e59]:
+              - heading "老青椒" [level=2] [ref=e119]
+              - generic [ref=e61]:
+                - generic [ref=e62]: 排序
+                - combobox [ref=e63]:
+                  - option "综合热度" [selected]
+                  - option "播放最多"
+                  - option "点赞最多"
+                  - option "评论最多"
+                  - option "收藏最多"
+                  - option "发布时间"
+            - table [ref=e65]:
+              - rowgroup [ref=e66]:
+                - row "标题 数据表现 转写" [ref=e67] [cursor=pointer]:
+                  - columnheader "标题" [ref=e68]
+                  - columnheader "数据表现" [ref=e69]
+                  - columnheader "转写" [ref=e70]
+              - rowgroup [ref=e120]:
+                - row "重返未来为啥是史上最拉周年庆？第五人格用AI敷衍被抓 宝可梦逆天比赛冠军因庆祝直接判负？【乐子周报245】 2026/04/23 · 高于均值 1.9x 播放 58.5万 点赞 2.3万 评论 2,478 已完成" [ref=e121] [cursor=pointer]:
+                  - cell "重返未来为啥是史上最拉周年庆？第五人格用AI敷衍被抓 宝可梦逆天比赛冠军因庆祝直接判负？【乐子周报245】 2026/04/23 · 高于均值 1.9x" [ref=e122]:
+                    - strong [ref=e123]: 重返未来为啥是史上最拉周年庆？第五人格用AI敷衍被抓 宝可梦逆天比赛冠军因庆祝直接判负？【乐子周报245】
+                    - generic [ref=e124]: 2026/04/23 · 高于均值 1.9x
+                  - cell "播放 58.5万 点赞 2.3万 评论 2,478" [ref=e125]:
+                    - generic [ref=e126]:
+                      - generic [ref=e127]:
+                        - generic [ref=e128]: 播放
+                        - strong [ref=e129]: 58.5万
+                      - generic [ref=e130]:
+                        - generic [ref=e131]: 点赞
+                        - strong [ref=e132]: 2.3万
+                      - generic [ref=e133]:
+                        - generic [ref=e134]: 评论
+                        - strong [ref=e135]: 2,478
+                  - cell "已完成" [ref=e136]:
+                    - generic [ref=e137]: 已完成
+                - row "顶流博主竟篡改冠军签名？某逆天活动退坑原神有钱拿？ 网文圈因一本小说上演黑暗事件！【乐子周报246】 2026/04/25 · 高于均值 1.54x 播放 47.4万 点赞 1.8万 评论 2,429 已完成" [ref=e138] [cursor=pointer]:
+                  - cell "顶流博主竟篡改冠军签名？某逆天活动退坑原神有钱拿？ 网文圈因一本小说上演黑暗事件！【乐子周报246】 2026/04/25 · 高于均值 1.54x" [ref=e139]:
+                    - strong [ref=e140]: 顶流博主竟篡改冠军签名？某逆天活动退坑原神有钱拿？ 网文圈因一本小说上演黑暗事件！【乐子周报246】
+                    - generic [ref=e141]: 2026/04/25 · 高于均值 1.54x
+                  - cell "播放 47.4万 点赞 1.8万 评论 2,429" [ref=e142]:
+                    - generic [ref=e143]:
+                      - generic [ref=e144]:
+                        - generic [ref=e145]: 播放
+                        - strong [ref=e146]: 47.4万
+                      - generic [ref=e147]:
+                        - generic [ref=e148]: 点赞
+                        - strong [ref=e149]: 1.8万
+                      - generic [ref=e150]:
+                        - generic [ref=e151]: 评论
+                        - strong [ref=e152]: 2,429
+                  - cell "已完成" [ref=e153]:
+                    - generic [ref=e154]: 已完成
+                - row "火影职业与女友双向出轨？剑网三玩家吐槽各大IP！ 盗版动漫网站黑吃黑举报同行？【乐子周报244】 2026/04/21 · 高于均值 1.58x 播放 48.6万 点赞 1.6万 评论 1,064 已完成" [ref=e155] [cursor=pointer]:
+                  - cell "火影职业与女友双向出轨？剑网三玩家吐槽各大IP！ 盗版动漫网站黑吃黑举报同行？【乐子周报244】 2026/04/21 · 高于均值 1.58x" [ref=e156]:
+                    - strong [ref=e157]: 火影职业与女友双向出轨？剑网三玩家吐槽各大IP！ 盗版动漫网站黑吃黑举报同行？【乐子周报244】
+                    - generic [ref=e158]: 2026/04/21 · 高于均值 1.58x
+                  - cell "播放 48.6万 点赞 1.6万 评论 1,064" [ref=e159]:
+                    - generic [ref=e160]:
+                      - generic [ref=e161]:
+                        - generic [ref=e162]: 播放
+                        - strong [ref=e163]: 48.6万
+                      - generic [ref=e164]:
+                        - generic [ref=e165]: 点赞
+                        - strong [ref=e166]: 1.6万
+                      - generic [ref=e167]:
+                        - generic [ref=e168]: 评论
+                        - strong [ref=e169]: 1,064
+                  - cell "已完成" [ref=e170]:
+                    - generic [ref=e171]: 已完成
+                - row "原神直播大胆阴阳友商！异环为何开服就一堆爆雷？日本网友画师工资低怪看盗版？【乐子周报248】 2026/04/30 · 高于均值 1.09x 播放 33.6万 点赞 1.4万 评论 4,475 已完成" [ref=e172] [cursor=pointer]:
+                  - cell "原神直播大胆阴阳友商！异环为何开服就一堆爆雷？日本网友画师工资低怪看盗版？【乐子周报248】 2026/04/30 · 高于均值 1.09x" [ref=e173]:
+                    - strong [ref=e174]: 原神直播大胆阴阳友商！异环为何开服就一堆爆雷？日本网友画师工资低怪看盗版？【乐子周报248】
+                    - generic [ref=e175]: 2026/04/30 · 高于均值 1.09x
+                  - cell "播放 33.6万 点赞 1.4万 评论 4,475" [ref=e176]:
+                    - generic [ref=e177]:
+                      - generic [ref=e178]:
+                        - generic [ref=e179]: 播放
+                        - strong [ref=e180]: 33.6万
+                      - generic [ref=e181]:
+                        - generic [ref=e182]: 点赞
+                        - strong [ref=e183]: 1.4万
+                      - generic [ref=e184]:
+                        - generic [ref=e185]: 评论
+                        - strong [ref=e186]: 4,475
+                  - cell "已完成" [ref=e187]:
+                    - generic [ref=e188]: 已完成
+                - row "男生出乙游角色凭啥不行？第五人格AI事件上演维权！和平精英联动国漫风评暴雷【乐子周报】 2026/05/05 · 高于均值 0.86x 播放 26.3万 点赞 1.2万 评论 1,740 已完成" [ref=e189] [cursor=pointer]:
+                  - cell "男生出乙游角色凭啥不行？第五人格AI事件上演维权！和平精英联动国漫风评暴雷【乐子周报】 2026/05/05 · 高于均值 0.86x" [ref=e190]:
+                    - strong [ref=e191]: 男生出乙游角色凭啥不行？第五人格AI事件上演维权！和平精英联动国漫风评暴雷【乐子周报】
+                    - generic [ref=e192]: 2026/05/05 · 高于均值 0.86x
+                  - cell "播放 26.3万 点赞 1.2万 评论 1,740" [ref=e193]:
+                    - generic [ref=e194]:
+                      - generic [ref=e195]:
+                        - generic [ref=e196]: 播放
+                        - strong [ref=e197]: 26.3万
+                      - generic [ref=e198]:
+                        - generic [ref=e199]: 点赞
+                        - strong [ref=e200]: 1.2万
+                      - generic [ref=e201]:
+                        - generic [ref=e202]: 评论
+                        - strong [ref=e203]: 1,740
+                  - cell "已完成" [ref=e204]:
+                    - generic [ref=e205]: 已完成
+                - row "Danking战队选手被爆开挂？奥特曼新作灵感竟来自男娘！ 荒野乱斗联动封杀动漫爆雷【乐子周报247】 2026/04/28 · 高于均值 0.98x 播放 30.1万 点赞 1.3万 评论 994 已完成" [ref=e206] [cursor=pointer]:
+                  - cell "Danking战队选手被爆开挂？奥特曼新作灵感竟来自男娘！ 荒野乱斗联动封杀动漫爆雷【乐子周报247】 2026/04/28 · 高于均值 0.98x" [ref=e207]:
+                    - strong [ref=e208]: Danking战队选手被爆开挂？奥特曼新作灵感竟来自男娘！ 荒野乱斗联动封杀动漫爆雷【乐子周报247】
+                    - generic [ref=e209]: 2026/04/28 · 高于均值 0.98x
+                  - cell "播放 30.1万 点赞 1.3万 评论 994" [ref=e210]:
+                    - generic [ref=e211]:
+                      - generic [ref=e212]:
+                        - generic [ref=e213]: 播放
+                        - strong [ref=e214]: 30.1万
+                      - generic [ref=e215]:
+                        - generic [ref=e216]: 点赞
+                        - strong [ref=e217]: 1.3万
+                      - generic [ref=e218]:
+                        - generic [ref=e219]: 评论
+                        - strong [ref=e220]: "994"
+                  - cell "已完成" [ref=e221]:
+                    - generic [ref=e222]: 已完成
+                - row "永劫逆天宣传拉踩王者？盗墓笔记饭圈文化惹怒作者！ 杀戮尖塔2二创收费引发官方下场【乐子周报244】 2026/04/20 · 高于均值 0.67x 播放 20.5万 点赞 1.0万 评论 1,185 未采集" [ref=e223] [cursor=pointer]:
+                  - cell "永劫逆天宣传拉踩王者？盗墓笔记饭圈文化惹怒作者！ 杀戮尖塔2二创收费引发官方下场【乐子周报244】 2026/04/20 · 高于均值 0.67x" [ref=e224]:
+                    - strong [ref=e225]: 永劫逆天宣传拉踩王者？盗墓笔记饭圈文化惹怒作者！ 杀戮尖塔2二创收费引发官方下场【乐子周报244】
+                    - generic [ref=e226]: 2026/04/20 · 高于均值 0.67x
+                  - cell "播放 20.5万 点赞 1.0万 评论 1,185" [ref=e227]:
+                    - generic [ref=e228]:
+                      - generic [ref=e229]:
+                        - generic [ref=e230]: 播放
+                        - strong [ref=e231]: 20.5万
+                      - generic [ref=e232]:
+                        - generic [ref=e233]: 点赞
+                        - strong [ref=e234]: 1.0万
+                      - generic [ref=e235]:
+                        - generic [ref=e236]: 评论
+                        - strong [ref=e237]: 1,185
+                  - cell "未采集" [ref=e238]:
+                    - generic [ref=e239]: 未采集
+                - row "Rapper指责乙游毒害玩家？英雄联盟冠军被爆出轨？逆战未来活动暴雷！【乐子周报249】 2026/05/03 · 高于均值 0.48x 播放 14.8万 点赞 7,026 评论 650 已完成" [ref=e240] [cursor=pointer]:
+                  - cell "Rapper指责乙游毒害玩家？英雄联盟冠军被爆出轨？逆战未来活动暴雷！【乐子周报249】 2026/05/03 · 高于均值 0.48x" [ref=e241]:
+                    - strong [ref=e242]: Rapper指责乙游毒害玩家？英雄联盟冠军被爆出轨？逆战未来活动暴雷！【乐子周报249】
+                    - generic [ref=e243]: 2026/05/03 · 高于均值 0.48x
+                  - cell "播放 14.8万 点赞 7,026 评论 650" [ref=e244]:
+                    - generic [ref=e245]:
+                      - generic [ref=e246]:
+                        - generic [ref=e247]: 播放
+                        - strong [ref=e248]: 14.8万
+                      - generic [ref=e249]:
+                        - generic [ref=e250]: 点赞
+                        - strong [ref=e251]: 7,026
+                      - generic [ref=e252]:
+                        - generic [ref=e253]: 评论
+                        - strong [ref=e254]: "650"
+                  - cell "已完成" [ref=e255]:
+                    - generic [ref=e256]: 已完成
+                - row "全都疯了！顶级大作档期撞车？游戏圈大混战要来了！【乐子快爆】 2026/05/02 · 高于均值 0.52x 播放 15.9万 点赞 6,565 评论 308 已完成" [ref=e257] [cursor=pointer]:
+                  - cell "全都疯了！顶级大作档期撞车？游戏圈大混战要来了！【乐子快爆】 2026/05/02 · 高于均值 0.52x" [ref=e258]:
+                    - strong [ref=e259]: 全都疯了！顶级大作档期撞车？游戏圈大混战要来了！【乐子快爆】
+                    - generic [ref=e260]: 2026/05/02 · 高于均值 0.52x
+                  - cell "播放 15.9万 点赞 6,565 评论 308" [ref=e261]:
+                    - generic [ref=e262]:
+                      - generic [ref=e263]:
+                        - generic [ref=e264]: 播放
+                        - strong [ref=e265]: 15.9万
+                      - generic [ref=e266]:
+                        - generic [ref=e267]: 点赞
+                        - strong [ref=e268]: 6,565
+                      - generic [ref=e269]:
+                        - generic [ref=e270]: 评论
+                        - strong [ref=e271]: "308"
+                  - cell "已完成" [ref=e272]:
+                    - generic [ref=e273]: 已完成
+                - row "上万人面前丢脸！魔兽主播圈到底有多“黑暗”【乐子快爆】 2026/04/29 · 高于均值 0.4x 播放 12.2万 点赞 5,110 评论 211 已完成" [ref=e274] [cursor=pointer]:
+                  - cell "上万人面前丢脸！魔兽主播圈到底有多“黑暗”【乐子快爆】 2026/04/29 · 高于均值 0.4x" [ref=e275]:
+                    - strong [ref=e276]: 上万人面前丢脸！魔兽主播圈到底有多“黑暗”【乐子快爆】
+                    - generic [ref=e277]: 2026/04/29 · 高于均值 0.4x
+                  - cell "播放 12.2万 点赞 5,110 评论 211" [ref=e278]:
+                    - generic [ref=e279]:
+                      - generic [ref=e280]:
+                        - generic [ref=e281]: 播放
+                        - strong [ref=e282]: 12.2万
+                      - generic [ref=e283]:
+                        - generic [ref=e284]: 点赞
+                        - strong [ref=e285]: 5,110
+                      - generic [ref=e286]:
+                        - generic [ref=e287]: 评论
+                        - strong [ref=e288]: "211"
+                  - cell "已完成" [ref=e289]:
+                    - generic [ref=e290]: 已完成
+          - complementary [ref=e71]:
+            - heading "详情与风格" [level=2] [ref=e73]
+            - generic [ref=e74]:
+              - generic [ref=e291]:
+                - heading "重返未来为啥是史上最拉周年庆？第五人格用AI敷衍被抓 宝可梦逆天比赛冠军因庆祝直接判负？【乐子周报245】" [level=3] [ref=e292]
+                - generic [ref=e293]:
+                  - generic [ref=e294]: 播放 58.5万
+                  - generic [ref=e295]: 点赞 2.3万
+                  - generic [ref=e296]: 收藏 4,957
+                  - generic [ref=e297]: 已完成
+                - generic [ref=e298]:
+                  - button "转写此视频" [ref=e299] [cursor=pointer]:
+                    - img [ref=e300]
+                    - text: 转写此视频
+                  - link "打开原链接" [ref=e305] [cursor=pointer]:
+                    - /url: https://www.bilibili.com/video/BV1osohBdEgk
+              - generic [ref=e76]:
+                - heading "账号自动化" [level=3] [ref=e77]
+                - generic [ref=e78]:
+                  - generic [ref=e79]:
+                    - generic [ref=e80]: 爆款数量
+                    - combobox [ref=e81]:
+                      - option "前 3 条"
+                      - option "前 5 条" [selected]
+                      - option "前 10 条"
+                      - option "全部转写"
+                  - button "转写并更新风格" [ref=e82] [cursor=pointer]:
+                    - generic [ref=e83]:
+                      - img [ref=e84]
+                      - text: 转写并更新风格
+              - generic [ref=e86]:
+                - generic [ref=e87]:
+                  - heading "转写稿" [level=3] [ref=e88]
+                  - paragraph [ref=e89]: 百万弹幕退坑狂潮重返未来 为何被称史上最拉周年庆第五人格新皮肤被扒 AI作画敷衍至极 人物就四根手指 宝可梦比赛惊天黑幕 选手因为起立庆祝酒杯剥
+                - generic [ref=e90]:
+                  - button "查看全文" [ref=e91] [cursor=pointer]:
+                    - img [ref=e92]
+                    - text: 查看全文
+                  - button "删除转写稿" [ref=e316] [cursor=pointer]:
+                    - img [ref=e317]
+                    - text: 删除转写稿
+              - generic [ref=e95]:
+                - generic [ref=e96]:
+                  - heading "账号风格卡" [level=3] [ref=e97]
+                  - paragraph [ref=e98]: "# 「老青椒」短视频文案风格卡 ## 内容定位 - **核心类型**：游戏圈 / 二次元圈 / 网文圈 / 直播圈 / 电竞圈的“乐子周报”式吃"
+                - generic [ref=e99]:
+                  - button "自动总结" [ref=e100] [cursor=pointer]:
+                    - img [ref=e101]
+                    - text: 自动总结
+                  - button "查看编辑" [ref=e103] [cursor=pointer]:
+                    - img [ref=e104]
+                    - text: 查看编辑
+  - alert [ref=e306]

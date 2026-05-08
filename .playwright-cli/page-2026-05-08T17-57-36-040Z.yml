@@ -1,0 +1,110 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - img [ref=e6]
+        - generic [ref=e8]:
+          - strong [ref=e9]: 账号风格库
+          - generic [ref=e10]: 本地工作台
+      - navigation [ref=e11]:
+        - link "首页" [ref=e12] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e16]: 首页
+        - link "账号库" [ref=e17] [cursor=pointer]:
+          - /url: /library
+          - img [ref=e18]
+          - generic [ref=e20]: 账号库
+        - link "项目库" [ref=e21] [cursor=pointer]:
+          - /url: /projects
+          - img [ref=e22]
+          - generic [ref=e26]: 项目库
+        - link "对话写作" [ref=e27] [cursor=pointer]:
+          - /url: /writer
+          - img [ref=e28]
+          - generic [ref=e30]: 对话写作
+        - link "草稿" [ref=e31] [cursor=pointer]:
+          - /url: /drafts
+          - img [ref=e32]
+          - generic [ref=e35]: 草稿
+    - main [ref=e36]:
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - paragraph [ref=e40]: Projects
+            - heading "项目库" [level=1] [ref=e41]
+            - paragraph [ref=e42]: 把多个账号组合成项目风格卡，用在更稳定的选题和文案生成里。
+          - button "刷新" [ref=e43] [cursor=pointer]:
+            - img [ref=e44]
+            - text: 刷新
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - generic [ref=e51]:
+              - heading "项目" [level=2] [ref=e52]
+              - button "管理" [active] [ref=e54] [cursor=pointer]
+            - generic [ref=e120]:
+              - generic [ref=e121]: 已选 0
+              - button "删除" [disabled] [ref=e122]:
+                - img [ref=e123]
+                - text: 删除
+            - generic [ref=e55]:
+              - button "老青椒+差评君 2 个参考账号 项目" [ref=e94] [cursor=pointer]:
+                - generic [ref=e95]:
+                  - generic [ref=e96]: 老青椒+差评君
+                  - generic [ref=e97]: 2 个参考账号
+                - generic [ref=e98]: 项目
+              - button "1 1 个参考账号 项目" [ref=e99] [cursor=pointer]:
+                - generic [ref=e100]:
+                  - generic [ref=e101]: "1"
+                  - generic [ref=e102]: 1 个参考账号
+                - generic [ref=e103]: 项目
+          - generic [ref=e57]:
+            - generic [ref=e58]:
+              - heading "新项目" [level=2] [ref=e59]
+              - generic [ref=e60]:
+                - button "保存项目" [disabled] [ref=e61]:
+                  - img [ref=e62]
+                  - text: 保存项目
+                - button "自动总结项目风格" [disabled] [ref=e66]:
+                  - img [ref=e67]
+                  - text: 自动总结项目风格
+            - generic [ref=e69]:
+              - generic [ref=e70]:
+                - generic [ref=e71]:
+                  - generic [ref=e72]: 项目名
+                  - textbox "例如：AI科普矩阵" [ref=e73]
+                - generic [ref=e74]:
+                  - generic [ref=e75]: 项目说明
+                  - textbox "内容方向、目标人群、账号矩阵定位..." [ref=e76]
+              - generic [ref=e77]:
+                - generic [ref=e78]:
+                  - generic [ref=e79]:
+                    - heading "参考账号" [level=3] [ref=e80]
+                    - paragraph [ref=e81]: 已选 0 个 · 显示 3 / 3
+                  - textbox "筛选参考账号" [ref=e82]:
+                    - /placeholder: 搜索账号名、平台或 UID
+                - generic [ref=e83]:
+                  - generic [ref=e104]:
+                    - checkbox "老青椒 B站 · 9 份转写" [ref=e105]
+                    - generic [ref=e106]:
+                      - strong [ref=e107]: 老青椒
+                      - generic [ref=e108]: B站 · 9 份转写
+                  - generic [ref=e109]:
+                    - checkbox "差评君 B站 · 10 份转写" [ref=e110]
+                    - generic [ref=e111]:
+                      - strong [ref=e112]: 差评君
+                      - generic [ref=e113]: B站 · 10 份转写
+                  - generic [ref=e114]:
+                    - checkbox "薛定谔的机 B站 · 10 份转写" [ref=e115]
+                    - generic [ref=e116]:
+                      - strong [ref=e117]: 薛定谔的机
+                      - generic [ref=e118]: B站 · 10 份转写
+              - generic [ref=e85]:
+                - generic [ref=e86]:
+                  - heading "项目风格卡" [level=3] [ref=e87]
+                  - button "保存风格卡" [disabled] [ref=e88]:
+                    - img [ref=e89]
+                    - text: 保存风格卡
+                - textbox "自动总结后会写入 style-library/projects/项目名/style.md，也可以在这里手动编辑。" [ref=e93]
+  - alert [ref=e119]

@@ -1,0 +1,166 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - img [ref=e6]
+        - generic [ref=e8]:
+          - strong [ref=e9]: 账号风格库
+          - generic [ref=e10]: 本地工作台
+      - navigation "主导航" [ref=e11]:
+        - link "首页" [ref=e12] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e16]: 首页
+        - link "账号库" [ref=e17] [cursor=pointer]:
+          - /url: /library
+          - img [ref=e18]
+          - generic [ref=e20]: 账号库
+        - link "项目库" [ref=e21] [cursor=pointer]:
+          - /url: /projects
+          - img [ref=e22]
+          - generic [ref=e26]: 项目库
+        - link "对话写作" [ref=e27] [cursor=pointer]:
+          - /url: /writer
+          - img [ref=e28]
+          - generic [ref=e30]: 对话写作
+        - link "草稿" [ref=e31] [cursor=pointer]:
+          - /url: /drafts
+          - img [ref=e32]
+          - generic [ref=e35]: 草稿
+    - main [ref=e36]:
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - paragraph [ref=e40]: Local Workbench
+            - heading "工作台总览" [level=1] [ref=e41]
+            - paragraph [ref=e42]: 采集、转写、风格沉淀和写作都在本地流转，文件沉淀到 style-library。
+          - generic [ref=e43]:
+            - button "读取中" [disabled] [ref=e44]:
+              - img [ref=e45]
+              - text: 读取中
+            - link "去写作台" [ref=e50]:
+              - /url: "#"
+              - img [ref=e51]
+              - text: 去写作台
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]:
+              - paragraph [ref=e56]: Quick Start
+              - heading "快速开工" [level=2] [ref=e57]
+              - paragraph [ref=e58]: 输入账号名自动搜索并采集爆款；后续转写和风格整理会进入账号库。
+            - generic [ref=e59]:
+              - generic [ref=e60]:
+                - generic [ref=e61]: 平台
+                - combobox [ref=e62]:
+                  - option "B站" [selected]
+                  - option "抖音"
+              - generic [ref=e63]:
+                - generic [ref=e64]: 账号名
+                - textbox "例如：某某UP主" [ref=e65]
+              - generic [ref=e66]:
+                - generic [ref=e67]: 数量
+                - spinbutton [ref=e68]: "20"
+              - generic [ref=e69]:
+                - generic [ref=e70]: 排序
+                - combobox [ref=e71]:
+                  - option "播放优先" [selected]
+                  - option "收藏优先"
+                  - option "最新优先"
+              - generic [ref=e72]:
+                - generic [ref=e73]: 时间
+                - combobox [ref=e74]:
+                  - option "不限" [selected]
+                  - option "近 7 天"
+                  - option "近 30 天"
+                  - option "近 90 天"
+                  - option "近半年"
+                  - option "近一年"
+                  - option "自定义"
+            - generic [ref=e75]:
+              - button "开始采集" [disabled] [ref=e76]:
+                - img [ref=e77]
+                - text: 开始采集
+              - button "检查环境" [ref=e79] [cursor=pointer]:
+                - img [ref=e80]
+                - text: 检查环境
+              - link "开始写文案" [ref=e83]:
+                - /url: "#"
+                - img [ref=e84]
+                - text: 开始写文案
+          - complementary [ref=e86]:
+            - heading "当前状态" [level=3] [ref=e87]
+            - generic [ref=e88]:
+              - generic [ref=e89]: 0 个账号
+              - generic [ref=e90]: 0 个项目
+              - generic [ref=e91]: 0 条视频
+              - generic [ref=e92]: 0 份转写
+              - generic [ref=e93]: 0 个草稿
+            - paragraph [ref=e94]: 点击检查环境，确认 opencli、硅基流动、对话模型和飞书 lark-cli 配置。
+        - generic [ref=e95]:
+          - generic [ref=e96]:
+            - generic [ref=e97]: 账号
+            - strong [ref=e98]: "0"
+            - generic [ref=e99]: 0 个可参考写作
+          - generic [ref=e100]:
+            - generic [ref=e101]: 视频资产
+            - strong [ref=e102]: "0"
+            - generic [ref=e103]: 0 份转写
+          - generic [ref=e104]:
+            - generic [ref=e105]: 转写覆盖
+            - strong [ref=e106]: 0%
+            - generic [ref=e107]: 等待采集
+          - generic [ref=e108]:
+            - generic [ref=e109]: 项目 / 草稿
+            - strong [ref=e110]: 0 / 0
+            - generic [ref=e111]: 矩阵风格与输出沉淀
+        - generic [ref=e112]:
+          - generic [ref=e114]:
+            - generic [ref=e115]:
+              - heading "常用任务" [level=2] [ref=e116]
+              - generic [ref=e117]: 本地工作流
+            - generic [ref=e118]:
+              - link "账号风格库 管理平台、账号、爆款视频、转写稿和可编辑风格卡。 0 个账号 · 0 条视频 查看账号库" [ref=e119] [cursor=pointer]:
+                - /url: /library
+                - img [ref=e121]
+                - generic [ref=e123]:
+                  - strong [ref=e124]: 账号风格库
+                  - generic [ref=e125]: 管理平台、账号、爆款视频、转写稿和可编辑风格卡。
+                - generic [ref=e126]:
+                  - generic [ref=e127]: 0 个账号 · 0 条视频
+                  - generic [ref=e128]: 查看账号库
+              - link "项目库 把多个账号合并成项目风格卡，适合矩阵账号和长期选题。 0 个项目 管理项目" [ref=e129] [cursor=pointer]:
+                - /url: /projects
+                - img [ref=e131]
+                - generic [ref=e135]:
+                  - strong [ref=e136]: 项目库
+                  - generic [ref=e137]: 把多个账号合并成项目风格卡，适合矩阵账号和长期选题。
+                - generic [ref=e138]:
+                  - generic [ref=e139]: 0 个项目
+                  - generic [ref=e140]: 管理项目
+              - link "对话写作 选择账号风格，按主题生成或改写已有文案。 先添加一个参考账号 开始写文案":
+                - /url: "#"
+                - generic:
+                  - img
+                - generic:
+                  - strong: 对话写作
+                  - generic: 选择账号风格，按主题生成或改写已有文案。
+                - generic:
+                  - generic: 先添加一个参考账号
+                  - generic: 开始写文案
+              - link "草稿管理 查看生成结果、引用账号、历史版本和可复用片段。 0 个草稿 查看草稿" [ref=e141] [cursor=pointer]:
+                - /url: /drafts
+                - img [ref=e143]
+                - generic [ref=e146]:
+                  - strong [ref=e147]: 草稿管理
+                  - generic [ref=e148]: 查看生成结果、引用账号、历史版本和可复用片段。
+                - generic [ref=e149]:
+                  - generic [ref=e150]: 0 个草稿
+                  - generic [ref=e151]: 查看草稿
+          - generic [ref=e153]:
+            - heading "最近账号" [level=2] [ref=e154]
+            - paragraph [ref=e155]: 正在读取本地风格库...
+        - generic [ref=e158]:
+          - heading "最近草稿" [level=2] [ref=e159]
+          - paragraph [ref=e160]: 生成文案后会出现在这里。
+  - alert [ref=e161]

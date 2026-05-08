@@ -1,0 +1,93 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+        - /url: /
+        - img [ref=e6]
+        - generic [ref=e8]:
+          - strong [ref=e9]: 账号风格库
+          - generic [ref=e10]: 本地工作台
+      - navigation [ref=e11]:
+        - link "首页" [ref=e12] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e16]: 首页
+        - link "账号库" [ref=e17] [cursor=pointer]:
+          - /url: /library
+          - img [ref=e18]
+          - generic [ref=e20]: 账号库
+        - link "项目库" [ref=e21] [cursor=pointer]:
+          - /url: /projects
+          - img [ref=e22]
+          - generic [ref=e26]: 项目库
+        - link "对话写作" [ref=e27] [cursor=pointer]:
+          - /url: /writer
+          - img [ref=e28]
+          - generic [ref=e30]: 对话写作
+        - link "草稿" [ref=e31] [cursor=pointer]:
+          - /url: /drafts
+          - img [ref=e32]
+          - generic [ref=e35]: 草稿
+    - main [ref=e36]:
+      - generic [ref=e37]:
+        - generic [ref=e39]:
+          - paragraph [ref=e40]: Writer
+          - heading "对话写作" [level=1] [ref=e41]
+          - paragraph [ref=e42]: 选风格，填需求，生成成稿。
+        - generic [ref=e43]:
+          - generic [ref=e44]:
+            - generic [ref=e45]:
+              - generic [ref=e46]:
+                - button "账号" [ref=e47] [cursor=pointer]
+                - button "项目" [disabled] [ref=e48]
+              - combobox [ref=e106]:
+                - option "B站 / UI Account" [selected]
+              - generic [ref=e50]:
+                - strong [ref=e51]: UI Account
+                - generic [ref=e52]: B站 / 1 条视频 / 1 份转写
+            - generic [ref=e53]:
+              - generic [ref=e54]:
+                - generic [ref=e55]:
+                  - heading "写作需求" [level=2] [ref=e56]
+                  - generic [ref=e57]:
+                    - button "主题" [ref=e58] [cursor=pointer]
+                    - button "改写" [ref=e59] [cursor=pointer]
+                - textbox "主题、目标人群、核心观点..." [ref=e60]
+                - generic [ref=e61]:
+                  - button "联网开" [active] [pressed] [ref=e112] [cursor=pointer]:
+                    - img [ref=e63]
+                    - text: 联网开
+                  - button "生成" [disabled] [ref=e68]:
+                    - img [ref=e69]
+                    - text: 生成
+                  - button "保存草稿" [disabled] [ref=e72]:
+                    - img [ref=e73]
+                    - text: 保存草稿
+              - generic [ref=e77]:
+                - generic [ref=e78]:
+                  - heading "生成结果" [level=2] [ref=e79]
+                  - generic [ref=e80]:
+                    - button "复制" [disabled] [ref=e81]:
+                      - img [ref=e82]
+                      - text: 复制
+                    - button "飞书文档" [disabled] [ref=e85]:
+                      - img [ref=e86]
+                      - text: 飞书文档
+                    - button "重写" [disabled] [ref=e90]:
+                      - img [ref=e91]
+                      - text: 重写
+                - generic [ref=e94]: 暂无结果
+          - complementary [ref=e95]:
+            - generic [ref=e96]:
+              - generic [ref=e97]:
+                - heading "引用风格" [level=2] [ref=e98]
+                - generic [ref=e107]:
+                  - generic [ref=e108]: B站
+                  - generic [ref=e109]: 1 份转写
+              - generic [ref=e99]:
+                - heading "UI Account" [level=3] [ref=e110]
+                - paragraph [ref=e101]: UI Account 风格卡 内容定位 根据现有爆款转写稿，围绕账号已验证的话题与表达方式输出。 开头方式 先抛出明确判断或问题，用一句话制造继续看的理由。 句式与节奏 短句优先，观点先行，再用例子或细节补足。 每段只推进一个信息点，避免长铺垫。 常用话术 “你会发现...” “真正关键的是...” “这件事别只看表面...” 叙事结构 钩子开头 → 场景/
+                - button "查看风格卡" [ref=e102] [cursor=pointer]:
+                  - img [ref=e103]
+                  - text: 查看风格卡
+  - alert [ref=e111]

@@ -1,0 +1,89 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - link "账号风格库 本地工作台" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - img [ref=e6]
+      - generic [ref=e8]:
+        - strong [ref=e9]: 账号风格库
+        - generic [ref=e10]: 本地工作台
+    - navigation "主导航" [ref=e11]:
+      - link [ref=e12] [cursor=pointer]:
+        - /url: /
+        - img [ref=e13]
+      - link [ref=e16] [cursor=pointer]:
+        - /url: /library
+        - img [ref=e17]
+      - link [ref=e19] [cursor=pointer]:
+        - /url: /projects
+        - img [ref=e20]
+      - link [ref=e24] [cursor=pointer]:
+        - /url: /writer
+        - img [ref=e25]
+      - link [ref=e27] [cursor=pointer]:
+        - /url: /drafts
+        - img [ref=e28]
+  - main [ref=e31]:
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - generic [ref=e34]:
+          - paragraph [ref=e35]: Writer
+          - heading "对话写作" [level=1] [ref=e36]
+          - paragraph [ref=e37]: 选风格，填需求，生成成稿。
+        - generic [ref=e38]:
+          - generic [ref=e39]: 0 个账号
+          - generic [ref=e40]: 0 个项目
+      - generic [ref=e41]:
+        - generic [ref=e42]:
+          - generic [ref=e43]:
+            - generic [ref=e44]:
+              - button "账号" [ref=e45] [cursor=pointer]
+              - button "项目" [disabled] [ref=e46]
+            - generic [ref=e47]: 读取中
+            - generic [ref=e48]:
+              - strong [ref=e49]: 未选择
+              - generic [ref=e50]: 暂无引用信息
+          - generic [ref=e51]:
+            - generic [ref=e52]:
+              - generic [ref=e53]:
+                - heading "写作需求" [level=2] [ref=e54]
+                - generic [ref=e55]:
+                  - button "主题" [ref=e56] [cursor=pointer]
+                  - button "改写" [ref=e57] [cursor=pointer]
+              - textbox "主题、目标人群、核心观点..." [ref=e58]
+              - generic [ref=e59]:
+                - button "联网关" [ref=e60] [cursor=pointer]:
+                  - img [ref=e61]
+                  - text: 联网关
+                - button "生成" [disabled] [ref=e66]:
+                  - img [ref=e67]
+                  - text: 生成
+                - button "保存草稿" [disabled] [ref=e70]:
+                  - img [ref=e71]
+                  - text: 保存草稿
+            - generic [ref=e75]:
+              - generic [ref=e76]:
+                - heading "生成结果" [level=2] [ref=e77]
+                - generic [ref=e78]:
+                  - button "复制" [disabled] [ref=e79]:
+                    - img [ref=e80]
+                    - text: 复制
+                  - button "飞书文档" [disabled] [ref=e83]:
+                    - img [ref=e84]
+                    - text: 飞书文档
+                  - button "重写" [disabled] [ref=e88]:
+                    - img [ref=e89]
+                    - text: 重写
+              - generic [ref=e92]: 暂无结果
+        - complementary [ref=e93]:
+          - generic [ref=e94]:
+            - group [ref=e95]:
+              - generic "引用风格 未选择风格" [ref=e96] [cursor=pointer]:
+                - generic [ref=e97]:
+                  - heading "引用风格" [level=2] [ref=e98]
+                  - generic [ref=e99]: 未选择风格
+            - generic [ref=e100]:
+              - heading "未选择风格" [level=3] [ref=e101]
+              - paragraph [ref=e102]: 暂无风格卡
+              - button "查看风格卡" [disabled] [ref=e103]:
+                - img [ref=e104]
+                - text: 查看风格卡
