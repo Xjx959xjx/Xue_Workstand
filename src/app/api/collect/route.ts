@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { collectVideos, resolveAccountUid } from "@/lib/opencli";
+import { collectVideos, hydrateBilibiliVideoStats, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
 import { platforms, Video } from "@/lib/types";
 import { nowIso } from "@/lib/utils";
 
 export const runtime = "nodejs";
+const DATE_FILTER_CANDIDATE_LIMIT = 50;
+const MAX_DATE_FILTER_PAGES = 8;
 
 const schema = z.object({
   platform: z.enum(platforms),
@@ -29,12 +31,24 @@ export async function POST(request: Request) {
       sourceUrl: input.uidOrUrl || input.name
     });
 
+    const collectPlan = makeCollectPlan(input.platform, input.limit, input.order, input.fromDate, input.toDate);
     const result = await collectVideos({
       platform: input.platform,
       account,
-      limit: input.limit,
-      order: input.order
+      limit: collectPlan.limit,
+      order: collectPlan.order,
+      hydrateDetails: collectPlan.hydrateDetails
     });
+    if (collectPlan.pageByPubdate && input.platform === "bilibili") {
+      result.videos = await collectDateWindowCandidates({
+        account,
+        fromDate: input.fromDate,
+        toDate: input.toDate,
+        firstPageVideos: result.videos,
+        hydrateDetails: collectPlan.hydrateDetails
+      });
+      result.rawCount = result.videos.length;
+    }
 
     const updatedAccount = await upsertAccount({
       platform: input.platform,
@@ -44,15 +58,23 @@ export async function POST(request: Request) {
       lastCollectedAt: nowIso()
     });
 
-    const filteredVideos = filterVideosByDate(result.videos, input.fromDate, input.toDate);
-    const videos = await saveVideos(updatedAccount, filteredVideos);
+    const dateFilter = buildDateFilterResult(result.videos, input.fromDate, input.toDate);
+    const filteredVideos = await selectVideosForSave({
+      videos: dateFilter.filteredVideos,
+      platform: input.platform,
+      limit: input.limit,
+      order: input.order,
+      hydrateFinalDetails: collectPlan.hydrateFinalDetails
+    });
+    const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), input.order);
 
     return NextResponse.json({
       account: await getAccountSummary(updatedAccount),
       videos,
       command: result.command,
       rawCount: result.rawCount,
-      filteredCount: filteredVideos.length
+      filteredCount: filteredVideos.length,
+      dateFilter: dateFilter.summary
     });
   } catch (error) {
     return NextResponse.json(
@@ -62,18 +84,140 @@ export async function POST(request: Request) {
   }
 }
 
-function filterVideosByDate(videos: Video[], fromDate?: string, toDate?: string) {
-  const from = parseBoundaryDate(fromDate, "start");
-  const to = parseBoundaryDate(toDate, "end");
-  if (!from && !to) return videos;
+function makeCollectPlan(
+  platform: (typeof platforms)[number],
+  limit: number,
+  order: "pubdate" | "click" | "stow",
+  fromDate?: string,
+  toDate?: string
+) {
+  const hasDateFilter = Boolean(fromDate || toDate);
+  const canUseLightweightDateCandidates = platform === "bilibili" && hasDateFilter && order !== "stow";
+  return {
+    limit: hasDateFilter ? DATE_FILTER_CANDIDATE_LIMIT : limit,
+    order: hasDateFilter ? "pubdate" : order,
+    pageByPubdate: hasDateFilter,
+    hydrateDetails: !canUseLightweightDateCandidates,
+    hydrateFinalDetails: canUseLightweightDateCandidates
+  };
+}
 
+async function collectDateWindowCandidates(input: {
+  account: Parameters<typeof collectVideos>[0]["account"];
+  fromDate?: string;
+  toDate?: string;
+  firstPageVideos: Video[];
+  hydrateDetails: boolean;
+}) {
+  const from = parseBoundaryDate(input.fromDate, "start");
+  const to = parseBoundaryDate(input.toDate, "end");
+  const videos = [...input.firstPageVideos];
+
+  for (let page = 2; page <= MAX_DATE_FILTER_PAGES; page += 1) {
+    if (shouldStopPaging(videos, from, to)) break;
+    const nextPage = await collectVideos({
+      platform: "bilibili",
+      account: input.account,
+      limit: DATE_FILTER_CANDIDATE_LIMIT,
+      order: "pubdate",
+      page,
+      hydrateDetails: input.hydrateDetails
+    });
+    if (!nextPage.videos.length) break;
+    videos.push(...nextPage.videos);
+  }
+
+  return dedupeVideos(videos);
+}
+
+async function selectVideosForSave(input: {
+  videos: Video[];
+  platform: (typeof platforms)[number];
+  limit: number;
+  order: "pubdate" | "click" | "stow";
+  hydrateFinalDetails: boolean;
+}) {
+  const selected = sortVideos(input.videos, input.order).slice(0, input.limit);
+  if (!input.hydrateFinalDetails || input.platform !== "bilibili") return selected;
+  return Promise.all(selected.map((video) => hydrateBilibiliVideoStats(video)));
+}
+
+function shouldStopPaging(videos: Video[], from: Date | null, to: Date | null) {
+  const dated = videos.map((video) => parsePublishedAt(video.publishedAt)).filter((date): date is Date => Boolean(date));
+  if (!dated.length) return false;
+  const oldest = dated.reduce((min, date) => (date < min ? date : min), dated[0]);
+  if (!from) return Boolean(to && oldest <= to);
+  const hasCandidateInWindow = !to || dated.some((date) => date <= to);
+  return hasCandidateInWindow && oldest < from;
+}
+
+function dedupeVideos(videos: Video[]) {
+  const seen = new Set<string>();
   return videos.filter((video) => {
-    const publishedAt = parsePublishedAt(video.publishedAt);
-    if (!publishedAt) return false;
-    if (from && publishedAt < from) return false;
-    if (to && publishedAt > to) return false;
+    const key = video.id || video.url;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
+}
+
+function buildDateFilterResult(videos: Video[], fromDate?: string, toDate?: string) {
+  const from = parseBoundaryDate(fromDate, "start");
+  const to = parseBoundaryDate(toDate, "end");
+  const datedVideos = videos
+    .map((video) => ({ video, publishedAt: parsePublishedAt(video.publishedAt) }))
+    .filter((item): item is { video: Video; publishedAt: Date } => Boolean(item.publishedAt));
+
+  if (!from && !to) {
+    return {
+      filteredVideos: videos,
+      summary: {
+        applied: false,
+        rawCount: videos.length,
+        matchedCount: videos.length,
+        filteredOutCount: 0,
+        missingDateCount: videos.length - datedVideos.length,
+        ...dateSpan(datedVideos.map((item) => item.publishedAt))
+      }
+    };
+  }
+
+  const filteredVideos = datedVideos
+    .filter(({ publishedAt }) => {
+      if (from && publishedAt < from) return false;
+      if (to && publishedAt > to) return false;
+      return true;
+    })
+    .map(({ video }) => video);
+
+  return {
+    filteredVideos,
+    summary: {
+      applied: true,
+      fromDate,
+      toDate,
+      rawCount: videos.length,
+      matchedCount: filteredVideos.length,
+      filteredOutCount: videos.length - filteredVideos.length,
+      missingDateCount: videos.length - datedVideos.length,
+      ...dateSpan(datedVideos.map((item) => item.publishedAt))
+    }
+  };
+}
+
+function sortVideos(videos: Video[], order: "pubdate" | "click" | "stow") {
+  const sorted = [...videos];
+  if (order === "pubdate") {
+    return sorted.sort((a, b) => compareDates(b.publishedAt, a.publishedAt));
+  }
+  if (order === "stow") {
+    return sorted.sort((a, b) => b.stats.favorites - a.stats.favorites || b.stats.views - a.stats.views);
+  }
+  return sorted.sort((a, b) => b.stats.views - a.stats.views || b.stats.favorites - a.stats.favorites);
+}
+
+function compareDates(a?: string, b?: string) {
+  return (parsePublishedAt(a)?.getTime() || 0) - (parsePublishedAt(b)?.getTime() || 0);
 }
 
 function parseBoundaryDate(value: string | undefined, boundary: "start" | "end") {
@@ -100,4 +244,20 @@ function parsePublishedAt(value: string | undefined) {
 
   const date = new Date(normalized.replace(" ", "T"));
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dateSpan(dates: Date[]) {
+  if (!dates.length) return {};
+  const sorted = [...dates].sort((a, b) => a.getTime() - b.getTime());
+  return {
+    earliestPublishedAt: toDateInputValue(sorted[0]),
+    latestPublishedAt: toDateInputValue(sorted[sorted.length - 1])
+  };
+}
+
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }

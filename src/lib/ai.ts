@@ -319,7 +319,11 @@ export async function generateStyleProfile(platform: Platform, accountId: string
       role: "user",
       content: `账号：${account.name}\n平台：${platform}\n\n爆款样本：\n${corpus}`
     }
-  ]);
+  ]).catch(() => ({
+    text: "",
+    model: "local-fallback",
+    fallback: true
+  }));
 
   const style = result.text || fallback;
   await saveStyle(platform, accountId, style);
@@ -374,7 +378,11 @@ export async function generateProjectStyleProfile(projectId: string) {
       role: "user",
       content: `项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n参考素材：\n${corpus}`
     }
-  ]);
+  ]).catch(() => ({
+    text: "",
+    model: "local-fallback",
+    fallback: true
+  }));
 
   const style = result.text || fallback;
   await saveProjectStyle(projectId, style);

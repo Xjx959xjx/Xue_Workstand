@@ -1,4 +1,7 @@
 import { execFile } from "child_process";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 import { promisify } from "util";
 import { Account, Platform, Video } from "./types";
 import {
@@ -99,6 +102,8 @@ export async function collectVideos(input: {
   account: Account;
   limit: number;
   order?: "pubdate" | "click" | "stow";
+  page?: number;
+  hydrateDetails?: boolean;
 }) {
   const args =
     input.platform === "bilibili"
@@ -110,6 +115,8 @@ export async function collectVideos(input: {
           String(input.limit),
           "--order",
           input.order || "click",
+          "--page",
+          String(input.page || 1),
           "-f",
           "json"
         ]
@@ -132,7 +139,13 @@ export async function collectVideos(input: {
   const rows = asArray(raw);
   const videos =
     input.platform === "bilibili"
-      ? await Promise.all(rows.map((row) => normalizeBilibiliVideo(row, input.account)))
+      ? await Promise.all(
+          rows.map((row) =>
+            normalizeBilibiliVideo(row, input.account, {
+              hydrateDetails: input.hydrateDetails ?? true
+            })
+          )
+        )
       : rows.map((row) => normalizeDouyinVideo(row, input.account));
 
   return {
@@ -150,6 +163,34 @@ export async function getBilibiliSubtitle(video: Video) {
   const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "-f", "json"]);
   const raw = parseJsonish(stdout);
   return extractSubtitleText(raw);
+}
+
+export async function downloadBilibiliVideo(video: Video) {
+  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
+  if (!bvid) {
+    throw new Error("无法解析 B站视频 BV 号，不能下载音视频文件");
+  }
+
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "style-library-bilibili-"));
+  const stdout = await runOpenCli(["bilibili", "download", bvid, "--output", outputDir, "-f", "json"]);
+  const raw = parseJsonish(stdout);
+  const rows = asArray(raw);
+  const failed = rows.find((row) => {
+    if (!row || typeof row !== "object") return false;
+    return String((row as Record<string, unknown>).status || "").toLowerCase() === "failed";
+  }) as Record<string, unknown> | undefined;
+
+  if (failed) {
+    const detail = String(failed.size || failed.message || failed.error || "下载失败");
+    throw new Error(`B站视频下载失败：${detail}`);
+  }
+
+  const files = await collectMediaFiles(outputDir);
+  if (!files.length) {
+    throw new Error("B站视频下载后没有找到可转写的本地媒体文件");
+  }
+
+  return files[0];
 }
 
 export async function hydrateBilibiliVideoStats(video: Video) {
@@ -172,12 +213,17 @@ export async function hydrateBilibiliVideoStats(video: Video) {
   };
 }
 
-async function normalizeBilibiliVideo(row: unknown, account: Account): Promise<Video> {
+async function normalizeBilibiliVideo(
+  row: unknown,
+  account: Account,
+  options: { hydrateDetails?: boolean } = {}
+): Promise<Video> {
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   const title = String(object.title || object.name || "未命名视频");
   const url = String(object.url || object.link || "");
   const bvid = extractBvid(url) || String(object.bvid || object.BVID || object.aid || "");
-  const metadata: Record<string, unknown> = bvid ? await getBilibiliVideoFields(bvid).catch(() => ({})) : {};
+  const metadata: Record<string, unknown> =
+    options.hydrateDetails !== false && bvid ? await getBilibiliVideoFields(bvid).catch(() => ({})) : {};
   const views = toNumber(object.plays ?? object.views ?? object.play ?? object.view ?? metadata.view);
   const likes = toNumber(object.likes ?? object.like ?? metadata.like);
   const comments = toNumber(object.comments ?? object.reply ?? object.replies ?? metadata.reply);
@@ -280,4 +326,24 @@ function extractSubtitleText(raw: unknown): string {
   }
 
   return "";
+}
+
+async function collectMediaFiles(root: string) {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const mediaFiles: string[] = [];
+
+  for (const entry of entries) {
+    const target = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      mediaFiles.push(...(await collectMediaFiles(target)));
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+    if (/\.(mp4|m4a|mp3|wav|aac|flac|ogg|webm|mov|mkv)$/i.test(entry.name)) {
+      mediaFiles.push(target);
+    }
+  }
+
+  return mediaFiles;
 }

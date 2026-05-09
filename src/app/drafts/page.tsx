@@ -30,7 +30,7 @@ export default function DraftsPage() {
             <p className="subtle">写作台保存后的内容会沉淀到这里。</p>
           </div>
         </header>
-        <EmptyState title="还没有草稿" body="在对话写作页点击“生成并保存”后，草稿会写入对应账号的 drafts 目录。" action={{ href: "/writer", label: "去写作台" }} />
+        <EmptyState title="还没有草稿" body="在对话写作页生成结果后点击“保存草稿”，内容会写入对应账号的 drafts 目录。" action={{ href: "/writer", label: "去写作台" }} />
       </div>
     );
   }

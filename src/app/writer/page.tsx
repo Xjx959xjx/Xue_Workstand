@@ -5,8 +5,10 @@ import { Copy, ExternalLink, Eye, FileUp, Globe2, RotateCcw, Save, Send } from "
 import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
-import { publishFeishuDocument, writeCopy } from "@/lib/client";
+import { publishFeishuDocument, saveDraft, writeCopy } from "@/lib/client";
 import { Draft } from "@/lib/types";
+
+type DraftSaveBase = Omit<Draft, "id" | "createdAt" | "updatedAt" | "content">;
 
 export default function WriterPage() {
   const { library, loading, refresh } = useLibrary();
@@ -18,6 +20,8 @@ export default function WriterPage() {
   const [sourceText, setSourceText] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
   const [lastContent, setLastContent] = useState("");
+  const [lastSavedContent, setLastSavedContent] = useState("");
+  const [lastDraftBase, setLastDraftBase] = useState<DraftSaveBase | null>(null);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
@@ -42,10 +46,11 @@ export default function WriterPage() {
         ? `${formatPlatform(selectedAccount.platform)} / ${selectedAccount.videoCount} 条视频 / ${selectedAccount.transcriptCount} 份转写`
         : "";
   const canGenerate = Boolean(prompt.trim() && !busy && (targetType === "project" ? selectedProject : selectedAccount));
+  const isCurrentSaved = Boolean(lastContent && lastDraftBase) && lastSavedContent === lastContent;
 
-  async function handleGenerate(save = false) {
+  async function handleGenerate() {
     if (!canGenerate) return;
-    setBusy(save ? "save" : "generate");
+    setBusy("generate");
     setNotice("");
 
     try {
@@ -57,14 +62,50 @@ export default function WriterPage() {
         mode,
         prompt,
         sourceText,
-        save,
         useWebResearch
       });
       setLastContent(result.content);
+      setLastSavedContent("");
+      setLastDraftBase(
+        targetType === "account" && selectedAccount
+          ? {
+              platform: selectedAccount.platform,
+              accountId: selectedAccount.id,
+              accountName: selectedAccount.name,
+              title: makeDraftTitle(prompt),
+              mode,
+              prompt,
+              input: sourceText,
+              styleRef: {
+                platform: selectedAccount.platform,
+                accountId: selectedAccount.id,
+                accountName: selectedAccount.name
+              }
+            }
+          : null
+      );
       setNotice(result.fallback ? "已使用本地模板生成。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`);
-      if (save) await refresh();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "生成失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleSaveDraft() {
+    if (!lastContent || !lastDraftBase) return;
+    setBusy("draft-save");
+    setNotice("");
+    try {
+      await saveDraft({
+        ...lastDraftBase,
+        content: lastContent,
+      });
+      setLastSavedContent(lastContent);
+      setNotice("草稿已保存。");
+      await refresh();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "保存草稿失败");
     } finally {
       setBusy("");
     }
@@ -208,39 +249,55 @@ export default function WriterPage() {
                   <Globe2 size={16} />
                   {useWebResearch ? "联网开" : "联网关"}
                 </button>
-                <button className="btn primary" disabled={!canGenerate} onClick={() => handleGenerate(false)} type="button">
+                <button
+                  className="btn primary"
+                  disabled={!canGenerate}
+                  onClick={handleGenerate}
+                  title={prompt.trim() ? "按当前引用风格生成文案" : "填写写作需求后可生成"}
+                  type="button"
+                >
                   <Send size={16} />
                   {busy === "generate" ? "生成中..." : "生成"}
                 </button>
-                {targetType === "account" ? (
-                  <button className="btn" disabled={!canGenerate} onClick={() => handleGenerate(true)} type="button">
-                    <Save size={16} />
-                    保存草稿
-                  </button>
-                ) : null}
               </div>
             </div>
 
             <div className="writer-result">
               <div className="section-title-row">
                 <h2>生成结果</h2>
-                <div className="button-row">
-                  <button className="btn" disabled={!lastContent} onClick={copyLast} type="button">
-                    <Copy size={16} />
-                    复制
-                  </button>
-                  <button className="btn" disabled={!lastContent || busy === "feishu"} onClick={handlePublishFeishu} type="button">
-                    <FileUp size={16} />
-                    {busy === "feishu" ? "发布中..." : "飞书文档"}
-                  </button>
-                  <button className="btn" disabled={!lastContent || !canGenerate} onClick={() => handleGenerate(false)} type="button">
-                    <RotateCcw size={16} />
-                    重写
-                  </button>
-                </div>
+                {lastContent ? (
+                  <div className="button-row">
+                    <button className="btn" onClick={copyLast} type="button">
+                      <Copy size={16} />
+                      复制
+                    </button>
+                    {lastDraftBase ? (
+                      <button
+                        className="btn"
+                        disabled={isCurrentSaved || busy === "draft-save"}
+                        onClick={handleSaveDraft}
+                        type="button"
+                        title="保存当前结果到生成时的参考账号"
+                      >
+                        <Save size={16} />
+                        {busy === "draft-save" ? "保存中..." : isCurrentSaved ? "已保存" : "保存草稿"}
+                      </button>
+                    ) : null}
+                    <button className="btn" disabled={busy === "feishu"} onClick={handlePublishFeishu} type="button">
+                      <FileUp size={16} />
+                      {busy === "feishu" ? "发布中..." : "飞书文档"}
+                    </button>
+                    <button className="btn" disabled={!canGenerate} onClick={handleGenerate} type="button">
+                      <RotateCcw size={16} />
+                      重写
+                    </button>
+                  </div>
+                ) : (
+                  <span className="status-pill pending">{busy === "generate" ? "生成中" : "等待生成"}</span>
+                )}
               </div>
               <div className={`result-box ${lastContent ? "" : "empty"}`}>
-                {busy === "generate" || busy === "save" ? "生成中..." : lastContent || "暂无结果"}
+                {busy === "generate" ? "生成中..." : lastContent || "暂无结果"}
               </div>
             </div>
           </div>
@@ -335,4 +392,9 @@ export default function WriterPage() {
 function makeStylePreview(style?: string) {
   const text = (style || "").replace(/[#*_>`-]/g, "").replace(/\s+/g, " ").trim();
   return text ? text.slice(0, 180) : "暂无风格卡";
+}
+
+function makeDraftTitle(prompt: string) {
+  const title = prompt.replace(/\s+/g, " ").trim().slice(0, 32);
+  return title || "未命名草稿";
 }

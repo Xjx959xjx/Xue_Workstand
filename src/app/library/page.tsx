@@ -252,11 +252,16 @@ export default function LibraryPage() {
       });
       setTranscribeProgress(80);
       if (result.style) setStyleDraft(result.style);
-      setMessage(
-        updateStyle
-          ? `已批量处理并更新风格卡：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。`
-          : `批量转写完成：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。`
-      );
+      const baseMessage = `批量转写完成：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。`;
+      if (!updateStyle) {
+        setMessage(baseMessage);
+      } else if (result.styleUpdated) {
+        setMessage(`${baseMessage} 风格卡已同步更新。`);
+      } else if (result.styleError) {
+        setMessage(`${baseMessage} 风格卡未更新：${result.styleError}`);
+      } else {
+        setMessage(`${baseMessage} 风格卡未更新。`);
+      }
       await refresh();
       setTranscribeProgress(100);
     } catch (err) {
@@ -366,10 +371,6 @@ export default function LibraryPage() {
           <p className="subtle">左侧选账号，中间看爆款，右侧整理转写稿与风格卡。</p>
         </div>
         <div className="button-row">
-          <button className="btn" onClick={() => setAccountModalOpen(true)} type="button">
-            <Plus size={16} />
-            添加账号
-          </button>
           <button className="btn" onClick={refresh} type="button">
             <RefreshCw size={16} />
             刷新
@@ -378,7 +379,7 @@ export default function LibraryPage() {
       </header>
 
       {error ? <div className="error">{error}</div> : null}
-      {message ? <div className={message.includes("失败") || message.includes("没有") ? "error" : "notice"}>{message}</div> : null}
+      {message ? <div className={isErrorMessage(message) ? "error" : "notice"}>{message}</div> : null}
 
       <section className="panel three-pane library-workspace">
         <aside className="pane">
@@ -654,10 +655,6 @@ export default function LibraryPage() {
                 <p>{stylePreview || "暂无风格卡"}</p>
               </div>
               <div className="button-row">
-                <button className="btn" disabled={busy === "style"} onClick={handleGenerateStyle} type="button">
-                  <Sparkles size={16} />
-                  自动总结
-                </button>
                 <button className="btn primary" onClick={() => setOpenModal("style")} type="button">
                   <Eye size={16} />
                   查看编辑
@@ -763,4 +760,8 @@ export default function LibraryPage() {
 
 function makePreview(text: string) {
   return text.replace(/\s+/g, " ").trim().slice(0, 72);
+}
+
+function isErrorMessage(message: string) {
+  return ["失败", "没有", "未配置", "未找到", "未更新"].some((keyword) => message.includes(keyword));
 }

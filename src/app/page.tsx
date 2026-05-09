@@ -114,7 +114,7 @@ export default function HomePage() {
     try {
       const result = await collectAccount({ platform, name, limit, order, ...dateFilter });
       setLastCollect(result);
-      setMessage(`采集完成：opencli 返回 ${result.rawCount} 条，${activeTimeLabel}内写入 ${result.filteredCount} 条到「${result.account.name}」。`);
+      setMessage(formatCollectMessage(result, activeTimeLabel, order));
       await refresh();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "采集失败");
@@ -143,10 +143,6 @@ export default function HomePage() {
             <RefreshCw size={16} />
             {loading ? "读取中" : "刷新数据"}
           </button>
-          <Link className={`btn primary ${canWrite ? "" : "disabled"}`} href={canWrite ? "/writer" : "#"}>
-            <MessageSquareText size={16} />
-            去写作台
-          </Link>
         </div>
       </header>
 
@@ -225,10 +221,6 @@ export default function HomePage() {
               <Settings2 size={16} />
               {busy === "health" ? "检查中..." : "检查环境"}
             </button>
-            <Link className={`btn ${canWrite ? "" : "disabled"}`} href={canWrite ? "/writer" : "#"}>
-              <MessageSquareText size={16} />
-              开始写文案
-            </Link>
           </div>
         </div>
         <aside className="quick-status">
@@ -272,9 +264,6 @@ export default function HomePage() {
               <span className="button-row">
                 <Link className="btn" href="/library">
                   去账号库整理风格
-                </Link>
-                <Link className="btn primary" href="/writer">
-                  去写作台生成文案
                 </Link>
               </span>
             ) : null}
@@ -342,7 +331,12 @@ export default function HomePage() {
 
         <div className="panel">
           <div className="panel-inner">
-            <h2>最近账号</h2>
+            <div className="section-title-row">
+              <h2>最近账号</h2>
+              <Link className="text-link" href="/library">
+                进入账号库
+              </Link>
+            </div>
             {loading ? <p className="subtle">正在读取本地风格库...</p> : null}
             {!loading && !library?.recentAccounts.length ? (
               <div className="empty-action">
@@ -352,7 +346,7 @@ export default function HomePage() {
             ) : null}
             <div className="detail-stack">
               {library?.recentAccounts.map((account) => (
-                <div className="account-row" key={account.id}>
+                <Link className="account-row compact-link-row" href="/library" key={account.id}>
                   <div>
                     <span className="list-title">{account.name}</span>
                     <span className="list-meta">
@@ -366,28 +360,23 @@ export default function HomePage() {
                       {account.transcriptCount > 0 ? <span className="status-pill done">可参考写作</span> : null}
                     </div>
                   </div>
-                  <div className="button-row">
-                    <Link className="btn" href="/library">
-                      看详情
-                    </Link>
-                    <Link className="btn" href="/">
-                      继续采集
-                    </Link>
-                    <Link className={`btn primary ${account.transcriptCount > 0 ? "" : "disabled"}`} href={account.transcriptCount > 0 ? "/writer" : "#"}>
-                      去写作
-                    </Link>
-                  </div>
-                </div>
+                  <span className="row-arrow">打开</span>
+                </Link>
               ))}
             </div>
           </div>
         </div>
       </section>
 
-      <section className="grid-2 activity-grid">
+      <section className="activity-grid">
         <div className="panel">
           <div className="panel-inner">
-            <h2>最近草稿</h2>
+            <div className="section-title-row">
+              <h2>最近草稿</h2>
+              <Link className={`text-link ${canWrite ? "" : "disabled"}`} href={canWrite ? "/writer" : "#"}>
+                进入写作台
+              </Link>
+            </div>
             {!library?.recentDrafts.length ? (
               <p className="subtle">生成文案后会出现在这里。</p>
             ) : (
@@ -448,4 +437,23 @@ function formatTimeRangeLabel(timeRange: TimeRange, fromDate?: string, toDate?: 
   if (fromDate) return `${fromDate} 之后`;
   if (toDate) return `${toDate} 之前`;
   return "自定义不限";
+}
+
+function formatCollectMessage(
+  result: Awaited<ReturnType<typeof collectAccount>>,
+  activeTimeLabel: string,
+  order: "pubdate" | "click" | "stow"
+) {
+  const base = `采集完成：opencli 返回 ${result.rawCount} 条，${activeTimeLabel}内写入 ${result.filteredCount} 条到「${result.account.name}」。`;
+  const filter = result.dateFilter;
+  if (!filter?.applied || result.filteredCount > 0 || result.rawCount === 0) return base;
+
+  const dateRange =
+    filter.earliestPublishedAt && filter.latestPublishedAt
+      ? `本次返回视频发布时间为 ${filter.earliestPublishedAt} 至 ${filter.latestPublishedAt}`
+      : filter.missingDateCount
+        ? `本次返回的视频有 ${filter.missingDateCount} 条缺少发布时间`
+        : "本次返回视频不在所选时间范围内";
+  const orderHint = order === "pubdate" ? "" : "，或把排序改成「最新优先」";
+  return `${base} ${dateRange}，都不在当前时间范围内；请把时间改成「不限」/更早的范围${orderHint}后再采集。`;
 }

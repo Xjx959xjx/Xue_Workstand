@@ -170,6 +170,13 @@ export function writeCopy(input: {
   });
 }
 
+export function saveDraft(input: Omit<Draft, "id" | "createdAt" | "updatedAt">) {
+  return requestJson<Draft>("/api/drafts", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
 export function publishFeishuDocument(input: { title: string; content: string }) {
   return requestJson<{ title: string; documentId: string; url: string }>("/api/feishu/document", {
     method: "POST",

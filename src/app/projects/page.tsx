@@ -199,19 +199,6 @@ export default function ProjectsPage() {
           <p className="subtle">把多个账号组合成项目风格卡，用在更稳定的选题和文案生成里。</p>
         </div>
         <div className="button-row">
-          <button
-            className="btn"
-            onClick={() => {
-              setSelectedProjectId("");
-              setProjectName("");
-              setProjectDescription("");
-              setProjectAccountIds([]);
-              setProjectStyleDraft("");
-            }}
-            type="button"
-          >
-            新建项目
-          </button>
           <button className="btn" onClick={refresh} type="button">
             <RefreshCw size={16} />
             刷新
@@ -227,6 +214,19 @@ export default function ProjectsPage() {
           <div className="pane-header">
             <h2>项目</h2>
             <div className="account-manage-actions">
+              <button
+                className="btn icon-btn"
+                onClick={() => {
+                  setSelectedProjectId("");
+                  setProjectName("");
+                  setProjectDescription("");
+                  setProjectAccountIds([]);
+                  setProjectStyleDraft("");
+                }}
+                type="button"
+              >
+                新建
+              </button>
               <button
                 className={`btn icon-btn ${projectManageMode ? "primary" : ""}`}
                 onClick={() => {

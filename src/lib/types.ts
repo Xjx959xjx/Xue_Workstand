@@ -117,6 +117,17 @@ export type CollectResult = {
   command: string;
   rawCount: number;
   filteredCount: number;
+  dateFilter?: {
+    applied: boolean;
+    fromDate?: string;
+    toDate?: string;
+    rawCount: number;
+    matchedCount: number;
+    filteredOutCount: number;
+    missingDateCount: number;
+    earliestPublishedAt?: string;
+    latestPublishedAt?: string;
+  };
 };
 
 export type WriteResult = {
@@ -134,6 +145,7 @@ export type BatchTranscribeResult = {
   failed: number;
   style?: string;
   styleUpdated?: boolean;
+  styleError?: string;
   fallback?: boolean;
   usedModel?: string;
   results: Array<{

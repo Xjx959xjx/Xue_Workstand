@@ -69,11 +69,16 @@ export async function POST(request: Request) {
     }
 
     if (input.updateStyle) {
-      const styleResult = await generateStyleProfile(input.platform, input.accountId);
-      result.style = styleResult.style;
-      result.styleUpdated = true;
-      result.fallback = styleResult.fallback;
-      result.usedModel = styleResult.usedModel;
+      try {
+        const styleResult = await generateStyleProfile(input.platform, input.accountId);
+        result.style = styleResult.style;
+        result.styleUpdated = true;
+        result.fallback = styleResult.fallback;
+        result.usedModel = styleResult.usedModel;
+      } catch (error) {
+        result.styleUpdated = false;
+        result.styleError = error instanceof Error ? error.message : "风格卡更新失败";
+      }
     }
 
     result.account = await getAccountSummary(account);
