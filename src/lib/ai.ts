@@ -21,6 +21,13 @@ type ChatMessage = {
 };
 
 export type ChatWireApi = "responses" | "chat_completions";
+type ChatCompletionResult = {
+  text: string;
+  model: string;
+  fallback: boolean;
+  fallbackReason?: string;
+};
+
 type FetchInitWithDispatcher = UndiciRequestInit & {
   dispatcher?: ProxyAgent;
 };
@@ -49,10 +56,10 @@ export function getChatRuntimeConfig() {
   };
 }
 
-export async function chatComplete(messages: ChatMessage[]) {
+export async function chatComplete(messages: ChatMessage[]): Promise<ChatCompletionResult> {
   const config = chatConfig();
   if (!config.apiKey || !config.model) {
-    return { text: "", model: config.model || "local-fallback", fallback: true };
+    return fallbackChatCompletion(config.model || "local-fallback");
   }
 
   if (config.wireApi === "responses") {
@@ -62,7 +69,10 @@ export async function chatComplete(messages: ChatMessage[]) {
   return createChatCompletion(config, messages);
 }
 
-async function createChatCompletion(config: ReturnType<typeof chatConfig>, messages: ChatMessage[]) {
+async function createChatCompletion(
+  config: ReturnType<typeof chatConfig>,
+  messages: ChatMessage[]
+): Promise<ChatCompletionResult> {
   const init: FetchInitWithDispatcher = {
     method: "POST",
     headers: {
@@ -79,8 +89,7 @@ async function createChatCompletion(config: ReturnType<typeof chatConfig>, messa
   const response = await undiciFetch(`${config.baseUrl}/chat/completions`, init);
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`对话模型调用失败：${response.status} ${text}`);
+    throw new Error(describeChatHttpFailure(response.status, await response.text(), response.headers.get("content-type")));
   }
 
   const data = (await response.json()) as {
@@ -94,7 +103,10 @@ async function createChatCompletion(config: ReturnType<typeof chatConfig>, messa
   };
 }
 
-async function createResponse(config: ReturnType<typeof chatConfig>, messages: ChatMessage[]) {
+async function createResponse(
+  config: ReturnType<typeof chatConfig>,
+  messages: ChatMessage[]
+): Promise<ChatCompletionResult> {
   const system = messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -124,8 +136,7 @@ async function createResponse(config: ReturnType<typeof chatConfig>, messages: C
   const response = await undiciFetch(`${config.baseUrl}/responses`, init);
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`对话模型调用失败：${response.status} ${text}`);
+    throw new Error(describeChatHttpFailure(response.status, await response.text(), response.headers.get("content-type")));
   }
 
   const data = (await response.json()) as unknown;
@@ -140,8 +151,65 @@ function normalizeWireApi(value?: string): ChatWireApi {
   return value === "chat_completions" || value === "chat-completions" ? "chat_completions" : "responses";
 }
 
+function fallbackChatCompletion(model = "local-fallback", error?: unknown): ChatCompletionResult {
+  return {
+    text: "",
+    model,
+    fallback: true,
+    fallbackReason: error ? buildChatFallbackReason(error) : undefined
+  };
+}
+
+async function chatCompleteWithFallback(messages: ChatMessage[]): Promise<ChatCompletionResult> {
+  try {
+    return await chatComplete(messages);
+  } catch (error) {
+    return fallbackChatCompletion("local-fallback", error);
+  }
+}
+
 function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
   return proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+}
+
+function describeChatHttpFailure(status: number, body: string, contentType?: string | null) {
+  const detail = summarizeChatErrorBody(body, contentType);
+  return `对话模型调用失败：${status}${detail ? ` ${detail}` : ""}`;
+}
+
+function summarizeChatErrorBody(body: string, contentType?: string | null) {
+  const trimmed = body.trim();
+  if (!trimmed) return "";
+
+  const isHtml = Boolean(contentType?.includes("text/html")) || /^<!doctype html\b/i.test(trimmed) || /^<html\b/i.test(trimmed);
+  if (isHtml) {
+    if (/error code 524|a timeout occurred/i.test(trimmed)) {
+      return "模型服务响应超时";
+    }
+
+    const title = trimmed.match(/<title>([^<]+)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim();
+    return title ? `服务返回 HTML 错误页（${title}）` : "服务返回 HTML 错误页";
+  }
+
+  return trimmed.replace(/\s+/g, " ").slice(0, 240);
+}
+
+function buildChatFallbackReason(error: unknown) {
+  return `${summarizeChatFailure(error)}，已自动切换到本地模板，可先编辑后再重试。`;
+}
+
+function summarizeChatFailure(error: unknown) {
+  if (!(error instanceof Error)) return "对话模型暂时不可用";
+
+  const message = error.message;
+  if (/524\b|响应超时|a timeout occurred/i.test(message)) return "对话模型服务超时";
+  if (/429\b|rate limit/i.test(message)) return "对话模型服务限流";
+  if (/401\b|403\b|unauthorized|forbidden/i.test(message)) return "对话模型服务鉴权异常";
+  if (/ECONNREFUSED|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|fetch failed|SocketError/i.test(message)) {
+    return "对话模型服务连接异常";
+  }
+  if (/5\d\d\b|对话模型调用失败：/i.test(message)) return "对话模型服务暂时异常";
+  return "对话模型暂时不可用";
 }
 
 function extractResponseText(data: unknown): string {
@@ -309,7 +377,7 @@ export async function generateStyleProfile(platform: Platform, accountId: string
     .join("\n\n---\n\n");
 
   const fallback = buildFallbackStyle(account.name, corpus);
-  const result = await chatComplete([
+  const result = await chatCompleteWithFallback([
     {
       role: "system",
       content:
@@ -319,11 +387,7 @@ export async function generateStyleProfile(platform: Platform, accountId: string
       role: "user",
       content: `账号：${account.name}\n平台：${platform}\n\n爆款样本：\n${corpus}`
     }
-  ]).catch(() => ({
-    text: "",
-    model: "local-fallback",
-    fallback: true
-  }));
+  ]);
 
   const style = result.text || fallback;
   await saveStyle(platform, accountId, style);
@@ -368,7 +432,7 @@ export async function generateProjectStyleProfile(projectId: string) {
     .join("\n\n---\n\n");
 
   const fallback = buildFallbackStyle(project.name, corpus);
-  const result = await chatComplete([
+  const result = await chatCompleteWithFallback([
     {
       role: "system",
       content:
@@ -378,11 +442,7 @@ export async function generateProjectStyleProfile(projectId: string) {
       role: "user",
       content: `项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n参考素材：\n${corpus}`
     }
-  ]).catch(() => ({
-    text: "",
-    model: "local-fallback",
-    fallback: true
-  }));
+  ]);
 
   const style = result.text || fallback;
   await saveProjectStyle(projectId, style);
@@ -421,7 +481,7 @@ export async function writeCopy(input: {
       : `请按账号风格改写下面文案。改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
   const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
 
-  const result = await chatComplete([
+  const result = await chatCompleteWithFallback([
     {
       role: "system",
       content:
@@ -459,7 +519,8 @@ export async function writeCopy(input: {
     content,
     draft,
     usedModel: result.model,
-    fallback: result.fallback
+    fallback: result.fallback,
+    fallbackReason: result.fallbackReason
   };
 }
 
@@ -505,7 +566,7 @@ async function writeProjectCopy(input: {
       : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
   const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
 
-  const result = await chatComplete([
+  const result = await chatCompleteWithFallback([
     {
       role: "system",
       content:
@@ -523,10 +584,32 @@ async function writeProjectCopy(input: {
     sourceText: input.sourceText
   });
 
+  let draft;
+
+  if (input.save) {
+    draft = await saveDraft({
+      targetType: "project",
+      projectId: project.id,
+      projectName: project.name,
+      title: makeTitleFromPrompt(input.prompt),
+      mode: input.mode,
+      prompt: input.prompt,
+      input: input.sourceText,
+      content,
+      styleRef: {
+        projectId: project.id,
+        projectName: project.name,
+        sourceAccountIds: project.sourceAccountIds
+      }
+    });
+  }
+
   return {
     content,
+    draft,
     usedModel: result.model,
-    fallback: result.fallback
+    fallback: result.fallback,
+    fallbackReason: result.fallbackReason
   };
 }
 

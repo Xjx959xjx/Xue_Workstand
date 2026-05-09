@@ -1,20 +1,60 @@
-import { AccountSummary, BatchTranscribeResult, CollectResult, Draft, LibraryState, Platform, ProjectSummary, Video } from "./types";
+import { AccountSummary, BatchTranscribeResult, CollectResult, Draft, DraftInput, LibraryState, Platform, ProjectSummary, Video } from "./types";
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers || {})
-    },
-    cache: "no-store"
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.headers || {})
+      },
+      cache: "no-store"
+    });
+  } catch (error) {
+    throw new Error(describeRequestError(error));
+  }
+
+  const fallbackResponse = response.clone();
+  const data = await response.json().catch(async () => {
+    const text = await fallbackResponse.text().catch(() => "");
+    return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
   });
 
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || "请求失败");
+    throw new Error(data.error || summarizeHttpError(response.status));
   }
   return data as T;
+}
+
+function describeRequestError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "请求失败：无法连接到本地服务，请确认开发服务器仍在运行。";
+  }
+
+  if (error.name === "AbortError") {
+    return "请求失败：连接超时，请稍后重试。";
+  }
+
+  if (/Failed to fetch|Load failed|NetworkError/i.test(error.message)) {
+    return "请求失败：无法连接到本地服务，请确认开发服务器仍在运行。";
+  }
+
+  return `请求失败：${error.message || "网络异常"}`;
+}
+
+function summarizeHttpError(status: number, body = "", contentType?: string | null) {
+  const trimmed = body.trim();
+  if (!trimmed) return `请求失败：服务返回 ${status}`;
+
+  const isHtml = Boolean(contentType?.includes("text/html")) || /^<!doctype html\b/i.test(trimmed) || /^<html\b/i.test(trimmed);
+  if (isHtml) {
+    const title = trimmed.match(/<title>([^<]+)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim();
+    return title ? `请求失败：服务返回异常页面（${title}）` : `请求失败：服务返回异常页面（${status}）`;
+  }
+
+  return trimmed.replace(/\s+/g, " ").slice(0, 220);
 }
 
 export function getLibrary() {
@@ -106,6 +146,13 @@ export function deleteTranscript(input: { platform: Platform; accountId: string;
   });
 }
 
+export function deleteVideos(input: { platform: Platform; accountId: string; videoIds: string[] }) {
+  return requestJson<{ deleted: string[] }>("/api/videos", {
+    method: "DELETE",
+    body: JSON.stringify(input)
+  });
+}
+
 export function generateStyle(platform: Platform, accountId: string) {
   return requestJson<{ style: string; fallback: boolean; usedModel: string }>("/api/style", {
     method: "POST",
@@ -164,13 +211,13 @@ export function writeCopy(input: {
   save?: boolean;
   useWebResearch?: boolean;
 }) {
-  return requestJson<{ content: string; draft?: Draft; usedModel: string; fallback: boolean }>("/api/write", {
+  return requestJson<{ content: string; draft?: Draft; usedModel: string; fallback: boolean; fallbackReason?: string }>("/api/write", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export function saveDraft(input: Omit<Draft, "id" | "createdAt" | "updatedAt">) {
+export function saveDraft(input: DraftInput) {
   return requestJson<Draft>("/api/drafts", {
     method: "POST",
     body: JSON.stringify(input)

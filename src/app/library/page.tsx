@@ -10,6 +10,7 @@ import {
   batchTranscribe,
   createAccount,
   deleteAccounts,
+  deleteVideos,
   deleteTranscript,
   generateStyle,
   getTranscript,
@@ -18,9 +19,14 @@ import {
   saveStyle,
   transcribeVideo
 } from "@/lib/client";
-import { Platform } from "@/lib/types";
+import { Platform, Video } from "@/lib/types";
 
 type BatchLimit = 3 | 5 | 10 | "all";
+const HOT_SCORE_FORMULA = "热度 = 播放 + 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
+
+function canReadTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath"> | null) {
+  return Boolean(video?.transcriptPath) || video?.transcriptStatus === "completed";
+}
 
 export default function LibraryPage() {
   const { library, loading, error, refresh } = useLibrary();
@@ -37,6 +43,7 @@ export default function LibraryPage() {
   const [hydratedStatsAccounts, setHydratedStatsAccounts] = useState<string[]>([]);
   const [accountManageMode, setAccountManageMode] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [selectedVideoIds, setSelectedVideoIds] = useState<string[]>([]);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [accountFilter, setAccountFilter] = useState("");
   const [newAccountPlatform, setNewAccountPlatform] = useState<Platform>("bilibili");
@@ -85,10 +92,16 @@ export default function LibraryPage() {
     : 0;
   const completedCount = sortedVideos.filter((video) => video.transcriptStatus === "completed").length;
   const pendingCount = sortedVideos.length - completedCount;
+  const selectedVideoHasTranscript = canReadTranscript(selectedVideo);
+  const visibleMessage = message && message !== error ? message : "";
 
   useEffect(() => {
     if (selectedAccount) setStyleDraft(selectedAccount.style);
   }, [selectedAccount]);
+
+  useEffect(() => {
+    setSelectedVideoIds([]);
+  }, [selectedAccount?.id]);
 
   useEffect(() => {
     if (busy !== "batch-style") return;
@@ -137,7 +150,7 @@ export default function LibraryPage() {
 
     async function loadTranscript() {
       setTranscript("");
-      if (!selectedAccount || !selectedVideo || selectedVideo.transcriptStatus !== "completed") return;
+      if (!selectedAccount || !selectedVideo || !canReadTranscript(selectedVideo)) return;
       try {
         const result = await getTranscript({
           platform: selectedAccount.platform,
@@ -311,6 +324,7 @@ export default function LibraryPage() {
         setSelectedVideoId("");
       }
       setSelectedAccountIds([]);
+      setSelectedVideoIds([]);
       setMessage(`已删除 ${result.deleted.length} 个账号。`);
       await refresh();
     } catch (err) {
@@ -322,7 +336,7 @@ export default function LibraryPage() {
 
   async function handleDeleteTranscript() {
     if (!selectedAccount || !selectedVideo) return;
-    const confirmed = window.confirm("确认删除当前视频的转写稿？视频记录会保留，状态会恢复为未采集。");
+    const confirmed = window.confirm("确认删除当前视频的转写稿？视频记录会保留，状态会恢复为未完成。");
     if (!confirmed) return;
     setBusy("delete-transcript");
     setMessage("");
@@ -342,9 +356,41 @@ export default function LibraryPage() {
     }
   }
 
+  async function handleDeleteSelectedVideos() {
+    if (!selectedAccount || !selectedVideoIds.length) return;
+    const confirmed = window.confirm(`确认删除 ${selectedVideoIds.length} 条视频？对应视频记录和转写稿会一起删除。`);
+    if (!confirmed) return;
+    setBusy("video-delete");
+    setMessage("");
+    try {
+      const result = await deleteVideos({
+        platform: selectedAccount.platform,
+        accountId: selectedAccount.id,
+        videoIds: selectedVideoIds
+      });
+      if (selectedVideo && selectedVideoIds.includes(selectedVideo.id)) {
+        setSelectedVideoId("");
+        setTranscript("");
+      }
+      setSelectedVideoIds([]);
+      setMessage(`已删除 ${result.deleted.length} 条视频。`);
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "删除视频失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
   function toggleManagedAccount(accountId: string) {
     setSelectedAccountIds((current) =>
       current.includes(accountId) ? current.filter((id) => id !== accountId) : [...current, accountId]
+    );
+  }
+
+  function toggleManagedVideo(videoId: string) {
+    setSelectedVideoIds((current) =>
+      current.includes(videoId) ? current.filter((id) => id !== videoId) : [...current, videoId]
     );
   }
 
@@ -379,7 +425,7 @@ export default function LibraryPage() {
       </header>
 
       {error ? <div className="error">{error}</div> : null}
-      {message ? <div className={isErrorMessage(message) ? "error" : "notice"}>{message}</div> : null}
+      {visibleMessage ? <div className={isErrorMessage(visibleMessage) ? "error" : "notice"}>{visibleMessage}</div> : null}
 
       <section className="panel three-pane library-workspace">
         <aside className="pane">
@@ -395,6 +441,7 @@ export default function LibraryPage() {
                 onClick={() => {
                   setAccountManageMode((current) => !current);
                   setSelectedAccountIds([]);
+                  setSelectedVideoIds([]);
                 }}
                 title="管理账号"
                 type="button"
@@ -433,35 +480,35 @@ export default function LibraryPage() {
             {filteredAccounts.map((account) => {
               const completion = account.videoCount ? Math.round((account.transcriptCount / account.videoCount) * 100) : 0;
               return (
-              <button
-                className={`list-button account-list-button ${selectedAccount?.id === account.id ? "active" : ""} ${
-                  accountManageMode && selectedAccountIds.includes(account.id) ? "checked" : ""
-                }`}
-                key={account.id}
-                onClick={() => {
-                  if (accountManageMode) {
-                    toggleManagedAccount(account.id);
-                    return;
-                  }
-                  setSelectedAccountId(account.id);
-                  setSelectedVideoId("");
-                  setStyleDraft(account.style);
-                }}
-                type="button"
-              >
-                {accountManageMode ? (
-                  <span className={`check-dot ${selectedAccountIds.includes(account.id) ? "checked" : ""}`} aria-hidden="true" />
-                ) : null}
-                <span>
-                  <span className="list-title">{account.name}</span>
-                  <span className="list-meta">
-                    {formatPlatform(account.platform)} · {account.videoCount} 条 · {account.transcriptCount} 转写
+                <button
+                  className={`list-button account-list-button ${selectedAccount?.id === account.id ? "active" : ""} ${
+                    accountManageMode && selectedAccountIds.includes(account.id) ? "checked" : ""
+                  }`}
+                  key={account.id}
+                  onClick={() => {
+                    if (accountManageMode) {
+                      toggleManagedAccount(account.id);
+                      return;
+                    }
+                    setSelectedAccountId(account.id);
+                    setSelectedVideoId("");
+                    setStyleDraft(account.style);
+                  }}
+                  type="button"
+                >
+                  {accountManageMode ? (
+                    <span className={`check-dot ${selectedAccountIds.includes(account.id) ? "checked" : ""}`} aria-hidden="true" />
+                  ) : null}
+                  <span>
+                    <span className="list-title">{account.name}</span>
+                    <span className="list-meta">
+                      {formatPlatform(account.platform)} · {account.videoCount} 条 · {account.transcriptCount} 转写
+                    </span>
+                    <span className="list-progress" aria-label={`转写覆盖 ${completion}%`}>
+                      <span style={{ width: `${completion}%` }} />
+                    </span>
                   </span>
-                  <span className="list-progress" aria-label={`转写覆盖 ${completion}%`}>
-                    <span style={{ width: `${completion}%` }} />
-                  </span>
-                </span>
-              </button>
+                </button>
               );
             })}
             {!filteredAccounts.length ? <p className="subtle">没有匹配的账号。</p> : null}
@@ -473,8 +520,9 @@ export default function LibraryPage() {
             <div>
               <h2>{selectedAccount?.name || "视频"}</h2>
               <p className="pane-subtitle">
-                {sortedVideos.length} 条视频 · {completedCount} 已转写 · {pendingCount} 待处理
+                {sortedVideos.length} 条视频 · {completedCount} 已完成 · {pendingCount} 未完成
               </p>
+              <p className="pane-caption">{HOT_SCORE_FORMULA}</p>
             </div>
             <div className="field sort-field">
               <label>排序</label>
@@ -489,6 +537,20 @@ export default function LibraryPage() {
             </div>
           </div>
           <div className="pane-body">
+            {accountManageMode ? (
+              <div className="account-manage-bar video-manage-bar">
+                <span>已选 {selectedVideoIds.length} 条视频</span>
+                <button
+                  className="btn danger"
+                  disabled={!selectedVideoIds.length || busy === "video-delete"}
+                  onClick={handleDeleteSelectedVideos}
+                  type="button"
+                >
+                  <Trash2 size={14} />
+                  {busy === "video-delete" ? "删除中..." : "批量删除视频"}
+                </button>
+              </div>
+            ) : null}
             <table className="video-table">
               <thead>
                 <tr>
@@ -498,45 +560,64 @@ export default function LibraryPage() {
                 </tr>
               </thead>
               <tbody>
-                {sortedVideos.map((video) => (
-                  <tr
-                    className={selectedVideo?.id === video.id ? "active" : ""}
-                    key={video.id}
-                    onClick={() => setSelectedVideoId(video.id)}
-                  >
-                    <td>
-                      <span className="video-title-line">
-                        <strong>{video.title}</strong>
-                        <span className="metric-mini">热度 {Math.round(video.hotScore)}</span>
-                      </span>
-                      <span className="list-meta">
-                        {formatDateWithYear(video.publishedAt)} · 高于均值 {video.relativeViewRate || 0}x
-                      </span>
-                    </td>
-                    <td className="metric performance-metric">
-                      <span className="metric-bar" aria-hidden="true">
-                        <span style={{ width: `${Math.max(4, Math.round(((video.stats.views || 0) / maxViews) * 100))}%` }} />
-                      </span>
-                      <span className="performance-stack">
-                        <span className="metric-item primary">
-                          <span>播放</span>
-                          <strong>{formatNumber(video.stats.views)}</strong>
+                {sortedVideos.map((video) => {
+                  const checked = selectedVideoIds.includes(video.id);
+                  return (
+                    <tr
+                      className={accountManageMode ? (checked ? "checked" : "") : selectedVideo?.id === video.id ? "active" : ""}
+                      key={video.id}
+                      onClick={() => {
+                        if (accountManageMode) {
+                          toggleManagedVideo(video.id);
+                          return;
+                        }
+                        setSelectedVideoId(video.id);
+                      }}
+                    >
+                      <td>
+                        <div className={`video-title-cell ${accountManageMode ? "manage" : ""}`}>
+                          {accountManageMode ? <span className={`check-dot ${checked ? "checked" : ""}`} aria-hidden="true" /> : null}
+                          <div className="video-title-copy">
+                            <span className="video-title-line">
+                              <strong>{video.title}</strong>
+                              <span
+                                className="metric-mini hot-score"
+                                title={buildHotScoreHint(video)}
+                              >
+                                热度 {Math.round(video.hotScore)}
+                              </span>
+                            </span>
+                            <span className="list-meta">
+                              {formatDateWithYear(video.publishedAt)} · 高于均值 {video.relativeViewRate || 0}x
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="metric performance-metric">
+                        <span className="metric-bar" aria-hidden="true">
+                          <span style={{ width: `${Math.max(4, Math.round(((video.stats.views || 0) / maxViews) * 100))}%` }} />
                         </span>
-                        <span className="metric-item">
-                          <span>点赞</span>
-                          <strong>{formatNumber(video.stats.likes)}</strong>
+                        <span className="performance-stack">
+                          <span className="metric-item primary">
+                            <span>播放</span>
+                            <strong>{formatNumber(video.stats.views)}</strong>
+                          </span>
+                          <span className="metric-item">
+                            <span>点赞</span>
+                            <strong>{formatNumber(video.stats.likes)}</strong>
+                          </span>
+                          <span className="metric-item">
+                            <span>评论</span>
+                            <strong>{formatNumber(video.stats.comments)}</strong>
+                          </span>
                         </span>
-                        <span className="metric-item">
-                          <span>评论</span>
-                          <strong>{formatNumber(video.stats.comments)}</strong>
-                        </span>
-                      </span>
-                    </td>
-                    <td>
-                      <StatusPill status={video.transcriptStatus} />
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        <StatusPill status={video.transcriptStatus} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -558,9 +639,6 @@ export default function LibraryPage() {
                   <span className="stat-pill">{selectedAccount.videoCount} 条视频</span>
                   <span className="stat-pill">{selectedAccount.transcriptCount} 份转写</span>
                 </div>
-                <span className="list-progress large" aria-label={`账号转写覆盖 ${accountCompletion}%`}>
-                  <span style={{ width: `${accountCompletion}%` }} />
-                </span>
               </div>
             ) : null}
             {selectedVideo ? (
@@ -623,12 +701,12 @@ export default function LibraryPage() {
             <div className="compact-card">
               <div>
                 <h3>转写稿</h3>
-                <p>{transcriptPreview || (selectedVideo?.transcriptStatus === "completed" ? "转写稿为空。" : "当前视频还没有转写稿。")}</p>
+                <p>{transcriptPreview || (selectedVideoHasTranscript ? "转写稿为空。" : "当前视频还没有转写稿。")}</p>
               </div>
               <div className="button-row">
                 <button
                   className="btn"
-                  disabled={!selectedVideo || (selectedVideo.transcriptStatus !== "completed" && !transcript)}
+                  disabled={!selectedVideo || (!selectedVideoHasTranscript && !transcript)}
                   onClick={() => setOpenModal("transcript")}
                   type="button"
                 >
@@ -638,7 +716,7 @@ export default function LibraryPage() {
                 {accountManageMode ? (
                   <button
                     className="btn danger"
-                    disabled={!selectedVideo || (selectedVideo.transcriptStatus !== "completed" && !transcript) || busy === "delete-transcript"}
+                    disabled={!selectedVideo || (!selectedVideoHasTranscript && !transcript) || busy === "delete-transcript"}
                     onClick={handleDeleteTranscript}
                     type="button"
                   >
@@ -762,6 +840,13 @@ function makePreview(text: string) {
   return text.replace(/\s+/g, " ").trim().slice(0, 72);
 }
 
+function buildHotScoreHint(video: {
+  hotScore: number;
+  stats: { views: number; likes: number; comments: number; favorites: number; shares?: number };
+}) {
+  return `${HOT_SCORE_FORMULA}\n当前视频：播放 ${formatNumber(video.stats.views)} + 点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}`;
+}
+
 function isErrorMessage(message: string) {
-  return ["失败", "没有", "未配置", "未找到", "未更新"].some((keyword) => message.includes(keyword));
+  return ["失败", "没有", "未配置", "未找到", "未更新", "无法", "异常", "超时"].some((keyword) => message.includes(keyword));
 }

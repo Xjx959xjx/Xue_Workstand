@@ -5,6 +5,7 @@ import { Copy, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
+import { Draft } from "@/lib/types";
 
 export default function DraftsPage() {
   const { library, loading, refresh } = useLibrary();
@@ -72,7 +73,7 @@ export default function DraftsPage() {
                 <span>
                   <span className="list-title">{draft.title}</span>
                   <span className="list-meta">
-                    {draft.accountName} · {formatDate(draft.createdAt)}
+                    {getDraftReferenceLabel(draft)} · {formatDate(draft.createdAt)}
                   </span>
                 </span>
                 <span className="status-pill done">{draft.mode === "topic" ? "主题" : "改写"}</span>
@@ -93,8 +94,8 @@ export default function DraftsPage() {
             {selectedDraft ? (
               <>
                 <div className="stat-row">
-                  <span className="stat-pill">{formatPlatform(selectedDraft.platform)}</span>
-                  <span className="stat-pill">参考 {selectedDraft.accountName}</span>
+                  <span className="stat-pill">{selectedDraft.targetType === "project" ? "项目" : formatPlatform(selectedDraft.platform)}</span>
+                  <span className="stat-pill">参考 {getDraftReferenceLabel(selectedDraft)}</span>
                   <span className="stat-pill">{formatDate(selectedDraft.createdAt)}</span>
                 </div>
                 <div>
@@ -120,4 +121,8 @@ export default function DraftsPage() {
       </section>
     </div>
   );
+}
+
+function getDraftReferenceLabel(draft: Draft) {
+  return draft.targetType === "project" ? `项目 ${draft.projectName}` : draft.accountName;
 }

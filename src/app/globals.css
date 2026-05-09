@@ -716,6 +716,13 @@ h3 {
   font-size: 11px;
 }
 
+.pane-caption {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .pane-body {
   display: grid;
   gap: 10px;
@@ -828,6 +835,13 @@ h3 {
   font-size: 12px;
 }
 
+.video-manage-bar {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(249, 251, 253, 0.98), rgba(242, 247, 251, 0.98));
+}
+
 .list-progress,
 .metric-bar {
   display: block;
@@ -888,8 +902,28 @@ h3 {
 }
 
 .video-table tbody tr:hover,
-.video-table tbody tr.active {
+.video-table tbody tr.active,
+.video-table tbody tr.checked {
   background: var(--accent-tint);
+}
+
+.video-title-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.video-title-cell.manage {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.video-title-copy {
+  min-width: 0;
+}
+
+.video-title-cell .check-dot {
+  margin-top: 3px;
 }
 
 .video-title-line {
@@ -909,6 +943,11 @@ h3 {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
+}
+
+.metric-mini.hot-score {
+  border-bottom: 1px dashed rgba(53, 105, 212, 0.35);
+  cursor: help;
 }
 
 .performance-stack {

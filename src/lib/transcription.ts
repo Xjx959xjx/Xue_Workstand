@@ -163,9 +163,9 @@ function buildMissingMediaReason(input: {
 }) {
   if (input.platform === "bilibili" && !input.hadBilibiliSubtitle) {
     if (input.mediaError) {
-      return `此 B站视频没有发现外挂或智能字幕，且回退下载音视频也失败了：${input.mediaError}`;
+      return `此 B站视频的公开字幕接口没有返回外挂或智能字幕轨；如果页面里看到的是弹幕或视频内嵌文字，这类内容无法直接当作字幕提取。回退下载音视频也失败了：${input.mediaError}`;
     }
-    return "此 B站视频没有发现外挂或智能字幕。请提供本地音视频路径，或先安装 yt-dlp 以便下载视频后再转写。";
+    return "此 B站视频的公开字幕接口没有返回外挂或智能字幕轨；如果页面里看到的是弹幕或视频内嵌文字，这类内容无法直接当作字幕提取。请提供本地音视频路径，或先安装 yt-dlp 以便下载视频后再转写。";
   }
 
   if (input.mediaError) {

@@ -386,7 +386,7 @@ export default function HomePage() {
                     <span>
                       <span className="list-title">{draft.title}</span>
                       <span className="list-meta">
-                        参考 {draft.accountName} · {formatDate(draft.createdAt)}
+                        参考 {draft.targetType === "project" ? `项目 ${draft.projectName}` : draft.accountName} · {formatDate(draft.createdAt)}
                       </span>
                     </span>
                     <span className="status-pill done">草稿</span>

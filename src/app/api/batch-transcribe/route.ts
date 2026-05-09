@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     };
 
     for (const video of candidates) {
-      if (video.transcriptStatus === "completed") {
+      if (video.transcriptStatus === "completed" || Boolean(video.transcriptPath)) {
         result.skipped += 1;
         result.results.push({
           videoId: video.id,

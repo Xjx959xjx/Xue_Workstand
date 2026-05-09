@@ -5,7 +5,8 @@ import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-const schema = z.object({
+const accountDraftSchema = z.object({
+  targetType: z.literal("account").optional(),
   platform: z.enum(platforms),
   accountId: z.string().min(1),
   accountName: z.string().min(1),
@@ -21,6 +22,24 @@ const schema = z.object({
     videoIds: z.array(z.string()).optional()
   })
 });
+
+const projectDraftSchema = z.object({
+  targetType: z.literal("project"),
+  projectId: z.string().min(1),
+  projectName: z.string().min(1),
+  title: z.string().min(1),
+  mode: z.enum(["topic", "rewrite"]),
+  prompt: z.string().min(1),
+  input: z.string().optional(),
+  content: z.string().min(1),
+  styleRef: z.object({
+    projectId: z.string().min(1),
+    projectName: z.string().min(1),
+    sourceAccountIds: z.array(z.string()).optional()
+  })
+});
+
+const schema = z.union([accountDraftSchema, projectDraftSchema]);
 
 export async function POST(request: Request) {
   try {

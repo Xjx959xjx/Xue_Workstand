@@ -6,9 +6,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { publishFeishuDocument, saveDraft, writeCopy } from "@/lib/client";
-import { Draft } from "@/lib/types";
+import { AccountDraftInput, Draft, DraftInput, ProjectDraftInput } from "@/lib/types";
 
-type DraftSaveBase = Omit<Draft, "id" | "createdAt" | "updatedAt" | "content">;
+type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
 
 export default function WriterPage() {
   const { library, loading, refresh } = useLibrary();
@@ -67,24 +67,43 @@ export default function WriterPage() {
       setLastContent(result.content);
       setLastSavedContent("");
       setLastDraftBase(
-        targetType === "account" && selectedAccount
+        targetType === "project" && selectedProject
           ? {
-              platform: selectedAccount.platform,
-              accountId: selectedAccount.id,
-              accountName: selectedAccount.name,
+              targetType: "project",
+              projectId: selectedProject.id,
+              projectName: selectedProject.name,
               title: makeDraftTitle(prompt),
               mode,
               prompt,
               input: sourceText,
               styleRef: {
-                platform: selectedAccount.platform,
-                accountId: selectedAccount.id,
-                accountName: selectedAccount.name
+                projectId: selectedProject.id,
+                projectName: selectedProject.name,
+                sourceAccountIds: selectedProject.sourceAccounts.map((account) => account.id)
               }
             }
-          : null
+          : targetType === "account" && selectedAccount
+            ? {
+                platform: selectedAccount.platform,
+                accountId: selectedAccount.id,
+                accountName: selectedAccount.name,
+                title: makeDraftTitle(prompt),
+                mode,
+                prompt,
+                input: sourceText,
+                styleRef: {
+                  platform: selectedAccount.platform,
+                  accountId: selectedAccount.id,
+                  accountName: selectedAccount.name
+                }
+              }
+            : null
       );
-      setNotice(result.fallback ? "已使用本地模板生成。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`);
+      setNotice(
+        result.fallback
+          ? result.fallbackReason || "已使用本地模板生成。"
+          : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`
+      );
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "生成失败");
     } finally {
@@ -97,10 +116,17 @@ export default function WriterPage() {
     setBusy("draft-save");
     setNotice("");
     try {
-      await saveDraft({
-        ...lastDraftBase,
-        content: lastContent,
-      });
+      const payload: DraftInput =
+        lastDraftBase.targetType === "project"
+          ? {
+              ...lastDraftBase,
+              content: lastContent
+            }
+          : {
+              ...lastDraftBase,
+              content: lastContent
+            };
+      await saveDraft(payload);
       setLastSavedContent(lastContent);
       setNotice("草稿已保存。");
       await refresh();
@@ -277,7 +303,7 @@ export default function WriterPage() {
                         disabled={isCurrentSaved || busy === "draft-save"}
                         onClick={handleSaveDraft}
                         type="button"
-                        title="保存当前结果到生成时的参考账号"
+                        title={targetType === "project" ? "保存当前结果到生成时的参考项目" : "保存当前结果到生成时的参考账号"}
                       >
                         <Save size={16} />
                         {busy === "draft-save" ? "保存中..." : isCurrentSaved ? "已保存" : "保存草稿"}

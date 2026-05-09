@@ -2,11 +2,14 @@ import { promises as fs } from "fs";
 import path from "path";
 import {
   Account,
+  AccountDraft,
   AccountSummary,
   Draft,
+  DraftInput,
   LibraryState,
   Platform,
   Project,
+  ProjectDraft,
   ProjectSummary,
   Video,
   platforms
@@ -30,6 +33,10 @@ const DEFAULT_STYLE = `# 风格卡
 ## 结尾 CTA
 - 暂未总结。
 `;
+
+function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {
+  return video.transcriptStatus === "completed" || Boolean(video.transcriptPath);
+}
 
 export function libraryRoot() {
   return path.resolve(process.cwd(), process.env.STYLE_LIBRARY_DIR || "style-library");
@@ -407,6 +414,52 @@ export async function deleteTranscript(platform: Platform, accountId: string, vi
   return { account, video: next };
 }
 
+export async function deleteVideos(platform: Platform, accountId: string, videoIds: string[]) {
+  const account = await resolveAccount(platform, accountId);
+  const uniqueIds = [...new Set(videoIds)].filter(Boolean);
+  const deleted: string[] = [];
+
+  for (const videoId of uniqueIds) {
+    const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+    if (!(await exists(videoFile))) continue;
+
+    await Promise.all([
+      fs.rm(videoFile, { force: true }),
+      fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`), { force: true })
+    ]);
+    deleted.push(videoId);
+  }
+
+  if (deleted.length) {
+    const draftFiles = await fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []);
+    await Promise.all(
+      draftFiles
+        .filter((file) => file.endsWith(".json"))
+        .map(async (file) => {
+          const target = path.join(draftsPath(account.platform, account.slug), file);
+          const draft = await readJson<Draft>(target);
+          if (!draft || draft.targetType === "project") return;
+          const currentVideoIds = draft.styleRef.videoIds;
+          if (!currentVideoIds?.length) return;
+
+          const nextVideoIds = currentVideoIds.filter((videoId: string) => !deleted.includes(videoId));
+          if (nextVideoIds.length === currentVideoIds.length) return;
+
+          await writeJson(target, {
+            ...draft,
+            styleRef: {
+              ...draft.styleRef,
+              videoIds: nextVideoIds.length ? nextVideoIds : undefined
+            },
+            updatedAt: nowIso()
+          });
+        })
+    );
+  }
+
+  return { account, deleted };
+}
+
 export async function saveStyle(platform: Platform, accountId: string, content: string) {
   const account = await resolveAccount(platform, accountId);
   await fs.writeFile(stylePath(account.platform, account.slug), content.trimEnd() + "\n", "utf8");
@@ -420,14 +473,31 @@ export async function saveProjectStyle(projectId: string, content: string) {
   return content.trimEnd();
 }
 
-export async function saveDraft(input: Omit<Draft, "id" | "createdAt" | "updatedAt">) {
+export async function saveDraft(input: DraftInput) {
+  const now = nowIso();
+  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(input.content)}`;
+
+  if (input.targetType === "project") {
+    const project = await resolveProject(input.projectId);
+    await ensureProjectDirs(project.slug);
+
+    const draft: ProjectDraft = {
+      ...input,
+      id,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    await writeJson(path.join(projectDraftsPath(project.slug), `${draft.id}.json`), draft);
+    return draft;
+  }
+
   const account = await resolveAccount(input.platform, input.accountId);
   await ensureAccountDirs(account.platform, account.slug);
 
-  const now = nowIso();
-  const draft: Draft = {
+  const draft: AccountDraft = {
     ...input,
-    id: `${now.replace(/[:.]/g, "-")}-${shortHash(input.content)}`,
+    id,
     createdAt: now,
     updatedAt: now
   };
@@ -471,7 +541,7 @@ export async function getAccountSummary(account: Account): Promise<AccountSummar
     videos,
     drafts,
     videoCount: videos.length,
-    transcriptCount: videos.filter((video) => video.transcriptStatus === "completed").length,
+    transcriptCount: videos.filter(videoHasTranscript).length,
     draftCount: drafts.length
   };
 }
@@ -540,11 +610,34 @@ async function getAllProjectSummaries() {
   ).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
 }
 
+async function getAllProjectDrafts() {
+  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const drafts = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .flatMap(async (entry) => {
+          const files = await fs.readdir(projectDraftsPath(entry.name)).catch(() => []);
+          return Promise.all(
+            files
+              .filter((file) => file.endsWith(".json"))
+              .map((file) => readJson<ProjectDraft>(path.join(projectDraftsPath(entry.name), file)))
+          );
+        })
+    )
+  )
+    .flat()
+    .filter(Boolean) as ProjectDraft[];
+
+  return drafts.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
 export async function getLibrary(): Promise<LibraryState> {
   await ensureLibrary();
   const [accounts, projects] = await Promise.all([getAllAccountSummaries(), getAllProjectSummaries()]);
 
-  const drafts = accounts.flatMap((account) => account.drafts);
+  const projectDrafts = await getAllProjectDrafts();
+  const drafts = [...accounts.flatMap((account) => account.drafts), ...projectDrafts];
   const recentAccounts = [...accounts].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
   const recentProjects = [...projects].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
   const recentDrafts = [...drafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
@@ -570,7 +663,7 @@ export async function getVideo(platform: Platform, accountId: string, videoId: s
 export async function getTopTranscriptSamples(platform: Platform, accountId: string, maxSamples = 8) {
   const account = await resolveAccount(platform, accountId);
   const summary = await getAccountSummary(account);
-  const completed = summary.videos.filter((video) => video.transcriptStatus === "completed").slice(0, maxSamples);
+  const completed = summary.videos.filter(videoHasTranscript).slice(0, maxSamples);
 
   const samples = await Promise.all(
     completed.map(async (video) => ({

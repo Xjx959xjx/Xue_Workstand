@@ -49,25 +49,48 @@ export type Video = {
   updatedAt: string;
 };
 
-export type Draft = {
+type DraftBase = {
   id: string;
-  platform: Platform;
-  accountId: string;
-  accountName: string;
   title: string;
   mode: "topic" | "rewrite";
   prompt: string;
   input?: string;
   content: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AccountDraft = DraftBase & {
+  targetType?: "account";
+  platform: Platform;
+  accountId: string;
+  accountName: string;
   styleRef: {
     platform: Platform;
     accountId: string;
     accountName: string;
     videoIds?: string[];
   };
-  createdAt: string;
-  updatedAt: string;
 };
+
+export type ProjectDraft = DraftBase & {
+  targetType: "project";
+  projectId: string;
+  projectName: string;
+  styleRef: {
+    projectId: string;
+    projectName: string;
+    sourceAccountIds?: string[];
+  };
+};
+
+export type Draft = AccountDraft | ProjectDraft;
+
+export type AccountDraftInput = Omit<AccountDraft, "id" | "createdAt" | "updatedAt">;
+
+export type ProjectDraftInput = Omit<ProjectDraft, "id" | "createdAt" | "updatedAt">;
+
+export type DraftInput = AccountDraftInput | ProjectDraftInput;
 
 export type Project = {
   id: string;
@@ -135,6 +158,7 @@ export type WriteResult = {
   draft?: Draft;
   usedModel: string;
   fallback: boolean;
+  fallbackReason?: string;
 };
 
 export type BatchTranscribeResult = {
