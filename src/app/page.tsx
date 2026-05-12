@@ -282,8 +282,8 @@ export default function HomePage() {
               <span className={`status-pill ${health.opencli.ok ? "done" : "failed"}`}>
                 opencli {health.opencli.ok ? `可用 ${health.opencli.version}` : "不可用"}
               </span>
-              <span className={`status-pill ${health.siliconflowConfigured ? "done" : "pending"}`}>
-                硅基流动 {health.siliconflowConfigured ? "已配置" : "未配置"}
+              <span className={`status-pill ${health.volcengineAsrConfigured ? "done" : "pending"}`}>
+                火山转写 {health.volcengineAsrConfigured ? "已配置" : "未配置"}
               </span>
               <span className={`status-pill ${health.chatConfigured ? "done" : "pending"}`}>
                 对话模型 {health.chatConfigured ? `${health.chat.model} / ${health.chat.wireApi} / 已配置` : `${health.chat.model} / ${health.chat.wireApi} / 未配置`}
@@ -296,7 +296,7 @@ export default function HomePage() {
               </span>
             </div>
           ) : (
-            <p className="subtle">点击检查环境，确认 opencli、硅基流动、对话模型和飞书 lark-cli 配置。</p>
+            <p className="subtle">点击检查环境，确认 opencli、火山转写、对话模型和飞书 lark-cli 配置。</p>
           )}
         </aside>
       </section>

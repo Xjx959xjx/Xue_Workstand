@@ -217,8 +217,8 @@ function pushTiming(result: BatchTranscribeResult, stage: string, startedAt: num
 
 function resolveDouyinBatchConcurrency() {
   const parsed = Number.parseInt(process.env.DOUYIN_TRANSCRIBE_CONCURRENCY || "", 10);
-  if (!Number.isFinite(parsed)) return 2;
-  return Math.min(Math.max(parsed, 1), 3);
+  if (!Number.isFinite(parsed)) return 3;
+  return Math.min(Math.max(parsed, 1), 4);
 }
 
 function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {

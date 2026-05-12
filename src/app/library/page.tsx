@@ -24,8 +24,18 @@ import { BatchTranscribeResult, Platform, Video } from "@/lib/types";
 import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } from "@/lib/utils";
 
 type BatchLimit = 3 | 5 | 10 | "all";
-const HOT_SCORE_FORMULA = "热度 = 播放 + 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
-const DOUYIN_MISSING_VIEWS_HINT = "抖音采集源未返回播放量，当前热度使用点赞、评论、收藏和分享计算。";
+type VideoSortMode = "hot" | "views" | "likes" | "comments" | "favorites" | "latest";
+
+const BILIBILI_HOT_SCORE_FORMULA = "热度 = 播放 + 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
+const DOUYIN_HOT_SCORE_FORMULA = "热度 = 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
+const VIDEO_SORT_OPTIONS: Array<{ value: VideoSortMode; label: string }> = [
+  { value: "hot", label: "综合热度" },
+  { value: "views", label: "播放最多" },
+  { value: "likes", label: "点赞最多" },
+  { value: "comments", label: "评论最多" },
+  { value: "favorites", label: "收藏最多" },
+  { value: "latest", label: "发布时间" }
+];
 
 function canReadTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath"> | null) {
   return Boolean(video?.transcriptPath) || video?.transcriptStatus === "completed";
@@ -53,7 +63,7 @@ export default function LibraryPage() {
   const [transcript, setTranscript] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
-  const [sortMode, setSortMode] = useState<"hot" | "views" | "likes" | "comments" | "favorites" | "latest">("hot");
+  const [sortMode, setSortMode] = useState<VideoSortMode>("hot");
   const [batchLimit, setBatchLimit] = useState<BatchLimit>(5);
   const [transcribeProgress, setTranscribeProgress] = useState(0);
   const [transcribeStage, setTranscribeStage] = useState("");
@@ -88,6 +98,13 @@ export default function LibraryPage() {
     });
   }, [accountFilter, library?.accounts]);
 
+  const availableSortOptions = useMemo(
+    () => VIDEO_SORT_OPTIONS.filter((option) => !(selectedAccount?.platform === "douyin" && option.value === "views")),
+    [selectedAccount?.platform]
+  );
+  const effectiveSortMode = selectedAccount?.platform === "douyin" && sortMode === "views" ? "hot" : sortMode;
+  const hotScoreFormula = selectedAccount?.platform === "douyin" ? DOUYIN_HOT_SCORE_FORMULA : BILIBILI_HOT_SCORE_FORMULA;
+
   const sortedVideos = useMemo(() => {
     const videos = [...(selectedAccount?.videos || [])];
     const sorters = {
@@ -99,8 +116,8 @@ export default function LibraryPage() {
       latest: (a: typeof videos[number], b: typeof videos[number]) =>
         +new Date(b.publishedAt || 0) - +new Date(a.publishedAt || 0)
     };
-    return videos.sort(sorters[sortMode]);
-  }, [selectedAccount?.videos, sortMode]);
+    return videos.sort(sorters[effectiveSortMode]);
+  }, [effectiveSortMode, selectedAccount?.videos]);
 
   const selectedVideo = useMemo(() => {
     const first = sortedVideos[0];
@@ -110,13 +127,14 @@ export default function LibraryPage() {
 
   const transcriptPreview = useMemo(() => makePreview(transcript), [transcript]);
   const stylePreview = useMemo(() => makePreview(styleDraft || selectedAccount?.style || ""), [selectedAccount?.style, styleDraft]);
-  const maxViews = useMemo(() => Math.max(...sortedVideos.map((video) => video.stats.views || 0), 1), [sortedVideos]);
+  const maxPrimaryMetric = useMemo(() => Math.max(...sortedVideos.map((video) => getPrimaryMetric(video).sortValue), 1), [sortedVideos]);
   const accountCompletion = selectedAccount?.videoCount
     ? Math.round((selectedAccount.transcriptCount / selectedAccount.videoCount) * 100)
     : 0;
   const completedCount = sortedVideos.filter((video) => video.transcriptStatus === "completed").length;
   const pendingCount = sortedVideos.length - completedCount;
   const selectedVideoHasTranscript = canReadTranscript(selectedVideo);
+  const selectedVideoPrimaryMetric = selectedVideo ? getPrimaryMetric(selectedVideo) : null;
   const visibleMessage = message && message !== error ? message : "";
   const visibleMessageIsError = isErrorMessage(visibleMessage);
   const editModalTitle = openModal === "transcript" ? "转写稿全文" : "账号风格卡";
@@ -642,18 +660,22 @@ export default function LibraryPage() {
               <p className="pane-subtitle">
                 {sortedVideos.length} 条视频 · {completedCount} 已完成 · {pendingCount} 未完成
               </p>
-              <p className="pane-caption">{HOT_SCORE_FORMULA}</p>
+              <p className="pane-caption">{hotScoreFormula}</p>
             </div>
             <div className="video-header-tools">
               <div className="field sort-field">
                 <label htmlFor="library-video-sort">排序</label>
-                <select id="library-video-sort" name="videoSort" value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                  <option value="hot">综合热度</option>
-                  <option value="views">播放最多</option>
-                  <option value="likes">点赞最多</option>
-                  <option value="comments">评论最多</option>
-                  <option value="favorites">收藏最多</option>
-                  <option value="latest">发布时间</option>
+                <select
+                  id="library-video-sort"
+                  name="videoSort"
+                  value={effectiveSortMode}
+                  onChange={(event) => setSortMode(event.target.value as VideoSortMode)}
+                >
+                  {availableSortOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
               <button
@@ -701,7 +723,7 @@ export default function LibraryPage() {
               <tbody>
                 {sortedVideos.map((video) => {
                   const checked = selectedVideoIds.includes(video.id);
-                  const viewsMissing = hasMissingDouyinViews(video);
+                  const primaryMetric = getPrimaryMetric(video);
                   return (
                     <tr
                       className={videoManageMode ? (checked ? "checked" : "") : selectedVideo?.id === video.id ? "active" : ""}
@@ -731,8 +753,7 @@ export default function LibraryPage() {
                                 </span>
                               </span>
                               <span className="list-meta">
-                                {formatDateWithYear(video.publishedAt)}
-                                {viewsMissing ? " · 播放未返回" : ` · 高于均值 ${video.relativeViewRate || 0}x`}
+                                {getVideoMetaText(video)}
                               </span>
                             </span>
                           </span>
@@ -740,12 +761,12 @@ export default function LibraryPage() {
                       </td>
                       <td className="metric performance-metric">
                         <span className="metric-bar" aria-hidden="true">
-                          <span style={{ width: `${Math.max(4, Math.round(((video.stats.views || 0) / maxViews) * 100))}%` }} />
+                          <span style={{ width: `${Math.max(4, Math.round((primaryMetric.sortValue / maxPrimaryMetric) * 100))}%` }} />
                         </span>
                         <span className="performance-stack">
-                          <span className={`metric-item primary ${viewsMissing ? "missing" : ""}`} title={viewsMissing ? DOUYIN_MISSING_VIEWS_HINT : undefined}>
-                            <span>播放</span>
-                            <strong>{viewsMissing ? "未返回" : formatNumber(video.stats.views)}</strong>
+                          <span className="metric-item primary" title={primaryMetric.title}>
+                            <span>{primaryMetric.label}</span>
+                            <strong>{primaryMetric.value}</strong>
                           </span>
                           <span className="metric-item">
                             <span>点赞</span>
@@ -790,9 +811,11 @@ export default function LibraryPage() {
               <div className="detail-section">
                 <h3>{selectedVideo.title}</h3>
                 <div className="stat-row">
-                  <span className="stat-pill" title={hasMissingDouyinViews(selectedVideo) ? DOUYIN_MISSING_VIEWS_HINT : undefined}>
-                    播放 {hasMissingDouyinViews(selectedVideo) ? "未返回" : formatNumber(selectedVideo.stats.views)}
-                  </span>
+                  {selectedVideoPrimaryMetric ? (
+                    <span className="stat-pill" title={selectedVideoPrimaryMetric.title}>
+                      {selectedVideoPrimaryMetric.label} {selectedVideoPrimaryMetric.value}
+                    </span>
+                  ) : null}
                   <span className="stat-pill">点赞 {formatNumber(selectedVideo.stats.likes)}</span>
                   <span className="stat-pill">收藏 {formatNumber(selectedVideo.stats.favorites)}</span>
                   <StatusPill status={selectedVideo.transcriptStatus} />
@@ -998,8 +1021,28 @@ function makePreview(text: string) {
   return text.replace(/\s+/g, " ").trim().slice(0, 72);
 }
 
-function hasMissingDouyinViews(video: { platform?: Video["platform"]; stats: Pick<Video["stats"], "views"> } | null) {
-  return video?.platform === "douyin" && !video.stats.views;
+function getVideoMetaText(video: Pick<Video, "platform" | "publishedAt" | "relativeViewRate">) {
+  const dateText = formatDateWithYear(video.publishedAt);
+  if (video.platform === "douyin") return dateText;
+  return `${dateText} · 高于均值 ${video.relativeViewRate || 0}x`;
+}
+
+function getPrimaryMetric(video: Pick<Video, "platform" | "hotScore" | "stats">) {
+  if (video.platform === "douyin") {
+    return {
+      label: "热度",
+      value: formatNumber(Math.round(video.hotScore)),
+      sortValue: Math.round(video.hotScore),
+      title: buildHotScoreHint(video)
+    };
+  }
+
+  return {
+    label: "播放",
+    value: formatNumber(video.stats.views),
+    sortValue: video.stats.views,
+    title: undefined
+  };
 }
 
 function ModalDialog({
@@ -1073,8 +1116,11 @@ function buildHotScoreHint(video: {
   hotScore: number;
   stats: { views: number; likes: number; comments: number; favorites: number; shares?: number };
 }) {
-  const viewValue = hasMissingDouyinViews(video) ? "未返回" : formatNumber(video.stats.views);
-  return `${HOT_SCORE_FORMULA}\n当前视频：播放 ${viewValue} + 点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}${hasMissingDouyinViews(video) ? `\n${DOUYIN_MISSING_VIEWS_HINT}` : ""}`;
+  if (video.platform === "douyin") {
+    return `${DOUYIN_HOT_SCORE_FORMULA}\n当前视频：点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}`;
+  }
+
+  return `${BILIBILI_HOT_SCORE_FORMULA}\n当前视频：播放 ${formatNumber(video.stats.views)} + 点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}`;
 }
 
 function isErrorMessage(message: string) {

@@ -46,7 +46,7 @@ export type Video = {
   relativeViewRate: number;
   transcriptStatus: TranscriptStatus;
   transcriptPath?: string;
-  transcriptSource?: "platform_subtitle" | "siliconflow" | "manual";
+  transcriptSource?: "platform_subtitle" | "siliconflow" | "volcengine" | "manual";
   downloadUrl?: string;
   topComments?: string[];
   raw?: unknown;

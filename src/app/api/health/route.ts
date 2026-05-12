@@ -31,7 +31,11 @@ export async function GET() {
       version: opencliVersion
     },
     libraryRoot: libraryRoot(),
-    siliconflowConfigured: Boolean(process.env.SILICONFLOW_API_KEY),
+    volcengineAsrConfigured: Boolean(
+      process.env.VOLCENGINE_ASR_API_KEY ||
+      process.env.VOLCENGINE_API_KEY ||
+      (process.env.VOLCENGINE_ASR_APP_KEY && process.env.VOLCENGINE_ASR_ACCESS_KEY)
+    ),
     chatConfigured: chat.configured,
     chat,
     feishuConfigured: feishu.configured,

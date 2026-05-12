@@ -10,6 +10,7 @@ const schema = z.object({
   accountId: z.string().min(1),
   videoId: z.string().min(1),
   mediaPath: z.string().optional(),
+  mediaUrl: z.string().url().optional(),
   allowRemoteDownload: z.boolean().optional()
 });
 

@@ -95,6 +95,7 @@ export function transcribeVideo(input: {
   accountId: string;
   videoId: string;
   mediaPath?: string;
+  mediaUrl?: string;
   allowRemoteDownload?: boolean;
 }) {
   return requestJson("/api/transcribe", {
@@ -506,7 +507,7 @@ export function getHealth() {
   return requestJson<{
     opencli: { ok: boolean; bin: string; version: string };
     libraryRoot: string;
-    siliconflowConfigured: boolean;
+    volcengineAsrConfigured: boolean;
     chatConfigured: boolean;
     chat: {
       baseUrl: string;
