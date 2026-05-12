@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Copy, RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { Copy, PenLine, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -86,10 +87,18 @@ export default function DraftsPage() {
         <section className="pane">
           <div className="pane-header">
             <h2>{selectedDraft?.title || "草稿详情"}</h2>
-            <button className="btn" disabled={!selectedDraft} onClick={handleCopy} type="button">
-              <Copy size={16} />
-              复制
-            </button>
+            <div className="button-row">
+              {selectedDraft ? (
+                <Link className="btn" href={buildRewriteHref(selectedDraft)} title="带入对话写作继续改写">
+                  <PenLine size={16} />
+                  改写
+                </Link>
+              ) : null}
+              <button className="btn" disabled={!selectedDraft} onClick={handleCopy} type="button">
+                <Copy size={16} />
+                复制
+              </button>
+            </div>
           </div>
           <div className="pane-body detail-stack">
             {selectedDraft ? (
@@ -126,4 +135,21 @@ export default function DraftsPage() {
 
 function getDraftReferenceLabel(draft: Draft) {
   return draft.targetType === "project" ? `项目 ${draft.projectName}` : draft.accountName;
+}
+
+function buildRewriteHref(draft: Draft) {
+  const params = new URLSearchParams({
+    mode: "rewrite",
+    draftId: draft.id
+  });
+
+  if (draft.targetType === "project") {
+    params.set("targetType", "project");
+    params.set("projectId", draft.projectId);
+  } else {
+    params.set("targetType", "account");
+    params.set("accountId", draft.accountId);
+  }
+
+  return `/writer?${params.toString()}`;
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -21,6 +22,7 @@ export default function ProjectsPage() {
   const [accountFilter, setAccountFilter] = useState("");
   const [projectManageMode, setProjectManageMode] = useState(false);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const selectedProject = useMemo(() => {
     return library?.projects.find((project) => project.id === selectedProjectId) || null;
@@ -60,8 +62,6 @@ export default function ProjectsPage() {
 
   async function handleDeleteSelectedProjects() {
     if (!selectedProjectIds.length) return;
-    const confirmed = window.confirm(`确认删除 ${selectedProjectIds.length} 个项目？项目风格卡和项目草稿会一起删除。`);
-    if (!confirmed) return;
     setBusy("project-delete");
     setMessage("");
     try {
@@ -74,6 +74,8 @@ export default function ProjectsPage() {
         setProjectStyleDraft("");
       }
       setSelectedProjectIds([]);
+      setProjectManageMode(false);
+      setDeleteConfirmOpen(false);
       setMessage(`已删除 ${result.deleted.length} 个项目。`);
       await refresh();
     } catch (err) {
@@ -250,7 +252,7 @@ export default function ProjectsPage() {
               <button
                 className="btn danger"
                 disabled={!selectedProjectIds.length || busy === "project-delete"}
-                onClick={handleDeleteSelectedProjects}
+                onClick={() => setDeleteConfirmOpen(true)}
                 type="button"
               >
                 <Trash2 size={14} />
@@ -413,6 +415,16 @@ export default function ProjectsPage() {
           </div>
         </div>
       </section>
+      {deleteConfirmOpen ? (
+        <ConfirmDialog
+          body={`会删除 ${selectedProjectIds.length} 个项目的风格卡和项目草稿。`}
+          busy={busy === "project-delete"}
+          confirmLabel="删除项目"
+          title="确认删除项目？"
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={handleDeleteSelectedProjects}
+        />
+      ) : null}
     </div>
   );
 }

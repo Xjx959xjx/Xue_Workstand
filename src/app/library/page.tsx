@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { Eye, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDateWithYear, formatNumber, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -75,6 +76,7 @@ export default function LibraryPage() {
   const [videoManageMode, setVideoManageMode] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedVideoIds, setSelectedVideoIds] = useState<string[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<"" | "accounts" | "videos">("");
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [accountFilter, setAccountFilter] = useState("");
   const [newAccountPlatform, setNewAccountPlatform] = useState<Platform>("bilibili");
@@ -451,8 +453,6 @@ export default function LibraryPage() {
 
   async function handleDeleteSelectedAccounts() {
     if (!selectedAccountIds.length) return;
-    const confirmed = window.confirm(`确认删除 ${selectedAccountIds.length} 个账号？本地账号资料和转写稿会一起删除。`);
-    if (!confirmed) return;
     setBusy("account-delete");
     setMessage("");
     try {
@@ -463,6 +463,8 @@ export default function LibraryPage() {
       }
       setSelectedAccountIds([]);
       setSelectedVideoIds([]);
+      setAccountManageMode(false);
+      setDeleteTarget("");
       setMessage(`已删除 ${result.deleted.length} 个账号。`);
       await refresh();
     } catch (err) {
@@ -474,8 +476,6 @@ export default function LibraryPage() {
 
   async function handleDeleteSelectedVideos() {
     if (!selectedAccount || !selectedVideoIds.length) return;
-    const confirmed = window.confirm(`确认删除 ${selectedVideoIds.length} 条视频？对应视频记录和转写稿会一起删除。`);
-    if (!confirmed) return;
     setBusy("video-delete");
     setMessage("");
     try {
@@ -489,6 +489,8 @@ export default function LibraryPage() {
         setTranscript("");
       }
       setSelectedVideoIds([]);
+      setVideoManageMode(false);
+      setDeleteTarget("");
       setMessage(`已删除 ${result.deleted.length} 条视频。`);
       await refresh();
     } catch (err) {
@@ -590,7 +592,7 @@ export default function LibraryPage() {
               <button
                 className="btn danger"
                 disabled={!selectedAccountIds.length || busy === "account-delete"}
-                onClick={handleDeleteSelectedAccounts}
+                onClick={() => setDeleteTarget("accounts")}
                 type="button"
               >
                 <Trash2 size={14} />
@@ -703,7 +705,7 @@ export default function LibraryPage() {
               <button
                 className="btn danger"
                 disabled={!selectedVideoIds.length || busy === "video-delete"}
-                onClick={handleDeleteSelectedVideos}
+                onClick={() => setDeleteTarget("videos")}
                 type="button"
               >
                 <Trash2 size={14} />
@@ -745,11 +747,8 @@ export default function LibraryPage() {
                             <span className="video-title-copy">
                               <span className="video-title-line">
                                 <strong>{video.title}</strong>
-                                <span
-                                  className="metric-mini hot-score"
-                                  title={buildHotScoreHint(video)}
-                                >
-                                  热度 {Math.round(video.hotScore)}
+                                <span className="metric-mini hot-score" title={buildHotScoreHint(video)}>
+                                  热度 {formatInteger(video.hotScore)}
                                 </span>
                               </span>
                               <span className="list-meta">
@@ -764,10 +763,6 @@ export default function LibraryPage() {
                           <span style={{ width: `${Math.max(4, Math.round((primaryMetric.sortValue / maxPrimaryMetric) * 100))}%` }} />
                         </span>
                         <span className="performance-stack">
-                          <span className="metric-item primary" title={primaryMetric.title}>
-                            <span>{primaryMetric.label}</span>
-                            <strong>{primaryMetric.value}</strong>
-                          </span>
                           <span className="metric-item">
                             <span>点赞</span>
                             <strong>{formatNumber(video.stats.likes)}</strong>
@@ -775,6 +770,10 @@ export default function LibraryPage() {
                           <span className="metric-item">
                             <span>评论</span>
                             <strong>{formatNumber(video.stats.comments)}</strong>
+                          </span>
+                          <span className="metric-item">
+                            <span>收藏</span>
+                            <strong>{formatNumber(video.stats.favorites)}</strong>
                           </span>
                         </span>
                       </td>
@@ -818,7 +817,6 @@ export default function LibraryPage() {
                   ) : null}
                   <span className="stat-pill">点赞 {formatNumber(selectedVideo.stats.likes)}</span>
                   <span className="stat-pill">收藏 {formatNumber(selectedVideo.stats.favorites)}</span>
-                  <StatusPill status={selectedVideo.transcriptStatus} />
                 </div>
                 <div className="button-row detail-action-row">
                   <button className="btn" disabled={busy === "transcribe"} onClick={handleTranscribe} type="button">
@@ -1013,12 +1011,36 @@ export default function LibraryPage() {
             </div>
         </ModalDialog>
       ) : null}
+      {deleteTarget === "accounts" ? (
+        <ConfirmDialog
+          body={`会删除 ${selectedAccountIds.length} 个账号的本地资料、视频记录和转写稿。`}
+          busy={busy === "account-delete"}
+          confirmLabel="删除账号"
+          title="确认删除账号？"
+          onCancel={() => setDeleteTarget("")}
+          onConfirm={handleDeleteSelectedAccounts}
+        />
+      ) : null}
+      {deleteTarget === "videos" ? (
+        <ConfirmDialog
+          body={`会删除 ${selectedVideoIds.length} 条视频记录，并同步删除对应转写稿。`}
+          busy={busy === "video-delete"}
+          confirmLabel="删除视频"
+          title="确认删除视频？"
+          onCancel={() => setDeleteTarget("")}
+          onConfirm={handleDeleteSelectedVideos}
+        />
+      ) : null}
     </div>
   );
 }
 
 function makePreview(text: string) {
   return text.replace(/\s+/g, " ").trim().slice(0, 72);
+}
+
+function formatInteger(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(Math.round(value || 0));
 }
 
 function getVideoMetaText(video: Pick<Video, "platform" | "publishedAt" | "relativeViewRate">) {

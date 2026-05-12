@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import { Copy, ExternalLink, Eye, FileUp, Globe2, RotateCcw, Save, Send } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
@@ -12,6 +13,15 @@ import { AccountDraftInput, Draft, DraftInput, ProjectDraftInput, WriteResult } 
 type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
 
 export default function WriterPage() {
+  return (
+    <Suspense fallback={<WriterFallback />}>
+      <WriterPageContent />
+    </Suspense>
+  );
+}
+
+function WriterPageContent() {
+  const searchParams = useSearchParams();
   const { library, loading, refresh } = useLibrary();
   const [targetType, setTargetType] = useState<"account" | "project">("account");
   const [accountId, setAccountId] = useState("");
@@ -72,6 +82,30 @@ export default function WriterPage() {
       previouslyFocused?.focus();
     };
   }, [feishuResult]);
+
+  useEffect(() => {
+    const target = searchParams.get("targetType");
+    const nextMode = searchParams.get("mode");
+    const nextPrompt = searchParams.get("prompt");
+    const nextSourceText = searchParams.get("sourceText");
+    const nextAccountId = searchParams.get("accountId");
+    const nextProjectId = searchParams.get("projectId");
+    const draftId = searchParams.get("draftId");
+    const sourceDraft = draftId ? library?.drafts.find((draft) => draft.id === draftId) : null;
+
+    if (target === "project") setTargetType("project");
+    if (target === "account") setTargetType("account");
+    if (nextMode === "topic" || nextMode === "rewrite") setMode(nextMode);
+    if (sourceDraft) {
+      setPrompt(sourceDraft.prompt);
+      setSourceText(sourceDraft.content);
+    } else {
+      if (nextPrompt !== null) setPrompt(nextPrompt);
+      if (nextSourceText !== null) setSourceText(nextSourceText);
+    }
+    if (nextAccountId) setAccountId(nextAccountId);
+    if (nextProjectId) setProjectId(nextProjectId);
+  }, [library?.drafts, searchParams]);
 
   async function handleGenerate() {
     if (!canGenerate) return;
@@ -530,6 +564,25 @@ export default function WriterPage() {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function WriterFallback() {
+  return (
+    <div className="page">
+      <header className="page-header workbench-header">
+        <div>
+          <p className="eyebrow">Writer</p>
+          <h1>对话写作</h1>
+          <p className="subtle">正在读取写作台。</p>
+        </div>
+      </header>
+      <section className="panel">
+        <div className="panel-inner">
+          <p className="subtle">加载中...</p>
+        </div>
+      </section>
     </div>
   );
 }
