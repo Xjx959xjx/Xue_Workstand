@@ -45,7 +45,7 @@ export function toNumber(value: unknown) {
 
 export function clampText(input: string, maxLength: number) {
   if (input.length <= maxLength) return input;
-  return `${input.slice(0, maxLength)}...`;
+  return `${input.slice(0, maxLength)}…`;
 }
 
 export function makeTitleFromPrompt(prompt: string) {

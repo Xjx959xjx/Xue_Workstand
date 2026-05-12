@@ -43,6 +43,14 @@ async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
   return stdout.trim();
 }
 
+export function parseOpenCliJsonish(stdout: string): unknown {
+  return parseJsonish(stdout);
+}
+
+export function openCliRows(raw: unknown): unknown[] {
+  return asArray(raw);
+}
+
 function parseJsonish(stdout: string): unknown {
   if (!stdout) return [];
   try {

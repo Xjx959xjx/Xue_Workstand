@@ -11,11 +11,18 @@ const schema = z.object({
   accountId: z.string().optional(),
   projectId: z.string().optional(),
   mode: z.enum(["topic", "rewrite"]),
-  prompt: z.string().min(1),
+  prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional()
 }).superRefine((input, ctx) => {
+  if (input.mode === "topic" && !input.prompt.trim()) {
+    ctx.addIssue({ code: "custom", message: "请填写写作主题", path: ["prompt"] });
+  }
+  if (input.mode === "rewrite" && !input.prompt.trim() && !input.sourceText?.trim()) {
+    ctx.addIssue({ code: "custom", message: "请填写改写要求或粘贴原文素材", path: ["sourceText"] });
+  }
+
   if (input.targetType === "project" || input.projectId) {
     if (!input.projectId) {
       ctx.addIssue({ code: "custom", message: "请选择参考项目", path: ["projectId"] });

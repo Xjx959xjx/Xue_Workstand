@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { publishFeishuDocument, saveDraft, streamWriteCopy, writeCopy } from "@/lib/client";
+import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import { AccountDraftInput, Draft, DraftInput, ProjectDraftInput, WriteResult } from "@/lib/types";
 
 type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
@@ -61,7 +62,12 @@ function WriterPageContent() {
       : selectedAccount
         ? `${formatPlatform(selectedAccount.platform)} / ${selectedAccount.videoCount} 条视频 / ${selectedAccount.transcriptCount} 份转写`
         : "";
-  const canGenerate = Boolean(prompt.trim() && !busy && (targetType === "project" ? selectedProject : selectedAccount));
+  const sourceExtraction = useMemo(() => extractRewriteSourceMaterial(sourceText), [sourceText]);
+  const normalizedPrompt = useMemo(() => normalizeRewritePrompt(mode, prompt, sourceText), [mode, prompt, sourceText]);
+  const normalizedSourceText = sourceText;
+  const hasRewriteSource = Boolean(normalizedSourceText.trim());
+  const hasTaskInput = mode === "topic" ? Boolean(normalizedPrompt.trim()) : Boolean(normalizedPrompt.trim() || hasRewriteSource);
+  const canGenerate = Boolean(hasTaskInput && !busy && (targetType === "project" ? selectedProject : selectedAccount));
   const isCurrentSaved = Boolean(lastContent && lastDraftBase) && lastSavedContent === lastContent;
   const noticeIsError = notice.includes("失败") || notice.includes("未配置");
 
@@ -123,8 +129,8 @@ function WriterPageContent() {
         accountId: targetType === "account" ? selectedAccount?.id : undefined,
         projectId: targetType === "project" ? selectedProject?.id : undefined,
         mode,
-        prompt,
-        sourceText,
+        prompt: normalizedPrompt,
+        sourceText: normalizedSourceText,
         useWebResearch
       };
 
@@ -172,10 +178,10 @@ function WriterPageContent() {
               targetType: "project",
               projectId: selectedProject.id,
               projectName: selectedProject.name,
-              title: makeDraftTitle(prompt),
+              title: makeDraftTitle(normalizedPrompt || normalizedSourceText),
               mode,
-              prompt,
-              input: sourceText,
+              prompt: normalizedPrompt,
+              input: normalizedSourceText,
               styleRef: {
                 projectId: selectedProject.id,
                 projectName: selectedProject.name,
@@ -187,10 +193,10 @@ function WriterPageContent() {
                 platform: selectedAccount.platform,
                 accountId: selectedAccount.id,
                 accountName: selectedAccount.name,
-                title: makeDraftTitle(prompt),
+                title: makeDraftTitle(normalizedPrompt || normalizedSourceText),
                 mode,
-                prompt,
-                input: sourceText,
+                prompt: normalizedPrompt,
+                input: normalizedSourceText,
                 styleRef: {
                   platform: selectedAccount.platform,
                   accountId: selectedAccount.id,
@@ -267,7 +273,7 @@ function WriterPageContent() {
 
   if (!loading && !library?.accounts.length && !library?.projects.length) {
     return (
-      <div className="page">
+      <div className="page writer-page">
         <header className="page-header workbench-header">
           <div>
             <p className="eyebrow">Writer</p>
@@ -281,7 +287,7 @@ function WriterPageContent() {
   }
 
   return (
-    <div className="page">
+    <div className="page writer-page">
       <header className="page-header workbench-header">
         <div>
           <p className="eyebrow">Writer</p>
@@ -321,7 +327,13 @@ function WriterPageContent() {
             {loading ? (
               <span className="stat-pill">读取中</span>
             ) : targetType === "project" ? (
-              <select aria-label="选择参考项目" className="writer-ref-select" value={selectedProject?.id || ""} onChange={(event) => setProjectId(event.target.value)}>
+              <select
+                aria-label="选择参考项目"
+                className="writer-ref-select"
+                name="projectId"
+                value={selectedProject?.id || ""}
+                onChange={(event) => setProjectId(event.target.value)}
+              >
                 {library?.projects.map((project) => (
                   <option key={project.id} value={project.id}>
                     {project.name}
@@ -329,7 +341,13 @@ function WriterPageContent() {
                 ))}
               </select>
             ) : (
-              <select aria-label="选择参考账号" className="writer-ref-select" value={selectedAccount?.id || ""} onChange={(event) => setAccountId(event.target.value)}>
+              <select
+                aria-label="选择参考账号"
+                className="writer-ref-select"
+                name="accountId"
+                value={selectedAccount?.id || ""}
+                onChange={(event) => setAccountId(event.target.value)}
+              >
                 {library?.accounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {formatPlatform(account.platform)} / {account.name}
@@ -360,19 +378,33 @@ function WriterPageContent() {
 
               <textarea
                 aria-label={mode === "topic" ? "写作主题和要求" : "改写要求"}
+                autoComplete="off"
                 className="writer-textarea main"
-                placeholder={mode === "topic" ? "主题、目标人群、核心观点…" : "改写要求、语气、长度、平台…"}
+                name="prompt"
+                placeholder={mode === "topic" ? "主题、目标人群、核心观点…" : DEFAULT_REWRITE_PROMPT}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
               />
               {mode === "rewrite" ? (
-                <textarea
-                  aria-label="需要改写的原文"
-                  className="writer-textarea source"
-                  placeholder="粘贴原文"
-                  value={sourceText}
-                  onChange={(event) => setSourceText(event.target.value)}
-                />
+                <>
+                  <textarea
+                    aria-label="需要改写的原文"
+                    autoComplete="off"
+                    className="writer-textarea source"
+                    name="sourceText"
+                    placeholder="粘贴原文、抖音分享链接；多条素材中间空一行…"
+                    value={sourceText}
+                    onChange={(event) => setSourceText(event.target.value)}
+                  />
+                  {sourceText.trim() ? (
+                    <div className="source-detect-row" aria-live="polite">
+                      <span className="status-pill done">{sourceExtraction.materials.length || 1} 条素材</span>
+                      {sourceExtraction.linkCount ? <span className="status-pill pending">{sourceExtraction.linkCount} 个链接待转写</span> : null}
+                      {!sourceExtraction.linkCount && sourceExtraction.textMaterialCount ? <span className="status-pill">{sourceExtraction.textMaterialCount} 条文案</span> : null}
+                      {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
+                    </div>
+                  ) : null}
+                </>
               ) : null}
 
               <div className="writer-actionbar">
@@ -383,18 +415,18 @@ function WriterPageContent() {
                   aria-pressed={useWebResearch}
                   title="联网检索"
                 >
-                  <Globe2 size={16} />
+                  <Globe2 aria-hidden="true" size={16} />
                   {useWebResearch ? "联网开" : "联网关"}
                 </button>
                 <button
                   className="btn primary"
                   disabled={!canGenerate}
                   onClick={handleGenerate}
-                  title={prompt.trim() ? "按当前引用风格生成文案" : "填写写作需求后可生成"}
+                  title={canGenerate ? "按当前引用风格生成文案" : mode === "rewrite" ? "填写改写要求或粘贴原文素材后可生成" : "填写写作主题后可生成"}
                   type="button"
                 >
-                  <Send size={16} />
-                  {busy === "generate" ? "生成中..." : "生成"}
+                  <Send aria-hidden="true" size={16} />
+                  {busy === "generate" ? "生成中…" : "生成"}
                 </button>
               </div>
             </div>
@@ -405,7 +437,7 @@ function WriterPageContent() {
                 {lastContent ? (
                   <div className="button-row">
                     <button className="btn" onClick={copyLast} type="button">
-                      <Copy size={16} />
+                      <Copy aria-hidden="true" size={16} />
                       复制
                     </button>
                     {lastDraftBase ? (
@@ -416,16 +448,16 @@ function WriterPageContent() {
                         type="button"
                         title={targetType === "project" ? "保存当前结果到生成时的参考项目" : "保存当前结果到生成时的参考账号"}
                       >
-                        <Save size={16} />
-                        {busy === "draft-save" ? "保存中..." : isCurrentSaved ? "已保存" : "保存草稿"}
+                        <Save aria-hidden="true" size={16} />
+                        {busy === "draft-save" ? "保存中…" : isCurrentSaved ? "已保存" : "保存草稿"}
                       </button>
                     ) : null}
                     <button className="btn" disabled={busy === "feishu"} onClick={handlePublishFeishu} type="button">
-                      <FileUp size={16} />
-                      {busy === "feishu" ? "发布中..." : "飞书文档"}
+                      <FileUp aria-hidden="true" size={16} />
+                      {busy === "feishu" ? "发布中…" : "飞书文档"}
                     </button>
                     <button className="btn" disabled={!canGenerate} onClick={handleGenerate} type="button">
-                      <RotateCcw size={16} />
+                      <RotateCcw aria-hidden="true" size={16} />
                       重写
                     </button>
                   </div>
@@ -445,7 +477,7 @@ function WriterPageContent() {
                 </div>
               ) : null}
               <div className={`result-box ${lastContent ? "" : "empty"}`}>
-                {busy === "generate" && !lastContent ? "正在等待首段内容..." : lastContent || "暂无结果"}
+                {busy === "generate" && !lastContent ? "正在等待首段内容…" : lastContent || "暂无结果"}
               </div>
               {lastResearch ? (
                 <details className="style-reference" style={{ marginTop: 16 }}>
@@ -494,7 +526,7 @@ function WriterPageContent() {
               <h3>{activeTitle || "未选择风格"}</h3>
               <p>{makeStylePreview(activeStyle)}</p>
               <button className="btn" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
-                <Eye size={16} />
+                <Eye aria-hidden="true" size={16} />
                 查看风格卡
               </button>
             </div>
@@ -557,7 +589,7 @@ function WriterPageContent() {
             <div className="feishu-success-card">
               <p>{feishuResult.title}</p>
               <a className="btn primary" href={feishuResult.url} rel="noreferrer" target="_blank">
-                <ExternalLink size={16} />
+                <ExternalLink aria-hidden="true" size={16} />
                 打开飞书文档
               </a>
             </div>
@@ -570,7 +602,7 @@ function WriterPageContent() {
 
 function WriterFallback() {
   return (
-    <div className="page">
+    <div className="page writer-page">
       <header className="page-header workbench-header">
         <div>
           <p className="eyebrow">Writer</p>
@@ -580,7 +612,7 @@ function WriterFallback() {
       </header>
       <section className="panel">
         <div className="panel-inner">
-          <p className="subtle">加载中...</p>
+          <p className="subtle">加载中…</p>
         </div>
       </section>
     </div>

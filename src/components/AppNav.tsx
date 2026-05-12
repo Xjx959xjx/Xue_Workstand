@@ -19,7 +19,7 @@ export function AppNav() {
     <aside className="sidebar">
       <Link href="/" className="brand">
         <span className="brand-mark">
-          <Sparkles size={20} />
+          <Sparkles aria-hidden="true" size={20} />
         </span>
         <span>
           <strong>账号风格库</strong>
@@ -32,7 +32,7 @@ export function AppNav() {
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
           return (
             <Link key={item.href} href={item.href} className={`nav-link ${active ? "active" : ""}`} aria-current={active ? "page" : undefined}>
-              <Icon size={19} />
+              <Icon aria-hidden="true" size={19} />
               <span>{item.label}</span>
             </Link>
           );

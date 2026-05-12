@@ -12,11 +12,18 @@ const schema = z.object({
   accountId: z.string().optional(),
   projectId: z.string().optional(),
   mode: z.enum(["topic", "rewrite"]),
-  prompt: z.string().min(1),
+  prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional()
 }).superRefine((input, ctx) => {
+  if (input.mode === "topic" && !input.prompt.trim()) {
+    ctx.addIssue({ code: "custom", message: "请填写写作主题", path: ["prompt"] });
+  }
+  if (input.mode === "rewrite" && !input.prompt.trim() && !input.sourceText?.trim()) {
+    ctx.addIssue({ code: "custom", message: "请填写改写要求或粘贴原文素材", path: ["sourceText"] });
+  }
+
   if (input.targetType === "project" || input.projectId) {
     if (!input.projectId) {
       ctx.addIssue({ code: "custom", message: "请选择参考项目", path: ["projectId"] });
@@ -35,6 +42,9 @@ export async function POST(request: Request) {
 
     const stream = createNdjsonStream(async (emit) => {
       emit({ type: "stage", stage: "prepare", message: "正在读取风格卡和代表样本", progress: 10 });
+      if (input.mode === "rewrite" && /https?:\/\//i.test(input.sourceText || "")) {
+        emit({ type: "stage", stage: "transcribe-links", message: "正在转写链接里的视频文稿", progress: 18 });
+      }
       const prepared = await prepareWriteCopyContext(input);
 
       if (input.useWebResearch) {

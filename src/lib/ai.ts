@@ -22,6 +22,8 @@ import {
   saveStyle,
   upsertProject
 } from "./storage";
+import { normalizeRewritePrompt } from "./source-extraction";
+import { resolveRewriteSourceMaterial } from "./source-transcription";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -765,26 +767,28 @@ export async function completePreparedWriteCopy(input: {
 }
 
 export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<PreparedWriteContext> {
-  if (input.targetType === "project" || input.projectId) {
-    return prepareProjectWriteContext(input);
+  const normalizedInput = await normalizeWriteCopyInput(input);
+
+  if (normalizedInput.targetType === "project" || normalizedInput.projectId) {
+    return prepareProjectWriteContext(normalizedInput);
   }
 
-  if (!input.platform || !input.accountId) {
+  if (!normalizedInput.platform || !normalizedInput.accountId) {
     throw new Error("请选择参考账号");
   }
 
-  const account = await resolveAccount(input.platform, input.accountId);
-  const style = await fs.readFile(path.join(libraryRoot(), input.platform, account.slug, "style.md"), "utf8");
-  const samples = await getTopTranscriptSamples(input.platform, input.accountId, 3);
+  const account = await resolveAccount(normalizedInput.platform, normalizedInput.accountId);
+  const style = await fs.readFile(path.join(libraryRoot(), normalizedInput.platform, account.slug, "style.md"), "utf8");
+  const samples = await getTopTranscriptSamples(normalizedInput.platform, normalizedInput.accountId, 3);
   const sampleContext = samples
     .map(({ video, transcript }) => `《${video.title}》\n${clampText(transcript, 1200)}`)
     .join("\n\n---\n\n");
 
   const userTask =
-    input.mode === "topic"
-      ? `请基于这个主题生成文案：\n${input.prompt}`
-      : `请按账号风格改写下面文案。改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
-  const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
+    normalizedInput.mode === "topic"
+      ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
+      : `请按账号风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
+  const webContext = normalizedInput.useWebResearch ? await buildWebResearchContext(normalizedInput) : "未启用联网检索。";
 
   return {
     messages: [
@@ -795,24 +799,24 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
       },
       {
         role: "user",
-        content: `参考账号：${account.name}\n平台：${input.platform}\n\n风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
+        content: `参考账号：${account.name}\n平台：${normalizedInput.platform}\n\n风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
       }
     ],
     fallbackName: account.name,
     fallbackStyle: style,
-    fallbackInput: input,
-    research: input.useWebResearch ? webContext : undefined,
+    fallbackInput: normalizedInput,
+    research: normalizedInput.useWebResearch ? webContext : undefined,
     draftBase: {
-      platform: input.platform,
-      accountId: input.accountId,
+      platform: normalizedInput.platform,
+      accountId: normalizedInput.accountId,
       accountName: account.name,
-      title: makeTitleFromPrompt(input.prompt),
-      mode: input.mode,
-      prompt: input.prompt,
-      input: input.sourceText,
+      title: makeTitleFromPrompt(normalizedInput.prompt),
+      mode: normalizedInput.mode,
+      prompt: normalizedInput.prompt,
+      input: normalizedInput.sourceText,
       styleRef: {
-        platform: input.platform,
-        accountId: input.accountId,
+        platform: normalizedInput.platform,
+        accountId: normalizedInput.accountId,
         accountName: account.name,
         videoIds: samples.map((sample) => sample.video.id)
       }
@@ -852,7 +856,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
   const userTask =
     input.mode === "topic"
       ? `请基于这个主题生成文案：\n${input.prompt}`
-      : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
+      : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文素材：\n${input.sourceText || ""}`;
   const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
 
   return {
@@ -890,6 +894,35 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       }
     }
   };
+}
+
+async function normalizeWriteCopyInput(input: WriteCopyInput): Promise<WriteCopyInput> {
+  const prompt = normalizeRewritePrompt(input.mode, input.prompt, input.sourceText);
+
+  if (input.mode !== "rewrite") {
+    return {
+      ...input,
+      prompt
+    };
+  }
+
+  const sourceText = await normalizeRewriteSourceText(input.sourceText || "");
+
+  return {
+    ...input,
+    prompt,
+    sourceText
+  };
+}
+
+async function normalizeRewriteSourceText(sourceText: string) {
+  const trimmed = sourceText.trim();
+  if (!trimmed || isNormalizedMaterialText(trimmed)) return trimmed;
+  return (await resolveRewriteSourceMaterial(trimmed)).normalizedText || trimmed;
+}
+
+function isNormalizedMaterialText(sourceText: string) {
+  return /^素材\s*\d+\s*[：:]/m.test(sourceText);
 }
 
 async function savePreparedDraft(
