@@ -2,6 +2,10 @@ export const platforms = ["bilibili", "douyin"] as const;
 
 export type Platform = (typeof platforms)[number];
 
+export const collectOrders = ["views", "likes", "favorites", "comments", "pubdate"] as const;
+
+export type CollectOrder = (typeof collectOrders)[number];
+
 export type TranscriptStatus =
   | "not_started"
   | "pending"
@@ -155,6 +159,7 @@ export type CollectResult = {
 
 export type WriteResult = {
   content: string;
+  research?: string;
   draft?: Draft;
   usedModel: string;
   fallback: boolean;
@@ -167,10 +172,15 @@ export type BatchTranscribeResult = {
   completed: number;
   skipped: number;
   failed: number;
+  timings?: Array<{
+    stage: string;
+    ms: number;
+  }>;
   style?: string;
   styleUpdated?: boolean;
   styleError?: string;
   fallback?: boolean;
+  fallbackReason?: string;
   usedModel?: string;
   results: Array<{
     videoId: string;
@@ -178,5 +188,9 @@ export type BatchTranscribeResult = {
     status: "completed" | "skipped" | "failed";
     source?: Video["transcriptSource"] | string;
     error?: string;
+    timings?: Array<{
+      stage: string;
+      ms: number;
+    }>;
   }>;
 };

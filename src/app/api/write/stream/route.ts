@@ -1,0 +1,86 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { completePreparedWriteCopy, prepareWriteCopyContext, streamResponseTextWithFallback } from "@/lib/ai";
+import { createNdjsonStream } from "@/lib/streaming";
+import { platforms } from "@/lib/types";
+
+export const runtime = "nodejs";
+
+const schema = z.object({
+  targetType: z.enum(["account", "project"]).optional(),
+  platform: z.enum(platforms).optional(),
+  accountId: z.string().optional(),
+  projectId: z.string().optional(),
+  mode: z.enum(["topic", "rewrite"]),
+  prompt: z.string().min(1),
+  sourceText: z.string().optional(),
+  save: z.boolean().optional(),
+  useWebResearch: z.boolean().optional()
+}).superRefine((input, ctx) => {
+  if (input.targetType === "project" || input.projectId) {
+    if (!input.projectId) {
+      ctx.addIssue({ code: "custom", message: "请选择参考项目", path: ["projectId"] });
+    }
+    return;
+  }
+
+  if (!input.platform || !input.accountId) {
+    ctx.addIssue({ code: "custom", message: "请选择参考账号", path: ["accountId"] });
+  }
+});
+
+export async function POST(request: Request) {
+  try {
+    const input = schema.parse(await request.json());
+
+    const stream = createNdjsonStream(async (emit) => {
+      emit({ type: "stage", stage: "prepare", message: "正在读取风格卡和代表样本", progress: 10 });
+      const prepared = await prepareWriteCopyContext(input);
+
+      if (input.useWebResearch) {
+        emit({ type: "stage", stage: "research", message: "联网检索已完成，正在整理资料", progress: 35 });
+        if (prepared.research) {
+          emit({ type: "result", data: { research: prepared.research, phase: "research" } });
+        }
+      }
+
+      emit({ type: "stage", stage: "generate", message: "正在生成文案", progress: 55 });
+      const result = await streamResponseTextWithFallback({
+        messages: prepared.messages,
+        onDelta(delta) {
+          emit({ type: "delta", delta });
+        }
+      });
+
+      if (!result.text.trim()) {
+        emit({ type: "stage", stage: "fallback", message: "正在切换到本地模板", progress: 76 });
+      }
+
+      if (input.save) {
+        emit({ type: "stage", stage: "save-draft", message: "正在保存草稿", progress: 88 });
+      }
+
+      const finalResult = await completePreparedWriteCopy({
+        prepared,
+        result,
+        save: input.save
+      });
+
+      emit({ type: "stage", stage: "finalize", message: "正在整理最终结果", progress: 95 });
+      emit({ type: "result", data: finalResult });
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive"
+      }
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "生成文案失败" },
+      { status: 400 }
+    );
+  }
+}

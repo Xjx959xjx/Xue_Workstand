@@ -14,7 +14,7 @@ import {
 import { useLibrary } from "@/components/LibraryProvider";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { collectAccount, getHealth } from "@/lib/client";
-import { Platform } from "@/lib/types";
+import { CollectOrder, Platform } from "@/lib/types";
 
 const entries = [
   {
@@ -47,7 +47,22 @@ const entries = [
   }
 ];
 
-type TimeRange = "all" | "7d" | "30d" | "90d" | "180d" | "365d" | "custom";
+type TimeRange = "all" | "7d" | "30d" | "90d" | "180d" | "365d" | "3y" | "custom";
+
+const collectOrderOptions: Record<Platform, Array<{ value: CollectOrder; label: string }>> = {
+  bilibili: [
+    { value: "views", label: "播放优先" },
+    { value: "likes", label: "点赞优先" },
+    { value: "favorites", label: "收藏优先" },
+    { value: "comments", label: "评论优先" },
+    { value: "pubdate", label: "时间优先" }
+  ],
+  douyin: [
+    { value: "likes", label: "点赞优先" },
+    { value: "comments", label: "评论优先" },
+    { value: "pubdate", label: "时间优先" }
+  ]
+};
 
 const timeRangeOptions: Array<{ value: TimeRange; label: string; days?: number }> = [
   { value: "all", label: "不限" },
@@ -56,6 +71,7 @@ const timeRangeOptions: Array<{ value: TimeRange; label: string; days?: number }
   { value: "90d", label: "近 90 天", days: 90 },
   { value: "180d", label: "近半年", days: 180 },
   { value: "365d", label: "近一年", days: 365 },
+  { value: "3y", label: "近 3 年", days: 365 * 3 },
   { value: "custom", label: "自定义" }
 ];
 
@@ -64,7 +80,7 @@ export default function HomePage() {
   const [platform, setPlatform] = useState<Platform>("bilibili");
   const [name, setName] = useState("");
   const [limit, setLimit] = useState(20);
-  const [order, setOrder] = useState<"pubdate" | "click" | "stow">("click");
+  const [order, setOrder] = useState<CollectOrder>("views");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [customFromDate, setCustomFromDate] = useState("");
   const [customToDate, setCustomToDate] = useState("");
@@ -77,11 +93,9 @@ export default function HomePage() {
     const accounts = library?.accounts || [];
     const videoCount = accounts.reduce((sum, account) => sum + account.videoCount, 0);
     const transcriptCount = accounts.reduce((sum, account) => sum + account.transcriptCount, 0);
-    const readyAccountCount = accounts.filter((account) => account.transcriptCount > 0).length;
     const projectCount = library?.projects.length || 0;
     const draftCount = library?.drafts.length || 0;
-    const transcriptRate = videoCount ? Math.round((transcriptCount / videoCount) * 100) : 0;
-    return { accounts, accountCount: accounts.length, readyAccountCount, videoCount, transcriptCount, transcriptRate, projectCount, draftCount };
+    return { accounts, accountCount: accounts.length, videoCount, transcriptCount, projectCount, draftCount };
   }, [library]);
 
   const canWrite = stats.accountCount > 0;
@@ -92,6 +106,16 @@ export default function HomePage() {
     timeRange
   ]);
   const activeTimeLabel = formatTimeRangeLabel(timeRange, dateFilter.fromDate, dateFilter.toDate);
+  const activeOrderOptions = collectOrderOptions[platform];
+
+  function handlePlatformChange(nextPlatform: Platform) {
+    setPlatform(nextPlatform);
+    setOrder((currentOrder) =>
+      collectOrderOptions[nextPlatform].some((option) => option.value === currentOrder)
+        ? currentOrder
+        : collectOrderOptions[nextPlatform][0].value
+    );
+  }
 
   async function handleHealthCheck() {
     setBusy("health");
@@ -151,47 +175,54 @@ export default function HomePage() {
           <div>
             <p className="eyebrow">Quick Start</p>
             <h2>快速开工</h2>
-            <p className="subtle">输入账号名自动搜索并采集爆款；后续转写和风格整理会进入账号库。</p>
+            <p className="subtle">输入账号名通过 opencli 搜索并采集爆款；抖音也可粘贴 sec_uid 或主页链接兜底。</p>
           </div>
           <div className="quick-form">
             <div className="field">
-              <label>平台</label>
-              <select value={platform} onChange={(event) => setPlatform(event.target.value as Platform)}>
+              <label htmlFor="collect-platform">平台</label>
+              <select id="collect-platform" name="platform" value={platform} onChange={(event) => handlePlatformChange(event.target.value as Platform)}>
                 <option value="bilibili">B站</option>
                 <option value="douyin">抖音</option>
               </select>
             </div>
             <div className="field">
-              <label>账号名</label>
-              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：某某UP主" />
+              <label htmlFor="collect-account-name">账号名</label>
+              <input
+                autoComplete="off"
+                id="collect-account-name"
+                name="accountName"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder={platform === "douyin" ? "例如：老青椒" : "例如：某某UP主"}
+              />
             </div>
             <div className="field">
-              <label>数量</label>
+              <label htmlFor="collect-limit">数量</label>
               <input
+                autoComplete="off"
+                id="collect-limit"
+                inputMode="numeric"
                 min={1}
                 max={50}
+                name="limit"
                 type="number"
                 value={limit}
                 onChange={(event) => setLimit(Number(event.target.value))}
               />
             </div>
             <div className="field">
-              <label>排序</label>
-              {platform === "bilibili" ? (
-                <select value={order} onChange={(event) => setOrder(event.target.value as typeof order)}>
-                  <option value="click">播放优先</option>
-                  <option value="stow">收藏优先</option>
-                  <option value="pubdate">最新优先</option>
-                </select>
-              ) : (
-                <select disabled value="default">
-                  <option value="default">默认排序</option>
-                </select>
-              )}
+              <label htmlFor="collect-order">排序</label>
+              <select id="collect-order" name="order" value={order} onChange={(event) => setOrder(event.target.value as CollectOrder)}>
+                {activeOrderOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="field">
-              <label>时间</label>
-              <select value={timeRange} onChange={(event) => setTimeRange(event.target.value as TimeRange)}>
+              <label htmlFor="collect-time-range">时间</label>
+              <select id="collect-time-range" name="timeRange" value={timeRange} onChange={(event) => setTimeRange(event.target.value as TimeRange)}>
                 {timeRangeOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -202,12 +233,26 @@ export default function HomePage() {
             {timeRange === "custom" ? (
               <>
                 <div className="field">
-                  <label>开始日期</label>
-                  <input type="date" value={customFromDate} onChange={(event) => setCustomFromDate(event.target.value)} />
+                  <label htmlFor="collect-from-date">开始日期</label>
+                  <input
+                    autoComplete="off"
+                    id="collect-from-date"
+                    name="fromDate"
+                    type="date"
+                    value={customFromDate}
+                    onChange={(event) => setCustomFromDate(event.target.value)}
+                  />
                 </div>
                 <div className="field">
-                  <label>结束日期</label>
-                  <input type="date" value={customToDate} onChange={(event) => setCustomToDate(event.target.value)} />
+                  <label htmlFor="collect-to-date">结束日期</label>
+                  <input
+                    autoComplete="off"
+                    id="collect-to-date"
+                    name="toDate"
+                    type="date"
+                    value={customToDate}
+                    onChange={(event) => setCustomToDate(event.target.value)}
+                  />
                 </div>
               </>
             ) : null}
@@ -273,31 +318,6 @@ export default function HomePage() {
 
       {error ? <div className="error">{error}</div> : null}
 
-      <section className="kpi-grid">
-        <div className="kpi-card">
-          <span>账号</span>
-          <strong>{stats.accountCount}</strong>
-          <small>{stats.readyAccountCount} 个可参考写作</small>
-        </div>
-        <div className="kpi-card">
-          <span>视频资产</span>
-          <strong>{stats.videoCount}</strong>
-          <small>{stats.transcriptCount} 份转写</small>
-        </div>
-        <div className="kpi-card">
-          <span>转写覆盖</span>
-          <strong>{stats.transcriptRate}%</strong>
-          <small>{stats.videoCount ? "基于已采集视频" : "等待采集"}</small>
-        </div>
-        <div className="kpi-card">
-          <span>项目 / 草稿</span>
-          <strong>
-            {stats.projectCount} / {stats.draftCount}
-          </strong>
-          <small>矩阵风格与输出沉淀</small>
-        </div>
-      </section>
-
       <section className="grid-2 dashboard-grid">
         <div className="panel task-panel">
           <div className="panel-inner">
@@ -309,8 +329,8 @@ export default function HomePage() {
               {entries.map((entry) => {
                 const Icon = entry.icon;
                 const disabled = entry.title === "对话写作" && !canWrite;
-                return (
-                  <Link className={`task-row ${disabled ? "disabled-card" : ""}`} href={disabled ? "#" : entry.href} key={entry.href}>
+                const content = (
+                  <>
                     <span className="entry-icon">
                       <Icon size={18} />
                     </span>
@@ -322,6 +342,15 @@ export default function HomePage() {
                       <span>{entryStatus(entry.title)}</span>
                       <span className={`btn ${disabled ? "disabled" : ""}`}>{entry.action}</span>
                     </span>
+                  </>
+                );
+                return disabled ? (
+                  <div aria-disabled="true" className="task-row disabled-card" key={entry.href}>
+                    {content}
+                  </div>
+                ) : (
+                  <Link className="task-row" href={entry.href} key={entry.href}>
+                    {content}
                   </Link>
                 );
               })}
@@ -373,9 +402,15 @@ export default function HomePage() {
           <div className="panel-inner">
             <div className="section-title-row">
               <h2>最近草稿</h2>
-              <Link className={`text-link ${canWrite ? "" : "disabled"}`} href={canWrite ? "/writer" : "#"}>
-                进入写作台
-              </Link>
+              {canWrite ? (
+                <Link className="text-link" href="/writer">
+                  进入写作台
+                </Link>
+              ) : (
+                <span aria-disabled="true" className="text-link disabled">
+                  进入写作台
+                </span>
+              )}
             </div>
             {!library?.recentDrafts.length ? (
               <p className="subtle">生成文案后会出现在这里。</p>
@@ -442,7 +477,7 @@ function formatTimeRangeLabel(timeRange: TimeRange, fromDate?: string, toDate?: 
 function formatCollectMessage(
   result: Awaited<ReturnType<typeof collectAccount>>,
   activeTimeLabel: string,
-  order: "pubdate" | "click" | "stow"
+  order: CollectOrder
 ) {
   const base = `采集完成：opencli 返回 ${result.rawCount} 条，${activeTimeLabel}内写入 ${result.filteredCount} 条到「${result.account.name}」。`;
   const filter = result.dateFilter;
@@ -454,6 +489,6 @@ function formatCollectMessage(
       : filter.missingDateCount
         ? `本次返回的视频有 ${filter.missingDateCount} 条缺少发布时间`
         : "本次返回视频不在所选时间范围内";
-  const orderHint = order === "pubdate" ? "" : "，或把排序改成「最新优先」";
+  const orderHint = order === "pubdate" ? "" : "，或把排序改成「时间优先」";
   return `${base} ${dateRange}，都不在当前时间范围内；请把时间改成「不限」/更早的范围${orderHint}后再采集。`;
 }

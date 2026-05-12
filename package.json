@@ -4,10 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:daemon": "node scripts/dev-server.mjs start",
+    "dev:status": "node scripts/dev-server.mjs status",
+    "dev:stop": "node scripts/dev-server.mjs stop",
+    "dev:restart": "node scripts/dev-server.mjs restart",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:library": "node scripts/check-library-consistency.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

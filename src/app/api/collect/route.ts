@@ -2,19 +2,24 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { collectVideos, hydrateBilibiliVideoStats, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
-import { platforms, Video } from "@/lib/types";
+import { collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
 import { nowIso } from "@/lib/utils";
 
 export const runtime = "nodejs";
 const DATE_FILTER_CANDIDATE_LIMIT = 50;
+const DOUYIN_CANDIDATE_LIMIT = 500;
 const MAX_DATE_FILTER_PAGES = 8;
+const collectOrderSchemaValues = [...collectOrders, "like", "click", "stow"] as const;
+const bilibiliCollectOrders = ["views", "likes", "favorites", "comments", "pubdate"] as const;
+const douyinCollectOrders = ["likes", "comments", "pubdate"] as const;
+type LegacyCollectOrder = CollectOrder | "like" | "click" | "stow";
 
 const schema = z.object({
   platform: z.enum(platforms),
   name: z.string().min(1),
   uidOrUrl: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
-  order: z.enum(["pubdate", "click", "stow"]).default("click"),
+  order: z.enum(collectOrderSchemaValues).default("likes"),
   fromDate: z.string().optional(),
   toDate: z.string().optional()
 });
@@ -22,6 +27,8 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
+    const order = normalizeCollectOrder(input.order);
+    validateCollectOrder(input.platform, order);
     const existing = !input.uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
     const uid = existing?.uid || (await resolveAccountUid(input.platform, input.name, input.uidOrUrl));
     const account = await upsertAccount({
@@ -31,13 +38,15 @@ export async function POST(request: Request) {
       sourceUrl: input.uidOrUrl || input.name
     });
 
-    const collectPlan = makeCollectPlan(input.platform, input.limit, input.order, input.fromDate, input.toDate);
+    const collectPlan = makeCollectPlan(input.platform, input.limit, order, input.fromDate, input.toDate);
     const result = await collectVideos({
       platform: input.platform,
       account,
       limit: collectPlan.limit,
       order: collectPlan.order,
-      hydrateDetails: collectPlan.hydrateDetails
+      hydrateDetails: collectPlan.hydrateDetails,
+      fromDate: input.platform === "douyin" ? input.fromDate : undefined,
+      toDate: input.platform === "douyin" ? input.toDate : undefined
     });
     if (collectPlan.pageByPubdate && input.platform === "bilibili") {
       result.videos = await collectDateWindowCandidates({
@@ -63,10 +72,10 @@ export async function POST(request: Request) {
       videos: dateFilter.filteredVideos,
       platform: input.platform,
       limit: input.limit,
-      order: input.order,
+      order,
       hydrateFinalDetails: collectPlan.hydrateFinalDetails
     });
-    const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), input.order);
+    const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), order);
 
     return NextResponse.json({
       account: await getAccountSummary(updatedAccount),
@@ -84,22 +93,51 @@ export async function POST(request: Request) {
   }
 }
 
+function normalizeCollectOrder(order: LegacyCollectOrder): CollectOrder {
+  if (order === "click") return "views";
+  if (order === "stow") return "favorites";
+  if (order === "like") return "likes";
+  return order;
+}
+
+function validateCollectOrder(platform: Platform, order: CollectOrder) {
+  const allowedOrders = platform === "bilibili" ? bilibiliCollectOrders : douyinCollectOrders;
+  if ((allowedOrders as readonly CollectOrder[]).includes(order)) return;
+  const readable = platform === "bilibili" ? "播放、点赞、收藏、评论、时间" : "点赞、评论、时间";
+  throw new Error(`${platform === "bilibili" ? "B站" : "抖音"}只支持按${readable}筛选。`);
+}
+
 function makeCollectPlan(
-  platform: (typeof platforms)[number],
+  platform: Platform,
   limit: number,
-  order: "pubdate" | "click" | "stow",
+  order: CollectOrder,
   fromDate?: string,
   toDate?: string
-) {
+): {
+  limit: number;
+  order: CollectOrder;
+  pageByPubdate: boolean;
+  hydrateDetails: boolean;
+  hydrateFinalDetails: boolean;
+} {
   const hasDateFilter = Boolean(fromDate || toDate);
-  const canUseLightweightDateCandidates = platform === "bilibili" && hasDateFilter && order !== "stow";
+  const canUseLightweightDateCandidates = platform === "bilibili" && hasDateFilter && order === "pubdate";
+  const candidateLimit =
+    platform === "douyin" ? DOUYIN_CANDIDATE_LIMIT : DATE_FILTER_CANDIDATE_LIMIT;
+  const needsLocalMetricSort = order === "likes" || order === "comments";
   return {
-    limit: hasDateFilter ? DATE_FILTER_CANDIDATE_LIMIT : limit,
-    order: hasDateFilter ? "pubdate" : order,
+    limit: hasDateFilter || needsLocalMetricSort ? candidateLimit : limit,
+    order: hasDateFilter ? "pubdate" : getCollectionOrder(order),
     pageByPubdate: hasDateFilter,
     hydrateDetails: !canUseLightweightDateCandidates,
     hydrateFinalDetails: canUseLightweightDateCandidates
   };
+}
+
+function getCollectionOrder(order: CollectOrder): CollectOrder {
+  if (order === "favorites") return "favorites";
+  if (order === "pubdate") return "pubdate";
+  return "views";
 }
 
 async function collectDateWindowCandidates(input: {
@@ -132,9 +170,9 @@ async function collectDateWindowCandidates(input: {
 
 async function selectVideosForSave(input: {
   videos: Video[];
-  platform: (typeof platforms)[number];
+  platform: Platform;
   limit: number;
-  order: "pubdate" | "click" | "stow";
+  order: CollectOrder;
   hydrateFinalDetails: boolean;
 }) {
   const selected = sortVideos(input.videos, input.order).slice(0, input.limit);
@@ -205,15 +243,30 @@ function buildDateFilterResult(videos: Video[], fromDate?: string, toDate?: stri
   };
 }
 
-function sortVideos(videos: Video[], order: "pubdate" | "click" | "stow") {
+function sortVideos(videos: Video[], order: CollectOrder) {
   const sorted = [...videos];
   if (order === "pubdate") {
-    return sorted.sort((a, b) => compareDates(b.publishedAt, a.publishedAt));
+    return sorted.sort((a, b) => compareDates(b.publishedAt, a.publishedAt) || compareByMetric(b, a, "likes"));
   }
-  if (order === "stow") {
-    return sorted.sort((a, b) => b.stats.favorites - a.stats.favorites || b.stats.views - a.stats.views);
-  }
-  return sorted.sort((a, b) => b.stats.views - a.stats.views || b.stats.favorites - a.stats.favorites);
+  return sorted.sort(
+    (a, b) =>
+      compareByMetric(b, a, order) ||
+      compareByMetric(b, a, "views") ||
+      compareByMetric(b, a, "likes") ||
+      compareDates(b.publishedAt, a.publishedAt)
+  );
+}
+
+function compareByMetric(a: Video, b: Video, order: CollectOrder) {
+  if (order === "pubdate") return compareDates(a.publishedAt, b.publishedAt);
+  return statValue(a, order) - statValue(b, order);
+}
+
+function statValue(video: Video, order: Exclude<CollectOrder, "pubdate">) {
+  if (order === "views") return video.stats.views;
+  if (order === "likes") return video.stats.likes;
+  if (order === "favorites") return video.stats.favorites;
+  return video.stats.comments;
 }
 
 function compareDates(a?: string, b?: string) {

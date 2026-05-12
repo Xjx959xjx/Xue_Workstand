@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { generateProjectStyleProfile } from "@/lib/ai";
+import { generateProjectStyleProfile, saveAndGenerateProjectStyleProfile } from "@/lib/ai";
 import { deleteProjects, getProjectSummary, saveProjectStyle, upsertProject } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -40,7 +40,18 @@ export async function PUT(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const input = z.object({ projectId: z.string().min(1) }).parse(await request.json());
+    const body = await request.json();
+    const saveAndGenerateSchema = baseSchema.extend({
+      sourceAccountIds: z.array(z.string().min(1)).default([])
+    });
+    const legacySchema = z.object({ projectId: z.string().min(1) });
+    const parsed = saveAndGenerateSchema.safeParse(body);
+
+    if (parsed.success && "name" in body) {
+      return NextResponse.json(await saveAndGenerateProjectStyleProfile(parsed.data));
+    }
+
+    const input = legacySchema.parse(body);
     return NextResponse.json(await generateProjectStyleProfile(input.projectId));
   } catch (error) {
     return NextResponse.json(

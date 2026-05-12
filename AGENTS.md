@@ -40,6 +40,10 @@ npm run dev
 
 ```bash
 npm run dev
+npm run dev:daemon
+npm run dev:status
+npm run dev:restart
+npm run dev:stop
 npm run lint
 npm run typecheck
 npm run build
@@ -51,6 +55,7 @@ npm run build
 
 注意事项：
 
+- 如果希望本地网页不依赖当前终端会话，使用 `npm run dev:daemon` 后台启动；日志在 `.dev-server/next-dev.log`，状态用 `npm run dev:status` 查看。
 - 开发服务器运行时不要同时执行 `npm run build`。本项目依赖 `.next`，并且 README 已说明两者并行可能导致 CSS/JS 静态资源短暂 404。
 - 如果页面出现样式或脚本异常，优先清理 `.next` 后重新启动：
 
@@ -64,10 +69,12 @@ npm run dev
 关键环境变量来自 `.env` / `.env.example`：
 
 - `OPENCLI_BIN`：采集、搜索、字幕、下载、飞书发布依赖的 `opencli` 可执行文件，默认 `opencli`
+- `FFMPEG_BIN`：音频抽取依赖的 `ffmpeg` 可执行文件，默认 `ffmpeg`
 - `STYLE_LIBRARY_DIR`：本地素材库目录，默认 `./style-library`
 - `SILICONFLOW_API_KEY`：硅基流动音视频转写 Key
 - `SILICONFLOW_BASE_URL`：硅基流动接口地址
 - `SILICONFLOW_TRANSCRIBE_MODEL`：转写模型
+- `DOUYIN_TRANSCRIBE_CONCURRENCY`：抖音批量转写并发数，默认 `2`，建议保持在 `1-3`
 - `CHAT_API_KEY`：对话模型 Key
 - `CHAT_BASE_URL`：对话模型接口地址，默认 `https://www.fhl.mom`
 - `CHAT_MODEL`：对话模型，默认 `gpt-5.5`
@@ -220,6 +227,8 @@ style-library/
 
 - 封装转写链路。
 - 优先使用平台字幕；必要时下载媒体并调用硅基流动转写。
+- 抖音转写优先通过 `opencli douyin user-videos` 获取最新媒体地址，再用 `ffmpeg` 抽取 16kHz 单声道低码率音频上传转写，避免整段视频上传。
+- 抖音批量转写会先按账号预取一次媒体地址，再使用小并发；默认并发 `2`，可用 `DOUYIN_TRANSCRIBE_CONCURRENCY` 调整。如果 opencli、ffmpeg 或硅基流动限流不稳定，优先降回 `1`。
 - 转写失败要更新视频状态，避免页面一直停留在进行中状态。
 
 `src/lib/ai.ts`
@@ -256,7 +265,7 @@ style-library/
 
 - 开发服务器运行时不要并行执行 `npm run build`，否则 `.next` 可能导致开发页静态资源短暂 404。
 - B 站采集支持按时间窗过滤，并且会分页补抓候选数据；不要轻易简化这段逻辑。
-- 抖音账号名搜索当前未接入 `opencli`，目前只能继续采集已经保存过 `sec_uid` 的账号，或由用户提供明确 `sec_uid` / 链接。
+- 抖音账号名搜索通过 `opencli douyin search` 适配器接入；如果当前 opencli 环境缺少该命令，应提示用户升级 / 安装适配器，或临时提供明确 `sec_uid` / 主页链接。
 - 部分 B 站视频的点赞 / 评论 / 收藏数据会在前端二次 hydrate，避免误删 `/api/videos/hydrate` 链路。
 - 模型能力缺失时退回模板生成是刻意设计，不是 bug。
 - 本地素材库可能包含用户长期积累资产，涉及删除、迁移、批量重写时要格外保守。
@@ -281,6 +290,16 @@ style-library/
 - 改动落盘格式前，先评估对现有 `style-library` 的兼容性。
 - 涉及删除、迁移、批量操作时，优先做可恢复或最小范围改动。
 - 不要把本地 fallback、部分采集失败、部分转写失败简单处理成全站失败。
+
+## 复杂任务工作流
+
+不需要整包引入外部 Agent 技能仓库；遇到中等及以上功能、跨层改动、存储结构调整、模型 / 采集 / 转写链路改造，按下面的轻量流程执行：
+
+1. **Spec**：先写清楚目标、输入输出、用户可见行为、边界条件、明确不做的事，以及是否影响既有 `style-library` 数据。
+2. **Plan**：拆成可独立验证的小步，标出会触碰的 `src/lib/*`、API、页面和文档文件，优先安排能尽早暴露风险的垂直切片。
+3. **Build**：按既有分层实现，优先复用领域逻辑和 `src/lib/client.ts`；涉及 `opencli`、模型、飞书或本地文件时保留中文错误和本地 fallback。
+4. **Test**：行为改动要补对应检查；存储、API、引用联动和 fallback 逻辑要重点验证。中等及以上代码改动至少跑 `npm run lint` 和 `npm run typecheck`。
+5. **Review**：提交前自查兼容性、删除 / 迁移风险、用户可编辑资产是否被无谓重写、UI 是否仍符合本地工作台风格；新增页面、API、环境变量或目录结构时同步更新文档。
 
 ## Agent 接手顺序
 

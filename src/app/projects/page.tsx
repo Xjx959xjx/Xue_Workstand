@@ -5,7 +5,7 @@ import { RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
-import { deleteProjects, generateProjectStyle, saveProjectStyle, upsertProject } from "@/lib/client";
+import { deleteProjects, saveProjectStyle, streamGenerateProjectStyle, upsertProject } from "@/lib/client";
 
 export default function ProjectsPage() {
   const { library, loading, error, refresh } = useLibrary();
@@ -44,19 +44,7 @@ export default function ProjectsPage() {
     setProjectStyleDraft(selectedProject.style);
   }, [selectedProject]);
 
-  useEffect(() => {
-    if (busy !== "project-style") return;
-
-    const timer = window.setInterval(() => {
-      setProjectStyleProgress((current) => {
-        if (current >= 92) return current;
-        const step = current < 36 ? 6 : current < 72 ? 4 : 2;
-        return Math.min(current + step, 92);
-      });
-    }, 650);
-
-    return () => window.clearInterval(timer);
-  }, [busy]);
+  const messageIsError = message.includes("失败") || message.includes("没有");
 
   function toggleProjectAccount(accountId: string) {
     setProjectAccountIds((current) =>
@@ -124,25 +112,32 @@ export default function ProjectsPage() {
     setProjectStyleProgress(8);
     setProjectStyleStage("准备保存项目配置");
     try {
-      setProjectStyleProgress(22);
-      setProjectStyleStage("保存项目配置");
-      const project = await upsertProject({
+      await streamGenerateProjectStyle({
         projectId: selectedProject?.id,
         name: projectName,
         description: projectDescription,
         sourceAccountIds: projectAccountIds
+      }, {
+        onStage(stage) {
+          setProjectStyleProgress(stage.progress || 0);
+          setProjectStyleStage(stage.message);
+        },
+        onResult(result) {
+          setProjectStyleProgress(100);
+          setProjectStyleStage("项目风格卡已更新");
+          setSelectedProjectId(result.project.id);
+          setProjectName(result.project.name);
+          setProjectDescription(result.project.description || "");
+          setProjectAccountIds(result.project.sourceAccountIds);
+          setProjectStyleDraft(result.style);
+          setMessage(
+            result.fallback
+              ? `已降级生成项目风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+              : "项目风格卡已自动更新。"
+          );
+        }
       });
-      setSelectedProjectId(project.id);
-      setProjectStyleProgress(42);
-      setProjectStyleStage("读取参考账号与转写样本");
-      const result = await generateProjectStyle(project.id);
-      setProjectStyleProgress(86);
-      setProjectStyleStage("写入项目风格卡");
-      setProjectStyleDraft(result.style);
-      setMessage(result.fallback ? "已用本地模板生成项目风格卡，可继续编辑。" : "项目风格卡已自动更新。");
       await refresh();
-      setProjectStyleProgress(100);
-      setProjectStyleStage("项目风格卡已更新");
     } catch (err) {
       setProjectStyleProgress(100);
       setProjectStyleStage("生成失败，请查看提示");
@@ -206,27 +201,33 @@ export default function ProjectsPage() {
         </div>
       </header>
 
-      {error ? <div className="error">{error}</div> : null}
-      {message ? <div className={message.includes("失败") || message.includes("没有") ? "error" : "notice"}>{message}</div> : null}
+      {error ? <div className="error" role="alert">{error}</div> : null}
+      {message ? (
+        <div aria-live={messageIsError ? "assertive" : "polite"} className={messageIsError ? "error" : "notice"} role={messageIsError ? "alert" : "status"}>
+          {message}
+        </div>
+      ) : null}
 
       <section className="panel project-workspace">
-        <div className="project-sidebar">
+        <div className={`project-sidebar ${projectManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header">
             <h2>项目</h2>
             <div className="account-manage-actions">
-              <button
-                className="btn icon-btn"
-                onClick={() => {
-                  setSelectedProjectId("");
-                  setProjectName("");
-                  setProjectDescription("");
-                  setProjectAccountIds([]);
-                  setProjectStyleDraft("");
-                }}
-                type="button"
-              >
-                新建
-              </button>
+              {!projectManageMode ? (
+                <button
+                  className="btn icon-btn"
+                  onClick={() => {
+                    setSelectedProjectId("");
+                    setProjectName("");
+                    setProjectDescription("");
+                    setProjectAccountIds([]);
+                    setProjectStyleDraft("");
+                  }}
+                  type="button"
+                >
+                  新建
+                </button>
+              ) : null}
               <button
                 className={`btn icon-btn ${projectManageMode ? "primary" : ""}`}
                 onClick={() => {
@@ -236,13 +237,16 @@ export default function ProjectsPage() {
                 title="管理项目"
                 type="button"
               >
-                管理
+                {projectManageMode ? "完成" : "管理"}
               </button>
             </div>
           </div>
           {projectManageMode ? (
-            <div className="account-manage-bar">
-              <span>已选 {selectedProjectIds.length}</span>
+            <div className="selection-toolbar" role="toolbar" aria-label="项目批量操作">
+              <div className="selection-copy">
+                <strong>项目选择</strong>
+                <span>已选 {selectedProjectIds.length} 个</span>
+              </div>
               <button
                 className="btn danger"
                 disabled={!selectedProjectIds.length || busy === "project-delete"}
@@ -250,7 +254,7 @@ export default function ProjectsPage() {
                 type="button"
               >
                 <Trash2 size={14} />
-                删除
+                删除项目
               </button>
             </div>
           ) : null}
@@ -265,6 +269,8 @@ export default function ProjectsPage() {
                 className={`list-button account-list-button ${selectedProject?.id === project.id ? "active" : ""} ${
                   projectManageMode && selectedProjectIds.includes(project.id) ? "checked" : ""
                 }`}
+                aria-current={!projectManageMode && selectedProject?.id === project.id ? "true" : undefined}
+                aria-pressed={projectManageMode ? selectedProjectIds.includes(project.id) : undefined}
                 key={project.id}
                 onClick={() => {
                   if (projectManageMode) {
@@ -321,15 +327,25 @@ export default function ProjectsPage() {
           <div className="pane-body detail-stack">
             <div className="project-form-grid">
               <div className="field">
-                <label>项目名</label>
-                <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="例如：AI科普矩阵" />
+                <label htmlFor="project-name">项目名</label>
+                <input
+                  autoComplete="off"
+                  id="project-name"
+                  name="projectName"
+                  value={projectName}
+                  onChange={(event) => setProjectName(event.target.value)}
+                  placeholder="例如：AI科普矩阵"
+                />
               </div>
               <div className="field">
-                <label>项目说明</label>
+                <label htmlFor="project-description">项目说明</label>
                 <input
+                  autoComplete="off"
+                  id="project-description"
+                  name="projectDescription"
                   value={projectDescription}
                   onChange={(event) => setProjectDescription(event.target.value)}
-                  placeholder="内容方向、目标人群、账号矩阵定位..."
+                  placeholder="内容方向、目标人群、账号矩阵定位…"
                 />
               </div>
             </div>
@@ -344,7 +360,9 @@ export default function ProjectsPage() {
                 </div>
                 <input
                   aria-label="筛选参考账号"
+                  autoComplete="off"
                   className="account-filter-input"
+                  name="accountFilter"
                   value={accountFilter}
                   onChange={(event) => setAccountFilter(event.target.value)}
                   placeholder="搜索账号名、平台或 UID"
@@ -355,6 +373,7 @@ export default function ProjectsPage() {
                   <label className="check-card" key={account.id}>
                     <input
                       checked={projectAccountIds.includes(account.id)}
+                      name="sourceAccountIds"
                       onChange={() => toggleProjectAccount(account.id)}
                       type="checkbox"
                     />
@@ -384,6 +403,7 @@ export default function ProjectsPage() {
                 </button>
               </div>
               <textarea
+                aria-label="项目风格卡"
                 className="project-style-textarea"
                 value={projectStyleDraft}
                 onChange={(event) => setProjectStyleDraft(event.target.value)}

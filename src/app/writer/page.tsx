@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { Copy, ExternalLink, Eye, FileUp, Globe2, RotateCcw, Save, Send } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
-import { publishFeishuDocument, saveDraft, writeCopy } from "@/lib/client";
-import { AccountDraftInput, Draft, DraftInput, ProjectDraftInput } from "@/lib/types";
+import { publishFeishuDocument, saveDraft, streamWriteCopy, writeCopy } from "@/lib/client";
+import { AccountDraftInput, Draft, DraftInput, ProjectDraftInput, WriteResult } from "@/lib/types";
 
 type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
 
@@ -20,12 +21,17 @@ export default function WriterPage() {
   const [sourceText, setSourceText] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
   const [lastContent, setLastContent] = useState("");
+  const [lastResearch, setLastResearch] = useState("");
   const [lastSavedContent, setLastSavedContent] = useState("");
   const [lastDraftBase, setLastDraftBase] = useState<DraftSaveBase | null>(null);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const [generateStage, setGenerateStage] = useState("");
+  const [generateProgress, setGenerateProgress] = useState(0);
   const [styleOpen, setStyleOpen] = useState(false);
   const [feishuResult, setFeishuResult] = useState<{ title: string; url: string } | null>(null);
+  const styleDialogRef = useRef<HTMLDivElement>(null);
+  const feishuDialogRef = useRef<HTMLDivElement>(null);
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
@@ -47,14 +53,37 @@ export default function WriterPage() {
         : "";
   const canGenerate = Boolean(prompt.trim() && !busy && (targetType === "project" ? selectedProject : selectedAccount));
   const isCurrentSaved = Boolean(lastContent && lastDraftBase) && lastSavedContent === lastContent;
+  const noticeIsError = notice.includes("失败") || notice.includes("未配置");
+
+  useEffect(() => {
+    if (!styleOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    styleDialogRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [styleOpen]);
+
+  useEffect(() => {
+    if (!feishuResult) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    feishuDialogRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [feishuResult]);
 
   async function handleGenerate() {
     if (!canGenerate) return;
     setBusy("generate");
     setNotice("");
+    setGenerateStage("准备写作任务");
+    setGenerateProgress(6);
+    setLastContent("");
+    setLastResearch("");
 
     try {
-      const result = await writeCopy({
+      const payload = {
         targetType,
         platform: targetType === "account" ? selectedAccount?.platform : undefined,
         accountId: targetType === "account" ? selectedAccount?.id : undefined,
@@ -63,8 +92,45 @@ export default function WriterPage() {
         prompt,
         sourceText,
         useWebResearch
+      };
+
+      const result = await new Promise<WriteResult>(async (resolve, reject) => {
+        try {
+          await streamWriteCopy(payload, {
+            onStage(stage) {
+              setGenerateStage(stage.message);
+              setGenerateProgress(stage.progress || 0);
+            },
+            onDelta(delta) {
+              setGenerateStage("正在生成文案");
+              setGenerateProgress((current) => Math.max(current, 60));
+              setLastContent((current) => current + delta);
+            },
+            onResearch(research) {
+              setLastResearch(research);
+            },
+            onResult(result) {
+              setLastContent(result.content);
+              setLastResearch(result.research || "");
+              setGenerateStage("生成完成");
+              setGenerateProgress(100);
+              resolve(result);
+            }
+          });
+        } catch {
+          try {
+            const fallback = await writeCopy(payload);
+            setLastContent(fallback.content);
+            setLastResearch(fallback.research || "");
+            setGenerateStage("已切换到兼容模式完成生成");
+            setGenerateProgress(100);
+            resolve(fallback);
+          } catch (error) {
+            reject(error);
+          }
+        }
       });
-      setLastContent(result.content);
+
       setLastSavedContent("");
       setLastDraftBase(
         targetType === "project" && selectedProject
@@ -107,7 +173,11 @@ export default function WriterPage() {
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "生成失败");
     } finally {
-      setBusy("");
+      window.setTimeout(() => {
+        setBusy("");
+        setGenerateStage("");
+        setGenerateProgress(0);
+      }, 500);
     }
   }
 
@@ -190,16 +260,21 @@ export default function WriterPage() {
         </div>
       </header>
 
-      {notice ? <div className={notice.includes("失败") || notice.includes("未配置") ? "error" : "notice"}>{notice}</div> : null}
+      {notice ? (
+        <div aria-live={noticeIsError ? "assertive" : "polite"} className={noticeIsError ? "error" : "notice"} role={noticeIsError ? "alert" : "status"}>
+          {notice}
+        </div>
+      ) : null}
 
       <section className="writer-workbench">
         <section className="panel writer-main">
           <div className="writer-refbar">
-            <div className="segmented">
-              <button className={targetType === "account" ? "active" : ""} onClick={() => setTargetType("account")} type="button">
+            <div aria-label="选择引用类型" className="segmented" role="group">
+              <button aria-pressed={targetType === "account"} className={targetType === "account" ? "active" : ""} onClick={() => setTargetType("account")} type="button">
                 账号
               </button>
               <button
+                aria-pressed={targetType === "project"}
                 className={targetType === "project" ? "active" : ""}
                 disabled={!library?.projects.length}
                 onClick={() => setTargetType("project")}
@@ -212,7 +287,7 @@ export default function WriterPage() {
             {loading ? (
               <span className="stat-pill">读取中</span>
             ) : targetType === "project" ? (
-              <select className="writer-ref-select" value={selectedProject?.id || ""} onChange={(event) => setProjectId(event.target.value)}>
+              <select aria-label="选择参考项目" className="writer-ref-select" value={selectedProject?.id || ""} onChange={(event) => setProjectId(event.target.value)}>
                 {library?.projects.map((project) => (
                   <option key={project.id} value={project.id}>
                     {project.name}
@@ -220,7 +295,7 @@ export default function WriterPage() {
                 ))}
               </select>
             ) : (
-              <select className="writer-ref-select" value={selectedAccount?.id || ""} onChange={(event) => setAccountId(event.target.value)}>
+              <select aria-label="选择参考账号" className="writer-ref-select" value={selectedAccount?.id || ""} onChange={(event) => setAccountId(event.target.value)}>
                 {library?.accounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {formatPlatform(account.platform)} / {account.name}
@@ -239,24 +314,26 @@ export default function WriterPage() {
             <div className="writer-task">
               <div className="section-title-row">
                 <h2>写作需求</h2>
-                <div className="segmented">
-                  <button className={mode === "topic" ? "active" : ""} onClick={() => setMode("topic")} type="button">
+                <div aria-label="选择写作模式" className="segmented" role="group">
+                  <button aria-pressed={mode === "topic"} className={mode === "topic" ? "active" : ""} onClick={() => setMode("topic")} type="button">
                     主题
                   </button>
-                  <button className={mode === "rewrite" ? "active" : ""} onClick={() => setMode("rewrite")} type="button">
+                  <button aria-pressed={mode === "rewrite"} className={mode === "rewrite" ? "active" : ""} onClick={() => setMode("rewrite")} type="button">
                     改写
                   </button>
                 </div>
               </div>
 
               <textarea
+                aria-label={mode === "topic" ? "写作主题和要求" : "改写要求"}
                 className="writer-textarea main"
-                placeholder={mode === "topic" ? "主题、目标人群、核心观点..." : "改写要求、语气、长度、平台..."}
+                placeholder={mode === "topic" ? "主题、目标人群、核心观点…" : "改写要求、语气、长度、平台…"}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
               />
               {mode === "rewrite" ? (
                 <textarea
+                  aria-label="需要改写的原文"
                   className="writer-textarea source"
                   placeholder="粘贴原文"
                   value={sourceText}
@@ -322,9 +399,35 @@ export default function WriterPage() {
                   <span className="status-pill pending">{busy === "generate" ? "生成中" : "等待生成"}</span>
                 )}
               </div>
+              {busy === "generate" ? (
+                <div className="project-progress" role="status" aria-live="polite" style={{ marginBottom: 16 }}>
+                  <div className="project-progress-copy">
+                    <span>{generateStage || "正在生成文案"}</span>
+                    <strong>{generateProgress}%</strong>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div className="progress-fill" style={{ width: `${generateProgress}%` }} />
+                  </div>
+                </div>
+              ) : null}
               <div className={`result-box ${lastContent ? "" : "empty"}`}>
-                {busy === "generate" ? "生成中..." : lastContent || "暂无结果"}
+                {busy === "generate" && !lastContent ? "正在等待首段内容..." : lastContent || "暂无结果"}
               </div>
+              {lastResearch ? (
+                <details className="style-reference" style={{ marginTop: 16 }}>
+                  <summary>
+                    <span className="style-reference-heading">
+                      <span className="style-reference-title">联网资料</span>
+                      <small>本次生成使用的研究摘要</small>
+                    </span>
+                  </summary>
+                  <div className="style-reference-body">
+                    <pre className="result-box" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+                      {lastResearch}
+                    </pre>
+                  </div>
+                </details>
+              ) : null}
             </div>
           </div>
         </section>
@@ -333,8 +436,8 @@ export default function WriterPage() {
           <div className="panel-inner detail-stack">
             <details className="style-reference" open>
               <summary>
-                <span>
-                  <h2>引用风格</h2>
+                <span className="style-reference-heading">
+                  <span className="style-reference-title">引用风格</span>
                   <small>{activeTitle || "未选择风格"}</small>
                 </span>
               </summary>
@@ -379,10 +482,18 @@ export default function WriterPage() {
       </section>
 
       {styleOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal-panel">
+        <div className="modal-backdrop">
+          <div
+            aria-labelledby="writer-style-dialog-title"
+            aria-modal="true"
+            className="modal-panel"
+            onKeyDown={(event) => handleDialogKeyDown(event, () => setStyleOpen(false))}
+            ref={styleDialogRef}
+            role="dialog"
+            tabIndex={-1}
+          >
             <div className="modal-header">
-              <h2>{activeTitle || "风格卡"}</h2>
+              <h2 id="writer-style-dialog-title">{activeTitle || "风格卡"}</h2>
               <button className="btn" onClick={() => setStyleOpen(false)} type="button">
                 关闭
               </button>
@@ -393,10 +504,18 @@ export default function WriterPage() {
       ) : null}
 
       {feishuResult ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal-panel feishu-modal">
+        <div className="modal-backdrop">
+          <div
+            aria-labelledby="writer-feishu-dialog-title"
+            aria-modal="true"
+            className="modal-panel feishu-modal"
+            onKeyDown={(event) => handleDialogKeyDown(event, () => setFeishuResult(null))}
+            ref={feishuDialogRef}
+            role="dialog"
+            tabIndex={-1}
+          >
             <div className="modal-header">
-              <h2>飞书文档已创建</h2>
+              <h2 id="writer-feishu-dialog-title">飞书文档已创建</h2>
               <button className="btn" onClick={() => setFeishuResult(null)} type="button">
                 关闭
               </button>
@@ -413,6 +532,42 @@ export default function WriterPage() {
       ) : null}
     </div>
   );
+}
+
+function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    onClose();
+    return;
+  }
+
+  if (event.key !== "Tab") return;
+
+  const focusable = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  );
+
+  if (!focusable.length) {
+    event.preventDefault();
+    event.currentTarget.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (document.activeElement === event.currentTarget) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function makeStylePreview(style?: string) {

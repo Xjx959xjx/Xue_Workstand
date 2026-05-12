@@ -1,9 +1,14 @@
+import { execFile } from "child_process";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { downloadBilibiliVideo, getBilibiliSubtitle } from "./opencli";
+import { promisify } from "util";
+import { downloadBilibiliVideo, getBilibiliSubtitle, refreshDouyinVideoDownloadUrl } from "./opencli";
 import { getVideo, markTranscriptFailed, saveTranscript } from "./storage";
-import { Platform } from "./types";
+import { cleanTranscriptText } from "./transcript-cleaning";
+import { Account, Platform, Video } from "./types";
+
+const execFileAsync = promisify(execFile);
 
 function transcriptionConfig() {
   return {
@@ -18,9 +23,13 @@ export async function transcribeVideo(input: {
   accountId: string;
   videoId: string;
   mediaPath?: string;
+  douyinMediaUrl?: string;
   allowRemoteDownload?: boolean;
 }) {
-  const { video } = await getVideo(input.platform, input.accountId, input.videoId);
+  const timings: Array<{ stage: string; ms: number }> = [];
+  const totalStartedAt = Date.now();
+  const { account, video } = await getVideo(input.platform, input.accountId, input.videoId);
+  timings.push({ stage: "load-video", ms: Date.now() - totalStartedAt });
   const cleanupTargets: string[] = [];
   let hadBilibiliSubtitle = false;
 
@@ -45,7 +54,9 @@ export async function transcribeVideo(input: {
   let mediaError = "";
 
   try {
-    if (!mediaPath && input.allowRemoteDownload) {
+    const shouldDownloadRemote =
+      input.allowRemoteDownload || (input.platform === "douyin" && Boolean(input.douyinMediaUrl));
+    if (!mediaPath && shouldDownloadRemote) {
       if (input.platform === "bilibili") {
         try {
           mediaPath = await downloadBilibiliVideo(video);
@@ -54,14 +65,13 @@ export async function transcribeVideo(input: {
           mediaError = error instanceof Error ? error.message : "B站视频下载失败";
         }
       } else {
-        const remoteUrl = resolveRemoteMediaUrl(video.downloadUrl, video.url);
-        if (remoteUrl) {
-          try {
-            mediaPath = await downloadRemoteMedia(remoteUrl, `${video.id}.mp4`);
-            cleanupTargets.push(mediaPath);
-          } catch (error) {
-            mediaError = error instanceof Error ? error.message : "下载媒体失败";
-          }
+        try {
+          const prepared = await downloadDouyinAudio(account, video, input.douyinMediaUrl);
+          mediaPath = prepared.mediaPath;
+          timings.push(...prepared.timings);
+          cleanupTargets.push(mediaPath);
+        } catch (error) {
+          mediaError = error instanceof Error ? error.message : "下载音频失败";
         }
       }
     }
@@ -77,16 +87,34 @@ export async function transcribeVideo(input: {
     }
 
     try {
+      const transcribeStartedAt = Date.now();
       const text = await transcribeWithSiliconFlow(mediaPath);
+      timings.push({ stage: "siliconflow-transcribe", ms: Date.now() - transcribeStartedAt });
+      const cleanStartedAt = Date.now();
+      const cleaned = await cleanTranscriptText({
+        platform: input.platform,
+        title: video.title,
+        text
+      });
+      timings.push({ stage: "clean-transcript", ms: Date.now() - cleanStartedAt });
+      const saveStartedAt = Date.now();
+      const saved = await saveTranscript({
+        platform: input.platform,
+        accountId: input.accountId,
+        videoId: input.videoId,
+        text: cleaned.text,
+        source: "siliconflow"
+      });
+      timings.push({ stage: "save-transcript", ms: Date.now() - saveStartedAt });
       return {
-        ...(await saveTranscript({
-          platform: input.platform,
-          accountId: input.accountId,
-          videoId: input.videoId,
-          text,
-          source: "siliconflow"
-        })),
-        usedProvider: "siliconflow"
+        ...saved,
+        usedProvider: "siliconflow",
+        timings: [...timings, { stage: "total", ms: Date.now() - totalStartedAt }],
+        transcriptCleaning: {
+          fallback: cleaned.fallback,
+          fallbackReason: cleaned.fallbackReason,
+          usedModel: cleaned.usedModel
+        }
       };
     } catch (error) {
       const reason = buildProviderErrorReason(input.platform, error);
@@ -134,26 +162,114 @@ async function transcribeWithSiliconFlow(mediaPath: string) {
   return data.text.trim();
 }
 
-async function downloadRemoteMedia(url: string, fileName: string) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`下载媒体失败：${response.status}`);
+async function downloadDouyinAudio(account: Account, video: Video, prefetchedMediaUrl?: string) {
+  const mediaUrlStartedAt = Date.now();
+  const mediaUrl = prefetchedMediaUrl || (await refreshDouyinVideoDownloadUrl(account, video));
+  const mediaUrlMs = Date.now() - mediaUrlStartedAt;
+  if (!mediaUrl) {
+    throw new Error("opencli 没有返回当前抖音视频的媒体地址，请先重新采集账号后再试。");
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const timings = [{ stage: prefetchedMediaUrl ? "douyin-media-url-prefetched" : "douyin-opencli", ms: mediaUrlMs }];
+  let extracted: { mediaPath: string; ms: number };
+  try {
+    extracted = await extractRemoteAudio(mediaUrl, `${video.id}.m4a`);
+  } catch (error) {
+    if (!isNoAudioStreamError(error)) throw error;
+
+    const fallbackStartedAt = Date.now();
+    const fallbackUrl = await refreshDouyinVideoDownloadUrl(account, video, {
+      preferBrowser: true,
+      excludeUrls: [mediaUrl]
+    });
+    timings.push({ stage: "douyin-media-url-audio-fallback", ms: Date.now() - fallbackStartedAt });
+    if (!fallbackUrl || fallbackUrl === mediaUrl) throw error;
+    extracted = await extractRemoteAudio(fallbackUrl, `${video.id}.m4a`);
+  }
+
+  return {
+    mediaPath: extracted.mediaPath,
+    timings: [
+      ...timings,
+      { stage: "douyin-ffmpeg-audio", ms: extracted.ms }
+    ]
+  };
+}
+
+async function extractRemoteAudio(url: string, fileName: string) {
   const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
-  await fs.writeFile(target, buffer);
-  return target;
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-y",
+    ...buildFfmpegHeaderArgs(url),
+    "-i",
+    url,
+    "-vn",
+    "-map",
+    "a:0",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "32k",
+    target
+  ];
+
+  try {
+    const startedAt = Date.now();
+    await execFileAsync(ffmpegBin(), args, {
+      maxBuffer: 1024 * 1024 * 4,
+      timeout: 10 * 60 * 1000
+    });
+    return { mediaPath: target, ms: Date.now() - startedAt };
+  } catch (error) {
+    await fs.rm(target, { force: true }).catch(() => undefined);
+    throw new Error(`抖音音频提取失败：${describeFfmpegError(error)}`);
+  }
 }
 
-function resolveRemoteMediaUrl(downloadUrl?: string, fallbackUrl?: string) {
-  if (downloadUrl?.trim()) return downloadUrl.trim();
-  if (fallbackUrl?.trim() && isLikelyDirectMediaUrl(fallbackUrl)) return fallbackUrl.trim();
-  return "";
+function ffmpegBin() {
+  return process.env.FFMPEG_BIN || "ffmpeg";
 }
 
-function isLikelyDirectMediaUrl(url: string) {
-  return /^https?:\/\//i.test(url) && /\.(mp4|m4a|mp3|wav|aac|flac|ogg|webm|mov|mkv)(\?|$)/i.test(url);
+function isNoAudioStreamError(error: unknown) {
+  return error instanceof Error && /matches no streams|stream map 'a:0'|does not contain any stream/i.test(error.message);
+}
+
+function buildFfmpegHeaderArgs(url: string) {
+  if (!/douyinvod\.com/i.test(url)) return [];
+
+  return [
+    "-headers",
+    [
+      "Accept: */*",
+      "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+      "Origin: https://www.douyin.com",
+      "Referer: https://www.douyin.com/",
+      "Sec-Fetch-Dest: video",
+      "Sec-Fetch-Mode: no-cors",
+      "Sec-Fetch-Site: cross-site",
+      "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+      ""
+    ].join("\r\n")
+  ];
+}
+
+function describeFfmpegError(error: unknown) {
+  if (!(error instanceof Error)) return "ffmpeg 执行失败";
+  const detail =
+    "stderr" in error && typeof (error as { stderr?: unknown }).stderr === "string"
+      ? (error as { stderr: string }).stderr.trim()
+      : "";
+  if (/ENOENT/.test(error.message)) {
+    return "未找到 ffmpeg，请先安装 ffmpeg，或设置 FFMPEG_BIN 指向可执行文件。";
+  }
+  return detail || error.message || "ffmpeg 执行失败";
 }
 
 function buildMissingMediaReason(input: {

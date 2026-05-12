@@ -1,18 +1,26 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
-import { Draft, Platform, WriteResult } from "./types";
+import {
+  AccountDraftInput,
+  Draft,
+  Platform,
+  ProjectDraftInput,
+  ProjectSummary,
+  WriteResult,
+  platforms
+} from "./types";
 import { clampText, makeTitleFromPrompt } from "./utils";
 import {
   getTopTranscriptSamples,
+  getProjectSummary,
   libraryRoot,
   resolveAccount,
   resolveProject,
   saveDraft,
   saveProjectStyle,
-  saveStyle
+  saveStyle,
+  upsertProject
 } from "./storage";
 
 type ChatMessage = {
@@ -21,19 +29,78 @@ type ChatMessage = {
 };
 
 export type ChatWireApi = "responses" | "chat_completions";
-type ChatCompletionResult = {
+export type ChatReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
+type ChatTool = {
+  type: "web_search";
+};
+export type ChatCompletionResult = {
   text: string;
   model: string;
   fallback: boolean;
   fallbackReason?: string;
 };
 
+export type WriteCopyInput = {
+  platform?: Platform;
+  accountId?: string;
+  targetType?: "account" | "project";
+  projectId?: string;
+  mode: Draft["mode"];
+  prompt: string;
+  sourceText?: string;
+  save?: boolean;
+  useWebResearch?: boolean;
+};
+
+export type PreparedWriteContext = {
+  messages: ChatMessage[];
+  fallbackName: string;
+  fallbackStyle: string;
+  fallbackInput: { mode: Draft["mode"]; prompt: string; sourceText?: string };
+  research?: string;
+  draftBase?: Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
+};
+
+export type SaveAndGenerateProjectStyleInput = {
+  projectId?: string;
+  name: string;
+  description?: string;
+  sourceAccountIds: string[];
+};
+
+export type ProjectStyleGenerationResult = {
+  project: ProjectSummary;
+  style: string;
+  fallback: boolean;
+  usedModel: string;
+  fallbackReason?: string;
+};
+
+export type PreparedAccountStyleContext = {
+  platform: Platform;
+  accountId: string;
+  accountName: string;
+  messages: ChatMessage[];
+  fallback: string;
+};
+
 type FetchInitWithDispatcher = UndiciRequestInit & {
   dispatcher?: ProxyAgent;
 };
 
-const execFileAsync = promisify(execFile);
-const WEB_RESEARCH_TIMEOUT_MS = 12_000;
+const STYLE_MAX_OUTPUT_TOKENS = 3200;
+
+class StreamResponseTextError extends Error {
+  partialText: string;
+  originalError: unknown;
+
+  constructor(error: unknown, partialText: string) {
+    super(error instanceof Error ? error.message : "模型流式输出中断");
+    this.name = "StreamResponseTextError";
+    this.partialText = partialText;
+    this.originalError = error;
+  }
+}
 
 function chatConfig() {
   return {
@@ -41,6 +108,7 @@ function chatConfig() {
     baseUrl: (process.env.CHAT_BASE_URL || "https://www.fhl.mom").replace(/\/$/, ""),
     model: process.env.CHAT_MODEL || "gpt-5.5",
     wireApi: normalizeWireApi(process.env.CHAT_WIRE_API),
+    reasoningEffort: normalizeReasoningEffort(process.env.CHAT_REASONING_EFFORT),
     proxyUrl: process.env.CHAT_PROXY_URL || ""
   };
 }
@@ -51,27 +119,188 @@ export function getChatRuntimeConfig() {
     baseUrl: config.baseUrl,
     model: config.model,
     wireApi: config.wireApi,
+    reasoningEffort: config.reasoningEffort,
     proxyConfigured: Boolean(config.proxyUrl),
     configured: Boolean(config.apiKey && config.model)
   };
 }
 
 export async function chatComplete(messages: ChatMessage[]): Promise<ChatCompletionResult> {
+  return chatCompleteWithFallback(messages);
+}
+
+export async function streamResponseText(input: {
+  messages: ChatMessage[];
+  reasoningEffort?: ChatReasoningEffort;
+  tools?: ChatTool[];
+  maxOutputTokens?: number;
+  onDelta: (delta: string) => void;
+}) {
+  const config = chatConfig();
+  if (!config.apiKey || !config.model) {
+    return fallbackChatCompletion(config.model || "local-fallback");
+  }
+
+  if (config.wireApi !== "responses") {
+    throw new Error("当前模型链路暂不支持流式输出，请切换到 Responses API。");
+  }
+
+  const system = input.messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
+  const requestInput = input.messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role,
+      content: message.content
+    }));
+
+  const init: FetchInitWithDispatcher = {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: config.model,
+      instructions: system || undefined,
+      input: requestInput,
+      temperature: 0.75,
+      stream: true,
+      tools: input.tools,
+      tool_choice: input.tools?.length ? "auto" : undefined,
+      max_output_tokens: input.maxOutputTokens,
+      reasoning: {
+        effort: input.reasoningEffort || config.reasoningEffort
+      },
+      store: false
+    }),
+    dispatcher: chatDispatcher(config.proxyUrl)
+  };
+
+  const response = await undiciFetch(`${config.baseUrl}/responses`, init);
+  if (!response.ok) {
+    throw new Error(describeChatHttpFailure(response.status, await response.text(), response.headers.get("content-type")));
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("模型服务没有返回可读取的流式内容");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let aggregatedText = "";
+  let streamFinished = false;
+
+  try {
+    while (!streamFinished) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const rawEvent of events) {
+        const lines = rawEvent
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const dataLine = lines.find((line) => line.startsWith("data: "));
+        if (!dataLine) continue;
+        const payload = dataLine.slice(6);
+        if (!payload || payload === "[DONE]") continue;
+
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(payload) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+
+        if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+          aggregatedText += parsed.delta;
+          input.onDelta(parsed.delta);
+        } else if (parsed.type === "response.output_text.done" && !aggregatedText.trim()) {
+          const text = typeof parsed.text === "string" ? parsed.text : "";
+          aggregatedText = text;
+          if (text) input.onDelta(text);
+        } else if (parsed.type === "response.completed") {
+          const completedText = extractResponseText(parsed.response);
+          if (completedText && completedText.length > aggregatedText.trim().length) {
+            const delta = completedText.slice(aggregatedText.length);
+            aggregatedText = completedText;
+            if (delta) input.onDelta(delta);
+          }
+          streamFinished = true;
+        } else if (parsed.type === "response.failed" || parsed.type === "response.incomplete") {
+          const errorMessage =
+            extractResponseErrorMessage(parsed.response) || extractResponseErrorMessage(parsed) || "模型流式输出失败";
+          throw new Error(errorMessage);
+        }
+      }
+    }
+    if (streamFinished) {
+      await reader.cancel().catch(() => undefined);
+    }
+  } catch (error) {
+    if (aggregatedText.trim()) {
+      throw new StreamResponseTextError(error, aggregatedText);
+    }
+    throw error;
+  }
+
+  return {
+    text: aggregatedText.trim(),
+    model: config.model,
+    fallback: false
+  } satisfies ChatCompletionResult;
+}
+
+export async function streamResponseTextWithFallback(input: {
+  messages: ChatMessage[];
+  reasoningEffort?: ChatReasoningEffort;
+  tools?: ChatTool[];
+  maxOutputTokens?: number;
+  onDelta: (delta: string) => void;
+}) {
+  try {
+    return await streamResponseText(input);
+  } catch (error) {
+    if (error instanceof StreamResponseTextError && error.partialText.trim()) {
+      return {
+        text: error.partialText.trim(),
+        model: chatConfig().model,
+        fallback: true,
+        fallbackReason: `${summarizeChatFailure(error)}，已保留模型已生成的内容，请检查后再使用。`
+      };
+    }
+    return fallbackChatCompletion("local-fallback", error);
+  }
+}
+
+async function chatCompleteWithEffort(
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort,
+  tools?: ChatTool[]
+): Promise<ChatCompletionResult> {
   const config = chatConfig();
   if (!config.apiKey || !config.model) {
     return fallbackChatCompletion(config.model || "local-fallback");
   }
 
   if (config.wireApi === "responses") {
-    return createResponse(config, messages);
+    return createResponse(config, messages, reasoningEffort, tools);
   }
 
-  return createChatCompletion(config, messages);
+  return createChatCompletion(config, messages, reasoningEffort);
 }
 
 async function createChatCompletion(
   config: ReturnType<typeof chatConfig>,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort
 ): Promise<ChatCompletionResult> {
   const init: FetchInitWithDispatcher = {
     method: "POST",
@@ -82,7 +311,8 @@ async function createChatCompletion(
     body: JSON.stringify({
       model: config.model,
       messages,
-      temperature: 0.75
+      temperature: 0.75,
+      reasoning_effort: reasoningEffort || config.reasoningEffort
     }),
     dispatcher: chatDispatcher(config.proxyUrl)
   };
@@ -105,7 +335,9 @@ async function createChatCompletion(
 
 async function createResponse(
   config: ReturnType<typeof chatConfig>,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort,
+  tools?: ChatTool[]
 ): Promise<ChatCompletionResult> {
   const system = messages
     .filter((message) => message.role === "system")
@@ -129,6 +361,11 @@ async function createResponse(
       instructions: system || undefined,
       input,
       temperature: 0.75,
+      tools,
+      tool_choice: tools?.length ? "auto" : undefined,
+      reasoning: {
+        effort: reasoningEffort || config.reasoningEffort
+      },
       store: false
     }),
     dispatcher: chatDispatcher(config.proxyUrl)
@@ -151,6 +388,12 @@ function normalizeWireApi(value?: string): ChatWireApi {
   return value === "chat_completions" || value === "chat-completions" ? "chat_completions" : "responses";
 }
 
+function normalizeReasoningEffort(value?: string): ChatReasoningEffort {
+  return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh"
+    ? value
+    : "xhigh";
+}
+
 function fallbackChatCompletion(model = "local-fallback", error?: unknown): ChatCompletionResult {
   return {
     text: "",
@@ -160,12 +403,30 @@ function fallbackChatCompletion(model = "local-fallback", error?: unknown): Chat
   };
 }
 
-async function chatCompleteWithFallback(messages: ChatMessage[]): Promise<ChatCompletionResult> {
+async function chatCompleteWithFallback(
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort,
+  tools?: ChatTool[]
+): Promise<ChatCompletionResult> {
   try {
-    return await chatComplete(messages);
+    return await chatCompleteWithEffort(messages, reasoningEffort, tools);
   } catch (error) {
     return fallbackChatCompletion("local-fallback", error);
   }
+}
+
+function completeStyleGeneration(messages: ChatMessage[]) {
+  if (chatConfig().wireApi !== "responses") {
+    return chatCompleteWithFallback(messages);
+  }
+
+  return streamResponseTextWithFallback({
+    messages,
+    maxOutputTokens: STYLE_MAX_OUTPUT_TOKENS,
+    onDelta() {
+      // Keep the request streaming so upstream proxies do not close long style-generation calls.
+    }
+  });
 }
 
 function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
@@ -201,11 +462,25 @@ function buildChatFallbackReason(error: unknown) {
 function summarizeChatFailure(error: unknown) {
   if (!(error instanceof Error)) return "对话模型暂时不可用";
 
-  const message = error.message;
-  if (/524\b|响应超时|a timeout occurred/i.test(message)) return "对话模型服务超时";
+  const originalError = error instanceof StreamResponseTextError ? error.originalError : error;
+  const cause = originalError instanceof Error ? originalError.cause : undefined;
+  const causeMessage =
+    cause instanceof Error
+      ? `${cause.name} ${cause.message} ${(cause as { code?: string }).code || ""}`
+      : "";
+  const message = [
+    error.name,
+    error.message,
+    originalError instanceof Error ? originalError.message : "",
+    causeMessage
+  ].join(" ");
+
+  if (/524\b|响应超时|a timeout occurred|timeout|timed out|AbortError|TimeoutError|aborted|UND_ERR_HEADERS_TIMEOUT/i.test(message)) {
+    return "对话模型服务超时";
+  }
   if (/429\b|rate limit/i.test(message)) return "对话模型服务限流";
   if (/401\b|403\b|unauthorized|forbidden/i.test(message)) return "对话模型服务鉴权异常";
-  if (/ECONNREFUSED|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|fetch failed|SocketError/i.test(message)) {
+  if (/ECONNREFUSED|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
     return "对话模型服务连接异常";
   }
   if (/5\d\d\b|对话模型调用失败：/i.test(message)) return "对话模型服务暂时异常";
@@ -234,131 +509,89 @@ function extractResponseText(data: unknown): string {
     .trim();
 }
 
+function extractResponseErrorMessage(data: unknown) {
+  if (!data || typeof data !== "object") return "";
+  const object = data as Record<string, unknown>;
+  const error = object.error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const errorObject = error as Record<string, unknown>;
+    return [errorObject.message, errorObject.code, errorObject.type]
+      .filter((part): part is string => typeof part === "string" && Boolean(part.trim()))
+      .join(" ");
+  }
+  return "";
+}
+
 async function buildWebResearchContext(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
-  const queries = makeSearchQueries(input);
-  if (!queries.length) return "未触发检索：需求为空。";
-
   try {
-    const results = await searchWeb(queries);
-    if (!results.length) return `已联网检索「${queries.join(" / ")}」，但没有拿到可用结果。`;
-
-    const lines = results
-      .slice(0, 6)
-      .map((item, index) => {
-        const date = item.date ? `｜${item.date}` : "";
-        const source = item.source ? `｜${item.source}` : "";
-        return `${index + 1}. ${item.title}${source}${date}\n   ${item.snippet || "暂无摘要"}\n   ${item.url}`;
-      })
-      .join("\n");
-
-    return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索关键词：${queries.join(" / ")}\n${lines}`;
+    return await buildNativeWebResearchContext(input);
   } catch (error) {
-    return `联网检索失败：${error instanceof Error ? error.message : "未知错误"}。如需最新事实，请让用户提供事件链接或关键词。`;
+    return buildWebResearchFailureContext(error);
   }
 }
 
-async function searchWeb(queries: string[]) {
-  const settled = await Promise.allSettled(
-    queries.map((query) => runOpenCliJson(["google", "search", query, "--limit", "6", "--lang", "zh", "-f", "json"]))
-  );
-  const rows = settled.flatMap((result) =>
-    result.status === "fulfilled" ? asArray(result.value).map(normalizeSearchResult).filter((item) => item.title || item.snippet) : []
-  );
-  const uniqueRows = dedupeSearchResults(rows);
-  if (uniqueRows.length) return uniqueRows;
+function buildWebResearchFailureContext(error: unknown) {
+  const reason = summarizeWebResearchFailure(error);
 
-  const newsResults = await runOpenCliJson(["google", "news", queries[0], "--limit", "6", "--lang", "zh", "--region", "CN", "-f", "json"]);
-  return asArray(newsResults).map(normalizeSearchResult).filter((item) => item.title || item.snippet);
+  return [
+    `联网资料：模型联网暂时不可用${reason ? `，${reason}` : ""}。`,
+    "写作处理：不要硬编最新事实，先按已有风格、原文和用户要求继续完成成稿。",
+    "如果这条内容必须追热点、价格或具体型号，请让用户补一个链接、品牌型号，或者更具体的关键词后再试。"
+  ].join("\n");
 }
 
-async function runOpenCliJson(args: string[]) {
-  const { stdout, stderr } = await execFileAsync(process.env.OPENCLI_BIN || "opencli", args, {
-    maxBuffer: 1024 * 1024 * 20,
-    timeout: WEB_RESEARCH_TIMEOUT_MS
-  });
-  if (stderr && stderr.toLowerCase().includes("error")) {
-    throw new Error(stderr.trim());
+function summarizeWebResearchFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/524\b|响应超时|a timeout occurred|timeout|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|ETIMEDOUT|Connect Timeout/i.test(message)) {
+    return "模型联网搜索超时";
   }
-  return parseJsonish(stdout.trim());
+  if (/fetch failed|SocketError|ECONNRESET|ECONNREFUSED/i.test(message)) {
+    return "模型联网搜索没连上";
+  }
+  if (/ENOTFOUND|EAI_AGAIN|DNS/i.test(message)) {
+    return "模型联网搜索域名解析失败";
+  }
+  if (/429\b|rate limit/i.test(message)) {
+    return "模型联网搜索被限流";
+  }
+  if (/401\b|403\b|unauthorized|forbidden/i.test(message)) {
+    return "模型联网搜索鉴权异常";
+  }
+  if (/原生联网搜索未返回可用结果/.test(message)) return "没有返回可用资料";
+  return "";
 }
 
-function parseJsonish(output: string): unknown {
-  if (!output) return [];
-  try {
-    return JSON.parse(output);
-  } catch {
-    const firstBrace = output.indexOf("{");
-    const firstBracket = output.indexOf("[");
-    const candidates = [firstBrace, firstBracket].filter((index) => index >= 0);
-    const start = Math.min(...candidates);
-    if (Number.isFinite(start)) {
-      try {
-        return JSON.parse(output.slice(start));
-      } catch {
-        return [];
+async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+  const researchTask =
+    input.mode === "topic"
+      ? `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${input.prompt}`
+      : `请围绕这次改写任务联网检索相关最新事实，并整理成写作参考。\n改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
+
+  const result = await chatCompleteWithEffort(
+    [
+      {
+        role: "system",
+        content:
+          "你是中文写作研究助手。请使用联网搜索工具查找与任务直接相关的最新事实，优先采用权威来源。输出必须使用中文纯文本，结构固定为：检索结论、关键信息、来源。若信息不足，明确写出“信息不足”。"
+      },
+      {
+        role: "user",
+        content: `${researchTask}\n\n要求：\n1. 只整理和写作任务强相关的信息。\n2. 每条信息尽量带上日期或时间线索。\n3. 来源部分列出站点名和链接。\n4. 不要直接写成成稿文案。`
       }
-    }
-    return [];
+    ],
+    "medium",
+    [{ type: "web_search" }]
+  );
+
+  if (result.fallback || !result.text.trim()) {
+    throw new Error(result.fallbackReason || "原生联网搜索未返回可用结果");
   }
+
+  return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${result.text.trim()}`;
 }
 
-function asArray(value: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"));
-  if (value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    for (const key of ["data", "items", "results", "list"]) {
-      if (Array.isArray(object[key])) return asArray(object[key]);
-    }
-    if (object.data && typeof object.data === "object") {
-      const nested = object.data as Record<string, unknown>;
-      for (const key of ["items", "results", "list"]) {
-        if (Array.isArray(nested[key])) return asArray(nested[key]);
-      }
-    }
-  }
-  return [];
-}
-
-function normalizeSearchResult(item: Record<string, unknown>) {
-  return {
-    title: String(item.title || ""),
-    snippet: String(item.snippet || item.summary || item.description || ""),
-    url: String(item.url || item.link || ""),
-    source: String(item.source || ""),
-    date: String(item.date || item.publishedAt || "")
-  };
-}
-
-function dedupeSearchResults(results: Array<ReturnType<typeof normalizeSearchResult>>) {
-  const seen = new Set<string>();
-  return results.filter((result) => {
-    const key = result.url || result.title;
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function makeSearchQueries(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
-  const text = `${input.prompt} ${input.mode === "rewrite" ? input.sourceText || "" : ""}`
-    .replace(/[，。！？、；："'“”‘’（）()[\]{}#*_`>]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return [];
-
-  const queries = [text.slice(0, 80)];
-  if (/游戏|手游|二游|steam|玩家|官方|开服|周年|抽卡/i.test(text)) {
-    queries.push("游戏圈 最新 争议 翻车 事件 2026");
-    queries.push("最近 二游 翻车 争议 官方 道歉 玩家 不满 2026");
-    queries.push("游戏 最新 离谱 事件 争议 玩家 2026");
-  }
-  if (/最新|最近|热点|事件|新闻|离谱|翻车|争议/.test(text) && !queries.some((query) => query.includes("最新"))) {
-    queries.push(`${text.slice(0, 42)} 最新 争议 事件`);
-  }
-  return [...new Set(queries)].slice(0, 4);
-}
-
-export async function generateStyleProfile(platform: Platform, accountId: string) {
+export async function prepareAccountStyleContext(platform: Platform, accountId: string): Promise<PreparedAccountStyleContext> {
   const account = await resolveAccount(platform, accountId);
   const samples = await getTopTranscriptSamples(platform, accountId, 8);
 
@@ -377,21 +610,40 @@ export async function generateStyleProfile(platform: Platform, accountId: string
     .join("\n\n---\n\n");
 
   const fallback = buildFallbackStyle(account.name, corpus);
-  const result = await chatCompleteWithFallback([
+  const messages: ChatMessage[] = [
     {
       role: "system",
       content:
-        "你是短视频账号风格分析师。请根据爆款转写稿，提炼可复用的中文文案风格卡。输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。"
+        "你是短视频账号风格分析师。请根据爆款转写稿，提炼可复用的中文文案风格卡。输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
     },
     {
       role: "user",
       content: `账号：${account.name}\n平台：${platform}\n\n爆款样本：\n${corpus}`
     }
-  ]);
+  ];
 
-  const style = result.text || fallback;
-  await saveStyle(platform, accountId, style);
-  return { style, fallback: result.fallback, usedModel: result.model };
+  return {
+    platform,
+    accountId,
+    accountName: account.name,
+    messages,
+    fallback
+  };
+}
+
+export async function completePreparedAccountStyle(
+  context: PreparedAccountStyleContext,
+  result: ChatCompletionResult
+) {
+  const style = result.text || context.fallback;
+  await saveStyle(context.platform, context.accountId, style);
+  return { style, fallback: result.fallback, usedModel: result.model, fallbackReason: result.fallbackReason };
+}
+
+export async function generateStyleProfile(platform: Platform, accountId: string) {
+  const context = await prepareAccountStyleContext(platform, accountId);
+  const result = await completeStyleGeneration(context.messages);
+  return completePreparedAccountStyle(context, result);
 }
 
 export async function generateProjectStyleProfile(projectId: string) {
@@ -432,11 +684,11 @@ export async function generateProjectStyleProfile(projectId: string) {
     .join("\n\n---\n\n");
 
   const fallback = buildFallbackStyle(project.name, corpus);
-  const result = await chatCompleteWithFallback([
+  const result = await completeStyleGeneration([
     {
       role: "system",
       content:
-        "你是项目级中文短视频风格策略师。请把多个账号的风格卡和爆款转写稿融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。"
+        "你是项目级中文短视频风格策略师。请把多个账号的风格卡和爆款转写稿融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合参考账号，不要输出泛泛模板。"
     },
     {
       role: "user",
@@ -446,22 +698,75 @@ export async function generateProjectStyleProfile(projectId: string) {
 
   const style = result.text || fallback;
   await saveProjectStyle(projectId, style);
-  return { style, fallback: result.fallback, usedModel: result.model };
+  return { style, fallback: result.fallback, usedModel: result.model, fallbackReason: result.fallbackReason };
 }
 
-export async function writeCopy(input: {
-  platform?: Platform;
-  accountId?: string;
-  targetType?: "account" | "project";
-  projectId?: string;
-  mode: Draft["mode"];
-  prompt: string;
-  sourceText?: string;
+export async function saveAndGenerateProjectStyleProfile(
+  input: SaveAndGenerateProjectStyleInput
+): Promise<ProjectStyleGenerationResult> {
+  if (!input.sourceAccountIds.length) {
+    throw new Error("请至少选择一个参考账号后再总结项目风格");
+  }
+
+  await assertProjectSourceAccountsExist(input.sourceAccountIds);
+  const project = await upsertProject(input);
+  const result = await generateProjectStyleProfile(project.id);
+  const summary = await getProjectSummary(project);
+
+  return {
+    project: summary,
+    style: result.style,
+    fallback: result.fallback,
+    usedModel: result.usedModel,
+    fallbackReason: result.fallbackReason
+  };
+}
+
+export async function writeCopy(input: WriteCopyInput): Promise<WriteResult> {
+  const prepared = await prepareWriteCopyContext(input);
+  const result = await chatCompleteWithFallback(prepared.messages);
+  const content = result.text || buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
+  const draft = await savePreparedDraft(input, prepared, content);
+
+  return {
+    content,
+    research: prepared.research,
+    draft,
+    usedModel: result.model,
+    fallback: result.fallback,
+    fallbackReason: result.fallbackReason
+  };
+}
+
+export async function completePreparedWriteCopy(input: {
+  prepared: PreparedWriteContext;
+  result: ChatCompletionResult;
   save?: boolean;
-  useWebResearch?: boolean;
 }): Promise<WriteResult> {
+  const content =
+    input.result.text ||
+    buildFallbackCopy(
+      input.prepared.fallbackName,
+      input.prepared.fallbackStyle,
+      input.prepared.fallbackInput
+    );
+  const draft = await savePreparedDraft({ save: input.save }, input.prepared, content);
+
+  return {
+    content,
+    research: input.prepared.research,
+    draft,
+    usedModel: input.result.model,
+    fallback: input.result.fallback || !input.result.text.trim(),
+    fallbackReason:
+      input.result.fallbackReason ||
+      (!input.result.text.trim() ? "模型没有返回可用内容，已自动切换到本地模板。" : undefined)
+  };
+}
+
+export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<PreparedWriteContext> {
   if (input.targetType === "project" || input.projectId) {
-    return writeProjectCopy(input);
+    return prepareProjectWriteContext(input);
   }
 
   if (!input.platform || !input.accountId) {
@@ -481,23 +786,23 @@ export async function writeCopy(input: {
       : `请按账号风格改写下面文案。改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
   const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
 
-  const result = await chatCompleteWithFallback([
-    {
-      role: "system",
-      content:
-        "你是中文短视频文案助手。严格参考给定账号风格卡和样本话术，但不要照抄原转写稿。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实；资料不足时说明需要用户补充更明确关键词。输出可以直接使用的成稿，必要时给出标题、正文、口播节奏和结尾互动。"
-    },
-    {
-      role: "user",
-      content: `参考账号：${account.name}\n平台：${input.platform}\n\n风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
-    }
-  ]);
-
-  const content = result.text || buildFallbackCopy(account.name, style, input);
-  let draft;
-
-  if (input.save) {
-    draft = await saveDraft({
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是中文短视频文案助手。严格参考给定账号风格卡和样本话术，但不要照抄原转写稿。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实；资料不足时说明需要用户补充更明确关键词。输出可以直接使用的成稿，必要时给出标题、正文、口播节奏和结尾互动。"
+      },
+      {
+        role: "user",
+        content: `参考账号：${account.name}\n平台：${input.platform}\n\n风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
+      }
+    ],
+    fallbackName: account.name,
+    fallbackStyle: style,
+    fallbackInput: input,
+    research: input.useWebResearch ? webContext : undefined,
+    draftBase: {
       platform: input.platform,
       accountId: input.accountId,
       accountName: account.name,
@@ -505,33 +810,17 @@ export async function writeCopy(input: {
       mode: input.mode,
       prompt: input.prompt,
       input: input.sourceText,
-      content,
       styleRef: {
         platform: input.platform,
         accountId: input.accountId,
         accountName: account.name,
         videoIds: samples.map((sample) => sample.video.id)
       }
-    });
-  }
-
-  return {
-    content,
-    draft,
-    usedModel: result.model,
-    fallback: result.fallback,
-    fallbackReason: result.fallbackReason
+    }
   };
 }
 
-async function writeProjectCopy(input: {
-  projectId?: string;
-  mode: Draft["mode"];
-  prompt: string;
-  sourceText?: string;
-  save?: boolean;
-  useWebResearch?: boolean;
-}): Promise<WriteResult> {
+async function prepareProjectWriteContext(input: WriteCopyInput): Promise<PreparedWriteContext> {
   if (!input.projectId) {
     throw new Error("请选择参考项目");
   }
@@ -566,28 +855,27 @@ async function writeProjectCopy(input: {
       : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
   const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
 
-  const result = await chatCompleteWithFallback([
-    {
-      role: "system",
-      content:
-        "你是中文短视频文案助手。严格参考给定项目风格卡和样本话术，但不要照抄原转写稿。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实；资料不足时说明需要用户补充更明确关键词。输出可以直接使用的成稿，必要时给出标题、正文、口播节奏和结尾互动。"
+  return {
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是中文短视频文案助手。严格参考给定项目风格卡和样本话术，但不要照抄原转写稿。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实；资料不足时说明需要用户补充更明确关键词。输出可以直接使用的成稿，必要时给出标题、正文、口播节奏和结尾互动。"
+      },
+      {
+        role: "user",
+        content: `参考项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n项目风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
+      }
+    ],
+    fallbackName: project.name,
+    fallbackStyle: style,
+    fallbackInput: {
+      mode: input.mode,
+      prompt: input.prompt,
+      sourceText: input.sourceText
     },
-    {
-      role: "user",
-      content: `参考项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n项目风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
-    }
-  ]);
-
-  const content = result.text || buildFallbackCopy(project.name, style, {
-    mode: input.mode,
-    prompt: input.prompt,
-    sourceText: input.sourceText
-  });
-
-  let draft;
-
-  if (input.save) {
-    draft = await saveDraft({
+    research: input.useWebResearch ? webContext : undefined,
+    draftBase: {
       targetType: "project",
       projectId: project.id,
       projectName: project.name,
@@ -595,22 +883,35 @@ async function writeProjectCopy(input: {
       mode: input.mode,
       prompt: input.prompt,
       input: input.sourceText,
-      content,
       styleRef: {
         projectId: project.id,
         projectName: project.name,
         sourceAccountIds: project.sourceAccountIds
       }
-    });
-  }
-
-  return {
-    content,
-    draft,
-    usedModel: result.model,
-    fallback: result.fallback,
-    fallbackReason: result.fallbackReason
+    }
   };
+}
+
+async function savePreparedDraft(
+  input: Pick<WriteCopyInput, "save">,
+  prepared: PreparedWriteContext,
+  content: string
+) {
+  if (!input.save || !prepared.draftBase) return undefined;
+  return saveDraft({ ...prepared.draftBase, content } as AccountDraftInput | ProjectDraftInput);
+}
+
+async function assertProjectSourceAccountsExist(sourceAccountIds: string[]) {
+  const uniqueIds = [...new Set(sourceAccountIds)].filter(Boolean);
+
+  for (const sourceAccountId of uniqueIds) {
+    const [platform] = sourceAccountId.split(":") as [Platform, string];
+    if (!platforms.includes(platform)) {
+      throw new Error(`参考账号格式不正确：${sourceAccountId}`);
+    }
+
+    await resolveAccount(platform, sourceAccountId);
+  }
 }
 
 function buildFallbackStyle(accountName: string, corpus: string) {

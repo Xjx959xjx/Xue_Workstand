@@ -1,31 +1,48 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { Eye, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDateWithYear, formatNumber, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { StatusPill } from "@/components/StatusPill";
 import {
-  batchTranscribe,
   createAccount,
   deleteAccounts,
   deleteVideos,
-  deleteTranscript,
-  generateStyle,
   getTranscript,
   hydrateVideo,
   saveTranscript,
   saveStyle,
+  streamBatchTranscribe,
+  streamGenerateStyle,
   transcribeVideo
 } from "@/lib/client";
-import { Platform, Video } from "@/lib/types";
+import type { StyleGenerationResponse } from "@/lib/client";
+import { BatchTranscribeResult, Platform, Video } from "@/lib/types";
+import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } from "@/lib/utils";
 
 type BatchLimit = 3 | 5 | 10 | "all";
 const HOT_SCORE_FORMULA = "热度 = 播放 + 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
+const DOUYIN_MISSING_VIEWS_HINT = "抖音采集源未返回播放量，当前热度使用点赞、评论、收藏和分享计算。";
 
 function canReadTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath"> | null) {
   return Boolean(video?.transcriptPath) || video?.transcriptStatus === "completed";
+}
+
+function getVideoOpenUrl(video: Video | null) {
+  if (!video?.url) return "";
+  if (video.platform !== "douyin") return video.url;
+  if (!isLikelyDirectMediaUrl(video.url)) return video.url;
+
+  const raw = video.raw && typeof video.raw === "object" ? (video.raw as Record<string, unknown>) : {};
+  return (
+    buildDouyinVideoUrl(
+      extractDouyinAwemeId(video.id) ||
+        extractDouyinAwemeId(String(raw.aweme_id || raw.id || ""))
+    ) || video.url
+  );
 }
 
 export default function LibraryPage() {
@@ -39,9 +56,13 @@ export default function LibraryPage() {
   const [sortMode, setSortMode] = useState<"hot" | "views" | "likes" | "comments" | "favorites" | "latest">("hot");
   const [batchLimit, setBatchLimit] = useState<BatchLimit>(5);
   const [transcribeProgress, setTranscribeProgress] = useState(0);
+  const [transcribeStage, setTranscribeStage] = useState("");
+  const [styleProgress, setStyleProgress] = useState(0);
+  const [styleStage, setStyleStage] = useState("");
   const [openModal, setOpenModal] = useState<"" | "transcript" | "style">("");
   const [hydratedStatsAccounts, setHydratedStatsAccounts] = useState<string[]>([]);
   const [accountManageMode, setAccountManageMode] = useState(false);
+  const [videoManageMode, setVideoManageMode] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedVideoIds, setSelectedVideoIds] = useState<string[]>([]);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
@@ -49,6 +70,8 @@ export default function LibraryPage() {
   const [newAccountPlatform, setNewAccountPlatform] = useState<Platform>("bilibili");
   const [newAccountName, setNewAccountName] = useState("");
   const [newAccountUidOrUrl, setNewAccountUidOrUrl] = useState("");
+  const editModalRef = useRef<HTMLDivElement>(null);
+  const accountModalRef = useRef<HTMLDivElement>(null);
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
@@ -83,6 +106,7 @@ export default function LibraryPage() {
     const first = sortedVideos[0];
     return sortedVideos.find((video) => video.id === selectedVideoId) || first || null;
   }, [selectedVideoId, sortedVideos]);
+  const selectedVideoOpenUrl = useMemo(() => getVideoOpenUrl(selectedVideo), [selectedVideo]);
 
   const transcriptPreview = useMemo(() => makePreview(transcript), [transcript]);
   const stylePreview = useMemo(() => makePreview(styleDraft || selectedAccount?.style || ""), [selectedAccount?.style, styleDraft]);
@@ -94,28 +118,35 @@ export default function LibraryPage() {
   const pendingCount = sortedVideos.length - completedCount;
   const selectedVideoHasTranscript = canReadTranscript(selectedVideo);
   const visibleMessage = message && message !== error ? message : "";
+  const visibleMessageIsError = isErrorMessage(visibleMessage);
+  const editModalTitle = openModal === "transcript" ? "转写稿全文" : "账号风格卡";
 
   useEffect(() => {
     if (selectedAccount) setStyleDraft(selectedAccount.style);
   }, [selectedAccount]);
 
   useEffect(() => {
-    setSelectedVideoIds([]);
-  }, [selectedAccount?.id]);
+    if (!openModal) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    editModalRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [openModal]);
 
   useEffect(() => {
-    if (busy !== "batch-style") return;
+    if (!accountModalOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    accountModalRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [accountModalOpen]);
 
-    const timer = window.setInterval(() => {
-      setTranscribeProgress((current) => {
-        if (current >= 92) return current;
-        const step = current < 36 ? 5 : current < 72 ? 3 : 1;
-        return Math.min(current + step, 92);
-      });
-    }, 650);
-
-    return () => window.clearInterval(timer);
-  }, [busy]);
+  useEffect(() => {
+    setSelectedVideoIds([]);
+    setVideoManageMode(false);
+  }, [selectedAccount?.id]);
 
   useEffect(() => {
     if (!selectedAccount || selectedAccount.platform !== "bilibili") return;
@@ -173,15 +204,53 @@ export default function LibraryPage() {
     if (!selectedAccount) return;
     setBusy("style");
     setMessage("");
+    setStyleProgress(8);
+    setStyleStage("正在读取账号转写样本");
     try {
-      const result = await generateStyle(selectedAccount.platform, selectedAccount.id);
+      const result = await new Promise<StyleGenerationResponse>(
+        async (resolve, reject) => {
+          let streamed = "";
+          try {
+            await streamGenerateStyle({
+              platform: selectedAccount.platform,
+              accountId: selectedAccount.id
+            }, {
+              onStage(stage) {
+                setStyleProgress(stage.progress || 0);
+                setStyleStage(stage.message);
+              },
+              onDelta(delta) {
+                streamed += delta;
+                setStyleDraft(streamed);
+                const nextProgress = Math.min(88, 45 + Math.floor(streamed.length / 80));
+                setStyleProgress((current) => Math.max(current, nextProgress));
+              },
+              onResult(result) {
+                setStyleProgress(100);
+                setStyleStage("风格卡已生成");
+                resolve(result);
+              }
+            });
+          } catch (error) {
+            reject(error);
+          }
+        }
+      );
       setStyleDraft(result.style);
-      setMessage(result.fallback ? "已用本地模板生成风格卡，可继续编辑。" : "已自动总结风格卡。");
+      setMessage(
+        result.fallback
+          ? `已降级生成风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+          : "已自动总结风格卡。"
+      );
       await refresh();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "自动总结失败");
     } finally {
-      setBusy("");
+      window.setTimeout(() => {
+        setBusy("");
+        setStyleProgress(0);
+        setStyleStage("");
+      }, 400);
     }
   }
 
@@ -226,9 +295,11 @@ export default function LibraryPage() {
     if (!selectedAccount || !selectedVideo) return;
     setBusy("transcribe");
     setTranscribeProgress(12);
+    setTranscribeStage("正在检查字幕和媒体");
     setMessage("");
     try {
       setTranscribeProgress(35);
+      setTranscribeStage("正在转写视频");
       await transcribeVideo({
         platform: selectedAccount.platform,
         accountId: selectedAccount.id,
@@ -236,6 +307,7 @@ export default function LibraryPage() {
         allowRemoteDownload: true
       });
       setTranscribeProgress(85);
+      setTranscribeStage("正在保存转写结果");
       setMessage("转写完成。");
       await refresh();
       setTranscribeProgress(100);
@@ -246,6 +318,7 @@ export default function LibraryPage() {
       window.setTimeout(() => {
         setBusy("");
         setTranscribeProgress(0);
+        setTranscribeStage("");
       }, 400);
     }
   }
@@ -254,22 +327,45 @@ export default function LibraryPage() {
     if (!selectedAccount) return;
     setBusy(updateStyle ? "batch-style" : "batch");
     setTranscribeProgress(8);
+    setTranscribeStage("正在读取候选视频");
     setMessage("");
     try {
-      setTranscribeProgress(25);
-      const result = await batchTranscribe({
-        platform: selectedAccount.platform,
-        accountId: selectedAccount.id,
-        limit: batchLimit,
-        updateStyle
+      const result = await new Promise<BatchTranscribeResult>(async (resolve, reject) => {
+        try {
+          await streamBatchTranscribe({
+            platform: selectedAccount.platform,
+            accountId: selectedAccount.id,
+            limit: batchLimit,
+            updateStyle
+          }, {
+            onStage(stage) {
+              setTranscribeProgress(stage.progress || 0);
+              setTranscribeStage(stage.message);
+            },
+            onVideo(video) {
+              setTranscribeStage(`已处理：${video.title}`);
+            },
+            onResult(result) {
+              setTranscribeProgress(100);
+              setTranscribeStage("批量任务已完成");
+              resolve(result);
+            }
+          });
+        } catch (error) {
+          reject(error);
+        }
       });
-      setTranscribeProgress(80);
       if (result.style) setStyleDraft(result.style);
-      const baseMessage = `批量转写完成：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。`;
+      const timingSummary = summarizeBatchTranscribeTimings(result);
+      const baseMessage = `批量转写完成：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。${timingSummary ? ` ${timingSummary}` : ""}`;
       if (!updateStyle) {
         setMessage(baseMessage);
       } else if (result.styleUpdated) {
-        setMessage(`${baseMessage} 风格卡已同步更新。`);
+        setMessage(
+          result.fallback
+            ? `${baseMessage} 风格卡已降级更新：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+            : `${baseMessage} 风格卡已同步更新。`
+        );
       } else if (result.styleError) {
         setMessage(`${baseMessage} 风格卡未更新：${result.styleError}`);
       } else {
@@ -284,8 +380,32 @@ export default function LibraryPage() {
       window.setTimeout(() => {
         setBusy("");
         setTranscribeProgress(0);
+        setTranscribeStage("");
       }, 400);
     }
+  }
+
+  function summarizeBatchTranscribeTimings(result: BatchTranscribeResult) {
+    const transcribeTotal = result.timings?.find((item) => item.stage === "transcribe-phase-total")?.ms;
+    const mediaPreload = result.timings?.find((item) => item.stage === "douyin-preload-media")?.ms;
+    const completedTimings = result.results
+      .map((item) => item.timings?.find((timing) => timing.stage === "total")?.ms || 0)
+      .filter((ms) => ms > 0);
+    const maxVideoMs = completedTimings.length ? Math.max(...completedTimings) : 0;
+    const parts = [
+      transcribeTotal ? `转写阶段 ${formatDuration(transcribeTotal)}` : "",
+      mediaPreload ? `媒体预取 ${formatDuration(mediaPreload)}` : "",
+      maxVideoMs ? `最慢单条 ${formatDuration(maxVideoMs)}` : ""
+    ].filter(Boolean);
+    return parts.length ? `耗时：${parts.join("，")}。` : "";
+  }
+
+  function formatDuration(ms: number) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    if (seconds < 60) return `${seconds} 秒`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
   }
 
   async function handleCreateAccount() {
@@ -334,28 +454,6 @@ export default function LibraryPage() {
     }
   }
 
-  async function handleDeleteTranscript() {
-    if (!selectedAccount || !selectedVideo) return;
-    const confirmed = window.confirm("确认删除当前视频的转写稿？视频记录会保留，状态会恢复为未完成。");
-    if (!confirmed) return;
-    setBusy("delete-transcript");
-    setMessage("");
-    try {
-      await deleteTranscript({
-        platform: selectedAccount.platform,
-        accountId: selectedAccount.id,
-        videoId: selectedVideo.id
-      });
-      setTranscript("");
-      setMessage("转写稿已删除。");
-      await refresh();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "删除转写稿失败");
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function handleDeleteSelectedVideos() {
     if (!selectedAccount || !selectedVideoIds.length) return;
     const confirmed = window.confirm(`确认删除 ${selectedVideoIds.length} 条视频？对应视频记录和转写稿会一起删除。`);
@@ -394,6 +492,14 @@ export default function LibraryPage() {
     );
   }
 
+  function selectVideo(videoId: string) {
+    if (videoManageMode) {
+      toggleManagedVideo(videoId);
+      return;
+    }
+    setSelectedVideoId(videoId);
+  }
+
   if (!loading && !library?.accounts.length) {
     return (
       <div className="page">
@@ -424,35 +530,45 @@ export default function LibraryPage() {
         </div>
       </header>
 
-      {error ? <div className="error">{error}</div> : null}
-      {visibleMessage ? <div className={isErrorMessage(visibleMessage) ? "error" : "notice"}>{visibleMessage}</div> : null}
+      {error ? <div className="error" role="alert">{error}</div> : null}
+      {visibleMessage ? (
+        <div aria-live={visibleMessageIsError ? "assertive" : "polite"} className={visibleMessageIsError ? "error" : "notice"} role={visibleMessageIsError ? "alert" : "status"}>
+          {visibleMessage}
+        </div>
+      ) : null}
 
       <section className="panel three-pane library-workspace">
-        <aside className="pane">
+        <aside className={`pane ${accountManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header">
             <h2>账号</h2>
             <div className="account-manage-actions">
-              <button className="btn icon-btn" onClick={() => setAccountModalOpen(true)} title="添加账号" type="button">
-                <Plus size={15} />
-                添加
-              </button>
+              {!accountManageMode ? (
+                <button className="btn icon-btn" onClick={() => setAccountModalOpen(true)} title="添加账号" type="button">
+                  <Plus size={15} />
+                  添加
+                </button>
+              ) : null}
               <button
                 className={`btn icon-btn ${accountManageMode ? "primary" : ""}`}
                 onClick={() => {
                   setAccountManageMode((current) => !current);
+                  setVideoManageMode(false);
                   setSelectedAccountIds([]);
                   setSelectedVideoIds([]);
                 }}
                 title="管理账号"
                 type="button"
               >
-                管理
+                {accountManageMode ? "完成" : "管理"}
               </button>
             </div>
           </div>
           {accountManageMode ? (
-            <div className="account-manage-bar">
-              <span>已选 {selectedAccountIds.length}</span>
+            <div className="selection-toolbar" role="toolbar" aria-label="账号批量操作">
+              <div className="selection-copy">
+                <strong>账号选择</strong>
+                <span>已选 {selectedAccountIds.length} 个</span>
+              </div>
               <button
                 className="btn danger"
                 disabled={!selectedAccountIds.length || busy === "account-delete"}
@@ -460,13 +576,15 @@ export default function LibraryPage() {
                 type="button"
               >
                 <Trash2 size={14} />
-                删除
+                删除账号
               </button>
             </div>
           ) : null}
           <div className="pane-search">
             <input
               aria-label="搜索账号"
+              autoComplete="off"
+              name="accountFilter"
               value={accountFilter}
               onChange={(event) => setAccountFilter(event.target.value)}
               placeholder="搜索账号名、平台或 UID"
@@ -481,6 +599,8 @@ export default function LibraryPage() {
               const completion = account.videoCount ? Math.round((account.transcriptCount / account.videoCount) * 100) : 0;
               return (
                 <button
+                  aria-current={!accountManageMode && selectedAccount?.id === account.id ? "true" : undefined}
+                  aria-pressed={accountManageMode ? selectedAccountIds.includes(account.id) : undefined}
                   className={`list-button account-list-button ${selectedAccount?.id === account.id ? "active" : ""} ${
                     accountManageMode && selectedAccountIds.includes(account.id) ? "checked" : ""
                   }`}
@@ -515,7 +635,7 @@ export default function LibraryPage() {
           </div>
         </aside>
 
-        <section className="pane">
+        <section className={`pane ${videoManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header video-pane-header">
             <div>
               <h2>{selectedAccount?.name || "视频"}</h2>
@@ -524,33 +644,52 @@ export default function LibraryPage() {
               </p>
               <p className="pane-caption">{HOT_SCORE_FORMULA}</p>
             </div>
-            <div className="field sort-field">
-              <label>排序</label>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="hot">综合热度</option>
-                <option value="views">播放最多</option>
-                <option value="likes">点赞最多</option>
-                <option value="comments">评论最多</option>
-                <option value="favorites">收藏最多</option>
-                <option value="latest">发布时间</option>
-              </select>
+            <div className="video-header-tools">
+              <div className="field sort-field">
+                <label htmlFor="library-video-sort">排序</label>
+                <select id="library-video-sort" name="videoSort" value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
+                  <option value="hot">综合热度</option>
+                  <option value="views">播放最多</option>
+                  <option value="likes">点赞最多</option>
+                  <option value="comments">评论最多</option>
+                  <option value="favorites">收藏最多</option>
+                  <option value="latest">发布时间</option>
+                </select>
+              </div>
+              <button
+                className={`btn icon-btn ${videoManageMode ? "primary" : ""}`}
+                disabled={!selectedAccount}
+                onClick={() => {
+                  setVideoManageMode((current) => !current);
+                  setAccountManageMode(false);
+                  setSelectedAccountIds([]);
+                  setSelectedVideoIds([]);
+                }}
+                title="管理视频"
+                type="button"
+              >
+                {videoManageMode ? "完成" : "管理"}
+              </button>
             </div>
           </div>
-          <div className="pane-body">
-            {accountManageMode ? (
-              <div className="account-manage-bar video-manage-bar">
-                <span>已选 {selectedVideoIds.length} 条视频</span>
-                <button
-                  className="btn danger"
-                  disabled={!selectedVideoIds.length || busy === "video-delete"}
-                  onClick={handleDeleteSelectedVideos}
-                  type="button"
-                >
-                  <Trash2 size={14} />
-                  {busy === "video-delete" ? "删除中..." : "批量删除视频"}
-                </button>
+          {videoManageMode ? (
+            <div className="selection-toolbar" role="toolbar" aria-label="视频批量操作">
+              <div className="selection-copy">
+                <strong>视频选择</strong>
+                <span>已选 {selectedVideoIds.length} 条</span>
               </div>
-            ) : null}
+              <button
+                className="btn danger"
+                disabled={!selectedVideoIds.length || busy === "video-delete"}
+                onClick={handleDeleteSelectedVideos}
+                type="button"
+              >
+                <Trash2 size={14} />
+                {busy === "video-delete" ? "删除中..." : "删除视频"}
+              </button>
+            </div>
+          ) : null}
+          <div className="pane-body">
             <table className="video-table">
               <thead>
                 <tr>
@@ -562,45 +701,51 @@ export default function LibraryPage() {
               <tbody>
                 {sortedVideos.map((video) => {
                   const checked = selectedVideoIds.includes(video.id);
+                  const viewsMissing = hasMissingDouyinViews(video);
                   return (
                     <tr
-                      className={accountManageMode ? (checked ? "checked" : "") : selectedVideo?.id === video.id ? "active" : ""}
+                      className={videoManageMode ? (checked ? "checked" : "") : selectedVideo?.id === video.id ? "active" : ""}
                       key={video.id}
-                      onClick={() => {
-                        if (accountManageMode) {
-                          toggleManagedVideo(video.id);
-                          return;
-                        }
-                        setSelectedVideoId(video.id);
-                      }}
                     >
                       <td>
-                        <div className={`video-title-cell ${accountManageMode ? "manage" : ""}`}>
-                          {accountManageMode ? <span className={`check-dot ${checked ? "checked" : ""}`} aria-hidden="true" /> : null}
-                          <div className="video-title-copy">
-                            <span className="video-title-line">
-                              <strong>{video.title}</strong>
-                              <span
-                                className="metric-mini hot-score"
-                                title={buildHotScoreHint(video)}
-                              >
-                                热度 {Math.round(video.hotScore)}
+                        <button
+                          aria-current={!videoManageMode && selectedVideo?.id === video.id ? "true" : undefined}
+                          aria-pressed={videoManageMode ? checked : undefined}
+                          className={`video-row-button ${videoManageMode ? "manage" : ""}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectVideo(video.id);
+                          }}
+                          type="button"
+                        >
+                          <span className={`video-title-cell ${videoManageMode ? "manage" : ""}`}>
+                            {videoManageMode ? <span className={`check-dot ${checked ? "checked" : ""}`} aria-hidden="true" /> : null}
+                            <span className="video-title-copy">
+                              <span className="video-title-line">
+                                <strong>{video.title}</strong>
+                                <span
+                                  className="metric-mini hot-score"
+                                  title={buildHotScoreHint(video)}
+                                >
+                                  热度 {Math.round(video.hotScore)}
+                                </span>
+                              </span>
+                              <span className="list-meta">
+                                {formatDateWithYear(video.publishedAt)}
+                                {viewsMissing ? " · 播放未返回" : ` · 高于均值 ${video.relativeViewRate || 0}x`}
                               </span>
                             </span>
-                            <span className="list-meta">
-                              {formatDateWithYear(video.publishedAt)} · 高于均值 {video.relativeViewRate || 0}x
-                            </span>
-                          </div>
-                        </div>
+                          </span>
+                        </button>
                       </td>
                       <td className="metric performance-metric">
                         <span className="metric-bar" aria-hidden="true">
                           <span style={{ width: `${Math.max(4, Math.round(((video.stats.views || 0) / maxViews) * 100))}%` }} />
                         </span>
                         <span className="performance-stack">
-                          <span className="metric-item primary">
+                          <span className={`metric-item primary ${viewsMissing ? "missing" : ""}`} title={viewsMissing ? DOUYIN_MISSING_VIEWS_HINT : undefined}>
                             <span>播放</span>
-                            <strong>{formatNumber(video.stats.views)}</strong>
+                            <strong>{viewsMissing ? "未返回" : formatNumber(video.stats.views)}</strong>
                           </span>
                           <span className="metric-item">
                             <span>点赞</span>
@@ -645,7 +790,9 @@ export default function LibraryPage() {
               <div className="detail-section">
                 <h3>{selectedVideo.title}</h3>
                 <div className="stat-row">
-                  <span className="stat-pill">播放 {formatNumber(selectedVideo.stats.views)}</span>
+                  <span className="stat-pill" title={hasMissingDouyinViews(selectedVideo) ? DOUYIN_MISSING_VIEWS_HINT : undefined}>
+                    播放 {hasMissingDouyinViews(selectedVideo) ? "未返回" : formatNumber(selectedVideo.stats.views)}
+                  </span>
                   <span className="stat-pill">点赞 {formatNumber(selectedVideo.stats.likes)}</span>
                   <span className="stat-pill">收藏 {formatNumber(selectedVideo.stats.favorites)}</span>
                   <StatusPill status={selectedVideo.transcriptStatus} />
@@ -655,8 +802,8 @@ export default function LibraryPage() {
                     <RefreshCw size={16} />
                     {busy === "transcribe" ? "转写中..." : "转写此视频"}
                   </button>
-                  {selectedVideo.url ? (
-                    <a className="btn" href={selectedVideo.url} target="_blank">
+                  {selectedVideoOpenUrl ? (
+                    <a className="btn" href={selectedVideoOpenUrl} rel="noreferrer" target="_blank">
                       打开原链接
                     </a>
                   ) : null}
@@ -670,8 +817,10 @@ export default function LibraryPage() {
               <h3>账号自动化</h3>
               <div className={`automation-row compact ${busy === "batch-style" ? "running" : ""}`}>
                 <div className="field compact-field">
-                  <label>爆款数量</label>
+                  <label htmlFor="batch-limit">爆款数量</label>
                   <select
+                    id="batch-limit"
+                    name="batchLimit"
                     value={batchLimit}
                     onChange={(event) =>
                       setBatchLimit(event.target.value === "all" ? "all" : (Number(event.target.value) as BatchLimit))
@@ -696,6 +845,7 @@ export default function LibraryPage() {
                   </span>
                 </button>
               </div>
+              {busy === "batch-style" || busy === "transcribe" ? <p className="subtle">{transcribeStage}</p> : null}
             </div>
 
             <div className="compact-card">
@@ -713,17 +863,6 @@ export default function LibraryPage() {
                   <Eye size={16} />
                   查看全文
                 </button>
-                {accountManageMode ? (
-                  <button
-                    className="btn danger"
-                    disabled={!selectedVideo || (!selectedVideoHasTranscript && !transcript) || busy === "delete-transcript"}
-                    onClick={handleDeleteTranscript}
-                    type="button"
-                  >
-                    <Trash2 size={16} />
-                    {busy === "delete-transcript" ? "删除中..." : "删除转写稿"}
-                  </button>
-                ) : null}
               </div>
             </div>
 
@@ -744,14 +883,17 @@ export default function LibraryPage() {
       </section>
 
       {openModal ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal-panel">
-            <div className="modal-header">
-              <h2>{openModal === "transcript" ? "转写稿全文" : "账号风格卡"}</h2>
-              <button className="btn" onClick={() => setOpenModal("")} type="button">
-                关闭
-              </button>
-            </div>
+        <ModalDialog
+          labelledBy="library-edit-modal-title"
+          panelRef={editModalRef}
+          onClose={() => setOpenModal("")}
+        >
+          <div className="modal-header">
+            <h2 id="library-edit-modal-title">{editModalTitle}</h2>
+            <button className="btn" onClick={() => setOpenModal("")} type="button">
+              关闭
+            </button>
+          </div>
             {openModal === "transcript" ? (
               <div className="modal-editor">
                 <textarea
@@ -774,52 +916,69 @@ export default function LibraryPage() {
               </div>
             ) : (
               <div className="modal-editor">
-                <textarea value={styleDraft || selectedAccount?.style || ""} onChange={(event) => setStyleDraft(event.target.value)} />
+                <textarea aria-label="账号风格卡" value={styleDraft || selectedAccount?.style || ""} onChange={(event) => setStyleDraft(event.target.value)} />
                 <div className="button-row">
-                  <button className="btn" disabled={busy === "style"} onClick={handleGenerateStyle} type="button">
-                    <Sparkles size={16} />
-                    自动总结
+                  <button className="btn progress-button" disabled={busy === "style"} onClick={handleGenerateStyle} type="button">
+                    <span className="progress-button-fill" style={{ width: `${busy === "style" ? styleProgress : 0}%` }} />
+                    <span className="progress-button-content">
+                      <Sparkles size={16} />
+                      {busy === "style" ? `自动总结中 ${styleProgress}%` : "自动总结"}
+                    </span>
                   </button>
-                  <button className="btn primary" disabled={busy === "save-style"} onClick={handleSaveStyle} type="button">
+                  <button className="btn primary" disabled={busy === "save-style" || busy === "style"} onClick={handleSaveStyle} type="button">
                     <Save size={16} />
                     保存
                   </button>
                 </div>
+                {busy === "style" ? <p className="subtle">{styleStage}</p> : null}
               </div>
             )}
-          </div>
-        </div>
+        </ModalDialog>
       ) : null}
 
       {accountModalOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal-panel account-modal">
-            <div className="modal-header">
-              <h2>添加账号</h2>
-              <button className="btn" onClick={() => setAccountModalOpen(false)} type="button">
-                关闭
-              </button>
-            </div>
+        <ModalDialog
+          labelledBy="library-account-modal-title"
+          panelClassName="account-modal"
+          panelRef={accountModalRef}
+          onClose={() => setAccountModalOpen(false)}
+        >
+          <div className="modal-header">
+            <h2 id="library-account-modal-title">添加账号</h2>
+            <button className="btn" onClick={() => setAccountModalOpen(false)} type="button">
+              关闭
+            </button>
+          </div>
             <div className="modal-editor">
               <div className="form-grid">
                 <div className="field">
-                  <label>平台</label>
-                  <select value={newAccountPlatform} onChange={(event) => setNewAccountPlatform(event.target.value as Platform)}>
+                  <label htmlFor="new-account-platform">平台</label>
+                  <select id="new-account-platform" name="platform" value={newAccountPlatform} onChange={(event) => setNewAccountPlatform(event.target.value as Platform)}>
                     <option value="bilibili">B站</option>
                     <option value="douyin">抖音</option>
                   </select>
                 </div>
                 <div className="field">
-                  <label>账号名</label>
-                  <input value={newAccountName} onChange={(event) => setNewAccountName(event.target.value)} placeholder="例如：老青椒" />
+                  <label htmlFor="new-account-name">账号名</label>
+                  <input
+                    autoComplete="off"
+                    id="new-account-name"
+                    name="accountName"
+                    value={newAccountName}
+                    onChange={(event) => setNewAccountName(event.target.value)}
+                    placeholder="例如：老青椒"
+                  />
                 </div>
               </div>
               <div className="field">
-                <label>UID 或主页链接</label>
+                <label htmlFor="new-account-uid-or-url">UID 或主页链接</label>
                 <input
+                  autoComplete="off"
+                  id="new-account-uid-or-url"
+                  name="uidOrUrl"
                   value={newAccountUidOrUrl}
                   onChange={(event) => setNewAccountUidOrUrl(event.target.value)}
-                  placeholder="B站可留空自动搜索；抖音建议填写 sec_uid 或主页链接"
+                  placeholder="可留空用 opencli 搜索；也可直接填写 UID / sec_uid / 主页链接"
                 />
               </div>
               <div className="button-row">
@@ -829,8 +988,7 @@ export default function LibraryPage() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
+        </ModalDialog>
       ) : null}
     </div>
   );
@@ -840,11 +998,83 @@ function makePreview(text: string) {
   return text.replace(/\s+/g, " ").trim().slice(0, 72);
 }
 
+function hasMissingDouyinViews(video: { platform?: Video["platform"]; stats: Pick<Video["stats"], "views"> } | null) {
+  return video?.platform === "douyin" && !video.stats.views;
+}
+
+function ModalDialog({
+  children,
+  labelledBy,
+  onClose,
+  panelClassName = "",
+  panelRef
+}: {
+  children: ReactNode;
+  labelledBy: string;
+  onClose: () => void;
+  panelClassName?: string;
+  panelRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="modal-backdrop">
+      <div
+        aria-labelledby={labelledBy}
+        aria-modal="true"
+        className={`modal-panel ${panelClassName}`}
+        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
+        ref={panelRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    onClose();
+    return;
+  }
+
+  if (event.key !== "Tab") return;
+
+  const focusable = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  );
+
+  if (!focusable.length) {
+    event.preventDefault();
+    event.currentTarget.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (document.activeElement === event.currentTarget) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function buildHotScoreHint(video: {
+  platform?: Video["platform"];
   hotScore: number;
   stats: { views: number; likes: number; comments: number; favorites: number; shares?: number };
 }) {
-  return `${HOT_SCORE_FORMULA}\n当前视频：播放 ${formatNumber(video.stats.views)} + 点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}`;
+  const viewValue = hasMissingDouyinViews(video) ? "未返回" : formatNumber(video.stats.views);
+  return `${HOT_SCORE_FORMULA}\n当前视频：播放 ${viewValue} + 点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}${hasMissingDouyinViews(video) ? `\n${DOUYIN_MISSING_VIEWS_HINT}` : ""}`;
 }
 
 function isErrorMessage(message: string) {

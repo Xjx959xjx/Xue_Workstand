@@ -65,6 +65,7 @@ export default function DraftsPage() {
             </div>
             {drafts.map((draft) => (
               <button
+                aria-current={selectedDraft?.id === draft.id ? "true" : undefined}
                 className={`list-button ${selectedDraft?.id === draft.id ? "active" : ""}`}
                 key={draft.id}
                 onClick={() => setSelectedId(draft.id)}

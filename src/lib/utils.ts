@@ -72,3 +72,40 @@ export function extractDouyinSecUid(input: string) {
   const path = trimmed.match(/\/user\/([^/?]+)/);
   return path?.[1] ? decodeURIComponent(path[1]) : trimmed;
 }
+
+export function extractDouyinAwemeId(input?: string) {
+  if (!input) return "";
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+
+  if (/^\d{10,}$/.test(trimmed)) return trimmed;
+
+  const pathMatch = trimmed.match(/\/video\/(\d{10,})/);
+  if (pathMatch?.[1]) return pathMatch[1];
+
+  return "";
+}
+
+export function buildDouyinVideoUrl(awemeId?: string) {
+  const normalized = extractDouyinAwemeId(awemeId);
+  return normalized ? `https://www.douyin.com/video/${encodeURIComponent(normalized)}` : "";
+}
+
+export function isLikelyDirectMediaUrl(url: string) {
+  if (!/^https?:\/\//i.test(url)) return false;
+
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname.toLowerCase();
+    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+
+    if (/\.(mp4|m4a|mp3|wav|aac|flac|ogg|webm|mov|mkv)$/i.test(pathname)) return true;
+    if (parsed.hostname.toLowerCase().includes("douyinvod.com")) return true;
+    if (/^(video|audio)_/.test(mimeType)) return true;
+    if (pathname.includes("/video/tos/")) return true;
+  } catch {
+    return /\.(mp4|m4a|mp3|wav|aac|flac|ogg|webm|mov|mkv)(\?|$)/i.test(url);
+  }
+
+  return false;
+}
