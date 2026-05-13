@@ -1,4 +1,16 @@
-import { AccountSummary, BatchTranscribeResult, CollectOrder, CollectResult, Draft, DraftInput, LibraryState, Platform, ProjectSummary, Video } from "./types";
+import {
+  AccountSummary,
+  BatchTranscribeResult,
+  CollectOrder,
+  CollectResult,
+  Draft,
+  DraftCoverReference,
+  DraftInput,
+  LibraryState,
+  Platform,
+  ProjectSummary,
+  Video
+} from "./types";
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -494,6 +506,122 @@ export function saveDraft(input: DraftInput) {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export function generateDraftEngagement(input: {
+  draftId: string;
+  commentCount: number;
+  danmakuCount: number;
+}) {
+  return requestJson<{
+    draft: Draft;
+    comments?: Draft["assets"] extends infer Assets
+      ? Assets extends { comments?: infer Comments }
+        ? Comments
+        : never
+      : never;
+    danmaku?: Draft["assets"] extends infer Assets
+      ? Assets extends { danmaku?: infer Danmaku }
+        ? Danmaku
+        : never
+      : never;
+    supportsDanmaku: boolean;
+  }>("/api/draft-assets/engagement", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function collectDraftCoverReferences(draftId: string) {
+  return requestJson<{ draft: Draft; references: DraftCoverReference[]; supportsCover: boolean }>("/api/draft-assets/cover/references", {
+    method: "POST",
+    body: JSON.stringify({ draftId })
+  });
+}
+
+export async function uploadDraftCoverReferences(input: { draftId: string; files: File[] }) {
+  const formData = new FormData();
+  formData.set("draftId", input.draftId);
+  input.files.forEach((file) => formData.append("files", file));
+
+  const response = await fetch("/api/draft-assets/cover/references", {
+    method: "POST",
+    body: formData,
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  const fallbackResponse = response.clone();
+  const data = await response.json().catch(async () => {
+    const text = await fallbackResponse.text().catch(() => "");
+    return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+  });
+
+  if (!response.ok) {
+    throw new Error(data.error || summarizeHttpError(response.status));
+  }
+  return data as { draft: Draft; references: DraftCoverReference[] };
+}
+
+export async function streamGenerateDraftCover(
+  input: {
+    draftId: string;
+    referenceIds: string[];
+    prompt?: string;
+    count: number;
+  },
+  handlers: {
+    onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
+    onResult?: (result: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] }) => void;
+  }
+) {
+  const response = await fetch("/api/draft-assets/cover/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("请求失败：服务没有返回可读取的流式内容。");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const event = JSON.parse(trimmed) as
+        | { type: "stage"; stage: string; message: string; progress?: number }
+        | { type: "result"; data: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] } }
+        | { type: "error"; message: string }
+        | { type: "done" };
+
+      if (event.type === "stage") handlers.onStage?.(event);
+      if (event.type === "result") handlers.onResult?.(event.data);
+      if (event.type === "error") throw new Error(event.message);
+    }
+  }
+}
+
+export function draftAssetFileUrl(draftId: string, path: string) {
+  const params = new URLSearchParams({ draftId, path });
+  return `/api/draft-assets/file?${params.toString()}`;
 }
 
 export function publishFeishuDocument(input: { title: string; content: string }) {

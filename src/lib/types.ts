@@ -39,6 +39,7 @@ export type Video = {
   accountId: string;
   title: string;
   url: string;
+  coverUrl?: string;
   publishedAt?: string;
   duration?: string | number;
   stats: VideoStats;
@@ -49,8 +50,70 @@ export type Video = {
   transcriptSource?: "platform_subtitle" | "siliconflow" | "volcengine" | "manual";
   downloadUrl?: string;
   topComments?: string[];
+  danmakuSamples?: string[];
   raw?: unknown;
   updatedAt: string;
+};
+
+export type DraftCommentAsset = {
+  id: string;
+  platform: Platform;
+  text: string;
+};
+
+export type DraftDanmakuAsset = {
+  id: string;
+  timeSec: number;
+  text: string;
+};
+
+export type DraftCoverReference = {
+  id: string;
+  source: "account" | "upload";
+  label: string;
+  path?: string;
+  url?: string;
+  accountId?: string;
+  accountName?: string;
+  videoId?: string;
+  videoTitle?: string;
+  createdAt: string;
+};
+
+export type DraftCoverImage = {
+  id: string;
+  path: string;
+  prompt: string;
+  referenceIds: string[];
+  model: string;
+  size: string;
+  quality: string;
+  format: "jpeg" | "png" | "webp";
+  createdAt: string;
+};
+
+export type DraftAssets = {
+  comments?: {
+    generatedAt: string;
+    requestedCount: number;
+    usedModel: string;
+    fallback: boolean;
+    fallbackReason?: string;
+    items: DraftCommentAsset[];
+  };
+  danmaku?: {
+    generatedAt: string;
+    requestedCount: number;
+    usedModel: string;
+    fallback: boolean;
+    fallbackReason?: string;
+    items: DraftDanmakuAsset[];
+  };
+  cover?: {
+    references: DraftCoverReference[];
+    images: DraftCoverImage[];
+    updatedAt: string;
+  };
 };
 
 type DraftBase = {
@@ -60,6 +123,7 @@ type DraftBase = {
   prompt: string;
   input?: string;
   content: string;
+  assets?: DraftAssets;
   createdAt: string;
   updatedAt: string;
 };

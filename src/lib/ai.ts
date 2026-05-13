@@ -125,8 +125,11 @@ export function getChatRuntimeConfig() {
   };
 }
 
-export async function chatComplete(messages: ChatMessage[]): Promise<ChatCompletionResult> {
-  return chatCompleteWithFallback(messages);
+export async function chatComplete(
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort
+): Promise<ChatCompletionResult> {
+  return chatCompleteWithFallback(messages, reasoningEffort);
 }
 
 export async function streamResponseText(input: {

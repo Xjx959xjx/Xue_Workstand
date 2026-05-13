@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Copy, PenLine, RefreshCw } from "lucide-react";
+import { Copy, MessageSquarePlus, PenLine, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -92,6 +92,12 @@ export default function DraftsPage() {
                 <Link className="btn" href={buildRewriteHref(selectedDraft)} title="带入对话写作继续改写">
                   <PenLine size={16} />
                   改写
+                </Link>
+              ) : null}
+              {selectedDraft ? (
+                <Link className="btn" href={`/assets?draftId=${encodeURIComponent(selectedDraft.id)}`} title="基于这篇草稿生成评论、弹幕和封面">
+                  <MessageSquarePlus size={16} />
+                  衍生素材
                 </Link>
               ) : null}
               <button className="btn" disabled={!selectedDraft} onClick={handleCopy} type="button">

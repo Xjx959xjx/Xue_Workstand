@@ -2,8 +2,8 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { useSearchParams } from "next/navigation";
-import { Copy, ExternalLink, Eye, FileUp, Globe2, RotateCcw, Save, Send } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Copy, ExternalLink, Eye, FileUp, Globe2, MessageSquarePlus, RotateCcw, Save, Send } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -21,6 +21,7 @@ export default function WriterPage() {
 }
 
 function WriterPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { library, loading, refresh } = useLibrary();
   const [targetType, setTargetType] = useState<"account" | "project">("account");
@@ -34,6 +35,7 @@ function WriterPageContent() {
   const [lastResearch, setLastResearch] = useState("");
   const [lastSavedContent, setLastSavedContent] = useState("");
   const [lastDraftBase, setLastDraftBase] = useState<DraftSaveBase | null>(null);
+  const [lastDraftId, setLastDraftId] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [generateStage, setGenerateStage] = useState("");
@@ -166,6 +168,7 @@ function WriterPageContent() {
       });
 
       setLastSavedContent("");
+      setLastDraftId(result.draft?.id || "");
       setLastDraftBase(
         targetType === "project" && selectedProject
           ? {
@@ -230,12 +233,44 @@ function WriterPageContent() {
               ...lastDraftBase,
               content: lastContent
             };
-      await saveDraft(payload);
+      const draft = await saveDraft(payload);
+      setLastDraftId(draft.id);
       setLastSavedContent(lastContent);
       setNotice("草稿已保存。");
       await refresh();
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "保存草稿失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleOpenAssets() {
+    if (!lastContent || !lastDraftBase) return;
+    setBusy("assets");
+    setNotice("");
+    try {
+      let draftId = lastDraftId;
+      if (!draftId || lastSavedContent !== lastContent) {
+        const payload: DraftInput =
+          lastDraftBase.targetType === "project"
+            ? {
+                ...lastDraftBase,
+                content: lastContent
+              }
+            : {
+                ...lastDraftBase,
+                content: lastContent
+              };
+        const draft = await saveDraft(payload);
+        draftId = draft.id;
+        setLastDraftId(draft.id);
+        setLastSavedContent(lastContent);
+        await refresh();
+      }
+      router.push(`/assets?draftId=${encodeURIComponent(draftId)}`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "打开衍生素材失败");
     } finally {
       setBusy("");
     }
@@ -423,6 +458,10 @@ function WriterPageContent() {
                     <button className="btn" disabled={busy === "feishu"} onClick={handlePublishFeishu} type="button">
                       <FileUp size={16} />
                       {busy === "feishu" ? "发布中..." : "飞书文档"}
+                    </button>
+                    <button className="btn" disabled={!lastDraftBase || busy === "assets"} onClick={handleOpenAssets} type="button">
+                      <MessageSquarePlus size={16} />
+                      {busy === "assets" ? "准备中..." : "生成衍生素材"}
                     </button>
                     <button className="btn" disabled={!canGenerate} onClick={handleGenerate} type="button">
                       <RotateCcw size={16} />

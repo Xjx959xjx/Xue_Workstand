@@ -15,6 +15,7 @@ const accountDraftSchema = z.object({
   prompt: z.string().min(1),
   input: z.string().optional(),
   content: z.string().min(1),
+  assets: z.any().optional(),
   styleRef: z.object({
     platform: z.enum(platforms),
     accountId: z.string(),
@@ -32,6 +33,7 @@ const projectDraftSchema = z.object({
   prompt: z.string().min(1),
   input: z.string().optional(),
   content: z.string().min(1),
+  assets: z.any().optional(),
   styleRef: z.object({
     projectId: z.string().min(1),
     projectName: z.string().min(1),

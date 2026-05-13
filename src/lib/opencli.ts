@@ -20,10 +20,42 @@ import {
 const execFileAsync = promisify(execFile);
 const DOUYIN_BROWSER_SEARCH_LIMIT = 12;
 const DOUYIN_BROWSER_VIDEO_SCAN_LIMIT = 500;
+const DOUYIN_RELATED_COMMENT_VIDEO_LIMIT = 6;
+const DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT = 20;
 const DOUYIN_POST_PAGE_SIZE = 20;
 
 type RunOpenCliOptions = {
   timeout?: number;
+};
+
+export type BilibiliCommentSample = {
+  rank: number;
+  author: string;
+  text: string;
+  likes: number;
+  replies: number;
+  time: string;
+};
+
+export type BilibiliVideoReference = {
+  bvid: string;
+  aid?: string;
+  cid?: string;
+  thumbnail?: string;
+  title?: string;
+};
+
+export type DouyinRelatedCommentVideo = {
+  id: string;
+  title: string;
+  likes: number;
+  url: string;
+};
+
+export type DouyinRelatedCommentResult = {
+  query: string;
+  videos: DouyinRelatedCommentVideo[];
+  comments: string[];
 };
 
 function opencliBin() {
@@ -138,6 +170,75 @@ async function searchDouyinUserSecUidWithBrowser(name: string) {
   }
 }
 
+export async function getDouyinRelatedTopicComments(
+  query: string,
+  options: { videoLimit?: number; commentLimit?: number } = {}
+): Promise<DouyinRelatedCommentResult> {
+  const cleanQuery = query.replace(/\s+/g, " ").trim();
+  if (!cleanQuery) {
+    return { query: "", videos: [], comments: [] };
+  }
+
+  const workspace = `douyin-topic-comments-${process.pid}-${Date.now()}-${shortHash(cleanQuery)}`;
+  const videoLimit = Math.max(1, Math.min(options.videoLimit || DOUYIN_RELATED_COMMENT_VIDEO_LIMIT, 8));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT, 30));
+  const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(cleanQuery)}?type=general`;
+
+  try {
+    await runOpenCli(
+      ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", searchUrl],
+      { timeout: 30_000 }
+    );
+    await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "5"], { timeout: 12_000 }).catch(() => undefined);
+
+    const videos = asArray(parseJsonish(await runOpenCli(["browser", "--workspace", workspace, "eval", DOUYIN_RELATED_VIDEO_EXTRACT_JS], { timeout: 20_000 })))
+      .map(normalizeDouyinRelatedVideo)
+      .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
+      .filter((video) => isDouyinRelatedVideoRelevant(video.title, cleanQuery))
+      .sort((a, b) => b.likes - a.likes)
+      .slice(0, videoLimit);
+
+    const comments: string[] = [];
+    for (const video of videos) {
+      await runOpenCli(["browser", "--workspace", workspace, "open", video.url], { timeout: 30_000 }).catch(() => undefined);
+      await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "5"], { timeout: 12_000 }).catch(() => undefined);
+      const rows = asArray(parseJsonish(await runOpenCli(["browser", "--workspace", workspace, "eval", DOUYIN_VIDEO_COMMENT_EXTRACT_JS], { timeout: 35_000 })));
+      comments.push(...rows.map(normalizeCommentText).filter(Boolean).slice(0, commentLimit));
+    }
+
+    return {
+      query: cleanQuery,
+      videos,
+      comments: uniqueStrings(comments)
+    };
+  } finally {
+    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
+function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | null {
+  const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+  const id = String(object.id || object.aweme_id || extractDouyinAwemeId(String(object.url || ""))).trim();
+  if (!id) return null;
+  const title = String(object.title || "").replace(/\s+/g, " ").trim();
+  return {
+    id,
+    title,
+    likes: toNumber(object.likes),
+    url: `https://www.douyin.com/video/${encodeURIComponent(id)}`
+  };
+}
+
+function isDouyinRelatedVideoRelevant(title: string, query: string) {
+  const haystack = title.toLowerCase();
+  const wantsFaker = /faker|李相赫|李哥|大飞/.test(query.toLowerCase());
+  const wantsKarina = /柳智敏|karina|aespa|lzm/i.test(query);
+  const hasFaker = /faker|李相赫|李哥|大飞/.test(haystack);
+  const hasKarina = /柳智敏|karina|aespa|lzm/i.test(haystack);
+  if (wantsFaker && wantsKarina) return hasFaker && hasKarina;
+  return hasFaker || hasKarina;
+}
+
 function selectDouyinSecUidFromRows(rows: unknown[], name: string) {
   const normalizedName = name.trim().toLowerCase();
   const candidates = rows
@@ -221,6 +322,124 @@ const DOUYIN_SEARCH_EXTRACT_JS = `
     await sleep(1000);
   }
   return extract().slice(0, ${DOUYIN_BROWSER_SEARCH_LIMIT});
+})()
+`;
+
+const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
+(() => {
+  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const numberValue = (text) => {
+    const match = clean(text).match(/([0-9.]+)\\s*([万億亿kKmM]?)/);
+    if (!match) return 0;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base)) return 0;
+    const unit = String(match[2] || "").toLowerCase();
+    if (unit === "万") return Math.round(base * 10000);
+    if (unit === "亿" || unit === "億") return Math.round(base * 100000000);
+    if (unit === "k") return Math.round(base * 1000);
+    if (unit === "m") return Math.round(base * 1000000);
+    return Math.round(base);
+  };
+  const seen = new Set();
+  const byWaterfall = Array.from(document.querySelectorAll('[id^="waterfall_item_"]'))
+    .map((element) => {
+      const id = String(element.id || "").replace(/^waterfall_item_/, "");
+      const lines = String(element.innerText || element.textContent || "")
+        .split(/\\n+/)
+        .map(clean)
+        .filter(Boolean);
+      const title = lines.find((line) => /Faker|faker|柳智敏|Karina|karina|李相赫|T1/.test(line) && !/^@/.test(line)) || "";
+      const likes = numberValue(lines.find((line) => /^\\d/.test(line) && !/^\\d{1,2}:\\d{2}/.test(line)) || "");
+      if (!id || seen.has(id) || !title || title === "相关搜索") return null;
+      seen.add(id);
+      return { id, aweme_id: id, title, likes, url: location.origin + "/video/" + id };
+    })
+    .filter(Boolean);
+
+  const byLinks = Array.from(document.querySelectorAll('a[href*="/video/"]'))
+    .map((anchor) => {
+      const href = anchor.getAttribute("href") || anchor.href || "";
+      const match = href.match(/\\/video\\/(\\d+)/);
+      const id = match ? match[1] : "";
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      const container = anchor.closest("li") || anchor.closest("div");
+      const lines = String(container?.innerText || anchor.innerText || anchor.textContent || "")
+        .split(/\\n+/)
+        .map(clean)
+        .filter(Boolean);
+      const title = lines.find((line) => /Faker|faker|柳智敏|Karina|karina|李相赫|T1/.test(line) && !/^@/.test(line)) || clean(anchor.innerText || anchor.textContent || "");
+      const likes = numberValue(lines.find((line) => /^\\d/.test(line) && !/^\\d{1,2}:\\d{2}/.test(line)) || "");
+      return title ? { id, aweme_id: id, title, likes, url: location.origin + "/video/" + id } : null;
+    })
+    .filter(Boolean);
+
+  return [...byWaterfall, ...byLinks].slice(0, 30);
+})()
+`;
+
+const DOUYIN_VIDEO_COMMENT_EXTRACT_JS = `
+async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const collect = () => {
+    const text = String(document.body?.innerText || "");
+    const marker = text.indexOf("全部评论");
+    const source = marker >= 0 ? text.slice(marker) : text;
+    const stopWords = [
+      "推荐视频",
+      "广告投放",
+      "用户服务协议",
+      "隐私政策",
+      "2026 © 抖音",
+      "热门：",
+      "加载中"
+    ];
+    let section = source;
+    for (const word of stopWords) {
+      const index = section.indexOf(word);
+      if (index > 0) section = section.slice(0, index);
+    }
+    const noise = /^(全部评论|留下你的精彩评论吧|分享|回复|举报|发布时间：|展开\\d+条回复|\\d+(\\.\\d+)?万?|\\d+小时前.*|\\d+分钟前.*|\\d+天前.*|IP属地.*|\\.\\.\\.)$/;
+    const lines = section
+      .split(/\\n+/)
+      .map(clean)
+      .filter(Boolean)
+      .filter((line) => !noise.test(line));
+    const seen = new Set();
+    const comments = [];
+    let skipSearchHints = false;
+    for (const line of lines) {
+      if (line === "大家都在搜：") {
+        skipSearchHints = true;
+        continue;
+      }
+      if (line === "...") {
+        skipSearchHints = false;
+        continue;
+      }
+      if (skipSearchHints) continue;
+      if (line.length < 1 || line.length > 240) continue;
+      if (seen.has(line)) continue;
+      seen.add(line);
+      comments.push(line);
+    }
+    return comments;
+  };
+
+  const scrollTargets = Array.from(document.querySelectorAll('[class*="comment"], [id*="comment"], div'))
+    .filter((element) => {
+      const text = clean(element.innerText || element.textContent || "");
+      return text.includes("全部评论") && text.length > 100;
+    })
+    .sort((a, b) => (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight));
+  const target = scrollTargets.find((element) => element.scrollHeight > element.clientHeight + 80) || document.scrollingElement || document.documentElement;
+  for (let i = 0; i < 3; i += 1) {
+    target.scrollTop += Math.max(500, target.clientHeight || 700);
+    target.dispatchEvent(new Event("scroll", { bubbles: true }));
+    await sleep(900);
+  }
+  return collect().slice(0, 80);
 })()
 `;
 
@@ -477,6 +696,47 @@ export async function getBilibiliSubtitle(video: Video) {
   return extractSubtitleText(raw);
 }
 
+export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw">, limit = 50) {
+  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
+  if (!bvid) return [];
+
+  const stdout = await runOpenCli([
+    "bilibili",
+    "comments",
+    bvid,
+    "--limit",
+    String(Math.max(1, Math.min(limit, 50))),
+    "-f",
+    "json"
+  ]);
+  return asArray(parseJsonish(stdout))
+    .map((row, index) => normalizeBilibiliComment(row, index))
+    .filter((comment) => comment.text) as BilibiliCommentSample[];
+}
+
+export async function getBilibiliVideoReference(video: Pick<Video, "id" | "url" | "raw" | "title" | "coverUrl">) {
+  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
+  if (!bvid) return null;
+
+  const opencliFields: Record<string, unknown> = await getBilibiliVideoFields(bvid).catch(() => ({}));
+  const publicFields =
+    extractBilibiliCid(opencliFields) && (stringField(opencliFields.thumbnail) || stringField(opencliFields.pic))
+      ? {}
+      : await getBilibiliPublicVideoFields(bvid).catch(() => ({}));
+  const fields: Record<string, unknown> = {
+    ...publicFields,
+    ...opencliFields
+  };
+  const reference: BilibiliVideoReference = {
+    bvid,
+    aid: stringField(fields.aid),
+    cid: extractBilibiliCid(fields),
+    thumbnail: stringField(fields.thumbnail) || stringField(fields.pic) || video.coverUrl || findCoverUrlInRaw(video.raw),
+    title: stringField(fields.title) || video.title
+  };
+  return reference;
+}
+
 export async function downloadBilibiliVideo(video: Video) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) {
@@ -567,6 +827,29 @@ async function getDouyinVideoRows(account: Account, options: { limit?: number } 
   return asArray(parseJsonish(stdout))
     .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
     .filter(Boolean) as Array<Record<string, unknown>>;
+}
+
+export async function getDouyinTopComments(account: Account, options: { limit?: number; commentLimit?: number } = {}) {
+  const stdout = await runOpenCli([
+    "douyin",
+    "user-videos",
+    account.uid,
+    "--limit",
+    String(Math.max(1, Math.min(options.limit || 20, 50))),
+    "--with_comments",
+    "true",
+    "--comment_limit",
+    String(Math.max(1, Math.min(options.commentLimit || 10, 30))),
+    "-f",
+    "json"
+  ]);
+  return asArray(parseJsonish(stdout))
+    .flatMap((row) => {
+      const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+      const topComments = Array.isArray(object.top_comments) ? object.top_comments : [];
+      return topComments.map((comment) => normalizeCommentText(comment)).filter(Boolean);
+    })
+    .filter(Boolean);
 }
 
 function resolveDouyinVideoLookupLimit(video: Pick<Video, "id" | "url" | "raw">) {
@@ -718,6 +1001,7 @@ export async function hydrateBilibiliVideoStats(video: Video) {
   const metadata = await getBilibiliVideoFields(bvid);
   return {
     ...video,
+    coverUrl: String(metadata.thumbnail || video.coverUrl || ""),
     duration: String(metadata.duration || video.duration || ""),
     stats: {
       views: toNumber(metadata.view ?? video.stats.views),
@@ -753,6 +1037,7 @@ async function normalizeBilibiliVideo(
     accountId: account.id,
     title,
     url,
+    coverUrl: stringField(metadata.thumbnail) || stringField(object.thumbnail) || stringField(object.pic),
     duration: String(metadata.duration || object.duration || ""),
     publishedAt: String(object.date || object.pubdate || object.created_at || metadata.publish_time || ""),
     stats: { views, likes, comments, favorites },
@@ -779,6 +1064,20 @@ async function getBilibiliVideoFields(bvid: string) {
     ) as Record<string, unknown>;
   }
   return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+}
+
+async function getBilibiliPublicVideoFields(bvid: string) {
+  const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 style-library",
+      Referer: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`
+    }
+  });
+  if (!response.ok) return {};
+  const payload = (await response.json()) as unknown;
+  const object = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const data = object.data && typeof object.data === "object" ? (object.data as Record<string, unknown>) : {};
+  return data;
 }
 
 function normalizeDouyinVideo(row: unknown, account: Account): Video {
@@ -808,7 +1107,7 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
     object.statistics && typeof object.statistics === "object" ? (object.statistics as Record<string, unknown>) : {};
   const nestedStats = object.stats && typeof object.stats === "object" ? (object.stats as Record<string, unknown>) : {};
   const topComments = Array.isArray(object.top_comments)
-    ? object.top_comments.map((comment) => (typeof comment === "string" ? comment : JSON.stringify(comment)))
+    ? object.top_comments.map((comment) => normalizeCommentText(comment)).filter(Boolean)
     : [];
 
   return {
@@ -863,6 +1162,71 @@ function firstNumber(...values: unknown[]) {
     if (number > 0) return number;
   }
   return 0;
+}
+
+function normalizeBilibiliComment(row: unknown, index: number): BilibiliCommentSample {
+  const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+  return {
+    rank: toNumber(object.rank) || index + 1,
+    author: String(object.author || object.uname || ""),
+    text: normalizeCommentText(object.text || object.content || object.message),
+    likes: toNumber(object.likes || object.like),
+    replies: toNumber(object.replies || object.reply),
+    time: String(object.time || object.ctime || "")
+  };
+}
+
+function normalizeCommentText(value: unknown): string {
+  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    for (const key of ["text", "content", "message", "comment", "reply"]) {
+      const text: string = normalizeCommentText(object[key]);
+      if (text) return text;
+    }
+    return JSON.stringify(value);
+  }
+  return "";
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean))];
+}
+
+function stringField(value: unknown) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+function extractBilibiliCid(fields: Record<string, unknown>) {
+  const direct = stringField(fields.cid);
+  if (direct) return direct;
+
+  const pages = fields.pages || fields.parts || fields.videos;
+  if (Array.isArray(pages)) {
+    for (const page of pages) {
+      if (!page || typeof page !== "object") continue;
+      const cid = stringField((page as Record<string, unknown>).cid);
+      if (cid) return cid;
+    }
+  }
+  return "";
+}
+
+function findCoverUrlInRaw(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "";
+  const object = raw as Record<string, unknown>;
+  for (const key of ["thumbnail", "pic", "cover", "cover_url", "pic_url"]) {
+    const value = stringField(object[key]);
+    if (value) return value;
+  }
+  const metadata = object.metadata && typeof object.metadata === "object" ? (object.metadata as Record<string, unknown>) : {};
+  for (const key of ["thumbnail", "pic", "cover"]) {
+    const value = stringField(metadata[key]);
+    if (value) return value;
+  }
+  return "";
 }
 
 function normalizeTimestamp(value: unknown) {

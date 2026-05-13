@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpenText, FileText, Home, Layers3, MessageSquareText, Sparkles } from "lucide-react";
+import { BookOpenText, FileText, Home, Layers3, MessageSquareMore, MessageSquareText, Sparkles } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "首页", icon: Home },
   { href: "/library", label: "账号库", icon: BookOpenText },
   { href: "/projects", label: "项目库", icon: Layers3 },
   { href: "/writer", label: "对话写作", icon: MessageSquareText },
+  { href: "/assets", label: "衍生素材", icon: MessageSquareMore },
   { href: "/drafts", label: "草稿", icon: FileText }
 ];
 

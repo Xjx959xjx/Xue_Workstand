@@ -5,6 +5,9 @@ import {
   AccountDraft,
   AccountSummary,
   Draft,
+  DraftAssets,
+  DraftCoverImage,
+  DraftCoverReference,
   DraftInput,
   LibraryState,
   Platform,
@@ -66,6 +69,10 @@ function projectDraftsPath(slug: string) {
   return path.join(projectPath(slug), "drafts");
 }
 
+function projectDraftAssetsPath(slug: string, draftId: string) {
+  return path.join(projectDraftsPath(slug), `${safeSegment(draftId)}.assets`);
+}
+
 function accountPath(platform: Platform, slug: string) {
   return path.join(platformPath(platform), slug);
 }
@@ -84,6 +91,10 @@ function transcriptsPath(platform: Platform, slug: string) {
 
 function draftsPath(platform: Platform, slug: string) {
   return path.join(accountPath(platform, slug), "drafts");
+}
+
+function draftAssetsPath(platform: Platform, slug: string, draftId: string) {
+  return path.join(draftsPath(platform, slug), `${safeSegment(draftId)}.assets`);
 }
 
 function stylePath(platform: Platform, slug: string) {
@@ -341,6 +352,26 @@ export async function saveVideo(account: Account, video: Video) {
   return next;
 }
 
+export async function saveVideoAssetFields(
+  platform: Platform,
+  accountId: string,
+  videoId: string,
+  fields: Partial<Pick<Video, "coverUrl" | "danmakuSamples" | "topComments" | "raw">>
+) {
+  const account = await resolveAccount(platform, accountId);
+  const target = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+  const video = await readJson<Video>(target);
+  if (!video) throw new Error("找不到视频元数据");
+
+  const next: Video = {
+    ...video,
+    ...fields,
+    updatedAt: nowIso()
+  };
+  await writeJson(target, next);
+  return next;
+}
+
 export async function saveTranscript(input: {
   platform: Platform;
   accountId: string;
@@ -506,6 +537,133 @@ export async function saveDraft(input: DraftInput) {
   return draft;
 }
 
+export async function resolveDraft(draftId: string) {
+  await ensureLibrary();
+  const [accountDraft, projectDraft] = await Promise.all([
+    findAccountDraft(draftId),
+    findProjectDraft(draftId)
+  ]);
+  const result = accountDraft || projectDraft;
+  if (!result) throw new Error(`找不到草稿：${draftId}`);
+  return result;
+}
+
+export async function updateDraftAssets(draftId: string, assets: DraftAssets | ((current: DraftAssets) => DraftAssets)) {
+  const resolved = await resolveDraft(draftId);
+  const nextAssets = typeof assets === "function" ? assets(resolved.draft.assets || {}) : assets;
+  const nextDraft: Draft = {
+    ...resolved.draft,
+    assets: nextAssets,
+    updatedAt: nowIso()
+  } as Draft;
+  await writeJson(resolved.file, nextDraft);
+  return nextDraft;
+}
+
+export async function ensureDraftAssetDir(draftId: string, kind = "") {
+  const resolved = await resolveDraft(draftId);
+  const base = getDraftAssetBase(resolved.draft);
+  const target = kind ? path.join(base, safeSegment(kind)) : base;
+  await fs.mkdir(target, { recursive: true });
+  return {
+    ...resolved,
+    dir: target,
+    baseDir: base
+  };
+}
+
+export async function saveUploadedDraftCoverReferences(input: {
+  draftId: string;
+  files: Array<{ name: string; type: string; data: Buffer }>;
+}) {
+  const resolved = await ensureDraftAssetDir(input.draftId, "references");
+  const now = nowIso();
+  const references: DraftCoverReference[] = [];
+
+  for (const file of input.files) {
+    const extension = coverExtensionFromMime(file.type, file.name);
+    const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${file.name}-${file.data.length}-${references.length}`)}`;
+    const filename = `${id}.${extension}`;
+    const target = path.join(resolved.dir, filename);
+    await fs.writeFile(target, file.data);
+    references.push({
+      id,
+      source: "upload",
+      label: file.name || `上传参考图 ${references.length + 1}`,
+      path: path.relative(resolved.baseDir, target),
+      createdAt: now
+    });
+  }
+
+  const draft = await updateDraftAssets(input.draftId, (current) => ({
+    ...current,
+    cover: {
+      references: mergeCoverReferences(current.cover?.references || [], references),
+      images: current.cover?.images || [],
+      updatedAt: nowIso()
+    }
+  }));
+
+  return { draft, references };
+}
+
+export async function saveGeneratedCoverImage(input: {
+  draftId: string;
+  bytes: Buffer;
+  prompt: string;
+  referenceIds: string[];
+  model: string;
+  size: string;
+  quality: string;
+  format: DraftCoverImage["format"];
+}) {
+  const resolved = await ensureDraftAssetDir(input.draftId, "covers");
+  const now = nowIso();
+  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.prompt}-${input.referenceIds.join(",")}`)}`;
+  const filename = `${id}.${input.format === "jpeg" ? "jpg" : input.format}`;
+  const target = path.join(resolved.dir, filename);
+  await fs.writeFile(target, input.bytes);
+
+  const image: DraftCoverImage = {
+    id,
+    path: path.relative(resolved.baseDir, target),
+    prompt: input.prompt,
+    referenceIds: input.referenceIds,
+    model: input.model,
+    size: input.size,
+    quality: input.quality,
+    format: input.format,
+    createdAt: now
+  };
+
+  const draft = await updateDraftAssets(input.draftId, (current) => ({
+    ...current,
+    cover: {
+      references: current.cover?.references || [],
+      images: [...(current.cover?.images || []), image],
+      updatedAt: nowIso()
+    }
+  }));
+
+  return { draft, image, file: target };
+}
+
+export async function getDraftAssetFile(draftId: string, assetPath: string) {
+  const resolved = await ensureDraftAssetDir(draftId);
+  const target = path.resolve(resolved.baseDir, assetPath);
+  const relative = path.relative(resolved.baseDir, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("素材路径不在当前草稿目录内");
+  }
+
+  const bytes = await fs.readFile(target);
+  return {
+    bytes,
+    file: target,
+    contentType: contentTypeFromExtension(target)
+  };
+}
+
 export async function getAccountSummary(account: Account): Promise<AccountSummary> {
   await ensureAccountDirs(account.platform, account.slug);
 
@@ -658,6 +816,62 @@ export async function getVideo(platform: Platform, accountId: string, videoId: s
   const video = await readJson<Video>(path.join(videosPath(account.platform, account.slug), `${videoId}.json`));
   if (!video) throw new Error("找不到视频");
   return { account, video };
+}
+
+async function findAccountDraft(draftId: string) {
+  for (const platform of platforms) {
+    const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const file = path.join(draftsPath(platform, entry.name), `${draftId}.json`);
+      const draft = await readJson<AccountDraft>(file);
+      if (draft) return { draft: draft as Draft, file };
+    }
+  }
+  return null;
+}
+
+async function findProjectDraft(draftId: string) {
+  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const file = path.join(projectDraftsPath(entry.name), `${draftId}.json`);
+    const draft = await readJson<ProjectDraft>(file);
+    if (draft) return { draft: draft as Draft, file };
+  }
+  return null;
+}
+
+function getDraftAssetBase(draft: Draft) {
+  if (draft.targetType === "project") {
+    const slug = draft.projectId.includes(":") ? draft.projectId.split(":").at(-1)! : draft.projectId;
+    return projectDraftAssetsPath(safeSegment(slug), draft.id);
+  }
+
+  const slug = draft.accountId.includes(":") ? draft.accountId.split(":").at(-1)! : draft.accountId;
+  return draftAssetsPath(draft.platform, safeSegment(slug), draft.id);
+}
+
+function mergeCoverReferences(existing: DraftCoverReference[], incoming: DraftCoverReference[]) {
+  const byId = new Map(existing.map((reference) => [reference.id, reference]));
+  for (const reference of incoming) byId.set(reference.id, reference);
+  return [...byId.values()];
+}
+
+function coverExtensionFromMime(mimeType: string, name: string) {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") return "jpg";
+  const extension = path.extname(name).replace(/^\./, "").toLowerCase();
+  return ["jpg", "jpeg", "png", "webp"].includes(extension) ? (extension === "jpeg" ? "jpg" : extension) : "jpg";
+}
+
+function contentTypeFromExtension(file: string) {
+  const extension = path.extname(file).toLowerCase();
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".json") return "application/json; charset=utf-8";
+  return "image/jpeg";
 }
 
 export async function getTopTranscriptSamples(platform: Platform, accountId: string, maxSamples = 8) {

@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { NextResponse } from "next/server";
 import { libraryRoot } from "@/lib/storage";
 import { getChatRuntimeConfig } from "@/lib/ai";
+import { getImageRuntimeConfig } from "@/lib/cover";
 import { checkFeishuRuntime } from "@/lib/feishu";
 
 export const runtime = "nodejs";
@@ -12,6 +13,7 @@ const execFileAsync = promisify(execFile);
 export async function GET() {
   const opencli = process.env.OPENCLI_BIN || "opencli";
   const chat = getChatRuntimeConfig();
+  const image = getImageRuntimeConfig();
   const feishu = await checkFeishuRuntime();
   let opencliOk = false;
   let opencliVersion = "";
@@ -38,6 +40,8 @@ export async function GET() {
     ),
     chatConfigured: chat.configured,
     chat,
+    imageConfigured: image.configured,
+    image,
     feishuConfigured: feishu.configured,
     feishu
   });
