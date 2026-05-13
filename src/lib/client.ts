@@ -406,7 +406,7 @@ export function writeCopy(input: {
   accountId?: string;
   projectId?: string;
   mode: Draft["mode"];
-  prompt: string;
+  prompt?: string;
   sourceText?: string;
   save?: boolean;
   useWebResearch?: boolean;
@@ -424,7 +424,7 @@ export async function streamWriteCopy(
     accountId?: string;
     projectId?: string;
     mode: Draft["mode"];
-    prompt: string;
+    prompt?: string;
     sourceText?: string;
     save?: boolean;
     useWebResearch?: boolean;

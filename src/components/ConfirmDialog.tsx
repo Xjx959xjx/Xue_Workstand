@@ -44,7 +44,7 @@ export function ConfirmDialog({
       >
         <div className="confirm-dialog-body">
           <div className="confirm-dialog-icon" aria-hidden="true">
-            <AlertTriangle size={20} />
+            <AlertTriangle aria-hidden="true" size={20} />
           </div>
           <div>
             <h2 id="confirm-dialog-title">{title}</h2>
@@ -56,7 +56,7 @@ export function ConfirmDialog({
             {cancelLabel}
           </button>
           <button className="btn danger" disabled={busy} onClick={onConfirm} type="button">
-            {busy ? "删除中..." : confirmLabel}
+            {busy ? "删除中…" : confirmLabel}
           </button>
         </div>
       </div>

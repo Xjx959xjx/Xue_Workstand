@@ -4,13 +4,36 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
-import { downloadBilibiliVideo, getBilibiliSubtitle, refreshDouyinVideoDownloadUrl } from "./opencli";
+import {
+  downloadBilibiliVideo,
+  getBilibiliSubtitle,
+  parseOpenCliJsonish,
+  refreshDouyinVideoDownloadUrl
+} from "./opencli";
 import { getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
 
 const execFileAsync = promisify(execFile);
 type Timing = { stage: string; ms: number };
+
+export type LinkTranscriptionResult = {
+  url: string;
+  resolvedUrl?: string;
+  platform: Platform | "unknown";
+  title?: string;
+  text: string;
+  source: "platform_subtitle" | "volcengine" | "metadata";
+  fallback?: boolean;
+  fallbackReason?: string;
+  timings?: Timing[];
+};
+
+type LinkMediaInfo = {
+  mediaId?: string;
+  title?: string;
+  mediaUrls: string[];
+};
 
 function transcriptionConfig() {
   const pollIntervalMs = Number.parseInt(process.env.VOLCENGINE_ASR_POLL_INTERVAL_MS || "", 10);
@@ -162,6 +185,95 @@ export async function transcribeVideo(input: {
         fs.rm(target, { recursive: true, force: true }).catch(() => undefined)
       )
     );
+  }
+}
+
+export async function transcribeLinkSource(input: {
+  url: string;
+  titleHint?: string;
+}): Promise<LinkTranscriptionResult> {
+  const startedAt = Date.now();
+  const resolvedUrl = await resolveShareUrl(input.url).catch(() => input.url);
+  const platform = detectLinkPlatform(resolvedUrl || input.url);
+
+  if (platform === "bilibili") {
+    const subtitle = await getBilibiliSubtitle({
+      id: resolvedUrl,
+      url: resolvedUrl,
+      raw: resolvedUrl
+    } as Video).catch(() => "");
+    if (subtitle.trim()) {
+      return {
+        url: input.url,
+        resolvedUrl,
+        platform,
+        title: input.titleHint,
+        text: subtitle.trim(),
+        source: "platform_subtitle",
+        timings: [{ stage: "total", ms: Date.now() - startedAt }]
+      };
+    }
+  }
+
+  if (platform !== "douyin" && platform !== "bilibili") {
+    throw new Error(`暂不支持从这个链接提取视频文稿：${input.url}`);
+  }
+
+  const media = await resolveLinkMediaUrl({
+    url: input.url,
+    resolvedUrl,
+    platform
+  });
+  if (!media.mediaUrls.length) {
+    if (media.title) {
+      return {
+        url: input.url,
+        resolvedUrl,
+        platform,
+        title: media.title,
+        text: media.title,
+        source: "metadata",
+        fallback: true,
+        fallbackReason: "没有解析到可转写的媒体地址，已仅使用视频标题/描述。"
+      };
+    }
+    throw new Error(`没有解析到可转写的媒体地址：${input.url}`);
+  }
+
+  const cleanupTargets: string[] = [];
+  try {
+    const downloaded = await downloadFirstAvailableRemoteAudio(
+      media.mediaUrls,
+      `${safeFileName(media.mediaId || "link-video")}.mp3`
+    );
+    cleanupTargets.push(downloaded.mediaPath);
+    const preparedForAsr = await prepareAudioForVolcengine(downloaded.mediaPath);
+    if (preparedForAsr.cleanupPath) cleanupTargets.push(preparedForAsr.cleanupPath);
+    const volcengine = await transcribeWithVolcengine(preparedForAsr.mediaPath);
+    const cleaned = await cleanTranscriptText({
+      platform,
+      title: media.title || input.titleHint,
+      text: volcengine.text
+    });
+    return {
+      url: input.url,
+      resolvedUrl,
+      platform,
+      title: media.title || input.titleHint,
+      text: cleaned.text,
+      source: "volcengine",
+      fallback: cleaned.fallback,
+      fallbackReason: cleaned.fallbackReason,
+      timings: [
+        { stage: "download-remote-audio", ms: downloaded.ms },
+        ...(downloaded.attempts.length > 1 ? [{ stage: `media-url-attempts-${downloaded.attempts.length}`, ms: 0 }] : []),
+        ...preparedForAsr.timings,
+        ...volcengine.timings,
+        { stage: "total", ms: Date.now() - startedAt }
+      ]
+    };
+  } finally {
+    await Promise.all(cleanupTargets.map((target) => fs.rm(target, { recursive: true, force: true }).catch(() => undefined)));
   }
 }
 
@@ -362,6 +474,272 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveShareUrl(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": browserUserAgent()
+      }
+    });
+    return response.url || url;
+  } catch {
+    return url;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function detectLinkPlatform(url: string): Platform | "unknown" {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    if (hostname.includes("bilibili.com") || hostname === "b23.tv") return "bilibili";
+    if (hostname.includes("douyin.com") || hostname.includes("iesdouyin.com")) return "douyin";
+  } catch {
+    if (/bilibili|b23\.tv/i.test(url)) return "bilibili";
+    if (/douyin|iesdouyin/i.test(url)) return "douyin";
+  }
+  return "unknown";
+}
+
+async function resolveLinkMediaUrl(input: {
+  url: string;
+  resolvedUrl: string;
+  platform: Platform;
+}): Promise<LinkMediaInfo> {
+  if (input.platform === "douyin") {
+    return resolveDouyinLinkMedia(input.resolvedUrl || input.url);
+  }
+
+  return resolveGenericLinkMedia(input.resolvedUrl || input.url);
+}
+
+async function resolveDouyinLinkMedia(url: string) {
+  const workspace = `douyin-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
+
+  try {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
+      "browser",
+      "--workspace",
+      workspace,
+      "--window",
+      "background",
+      "--keep-tab",
+      "true",
+      "open",
+      url
+    ], {
+      maxBuffer: 1024 * 1024 * 8,
+      timeout: 30_000
+    });
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "wait", "time", "2"], {
+      maxBuffer: 1024 * 1024,
+      timeout: 10_000
+    }).catch(() => undefined);
+    const { stdout } = await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
+      "browser",
+      "--workspace",
+      workspace,
+      "eval",
+      DOUYIN_LINK_MEDIA_EXTRACT_JS
+    ], {
+      maxBuffer: 1024 * 1024 * 20,
+      timeout: 30_000
+    });
+    const data = parseOpenCliJsonish(stdout.trim());
+    const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+    const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
+    return {
+      mediaId: String(object.awemeId || ""),
+      title: normalizeTitle(String(object.title || object.description || "")),
+      mediaUrls: sortLinkMediaUrls(mediaUrls)
+    };
+  } finally {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "close"], {
+      maxBuffer: 1024 * 1024,
+      timeout: 5_000
+    }).catch(() => undefined);
+  }
+}
+
+async function resolveGenericLinkMedia(url: string) {
+  const response = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": browserUserAgent()
+    }
+  });
+  const html = await response.text().catch(() => "");
+  const mediaUrls = [
+    ...Array.from(html.matchAll(/https?:\\?\/\\?\/[^"'<>\\]+?(?:\.mp4|\.m4a|\.mp3|mime_type=(?:video|audio)_[^"'<>\\]+)/gi)).map((match) =>
+      match[0].replaceAll("\\/", "/")
+    )
+  ];
+  return {
+    mediaId: response.url,
+    title: normalizeTitle(extractHtmlTitle(html)),
+    mediaUrls: sortLinkMediaUrls(mediaUrls)
+  };
+}
+
+async function downloadFirstAvailableRemoteAudio(urls: string[], fileName: string) {
+  const attempts: Array<{ url: string; error?: string; ms?: number }> = [];
+  const uniqueUrls = [...new Set(urls.filter(Boolean))];
+  let lastError: unknown;
+
+  for (const [index, url] of uniqueUrls.entries()) {
+    try {
+      const downloaded = await downloadRemoteAudio(url, `${index + 1}-${fileName}`);
+      attempts.push({ url, ms: downloaded.ms });
+      return { ...downloaded, attempts };
+    } catch (error) {
+      lastError = error;
+      attempts.push({ url, error: error instanceof Error ? error.message : "音频提取失败" });
+      if (!isNoAudioStreamError(error)) break;
+    }
+  }
+
+  const noAudioCount = attempts.filter((attempt) => /matches no streams|stream map 'a:0'|does not contain any stream/i.test(attempt.error || "")).length;
+  const detail = attempts
+    .map((attempt, index) => `候选 ${index + 1}：${attempt.error || "未返回音频"}`)
+    .join("；");
+  if (noAudioCount === attempts.length && attempts.length > 0) {
+    throw new Error(`音频提取失败：已尝试 ${attempts.length} 个媒体地址，均未包含可转写音轨。${detail}`);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("音频提取失败：没有可用媒体地址");
+}
+
+const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const normalizeUrl = (url) => {
+    if (!url) return "";
+    if (url.startsWith("//")) return "https:" + url;
+    return url;
+  };
+  const collect = () => {
+    const urls = [];
+    const pushUrl = (value) => {
+      const normalized = normalizeUrl(String(value || ""));
+      if (/^https?:\\/\\//i.test(normalized)) urls.push(normalized);
+    };
+    const collectUrlsDeep = (value, depth = 0) => {
+      if (!value || depth > 8) return;
+      if (typeof value === "string") {
+        if (/^https?:|^\\/\\//i.test(value) && /douyinvod|mime_type=video|mime_type=audio|\\/aweme\\/v1\\/play\\//i.test(value)) {
+          pushUrl(value);
+        }
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value.slice(0, 200)) collectUrlsDeep(item, depth + 1);
+        return;
+      }
+      if (typeof value === "object") {
+        for (const [key, item] of Object.entries(value)) {
+          if (/url|addr|play|download|audio|video/i.test(key)) collectUrlsDeep(item, depth + 1);
+        }
+      }
+    };
+    for (const video of Array.from(document.querySelectorAll("video"))) {
+      for (const value of [video.currentSrc, video.src]) {
+        if (value) pushUrl(value);
+      }
+      for (const source of Array.from(video.querySelectorAll("source"))) {
+        const value = source.src || source.getAttribute("src") || "";
+        if (value) pushUrl(value);
+      }
+    }
+    for (const entry of performance.getEntriesByType("resource")) {
+      const name = normalizeUrl(entry.name || "");
+      if (/douyinvod|mime_type=video|mime_type=audio|\\/aweme\\/v1\\/play\\//i.test(name)) pushUrl(name);
+    }
+    for (const script of Array.from(document.querySelectorAll("script"))) {
+      const text = script.textContent || "";
+      if (!/aweme|play_addr|download_addr|douyinvod|url_list/.test(text)) continue;
+      const matches = text.match(/https?:\\\\?\\/\\\\?\\/[^"'<>\\\\]+/g) || [];
+      for (const match of matches) pushUrl(match.replaceAll("\\\\/", "/"));
+      const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
+      if (jsonMatch && jsonMatch[0].length < 8_000_000) {
+        try {
+          collectUrlsDeep(JSON.parse(jsonMatch[0]));
+        } catch {}
+      }
+    }
+    const metas = Object.fromEntries(
+      Array.from(document.querySelectorAll("meta[property], meta[name]"))
+        .map((meta) => [meta.getAttribute("property") || meta.getAttribute("name") || "", meta.getAttribute("content") || ""])
+        .filter(([key, value]) => key && value)
+    );
+    const awemeId = (location.href.match(/\\/video\\/(\\d{10,})/) || [])[1] || "";
+    return {
+      awemeId,
+      title: clean(metas["og:title"] || document.title || ""),
+      description: clean(metas.description || metas["og:description"] || ""),
+      mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
+    };
+  };
+  for (let i = 0; i < 8; i += 1) {
+    const data = collect();
+    if (data.mediaUrls.length) return data;
+    const video = document.querySelector("video");
+    if (video) video.play().catch(() => undefined);
+    await sleep(1000);
+  }
+  return collect();
+})()
+`;
+
+function sortLinkMediaUrls(urls: string[]) {
+  const unique = [...new Set(urls.map((url) => url.trim()).filter(Boolean))];
+  return unique.sort((a, b) => linkMediaUrlScore(b) - linkMediaUrlScore(a));
+}
+
+function linkMediaUrlScore(url: string) {
+  let score = 0;
+  try {
+    const parsed = new URL(url);
+    const text = `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase();
+    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+    if (mimeType.startsWith("audio_")) score += 1000;
+    if (/\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(parsed.pathname)) score += 900;
+    if (/douyinvod|audio|music|playwm|play_addr|download_addr/.test(text)) score += 160;
+    if (mimeType === "video_mp4" || /\.(mp4|webm|mov)(\?|$)/i.test(parsed.pathname)) score += 80;
+  } catch {
+    if (/\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(url)) score += 900;
+    if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) score += 80;
+  }
+  return score;
+}
+
+function extractHtmlTitle(html: string) {
+  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1];
+  return ogTitle || title || "";
+}
+
+function normalizeTitle(input: string) {
+  return input
+    .replace(/\s*-\s*抖音$/i, "")
+    .replace(/\s*_\s*哔哩哔哩.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeFileName(input: string) {
+  return input.replace(/[^\w.-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "video";
+}
+
+function browserUserAgent() {
+  return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 }
 
 function normalizeVolcengineAudioFormat(value: string | undefined) {

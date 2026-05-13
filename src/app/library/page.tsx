@@ -27,8 +27,6 @@ import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } fro
 type BatchLimit = 3 | 5 | 10 | "all";
 type VideoSortMode = "hot" | "views" | "likes" | "comments" | "favorites" | "latest";
 
-const BILIBILI_HOT_SCORE_FORMULA = "热度 = 播放 + 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
-const DOUYIN_HOT_SCORE_FORMULA = "热度 = 点赞×20 + 评论×60 + 收藏×80 + 分享×50";
 const VIDEO_SORT_OPTIONS: Array<{ value: VideoSortMode; label: string }> = [
   { value: "hot", label: "综合热度" },
   { value: "views", label: "播放最多" },
@@ -105,8 +103,6 @@ export default function LibraryPage() {
     [selectedAccount?.platform]
   );
   const effectiveSortMode = selectedAccount?.platform === "douyin" && sortMode === "views" ? "hot" : sortMode;
-  const hotScoreFormula = selectedAccount?.platform === "douyin" ? DOUYIN_HOT_SCORE_FORMULA : BILIBILI_HOT_SCORE_FORMULA;
-
   const sortedVideos = useMemo(() => {
     const videos = [...(selectedAccount?.videos || [])];
     const sorters = {
@@ -136,7 +132,7 @@ export default function LibraryPage() {
   const completedCount = sortedVideos.filter((video) => video.transcriptStatus === "completed").length;
   const pendingCount = sortedVideos.length - completedCount;
   const selectedVideoHasTranscript = canReadTranscript(selectedVideo);
-  const selectedVideoPrimaryMetric = selectedVideo ? getPrimaryMetric(selectedVideo) : null;
+  const selectedVideoViewCount = selectedVideo?.platform === "bilibili" ? selectedVideo.stats.views : null;
   const visibleMessage = message && message !== error ? message : "";
   const visibleMessageIsError = isErrorMessage(visibleMessage);
   const editModalTitle = openModal === "transcript" ? "转写稿全文" : "账号风格卡";
@@ -522,7 +518,7 @@ export default function LibraryPage() {
 
   if (!loading && !library?.accounts.length) {
     return (
-      <div className="page">
+      <div className="page library-page">
         <header className="page-header">
           <div>
             <p className="eyebrow">Library</p>
@@ -535,7 +531,7 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="page">
+    <div className="page library-page">
       <header className="page-header workbench-header">
         <div>
           <p className="eyebrow">Library</p>
@@ -544,7 +540,7 @@ export default function LibraryPage() {
         </div>
         <div className="button-row">
           <button className="btn" onClick={refresh} type="button">
-            <RefreshCw size={16} />
+            <RefreshCw aria-hidden="true" size={16} />
             刷新
           </button>
         </div>
@@ -563,13 +559,14 @@ export default function LibraryPage() {
             <h2>账号</h2>
             <div className="account-manage-actions">
               {!accountManageMode ? (
-                <button className="btn icon-btn" onClick={() => setAccountModalOpen(true)} title="添加账号" type="button">
-                  <Plus size={15} />
+                <button aria-label="添加账号" className="btn icon-btn" onClick={() => setAccountModalOpen(true)} title="添加账号" type="button">
+                  <Plus aria-hidden="true" size={15} />
                   添加
                 </button>
               ) : null}
               <button
                 className={`btn icon-btn ${accountManageMode ? "primary" : ""}`}
+                aria-label={accountManageMode ? "完成账号管理" : "管理账号"}
                 onClick={() => {
                   setAccountManageMode((current) => !current);
                   setVideoManageMode(false);
@@ -595,7 +592,7 @@ export default function LibraryPage() {
                 onClick={() => setDeleteTarget("accounts")}
                 type="button"
               >
-                <Trash2 size={14} />
+                <Trash2 aria-hidden="true" size={14} />
                 删除账号
               </button>
             </div>
@@ -607,7 +604,7 @@ export default function LibraryPage() {
               name="accountFilter"
               value={accountFilter}
               onChange={(event) => setAccountFilter(event.target.value)}
-              placeholder="搜索账号名、平台或 UID"
+              placeholder="搜索账号名、平台或 UID…"
             />
           </div>
           <div className="pane-body">
@@ -657,15 +654,16 @@ export default function LibraryPage() {
 
         <section className={`pane ${videoManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header video-pane-header">
-            <div>
-              <h2>{selectedAccount?.name || "视频"}</h2>
+            <div className="video-header-copy">
+              <div className="video-title-row">
+                <h2>视频</h2>
+              </div>
               <p className="pane-subtitle">
                 {sortedVideos.length} 条视频 · {completedCount} 已完成 · {pendingCount} 未完成
               </p>
-              <p className="pane-caption">{hotScoreFormula}</p>
             </div>
             <div className="video-header-tools">
-              <div className="field sort-field">
+              <div className="inline-sort-control">
                 <label htmlFor="library-video-sort">排序</label>
                 <select
                   id="library-video-sort"
@@ -682,6 +680,7 @@ export default function LibraryPage() {
               </div>
               <button
                 className={`btn icon-btn ${videoManageMode ? "primary" : ""}`}
+                aria-label={videoManageMode ? "完成视频管理" : "管理视频"}
                 disabled={!selectedAccount}
                 onClick={() => {
                   setVideoManageMode((current) => !current);
@@ -708,8 +707,8 @@ export default function LibraryPage() {
                 onClick={() => setDeleteTarget("videos")}
                 type="button"
               >
-                <Trash2 size={14} />
-                {busy === "video-delete" ? "删除中..." : "删除视频"}
+                <Trash2 aria-hidden="true" size={14} />
+                {busy === "video-delete" ? "删除中…" : "删除视频"}
               </button>
             </div>
           ) : null}
@@ -747,9 +746,6 @@ export default function LibraryPage() {
                             <span className="video-title-copy">
                               <span className="video-title-line">
                                 <strong>{video.title}</strong>
-                                <span className="metric-mini hot-score" title={buildHotScoreHint(video)}>
-                                  热度 {formatInteger(video.hotScore)}
-                                </span>
                               </span>
                               <span className="list-meta">
                                 {getVideoMetaText(video)}
@@ -810,18 +806,16 @@ export default function LibraryPage() {
               <div className="detail-section">
                 <h3>{selectedVideo.title}</h3>
                 <div className="stat-row">
-                  {selectedVideoPrimaryMetric ? (
-                    <span className="stat-pill" title={selectedVideoPrimaryMetric.title}>
-                      {selectedVideoPrimaryMetric.label} {selectedVideoPrimaryMetric.value}
-                    </span>
+                  {selectedVideoViewCount !== null ? (
+                    <span className="stat-pill">播放 {formatNumber(selectedVideoViewCount)}</span>
                   ) : null}
                   <span className="stat-pill">点赞 {formatNumber(selectedVideo.stats.likes)}</span>
                   <span className="stat-pill">收藏 {formatNumber(selectedVideo.stats.favorites)}</span>
                 </div>
                 <div className="button-row detail-action-row">
                   <button className="btn" disabled={busy === "transcribe"} onClick={handleTranscribe} type="button">
-                    <RefreshCw size={16} />
-                    {busy === "transcribe" ? "转写中..." : "转写此视频"}
+                    <RefreshCw aria-hidden="true" size={16} />
+                    {busy === "transcribe" ? "转写中…" : "转写此视频"}
                   </button>
                   {selectedVideoOpenUrl ? (
                     <a className="btn" href={selectedVideoOpenUrl} rel="noreferrer" target="_blank">
@@ -861,7 +855,7 @@ export default function LibraryPage() {
                 >
                   <span className="progress-button-fill" style={{ width: `${busy === "batch-style" ? transcribeProgress : 0}%` }} />
                   <span className="progress-button-content">
-                    <Sparkles size={16} />
+                    <Sparkles aria-hidden="true" size={16} />
                     {busy === "batch-style" ? `转写更新中 ${transcribeProgress}%` : "转写并更新风格"}
                   </span>
                 </button>
@@ -881,7 +875,7 @@ export default function LibraryPage() {
                   onClick={() => setOpenModal("transcript")}
                   type="button"
                 >
-                  <Eye size={16} />
+                  <Eye aria-hidden="true" size={16} />
                   查看全文
                 </button>
               </div>
@@ -894,7 +888,7 @@ export default function LibraryPage() {
               </div>
               <div className="button-row">
                 <button className="btn primary" onClick={() => setOpenModal("style")} type="button">
-                  <Eye size={16} />
+                  <Eye aria-hidden="true" size={16} />
                   查看编辑
                 </button>
               </div>
@@ -919,9 +913,11 @@ export default function LibraryPage() {
               <div className="modal-editor">
                 <textarea
                   aria-label="转写稿全文"
+                  autoComplete="off"
+                  name="transcript"
                   value={transcript}
                   onChange={(event) => setTranscript(event.target.value)}
-                  placeholder="暂无转写稿。"
+                  placeholder="暂无转写稿…"
                 />
                 <div className="button-row">
                   <button
@@ -930,24 +926,30 @@ export default function LibraryPage() {
                     onClick={handleSaveTranscript}
                     type="button"
                   >
-                    <Save size={16} />
+                    <Save aria-hidden="true" size={16} />
                     保存转写稿
                   </button>
                 </div>
               </div>
             ) : (
               <div className="modal-editor">
-                <textarea aria-label="账号风格卡" value={styleDraft || selectedAccount?.style || ""} onChange={(event) => setStyleDraft(event.target.value)} />
+                <textarea
+                  aria-label="账号风格卡"
+                  autoComplete="off"
+                  name="accountStyle"
+                  value={styleDraft || selectedAccount?.style || ""}
+                  onChange={(event) => setStyleDraft(event.target.value)}
+                />
                 <div className="button-row">
                   <button className="btn progress-button" disabled={busy === "style"} onClick={handleGenerateStyle} type="button">
                     <span className="progress-button-fill" style={{ width: `${busy === "style" ? styleProgress : 0}%` }} />
                     <span className="progress-button-content">
-                      <Sparkles size={16} />
+                      <Sparkles aria-hidden="true" size={16} />
                       {busy === "style" ? `自动总结中 ${styleProgress}%` : "自动总结"}
                     </span>
                   </button>
                   <button className="btn primary" disabled={busy === "save-style" || busy === "style"} onClick={handleSaveStyle} type="button">
-                    <Save size={16} />
+                    <Save aria-hidden="true" size={16} />
                     保存
                   </button>
                 </div>
@@ -987,7 +989,7 @@ export default function LibraryPage() {
                     name="accountName"
                     value={newAccountName}
                     onChange={(event) => setNewAccountName(event.target.value)}
-                    placeholder="例如：老青椒"
+                    placeholder="例如：老青椒…"
                   />
                 </div>
               </div>
@@ -999,13 +1001,13 @@ export default function LibraryPage() {
                   name="uidOrUrl"
                   value={newAccountUidOrUrl}
                   onChange={(event) => setNewAccountUidOrUrl(event.target.value)}
-                  placeholder="可留空用 opencli 搜索；也可直接填写 UID / sec_uid / 主页链接"
+                  placeholder="可留空用 opencli 搜索；也可直接填写 UID / sec_uid / 主页链接…"
                 />
               </div>
               <div className="button-row">
                 <button className="btn primary" disabled={!newAccountName.trim() || busy === "account-create"} onClick={handleCreateAccount} type="button">
-                  <Plus size={16} />
-                  {busy === "account-create" ? "添加中..." : "添加账号"}
+                  <Plus aria-hidden="true" size={16} />
+                  {busy === "account-create" ? "添加中…" : "添加账号"}
                 </button>
               </div>
             </div>
@@ -1039,31 +1041,19 @@ function makePreview(text: string) {
   return text.replace(/\s+/g, " ").trim().slice(0, 72);
 }
 
-function formatInteger(value: number) {
-  return new Intl.NumberFormat("zh-CN").format(Math.round(value || 0));
-}
-
-function getVideoMetaText(video: Pick<Video, "platform" | "publishedAt" | "relativeViewRate">) {
-  const dateText = formatDateWithYear(video.publishedAt);
-  if (video.platform === "douyin") return dateText;
-  return `${dateText} · 高于均值 ${video.relativeViewRate || 0}x`;
+function getVideoMetaText(video: Pick<Video, "publishedAt">) {
+  return formatDateWithYear(video.publishedAt);
 }
 
 function getPrimaryMetric(video: Pick<Video, "platform" | "hotScore" | "stats">) {
   if (video.platform === "douyin") {
     return {
-      label: "热度",
-      value: formatNumber(Math.round(video.hotScore)),
-      sortValue: Math.round(video.hotScore),
-      title: buildHotScoreHint(video)
+      sortValue: Math.round(video.hotScore)
     };
   }
 
   return {
-    label: "播放",
-    value: formatNumber(video.stats.views),
-    sortValue: video.stats.views,
-    title: undefined
+    sortValue: video.stats.views
   };
 }
 
@@ -1131,18 +1121,6 @@ function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () =
     event.preventDefault();
     first.focus();
   }
-}
-
-function buildHotScoreHint(video: {
-  platform?: Video["platform"];
-  hotScore: number;
-  stats: { views: number; likes: number; comments: number; favorites: number; shares?: number };
-}) {
-  if (video.platform === "douyin") {
-    return `${DOUYIN_HOT_SCORE_FORMULA}\n当前视频：点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}`;
-  }
-
-  return `${BILIBILI_HOT_SCORE_FORMULA}\n当前视频：播放 ${formatNumber(video.stats.views)} + 点赞 ${formatNumber(video.stats.likes)}×20 + 评论 ${formatNumber(video.stats.comments)}×60 + 收藏 ${formatNumber(video.stats.favorites)}×80 + 分享 ${formatNumber(video.stats.shares ?? 0)}×50 = ${Math.round(video.hotScore)}`;
 }
 
 function isErrorMessage(message: string) {

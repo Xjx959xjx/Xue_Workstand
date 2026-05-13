@@ -12,7 +12,7 @@ import {
   Settings2
 } from "lucide-react";
 import { useLibrary } from "@/components/LibraryProvider";
-import { formatDate, formatPlatform } from "@/components/Formatters";
+import { formatPlatform } from "@/components/Formatters";
 import { collectAccount, getHealth } from "@/lib/client";
 import { CollectOrder, Platform } from "@/lib/types";
 
@@ -155,7 +155,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className="page">
+    <div className="page home-page">
       <header className="page-header workbench-header">
         <div>
           <p className="eyebrow">Local Workbench</p>
@@ -164,7 +164,7 @@ export default function HomePage() {
         </div>
         <div className="button-row">
           <button className="btn" disabled={loading} onClick={refresh} type="button">
-            <RefreshCw size={16} />
+            <RefreshCw aria-hidden="true" size={16} />
             {loading ? "读取中" : "刷新数据"}
           </button>
         </div>
@@ -193,7 +193,7 @@ export default function HomePage() {
                 name="accountName"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder={platform === "douyin" ? "例如：老青椒" : "例如：某某UP主"}
+                placeholder={platform === "douyin" ? "例如：老青椒…" : "例如：某某UP主…"}
               />
             </div>
             <div className="field">
@@ -259,12 +259,12 @@ export default function HomePage() {
           </div>
           <div className="quick-actions">
             <button className="btn primary" disabled={!canSubmit} onClick={handleCollect} type="button">
-              <Play size={16} />
-              {busy === "collect" ? "采集中..." : "开始采集"}
+              <Play aria-hidden="true" size={16} />
+              {busy === "collect" ? "采集中…" : "开始采集"}
             </button>
             <button className="btn" disabled={busy === "health"} onClick={handleHealthCheck} type="button">
-              <Settings2 size={16} />
-              {busy === "health" ? "检查中..." : "检查环境"}
+              <Settings2 aria-hidden="true" size={16} />
+              {busy === "health" ? "检查中…" : "检查环境"}
             </button>
           </div>
         </div>
@@ -332,7 +332,7 @@ export default function HomePage() {
                 const content = (
                   <>
                     <span className="entry-icon">
-                      <Icon size={18} />
+                      <Icon aria-hidden="true" size={18} />
                     </span>
                     <span>
                       <strong>{entry.title}</strong>
@@ -366,7 +366,7 @@ export default function HomePage() {
                 进入账号库
               </Link>
             </div>
-            {loading ? <p className="subtle">正在读取本地风格库...</p> : null}
+            {loading ? <p className="subtle">正在读取本地风格库…</p> : null}
             {!loading && !library?.recentAccounts.length ? (
               <div className="empty-action">
                 <p className="subtle">还没有账号。上方填入账号名后，可以直接保存或开始采集。</p>
@@ -393,42 +393,6 @@ export default function HomePage() {
                 </Link>
               ))}
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="activity-grid">
-        <div className="panel">
-          <div className="panel-inner">
-            <div className="section-title-row">
-              <h2>最近草稿</h2>
-              {canWrite ? (
-                <Link className="text-link" href="/writer">
-                  进入写作台
-                </Link>
-              ) : (
-                <span aria-disabled="true" className="text-link disabled">
-                  进入写作台
-                </span>
-              )}
-            </div>
-            {!library?.recentDrafts.length ? (
-              <p className="subtle">生成文案后会出现在这里。</p>
-            ) : (
-              <div className="detail-stack">
-                {library.recentDrafts.map((draft) => (
-                  <Link href="/drafts" className="list-button" key={draft.id}>
-                    <span>
-                      <span className="list-title">{draft.title}</span>
-                      <span className="list-meta">
-                        参考 {draft.targetType === "project" ? `项目 ${draft.projectName}` : draft.accountName} · {formatDate(draft.createdAt)}
-                      </span>
-                    </span>
-                    <span className="status-pill done">草稿</span>
-                  </Link>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       </section>

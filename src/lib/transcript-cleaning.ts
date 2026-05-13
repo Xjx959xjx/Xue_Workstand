@@ -1,4 +1,3 @@
-import { chatComplete, getChatRuntimeConfig } from "./ai";
 import { Platform } from "./types";
 
 export type TranscriptCleanResult = {
@@ -37,6 +36,7 @@ export async function cleanTranscriptText(input: {
     };
   }
 
+  const { chatComplete, getChatRuntimeConfig } = await import("./ai");
   const runtime = getChatRuntimeConfig();
   if (!runtime.configured) {
     return {

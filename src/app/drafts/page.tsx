@@ -24,7 +24,7 @@ export default function DraftsPage() {
 
   if (!loading && !drafts.length) {
     return (
-      <div className="page">
+      <div className="page drafts-page">
         <header className="page-header workbench-header">
           <div>
             <p className="eyebrow">Drafts</p>
@@ -38,7 +38,7 @@ export default function DraftsPage() {
   }
 
   return (
-    <div className="page">
+    <div className="page drafts-page">
       <header className="page-header workbench-header">
         <div>
           <p className="eyebrow">Drafts</p>
@@ -48,7 +48,7 @@ export default function DraftsPage() {
         <div className="button-row">
           <span className="stat-pill">{drafts.length} 个草稿</span>
           <button className="btn" onClick={refresh} type="button">
-            <RefreshCw size={16} />
+            <RefreshCw aria-hidden="true" size={16} />
             刷新
           </button>
         </div>
@@ -90,7 +90,7 @@ export default function DraftsPage() {
             <div className="button-row">
               {selectedDraft ? (
                 <Link className="btn" href={buildRewriteHref(selectedDraft)} title="带入对话写作继续改写">
-                  <PenLine size={16} />
+                  <PenLine aria-hidden="true" size={16} />
                   改写
                 </Link>
               ) : null}
@@ -101,7 +101,7 @@ export default function DraftsPage() {
                 </Link>
               ) : null}
               <button className="btn" disabled={!selectedDraft} onClick={handleCopy} type="button">
-                <Copy size={16} />
+                <Copy aria-hidden="true" size={16} />
                 复制
               </button>
             </div>
