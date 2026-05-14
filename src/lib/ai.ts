@@ -36,6 +36,9 @@ export type ChatReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type ChatTool = {
   type: "web_search";
 };
+type ChatRequestOptions = {
+  signal?: AbortSignal;
+};
 export type ChatCompletionResult = {
   text: string;
   model: string;
@@ -93,6 +96,8 @@ type FetchInitWithDispatcher = UndiciRequestInit & {
 };
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
+const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
+const WEB_RESEARCH_TIMEOUT_MS = 180_000;
 
 class StreamResponseTextError extends Error {
   partialText: string;
@@ -141,6 +146,7 @@ export async function streamResponseText(input: {
   reasoningEffort?: ChatReasoningEffort;
   tools?: ChatTool[];
   maxOutputTokens?: number;
+  signal?: AbortSignal;
   onDelta: (delta: string) => void;
 }) {
   const config = chatConfig();
@@ -183,7 +189,8 @@ export async function streamResponseText(input: {
       },
       store: false
     }),
-    dispatcher: chatDispatcher(config.proxyUrl)
+    dispatcher: chatDispatcher(config.proxyUrl),
+    signal: input.signal
   };
 
   const response = await undiciFetch(`${config.baseUrl}/responses`, init);
@@ -270,6 +277,7 @@ export async function streamResponseTextWithFallback(input: {
   reasoningEffort?: ChatReasoningEffort;
   tools?: ChatTool[];
   maxOutputTokens?: number;
+  signal?: AbortSignal;
   onDelta: (delta: string) => void;
 }) {
   try {
@@ -290,7 +298,8 @@ export async function streamResponseTextWithFallback(input: {
 async function chatCompleteWithEffort(
   messages: ChatMessage[],
   reasoningEffort?: ChatReasoningEffort,
-  tools?: ChatTool[]
+  tools?: ChatTool[],
+  options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
   const config = chatConfig();
   if (!config.apiKey || !config.model) {
@@ -298,16 +307,17 @@ async function chatCompleteWithEffort(
   }
 
   if (config.wireApi === "responses") {
-    return createResponse(config, messages, reasoningEffort, tools);
+    return createResponse(config, messages, reasoningEffort, tools, options);
   }
 
-  return createChatCompletion(config, messages, reasoningEffort);
+  return createChatCompletion(config, messages, reasoningEffort, options);
 }
 
 async function createChatCompletion(
   config: ReturnType<typeof chatConfig>,
   messages: ChatMessage[],
-  reasoningEffort?: ChatReasoningEffort
+  reasoningEffort?: ChatReasoningEffort,
+  options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
   const init: FetchInitWithDispatcher = {
     method: "POST",
@@ -321,7 +331,8 @@ async function createChatCompletion(
       temperature: 0.75,
       reasoning_effort: reasoningEffort || config.reasoningEffort
     }),
-    dispatcher: chatDispatcher(config.proxyUrl)
+    dispatcher: chatDispatcher(config.proxyUrl),
+    signal: options.signal
   };
   const response = await undiciFetch(`${config.baseUrl}/chat/completions`, init);
 
@@ -344,7 +355,8 @@ async function createResponse(
   config: ReturnType<typeof chatConfig>,
   messages: ChatMessage[],
   reasoningEffort?: ChatReasoningEffort,
-  tools?: ChatTool[]
+  tools?: ChatTool[],
+  options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
   const system = messages
     .filter((message) => message.role === "system")
@@ -375,7 +387,8 @@ async function createResponse(
       },
       store: false
     }),
-    dispatcher: chatDispatcher(config.proxyUrl)
+    dispatcher: chatDispatcher(config.proxyUrl),
+    signal: options.signal
   };
   const response = await undiciFetch(`${config.baseUrl}/responses`, init);
 
@@ -534,6 +547,7 @@ async function buildWebResearchContext(input: { mode: Draft["mode"]; prompt: str
   try {
     return await buildNativeWebResearchContext(input);
   } catch (error) {
+    console.warn("[ai] web research failed:", describeErrorForLog(error));
     return buildWebResearchFailureContext(error);
   }
 }
@@ -575,20 +589,29 @@ async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; promp
       ? `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${input.prompt}`
       : `请围绕这次改写任务联网检索相关最新事实，并整理成写作参考。\n改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
 
-  const result = await chatCompleteWithEffort(
-    [
-      {
-        role: "system",
-        content:
-          "你是中文写作研究助手。请使用联网搜索工具查找与任务直接相关的最新事实，优先采用权威来源。输出必须使用中文纯文本，结构固定为：检索结论、关键信息、来源。若信息不足，明确写出“信息不足”。"
-      },
-      {
-        role: "user",
-        content: `${researchTask}\n\n要求：\n1. 只整理和写作任务强相关的信息。\n2. 每条信息尽量带上日期或时间线索。\n3. 来源部分列出站点名和链接。\n4. 不要直接写成成稿文案。`
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content:
+        "你是中文写作研究助手。请使用联网搜索工具查找与任务直接相关的最新事实，优先采用权威来源。输出必须使用中文纯文本，结构固定为：检索结论、关键信息、来源。若信息不足，明确写出“信息不足”。"
+    },
+    {
+      role: "user",
+      content: `${researchTask}\n\n要求：\n1. 只整理和写作任务强相关的信息。\n2. 每条信息尽量带上日期或时间线索。\n3. 来源部分列出站点名和链接。\n4. 不要直接写成成稿文案。`
+    }
+  ];
+
+  const result = await withWebResearchTimeout((signal) =>
+    streamResponseText({
+      messages,
+      reasoningEffort: "medium",
+      tools: [{ type: "web_search" }],
+      maxOutputTokens: WEB_RESEARCH_MAX_OUTPUT_TOKENS,
+      signal,
+      onDelta() {
+        // Consume the Responses stream so long web searches do not sit behind an idle proxy connection.
       }
-    ],
-    "medium",
-    [{ type: "web_search" }]
+    })
   );
 
   if (result.fallback || !result.text.trim()) {
@@ -596,6 +619,32 @@ async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; promp
   }
 
   return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${result.text.trim()}`;
+}
+
+async function withWebResearchTimeout<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WEB_RESEARCH_TIMEOUT_MS);
+
+  try {
+    return await run(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted && !(error instanceof StreamResponseTextError && error.partialText.trim())) {
+      throw new Error(`模型联网搜索超时（超过 ${Math.round(WEB_RESEARCH_TIMEOUT_MS / 1000)} 秒）`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function describeErrorForLog(error: unknown) {
+  if (!(error instanceof Error)) return String(error || "");
+  const cause = error.cause;
+  const causeDetail =
+    cause instanceof Error
+      ? ` cause=${cause.name}: ${cause.message}${(cause as { code?: string }).code ? ` code=${(cause as { code?: string }).code}` : ""}`
+      : "";
+  return `${error.name}: ${error.message}${causeDetail}`;
 }
 
 export async function prepareAccountStyleContext(platform: Platform, accountId: string): Promise<PreparedAccountStyleContext> {

@@ -39,6 +39,7 @@ function transcriptionConfig() {
   const pollIntervalMs = Number.parseInt(process.env.VOLCENGINE_ASR_POLL_INTERVAL_MS || "", 10);
   const maxPollAttempts = Number.parseInt(process.env.VOLCENGINE_ASR_MAX_POLL_ATTEMPTS || "", 10);
   const timeoutMs = Number.parseInt(process.env.VOLCENGINE_ASR_REQUEST_TIMEOUT_MS || "", 10);
+  const retryCount = Number.parseInt(process.env.VOLCENGINE_ASR_RETRY_COUNT || "", 10);
 
   return {
     apiKey: process.env.VOLCENGINE_ASR_API_KEY || process.env.VOLCENGINE_API_KEY || "",
@@ -55,7 +56,8 @@ function transcriptionConfig() {
     audioFormat: normalizeVolcengineAudioFormat(process.env.VOLCENGINE_ASR_AUDIO_FORMAT),
     pollIntervalMs: Number.isFinite(pollIntervalMs) ? Math.max(pollIntervalMs, 500) : 1000,
     maxPollAttempts: Number.isFinite(maxPollAttempts) ? Math.max(maxPollAttempts, 1) : 120,
-    timeoutMs: Number.isFinite(timeoutMs) ? Math.max(timeoutMs, 5000) : 30000
+    timeoutMs: Number.isFinite(timeoutMs) ? Math.max(timeoutMs, 5000) : 30000,
+    retryCount: Number.isFinite(retryCount) ? Math.max(0, Math.min(retryCount, 3)) : 2
   };
 }
 
@@ -286,8 +288,6 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
   }
 
   const timings: Timing[] = [];
-  const taskId = randomUUID();
-  const headers = buildVolcengineHeaders(config, taskId);
   const readStartedAt = Date.now();
   const audioBytes = await fs.readFile(mediaPath);
   timings.push({ stage: "read-audio-file", ms: Date.now() - readStartedAt });
@@ -310,54 +310,78 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
     }
   };
 
-  const submitStartedAt = Date.now();
-  const submitResponse = await fetchWithTimeout(
-    config.submitUrl,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body)
-    },
-    config.timeoutMs
-  );
-  await assertVolcengineResponse(submitResponse, "提交火山引擎转写任务", ["20000000"]);
-  timings.push({ stage: "volcengine-submit", ms: Date.now() - submitStartedAt });
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: unknown;
 
-  const queryStartedAt = Date.now();
-  let pollWaitMs = 0;
-  let queryRequestMs = 0;
-  for (let attempt = 0; attempt < config.maxPollAttempts; attempt += 1) {
-    if (attempt > 0) {
-      const waitStartedAt = Date.now();
-      await sleep(config.pollIntervalMs);
-      pollWaitMs += Date.now() - waitStartedAt;
+  while (attempt <= config.retryCount) {
+    const taskId = randomUUID();
+    const headers = buildVolcengineHeaders(config, taskId);
+    const attemptPrefix = attempt > 0 ? `retry-${attempt + 1}-` : "";
+
+    try {
+      const submitStartedAt = Date.now();
+      const submitResponse = await fetchWithTimeout(
+        config.submitUrl,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body)
+        },
+        config.timeoutMs
+      );
+      await assertVolcengineResponse(submitResponse, "提交火山引擎转写任务", ["20000000"]);
+      timings.push({ stage: `${attemptPrefix}volcengine-submit`, ms: Date.now() - submitStartedAt });
+
+      const queryStartedAt = Date.now();
+      let pollWaitMs = 0;
+      let queryRequestMs = 0;
+      for (let pollAttempt = 0; pollAttempt < config.maxPollAttempts; pollAttempt += 1) {
+        if (pollAttempt > 0) {
+          const waitStartedAt = Date.now();
+          await sleep(config.pollIntervalMs);
+          pollWaitMs += Date.now() - waitStartedAt;
+        }
+        const queryRequestStartedAt = Date.now();
+        const queryResponse = await fetchWithTimeout(
+          config.queryUrl,
+          {
+            method: "POST",
+            headers,
+            body: "{}"
+          },
+          config.timeoutMs
+        );
+        queryRequestMs += Date.now() - queryRequestStartedAt;
+        const statusCode = getVolcengineHeader(queryResponse, "X-Api-Status-Code");
+        if (statusCode === "20000001" || statusCode === "20000002") continue;
+        await assertVolcengineResponse(queryResponse, "查询火山引擎转写结果", ["20000000"]);
+        const data = (await queryResponse.json()) as unknown;
+        const text = extractVolcengineTranscript(data);
+        if (!text.trim()) {
+          throw new Error("火山引擎没有返回转写文本");
+        }
+        timings.push({ stage: `${attemptPrefix}volcengine-query-requests`, ms: queryRequestMs });
+        if (pollWaitMs) timings.push({ stage: `${attemptPrefix}volcengine-poll-wait`, ms: pollWaitMs });
+        timings.push({ stage: `${attemptPrefix}volcengine-query`, ms: Date.now() - queryStartedAt });
+        return { text: text.trim(), timings };
+      }
+
+      throw new Error("火山引擎转写任务查询超时，请稍后重试。");
+    } catch (error) {
+      lastError = error;
+      if (!shouldRetryVolcengineError(error) || attempt >= config.retryCount) {
+        break;
+      }
+      const backoffMs = 1200 * (attempt + 1);
+      timings.push({ stage: `${attemptPrefix}volcengine-retry-wait`, ms: backoffMs });
+      await sleep(backoffMs);
+      attempt += 1;
     }
-    const queryRequestStartedAt = Date.now();
-    const queryResponse = await fetchWithTimeout(
-      config.queryUrl,
-      {
-        method: "POST",
-        headers,
-        body: "{}"
-      },
-      config.timeoutMs
-    );
-    queryRequestMs += Date.now() - queryRequestStartedAt;
-    const statusCode = getVolcengineHeader(queryResponse, "X-Api-Status-Code");
-    if (statusCode === "20000001" || statusCode === "20000002") continue;
-    await assertVolcengineResponse(queryResponse, "查询火山引擎转写结果", ["20000000"]);
-    const data = (await queryResponse.json()) as unknown;
-    const text = extractVolcengineTranscript(data);
-    if (!text.trim()) {
-      throw new Error("火山引擎没有返回转写文本");
-    }
-    timings.push({ stage: "volcengine-query-requests", ms: queryRequestMs });
-    if (pollWaitMs) timings.push({ stage: "volcengine-poll-wait", ms: pollWaitMs });
-    timings.push({ stage: "volcengine-query", ms: Date.now() - queryStartedAt });
-    return { text: text.trim(), timings };
   }
 
-  throw new Error("火山引擎转写任务查询超时，请稍后重试。");
+  timings.push({ stage: "volcengine-total-attempts", ms: Date.now() - startedAt });
+  throw lastError instanceof Error ? lastError : new Error("火山引擎转写失败");
 }
 
 async function prepareAudioForVolcengine(mediaPath: string): Promise<{
@@ -472,6 +496,11 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function shouldRetryVolcengineError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR|超时|timeout|503|502|504|socket/i.test(message);
 }
 
 function sleep(ms: number) {

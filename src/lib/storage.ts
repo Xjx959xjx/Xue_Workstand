@@ -518,6 +518,11 @@ export async function saveVideos(account: Account, incoming: Video[]) {
     const existing = await readJson<Video>(target);
     const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${id}.txt`);
     const hasTranscript = await exists(transcriptFile);
+    const mergedStats = mergeVideoStats(existing, video);
+    const mergedTopComments =
+      Array.isArray(video.topComments) && video.topComments.length
+        ? video.topComments
+        : existing?.topComments;
 
     const next: Video = {
       ...existing,
@@ -525,9 +530,11 @@ export async function saveVideos(account: Account, incoming: Video[]) {
       id,
       accountId: account.id,
       platform: account.platform,
-      hotScore: calculateHotScore(video),
+      stats: mergedStats,
+      topComments: mergedTopComments,
+      hotScore: calculateHotScore({ ...video, stats: mergedStats }),
       relativeViewRate:
-        video.stats.views > 0 && averageViews > 0 ? Number((video.stats.views / averageViews).toFixed(2)) : 0,
+        mergedStats.views > 0 && averageViews > 0 ? Number((mergedStats.views / averageViews).toFixed(2)) : 0,
       transcriptStatus: hasTranscript ? "completed" : existing?.transcriptStatus ?? video.transcriptStatus,
       transcriptPath: hasTranscript ? transcriptFile : existing?.transcriptPath ?? video.transcriptPath,
       transcriptSource: hasTranscript ? existing?.transcriptSource ?? video.transcriptSource : video.transcriptSource,
@@ -539,6 +546,24 @@ export async function saveVideos(account: Account, incoming: Video[]) {
   }
 
   return saved.sort((a, b) => b.hotScore - a.hotScore);
+}
+
+function mergeVideoStats(existing: Video | null, incoming: Video) {
+  if (!existing) return incoming.stats;
+  return {
+    views: pickPreferredMetric(existing.stats.views, incoming.stats.views),
+    likes: pickPreferredMetric(existing.stats.likes, incoming.stats.likes),
+    comments: pickPreferredMetric(existing.stats.comments, incoming.stats.comments),
+    favorites: pickPreferredMetric(existing.stats.favorites, incoming.stats.favorites),
+    shares: pickPreferredMetric(existing.stats.shares, incoming.stats.shares)
+  };
+}
+
+function pickPreferredMetric(existing?: number, incoming?: number) {
+  const safeExisting = Number.isFinite(existing) ? Number(existing) : 0;
+  const safeIncoming = Number.isFinite(incoming) ? Number(incoming) : 0;
+  if (safeIncoming > 0) return safeIncoming;
+  return safeExisting;
 }
 
 export async function saveVideo(account: Account, video: Video) {
@@ -599,11 +624,19 @@ export async function saveTranscript(input: {
     transcriptStatus: "completed",
     transcriptPath: transcriptFile,
     transcriptSource: input.source,
+    raw: clearTranscriptError(video.raw),
     updatedAt: nowIso()
   };
   await writeJson(videoFile, next);
 
   return { account, video: next, transcript: input.text.trim() };
+}
+
+function clearTranscriptError(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const next = { ...(raw as Record<string, unknown>) };
+  delete next.transcriptError;
+  return next;
 }
 
 export async function markTranscriptFailed(platform: Platform, accountId: string, videoId: string, reason: string) {

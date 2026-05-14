@@ -535,11 +535,16 @@ export async function collectVideos(input: {
         ];
 
   if (input.platform === "douyin") {
-    const rows = await scanDouyinPostVideoRows(input.account, {
-      limit: input.limit,
-      fromDate: input.fromDate,
-      toDate: input.toDate
-    });
+    let rows: unknown[];
+    try {
+      rows = await scanDouyinPostVideoRows(input.account, {
+        limit: input.limit,
+        fromDate: input.fromDate,
+        toDate: input.toDate
+      });
+    } catch {
+      rows = await getDouyinVideoRows(input.account, { limit: input.limit });
+    }
     return {
       command: `${opencliBin()} ${args.join(" ")}`,
       rawCount: rows.length,
@@ -883,6 +888,129 @@ async function getDouyinVideoRows(account: Account, options: { limit?: number } 
   return asArray(parseJsonish(stdout))
     .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
     .filter(Boolean) as Array<Record<string, unknown>>;
+}
+
+export async function getDouyinVideoDetailMap(
+  account: Account,
+  videos: Array<Pick<Video, "id" | "url" | "raw">>,
+  options: { commentLimit?: number } = {}
+) {
+  const awemeIds = [...new Set(videos.map((video) => getDouyinAwemeId(video)).filter(Boolean))];
+  const details = new Map<string, { commentCount?: number; topComments: string[] }>();
+  if (!awemeIds.length) return details;
+
+  const workspace = `douyin-detail-${process.pid}-${Date.now()}-${shortHash(account.uid)}`;
+  const profileUrl = `https://www.douyin.com/user/${encodeURIComponent(account.uid)}`;
+
+  try {
+    await runOpenCli(
+      ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", profileUrl],
+      { timeout: 30_000 }
+    );
+    await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "2"], { timeout: 10_000 }).catch(() => undefined);
+
+    for (const awemeId of awemeIds) {
+      const detail = await getDouyinVideoDetailWithBrowser(workspace, awemeId, options).catch(() => null);
+      if (!detail) continue;
+      details.set(awemeId, detail);
+    }
+  } finally {
+    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+  }
+
+  return details;
+}
+
+async function getDouyinVideoDetailWithBrowser(
+  workspace: string,
+  awemeId: string,
+  options: { commentLimit?: number } = {}
+) {
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 20));
+  const result = parseJsonish(
+    await runOpenCli(
+      [
+        "browser",
+        "--workspace",
+        workspace,
+        "eval",
+        buildDouyinDetailExtractJs({
+          awemeId,
+          commentLimit
+        })
+      ],
+      { timeout: 20_000 }
+    )
+  );
+  const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
+  const topComments = Array.isArray(object.topComments)
+    ? object.topComments.map((comment) => normalizeCommentText(comment)).filter(Boolean)
+    : [];
+  const commentCount = toNumber(object.commentCount);
+  if (!topComments.length && commentCount <= 0) return null;
+  return {
+    commentCount: commentCount > 0 ? commentCount : undefined,
+    topComments
+  };
+}
+
+function buildDouyinDetailExtractJs(options: { awemeId: string; commentLimit: number }) {
+  return `
+(async () => {
+  const awemeId = ${JSON.stringify(options.awemeId)};
+  const commentLimit = ${options.commentLimit};
+  const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const normalizeComment = (comment) => {
+    if (!comment || typeof comment !== "object") return "";
+    return normalizeText(
+      comment.text ||
+      comment.content ||
+      comment.reply_comment?.text ||
+      comment.reply_comment?.content ||
+      ""
+    );
+  };
+  const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
+  detailUrl.searchParams.set("aweme_id", awemeId);
+  detailUrl.searchParams.set("aid", "6383");
+  const detailResponse = await fetch(detailUrl.toString(), {
+    credentials: "include",
+    headers: {
+      accept: "application/json, text/plain, */*"
+    }
+  });
+  const detailPayload = await detailResponse.json().catch(() => ({}));
+  const awemeDetail = detailPayload && typeof detailPayload === "object" ? detailPayload.aweme_detail || {} : {};
+  const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
+  let topComments = [];
+  try {
+    const commentUrl = new URL("https://www.douyin.com/aweme/v1/web/comment/list/");
+    commentUrl.searchParams.set("aweme_id", awemeId);
+    commentUrl.searchParams.set("cursor", "0");
+    commentUrl.searchParams.set("count", String(commentLimit));
+    commentUrl.searchParams.set("item_type", "0");
+    commentUrl.searchParams.set("insert_ids", "");
+    commentUrl.searchParams.set("whale_cut_token", "");
+    commentUrl.searchParams.set("cut_version", "1");
+    commentUrl.searchParams.set("rcFT", "");
+    commentUrl.searchParams.set("device_platform", "webapp");
+    commentUrl.searchParams.set("aid", "6383");
+    const commentResponse = await fetch(commentUrl.toString(), {
+      credentials: "include",
+      headers: {
+        accept: "application/json, text/plain, */*"
+      }
+    });
+    const commentPayload = await commentResponse.json().catch(() => ({}));
+    const comments = Array.isArray(commentPayload.comments) ? commentPayload.comments : [];
+    topComments = comments.map(normalizeComment).filter(Boolean);
+  } catch {}
+  return {
+    commentCount: Number(statistics.comment_count || 0),
+    topComments
+  };
+})()
+`;
 }
 
 export async function getDouyinTopComments(account: Account, options: { limit?: number; commentLimit?: number } = {}) {

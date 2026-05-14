@@ -48,7 +48,13 @@ export async function POST(request: Request) {
       const prepared = await prepareWriteCopyContext(input);
 
       if (input.useWebResearch) {
-        emit({ type: "stage", stage: "research", message: "联网检索已完成，正在整理资料", progress: 35 });
+        const researchUnavailable = prepared.research?.startsWith("联网资料：模型联网暂时不可用");
+        emit({
+          type: "stage",
+          stage: "research",
+          message: researchUnavailable ? "联网检索暂不可用，正在继续生成" : "联网检索已完成，正在整理资料",
+          progress: 35
+        });
         if (prepared.research) {
           emit({ type: "result", data: { research: prepared.research, phase: "research" } });
         }

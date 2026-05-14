@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { collectVideos, hydrateBilibiliVideoStats, resolveAccountUid } from "@/lib/opencli";
+import {
+  collectVideos,
+  getDouyinAwemeId,
+  getDouyinVideoDetailMap,
+  hydrateBilibiliVideoStats,
+  resolveAccountUid
+} from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
 import { collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
 import { nowIso } from "@/lib/utils";
@@ -68,13 +74,16 @@ export async function POST(request: Request) {
     });
 
     const dateFilter = buildDateFilterResult(result.videos, input.fromDate, input.toDate);
-    const filteredVideos = await selectVideosForSave({
+    let filteredVideos = await selectVideosForSave({
       videos: dateFilter.filteredVideos,
       platform: input.platform,
       limit: input.limit,
       order,
       hydrateFinalDetails: collectPlan.hydrateFinalDetails
     });
+    if (input.platform === "douyin") {
+      filteredVideos = await enrichDouyinVideos(updatedAccount, filteredVideos);
+    }
     const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), order);
 
     return NextResponse.json({
@@ -91,6 +100,30 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+}
+
+async function enrichDouyinVideos(account: Awaited<ReturnType<typeof upsertAccount>>, videos: Video[]) {
+  const needsDetail = videos.filter(
+    (video) => video.stats.comments <= 0 || !Array.isArray(video.topComments) || video.topComments.length === 0
+  );
+  if (!needsDetail.length) return videos;
+
+  const detailMap = await getDouyinVideoDetailMap(account, needsDetail, { commentLimit: 10 }).catch(() => new Map());
+  if (!detailMap.size) return videos;
+
+  return videos.map((video) => {
+    const detailKey = getDouyinAwemeId(video) || video.id;
+    const detail = detailMap.get(detailKey);
+    if (!detail) return video;
+    return {
+      ...video,
+      stats: {
+        ...video.stats,
+        comments: detail.commentCount ?? video.stats.comments
+      },
+      topComments: detail.topComments.length ? detail.topComments : video.topComments
+    };
+  });
 }
 
 function normalizeCollectOrder(order: LegacyCollectOrder): CollectOrder {
