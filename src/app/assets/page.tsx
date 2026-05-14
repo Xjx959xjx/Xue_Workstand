@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Copy, Download, ImagePlus, MessageCircle, Play, RefreshCw, Upload } from "lucide-react";
+import { Copy, Download, ExternalLink, FileUp, ImagePlus, MessageCircle, Play, RefreshCw, Upload } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -10,6 +10,7 @@ import {
   collectDraftCoverReferences,
   draftAssetFileUrl,
   generateDraftEngagement,
+  publishFeishuDocument,
   streamGenerateDraftCover,
   uploadDraftCoverReferences
 } from "@/lib/client";
@@ -36,6 +37,7 @@ function AssetsPageContent() {
   const [notice, setNotice] = useState("");
   const [coverStage, setCoverStage] = useState("");
   const [coverProgress, setCoverProgress] = useState(0);
+  const [feishuResult, setFeishuResult] = useState<{ title: string; url: string } | null>(null);
 
   const drafts = useMemo(() => library?.drafts || [], [library?.drafts]);
   const selectedDraft = useMemo(() => drafts.find((draft) => draft.id === selectedId) || drafts[0] || null, [drafts, selectedId]);
@@ -44,6 +46,7 @@ function AssetsPageContent() {
   const accountReferences = references.filter((reference) => reference.source === "account");
   const uploadedReferences = references.filter((reference) => reference.source === "upload");
   const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持");
+  const isWritingAssets = Boolean(busy);
 
   useEffect(() => {
     const draftId = searchParams.get("draftId");
@@ -154,6 +157,24 @@ function AssetsPageContent() {
     setNotice(message);
   }
 
+  async function handlePublishAssetText(title: string, items: string[], emptyMessage: string) {
+    if (!selectedDraft || !items.length) return;
+    setBusy("feishu-comments");
+    setNotice("");
+    try {
+      const result = await publishFeishuDocument({
+        title: `${selectedDraft.title}-${title}`,
+        content: items.join("\n")
+      });
+      setFeishuResult({ title: result.title, url: result.url });
+      setNotice("已导出到飞书文档。");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : emptyMessage);
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!loading && !drafts.length) {
     return (
       <div className="page">
@@ -245,7 +266,7 @@ function AssetsPageContent() {
                       <h3>观众评论与 B站弹幕</h3>
                       <p className="subtle">评论覆盖 B站 / 抖音，弹幕仅 B站草稿可用。</p>
                     </div>
-                    <button className="btn primary" disabled={busy === "engagement"} onClick={handleGenerateEngagement} type="button">
+                    <button className="btn primary" disabled={isWritingAssets} onClick={handleGenerateEngagement} type="button">
                       <MessageCircle size={16} />
                       {busy === "engagement" ? "生成中..." : "生成"}
                     </button>
@@ -265,6 +286,15 @@ function AssetsPageContent() {
                     items={(selectedDraft.assets?.comments?.items || []).map((item) => item.text)}
                     title={`评论池 ${selectedDraft.assets?.comments?.items.length || 0}`}
                     onCopy={() => copyText((selectedDraft.assets?.comments?.items || []).map((item) => item.text).join("\n"), "评论已复制。")}
+                    onPublish={() =>
+                      handlePublishAssetText(
+                        "评论池",
+                        (selectedDraft.assets?.comments?.items || []).map((item) => item.text),
+                        "导出评论池失败"
+                      )
+                    }
+                    publishDisabled={Boolean(busy)}
+                    publishing={busy === "feishu-comments"}
                   />
                   {supportsBilibili ? (
                     <AssetTextList
@@ -285,14 +315,14 @@ function AssetsPageContent() {
                       <p className="subtle">可从账号爆款封面和上传图片里选择参考图。</p>
                     </div>
                     <div className="button-row">
-                      <button className="btn" disabled={!supportsBilibili || busy === "references"} onClick={handleCollectReferences} type="button">
+                      <button className="btn" disabled={!supportsBilibili || isWritingAssets} onClick={handleCollectReferences} type="button">
                         <ImagePlus size={16} />
                         {busy === "references" ? "收集中..." : "账号封面"}
                       </button>
                       <label className="btn file-button">
                         <Upload size={16} />
                         上传图片
-                        <input accept="image/*" disabled={!supportsBilibili || busy === "upload"} multiple type="file" onChange={(event) => handleUploadReferences(event.target.files)} />
+                        <input accept="image/*" disabled={!supportsBilibili || isWritingAssets} multiple type="file" onChange={(event) => handleUploadReferences(event.target.files)} />
                       </label>
                     </div>
                   </div>
@@ -329,7 +359,7 @@ function AssetsPageContent() {
                     }
                   />
 
-                  <button className="btn primary" disabled={!supportsBilibili || busy === "cover"} onClick={handleGenerateCover} type="button">
+                  <button className="btn primary" disabled={!supportsBilibili || isWritingAssets} onClick={handleGenerateCover} type="button">
                     <Play size={16} />
                     {busy === "cover" ? "生成中..." : "生成封面"}
                   </button>
@@ -374,19 +404,63 @@ function AssetsPageContent() {
           </div>
         </aside>
       </section>
+
+      {feishuResult ? (
+        <div className="modal-backdrop">
+          <div aria-labelledby="assets-feishu-dialog-title" aria-modal="true" className="modal-panel feishu-modal" role="dialog" tabIndex={-1}>
+            <div className="modal-header">
+              <h2 id="assets-feishu-dialog-title">飞书文档已创建</h2>
+              <button className="btn" onClick={() => setFeishuResult(null)} type="button">
+                关闭
+              </button>
+            </div>
+            <div className="feishu-success-card">
+              <p>{feishuResult.title}</p>
+              <a className="btn primary" href={feishuResult.url} rel="noreferrer" target="_blank">
+                <ExternalLink aria-hidden="true" size={16} />
+                打开飞书文档
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function AssetTextList({ title, items, empty, onCopy }: { title: string; items: string[]; empty: string; onCopy: () => void }) {
+function AssetTextList({
+  title,
+  items,
+  empty,
+  onCopy,
+  onPublish,
+  publishDisabled,
+  publishing
+}: {
+  title: string;
+  items: string[];
+  empty: string;
+  onCopy: () => void;
+  onPublish?: () => void;
+  publishDisabled?: boolean;
+  publishing?: boolean;
+}) {
   return (
     <div className="asset-list-block">
       <div className="section-title-row">
         <h3>{title}</h3>
-        <button className="btn" disabled={!items.length} onClick={onCopy} type="button">
-          <Copy size={16} />
-          复制
-        </button>
+        <div className="button-row">
+          <button className="btn" disabled={!items.length} onClick={onCopy} type="button">
+            <Copy size={16} />
+            复制
+          </button>
+          {onPublish ? (
+            <button className="btn" disabled={!items.length || publishDisabled} onClick={onPublish} type="button">
+              <FileUp size={16} />
+              {publishing ? "导出中..." : "飞书文档"}
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className={`asset-text-list ${items.length ? "" : "empty"}`}>
         {items.length ? items.map((item, index) => <p key={`${index}-${item}`}>{item}</p>) : empty}

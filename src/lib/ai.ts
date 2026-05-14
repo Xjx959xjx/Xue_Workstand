@@ -14,6 +14,7 @@ import { clampText, makeTitleFromPrompt } from "./utils";
 import {
   getTopTranscriptSamples,
   getProjectSummary,
+  resolveCopySource,
   libraryRoot,
   resolveAccount,
   resolveProject,
@@ -68,6 +69,7 @@ export type SaveAndGenerateProjectStyleInput = {
   name: string;
   description?: string;
   sourceAccountIds: string[];
+  sourceMaterialIds?: string[];
 };
 
 export type ProjectStyleGenerationResult = {
@@ -855,6 +857,8 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       return `参考账号：${account.name}\n${block || "暂无样本"}`;
     })
     .join("\n\n---\n\n");
+  const materialContext = await buildProjectCopySourceContext(project.sourceMaterialIds || []);
+  const referenceContext = [sampleContext, materialContext].filter(Boolean).join("\n\n---\n\n");
 
   const userTask =
     input.mode === "topic"
@@ -871,7 +875,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       },
       {
         role: "user",
-        content: `参考项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n项目风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
+        content: `参考项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n项目风格卡：\n${style}\n\n代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
       }
     ],
     fallbackName: project.name,
@@ -893,10 +897,25 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       styleRef: {
         projectId: project.id,
         projectName: project.name,
-        sourceAccountIds: project.sourceAccountIds
+        sourceAccountIds: project.sourceAccountIds,
+        sourceMaterialIds: project.sourceMaterialIds
       }
     }
   };
+}
+
+async function buildProjectCopySourceContext(sourceIds: string[]) {
+  if (!sourceIds.length) return "";
+  const sources = await Promise.all(sourceIds.slice(0, 8).map((sourceId) => resolveCopySource(sourceId).catch(() => null)));
+
+  return sources
+    .filter(Boolean)
+    .map((source, index) => {
+      if (!source) return "";
+      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${clampText(source.transcript, 1400)}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 async function normalizeWriteCopyInput(input: WriteCopyInput): Promise<WriteCopyInput> {

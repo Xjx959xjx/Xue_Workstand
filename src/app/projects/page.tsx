@@ -168,21 +168,21 @@ export default function ProjectsPage() {
     }
   }
 
-  if (!loading && !library?.accounts.length) {
+  if (!loading && !library?.accounts.length && !library?.projects.length) {
     return (
       <div className="page projects-page">
         <header className="page-header workbench-header">
           <div>
             <p className="eyebrow">Projects</p>
             <h1>项目库</h1>
-            <p className="subtle">先采集账号，再把多个账号组合成稳定项目风格。</p>
+            <p className="subtle">项目可以来自参考账号，也可以来自文案工具里的纯转写素材。</p>
           </div>
           <button className="btn" onClick={refresh} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             刷新
           </button>
         </header>
-        <EmptyState title="还没有参考账号" body="先采集至少一个账号，再把多个账号组合成项目风格。" action={{ href: "/", label: "去采集账号" }} />
+        <EmptyState title="还没有项目" body="可以先采集账号创建风格项目，也可以去文案工具转写链接后批量创建纯文案项目。" action={{ href: "/copy-tools", label: "去文案工具" }} />
       </div>
     );
   }
@@ -266,8 +266,9 @@ export default function ProjectsPage() {
             <div className="status-summary">
               <span>{library?.projects.length || 0} 个项目</span>
               <span>{library?.accounts.length || 0} 个账号可用</span>
+              <span>{library?.copySources.length || 0} 份文案素材</span>
             </div>
-            {!library?.projects.length ? <p className="subtle">项目可以绑定多个参考账号，沉淀成一个独立风格卡。</p> : null}
+            {!library?.projects.length ? <p className="subtle">项目可以绑定参考账号，也可以从文案工具归档纯文案素材。</p> : null}
             {library?.projects.map((project) => (
               <button
                 className={`list-button account-list-button ${selectedProject?.id === project.id ? "active" : ""} ${
@@ -290,7 +291,10 @@ export default function ProjectsPage() {
                 ) : null}
                 <span>
                   <span className="list-title">{project.name}</span>
-                  <span className="list-meta">{project.sourceAccounts.length} 个参考账号</span>
+                  <span className="list-meta">
+                    {project.sourceAccounts.length} 个参考账号
+                    {project.sourceMaterialCount ? ` · ${project.sourceMaterialCount} 份文案素材` : ""}
+                  </span>
                 </span>
                 <span className="status-pill done">项目</span>
               </button>
@@ -390,7 +394,11 @@ export default function ProjectsPage() {
                     </span>
                   </label>
                 ))}
-                {!filteredAccounts.length ? <p className="subtle">没有匹配的账号。</p> : null}
+                {!filteredAccounts.length ? (
+                  <p className="subtle">
+                    {library?.accounts.length ? "没有匹配的账号。" : "暂无账号。纯文案项目可以先不选择参考账号。"}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -417,6 +425,23 @@ export default function ProjectsPage() {
                 placeholder="自动总结后会写入 style-library/projects/项目名/style.md，也可以在这里手动编辑…"
               />
             </div>
+
+            {selectedProject?.sourceMaterials.length ? (
+              <div>
+                <div className="button-row section-title-row">
+                  <h3>文案素材</h3>
+                  <span className="status-pill done">{selectedProject.sourceMaterials.length} 份</span>
+                </div>
+                <div className="copy-project-list">
+                  {selectedProject.sourceMaterials.map((source) => (
+                    <a className="copy-project-row" href={source.resolvedUrl || source.url} key={source.id} rel="noreferrer" target="_blank">
+                      <strong>{source.title}</strong>
+                      <span>{source.platform === "unknown" ? "未知平台" : formatPlatform(source.platform)}</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </section>

@@ -7,6 +7,7 @@ import {
   FileText,
   Layers3,
   MessageSquareText,
+  NotebookText,
   Play,
   RefreshCw,
   Settings2
@@ -17,6 +18,13 @@ import { collectAccount, getHealth } from "@/lib/client";
 import { CollectOrder, Platform } from "@/lib/types";
 
 const entries = [
+  {
+    href: "/copy-tools",
+    title: "文案工具",
+    body: "贴 B站 / 抖音链接自动转写，批量保存成纯文案项目。",
+    action: "处理链接",
+    icon: NotebookText
+  },
   {
     href: "/library",
     title: "账号风格库",
@@ -93,9 +101,10 @@ export default function HomePage() {
     const accounts = library?.accounts || [];
     const videoCount = accounts.reduce((sum, account) => sum + account.videoCount, 0);
     const transcriptCount = accounts.reduce((sum, account) => sum + account.transcriptCount, 0);
+    const copySourceCount = library?.copySources.length || 0;
     const projectCount = library?.projects.length || 0;
     const draftCount = library?.drafts.length || 0;
-    return { accounts, accountCount: accounts.length, videoCount, transcriptCount, projectCount, draftCount };
+    return { accounts, accountCount: accounts.length, videoCount, transcriptCount, copySourceCount, projectCount, draftCount };
   }, [library]);
 
   const canWrite = stats.accountCount > 0;
@@ -148,6 +157,7 @@ export default function HomePage() {
   }
 
   function entryStatus(title: string) {
+    if (title === "文案工具") return `${stats.copySourceCount} 份文案素材`;
     if (title === "账号风格库") return `${stats.accountCount} 个账号 · ${stats.videoCount} 条视频`;
     if (title === "项目库") return `${stats.projectCount} 个项目`;
     if (title === "对话写作") return canWrite ? "已有参考账号" : "先添加一个参考账号";
@@ -275,6 +285,7 @@ export default function HomePage() {
             <span className="stat-pill">{stats.projectCount} 个项目</span>
             <span className="stat-pill">{stats.videoCount} 条视频</span>
             <span className="stat-pill">{stats.transcriptCount} 份转写</span>
+            <span className="stat-pill">{stats.copySourceCount} 份文案素材</span>
             <span className="stat-pill">{stats.draftCount} 个草稿</span>
           </div>
           {health ? (

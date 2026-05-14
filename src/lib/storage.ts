@@ -4,6 +4,7 @@ import {
   Account,
   AccountDraft,
   AccountSummary,
+  CopySource,
   Draft,
   DraftAssets,
   DraftCoverImage,
@@ -17,7 +18,7 @@ import {
   Video,
   platforms
 } from "./types";
-import { nowIso, safeSegment, shortHash } from "./utils";
+import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
 
 const DEFAULT_STYLE = `# 风格卡
 
@@ -37,6 +38,8 @@ const DEFAULT_STYLE = `# 风格卡
 - 暂未总结。
 `;
 
+const draftAssetQueues = new Map<string, Promise<unknown>>();
+
 function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {
   return video.transcriptStatus === "completed" || Boolean(video.transcriptPath);
 }
@@ -51,6 +54,22 @@ function platformPath(platform: Platform) {
 
 function projectsPath() {
   return path.join(libraryRoot(), "projects");
+}
+
+function copyToolsPath() {
+  return path.join(libraryRoot(), "copy-tools");
+}
+
+function copySourcesPath() {
+  return path.join(copyToolsPath(), "sources");
+}
+
+function copySourceJsonPath(id: string) {
+  return path.join(copySourcesPath(), `${id}.json`);
+}
+
+function copySourceTranscriptPath(id: string) {
+  return path.join(copySourcesPath(), `${id}.txt`);
 }
 
 function projectPath(slug: string) {
@@ -99,6 +118,61 @@ function draftAssetsPath(platform: Platform, slug: string, draftId: string) {
 
 function stylePath(platform: Platform, slug: string) {
   return path.join(accountPath(platform, slug), "style.md");
+}
+
+function normalizeStorageSegment(value: string, label: string) {
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.includes("..") ||
+    normalized !== safeSegment(normalized)
+  ) {
+    throw new Error(`${label} 不合法`);
+  }
+  return normalized;
+}
+
+function normalizeAccountSlug(accountIdOrSlug: string) {
+  const slug = accountIdOrSlug.includes(":") ? accountIdOrSlug.split(":").at(-1)! : accountIdOrSlug;
+  return normalizeStorageSegment(slug, "账号 ID");
+}
+
+function normalizeProjectSlug(projectIdOrSlug: string) {
+  const slug = projectIdOrSlug.includes(":") ? projectIdOrSlug.split(":").at(-1)! : projectIdOrSlug;
+  return normalizeStorageSegment(slug, "项目 ID");
+}
+
+function normalizeVideoId(videoId: string) {
+  return normalizeStorageSegment(videoId, "视频 ID");
+}
+
+function normalizeDraftId(draftId: string) {
+  return normalizeStorageSegment(draftId, "草稿 ID");
+}
+
+function normalizeCopySourceId(sourceId: string) {
+  return normalizeStorageSegment(sourceId, "文案素材 ID");
+}
+
+async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
+  const previous = draftAssetQueues.get(draftId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.then(() => current, () => current);
+  draftAssetQueues.set(draftId, next);
+
+  try {
+    await previous.catch(() => undefined);
+    return await run();
+  } finally {
+    release();
+    if (draftAssetQueues.get(draftId) === next) {
+      draftAssetQueues.delete(draftId);
+    }
+  }
 }
 
 async function exists(target: string) {
@@ -152,13 +226,14 @@ export async function ensureLibrary() {
   await fs.mkdir(libraryRoot(), { recursive: true });
   await Promise.all([
     ...platforms.map((platform) => fs.mkdir(platformPath(platform), { recursive: true })),
-    fs.mkdir(projectsPath(), { recursive: true })
+    fs.mkdir(projectsPath(), { recursive: true }),
+    fs.mkdir(copySourcesPath(), { recursive: true })
   ]);
 }
 
 export async function resolveAccount(platform: Platform, accountIdOrSlug: string) {
   await ensureLibrary();
-  const slug = accountIdOrSlug.includes(":") ? accountIdOrSlug.split(":").at(-1)! : accountIdOrSlug;
+  const slug = normalizeAccountSlug(accountIdOrSlug);
   const account = await readJson<Account>(accountJsonPath(platform, slug));
   if (!account) {
     throw new Error(`找不到账号：${platform}/${slug}`);
@@ -232,10 +307,11 @@ export async function deleteAccounts(accountIds: string[]) {
   for (const accountId of uniqueIds) {
     const [platform, slug] = accountId.split(":") as [Platform, string];
     if (!platforms.includes(platform) || !slug) continue;
-    const target = accountPath(platform, safeSegment(slug));
+    const normalizedSlug = normalizeAccountSlug(slug);
+    const target = accountPath(platform, normalizedSlug);
     if (!(await exists(target))) continue;
     await fs.rm(target, { recursive: true, force: true });
-    deleted.push(`${platform}:${slug}`);
+    deleted.push(`${platform}:${normalizedSlug}`);
   }
 
   if (deleted.length) {
@@ -264,6 +340,7 @@ export async function upsertProject(input: {
   name: string;
   description?: string;
   sourceAccountIds?: string[];
+  sourceMaterialIds?: string[];
   projectId?: string;
 }) {
   await ensureLibrary();
@@ -272,6 +349,9 @@ export async function upsertProject(input: {
   const now = nowIso();
   const slug = existing?.slug ?? safeSegment(input.name, shortHash(input.name));
   await ensureProjectDirs(slug);
+  if (input.sourceMaterialIds) {
+    await assertCopySourcesExist(input.sourceMaterialIds);
+  }
 
   const project: Project = {
     id: `project:${slug}`,
@@ -279,11 +359,15 @@ export async function upsertProject(input: {
     name: input.name || existing?.name || "未命名项目",
     description: input.description ?? existing?.description,
     sourceAccountIds: input.sourceAccountIds ?? existing?.sourceAccountIds ?? [],
+    sourceMaterialIds: input.sourceMaterialIds ?? existing?.sourceMaterialIds ?? [],
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
 
   await writeJson(projectJsonPath(slug), project);
+  if (input.sourceMaterialIds) {
+    await syncCopySourceProjectRefs(project.id, input.sourceMaterialIds);
+  }
   return project;
 }
 
@@ -293,12 +377,129 @@ export async function deleteProjects(projectIds: string[]) {
   const deleted: string[] = [];
 
   for (const projectId of uniqueIds) {
-    const slug = projectId.includes(":") ? projectId.split(":").at(-1)! : projectId;
-    if (!slug) continue;
-    const target = projectPath(safeSegment(slug));
+    const slug = normalizeProjectSlug(projectId);
+    const target = projectPath(slug);
     if (!(await exists(target))) continue;
     await fs.rm(target, { recursive: true, force: true });
     deleted.push(`project:${slug}`);
+  }
+
+  if (deleted.length) {
+    await removeCopySourceProjectRefs(deleted);
+  }
+
+  return { deleted };
+}
+
+export async function saveCopySource(input: {
+  title?: string;
+  platform: CopySource["platform"];
+  url: string;
+  resolvedUrl?: string;
+  transcript: string;
+  source: CopySource["source"];
+  status?: CopySource["status"];
+  error?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
+}) {
+  await ensureLibrary();
+  const now = nowIso();
+  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.url}-${input.transcript}`)}`;
+  const transcript = input.transcript.trim();
+  const title = makeDraftTitleFromContent(
+    input.title || transcript || input.url,
+    input.platform === "unknown" ? "链接素材" : `${formatPlatformName(input.platform)}素材`
+  );
+  const transcriptFile = copySourceTranscriptPath(id);
+
+  await fs.writeFile(transcriptFile, transcript, "utf8");
+
+  const source: CopySource = {
+    id,
+    title,
+    platform: input.platform,
+    url: input.url,
+    resolvedUrl: input.resolvedUrl,
+    transcript,
+    transcriptPath: transcriptFile,
+    source: input.source,
+    status: input.status || "completed",
+    error: input.error,
+    fallback: input.fallback,
+    fallbackReason: input.fallbackReason,
+    projectIds: [],
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await writeJson(copySourceJsonPath(id), source);
+  return source;
+}
+
+export async function createCopySourceProject(input: {
+  name: string;
+  description?: string;
+  sourceMaterialIds: string[];
+}) {
+  if (!input.sourceMaterialIds.length) {
+    throw new Error("请选择至少一份转写文案");
+  }
+
+  const sources = await assertCopySourcesExist(input.sourceMaterialIds);
+  const project = await upsertProject({
+    name: input.name,
+    description: input.description,
+    sourceAccountIds: [],
+    sourceMaterialIds: sources.map((source) => source.id)
+  });
+
+  return getProjectSummary(project);
+}
+
+export async function getCopySources() {
+  await ensureLibrary();
+  const files = await fs.readdir(copySourcesPath()).catch(() => []);
+  const sources = (
+    await Promise.all(
+      files
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => readJson<CopySource>(path.join(copySourcesPath(), file)))
+    )
+  )
+    .filter(Boolean)
+    .map((source) => normalizeCopySource(source as CopySource));
+
+  return sources.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export async function resolveCopySource(sourceId: string) {
+  await ensureLibrary();
+  const id = normalizeCopySourceId(sourceId);
+  const source = await readJson<CopySource>(copySourceJsonPath(id));
+  if (!source) {
+    throw new Error(`找不到文案素材：${id}`);
+  }
+  return normalizeCopySource(source);
+}
+
+export async function deleteCopySources(sourceIds: string[]) {
+  await ensureLibrary();
+  const uniqueIds = [...new Set(sourceIds)].filter(Boolean).map(normalizeCopySourceId);
+  const deleted: string[] = [];
+
+  for (const sourceId of uniqueIds) {
+    const jsonFile = copySourceJsonPath(sourceId);
+    if (!(await exists(jsonFile))) continue;
+    await Promise.all([
+      fs.rm(jsonFile, { force: true }),
+      fs.rm(copySourceTranscriptPath(sourceId), { force: true })
+    ]);
+    deleted.push(sourceId);
+  }
+
+  if (deleted.length) {
+    await removeCopySourcesFromProjects(deleted);
   }
 
   return { deleted };
@@ -342,9 +543,11 @@ export async function saveVideos(account: Account, incoming: Video[]) {
 
 export async function saveVideo(account: Account, video: Video) {
   await ensureAccountDirs(account.platform, account.slug);
-  const target = path.join(videosPath(account.platform, account.slug), `${video.id}.json`);
+  const id = normalizeVideoId(video.id);
+  const target = path.join(videosPath(account.platform, account.slug), `${id}.json`);
   const next = {
     ...video,
+    id,
     hotScore: calculateHotScore(video),
     updatedAt: nowIso()
   };
@@ -359,7 +562,8 @@ export async function saveVideoAssetFields(
   fields: Partial<Pick<Video, "coverUrl" | "danmakuSamples" | "topComments" | "raw">>
 ) {
   const account = await resolveAccount(platform, accountId);
-  const target = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+  const normalizedVideoId = normalizeVideoId(videoId);
+  const target = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
   const video = await readJson<Video>(target);
   if (!video) throw new Error("找不到视频元数据");
 
@@ -381,12 +585,13 @@ export async function saveTranscript(input: {
 }) {
   const account = await resolveAccount(input.platform, input.accountId);
   await ensureAccountDirs(account.platform, account.slug);
+  const videoId = normalizeVideoId(input.videoId);
 
-  const videoFile = path.join(videosPath(account.platform, account.slug), `${input.videoId}.json`);
+  const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
   const video = await readJson<Video>(videoFile);
   if (!video) throw new Error("找不到视频元数据");
 
-  const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${input.videoId}.txt`);
+  const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`);
   await fs.writeFile(transcriptFile, input.text.trim(), "utf8");
 
   const next: Video = {
@@ -403,7 +608,8 @@ export async function saveTranscript(input: {
 
 export async function markTranscriptFailed(platform: Platform, accountId: string, videoId: string, reason: string) {
   const account = await resolveAccount(platform, accountId);
-  const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+  const normalizedVideoId = normalizeVideoId(videoId);
+  const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
   const video = await readJson<Video>(videoFile);
   if (!video) return;
 
@@ -417,7 +623,8 @@ export async function markTranscriptFailed(platform: Platform, accountId: string
 
 export async function readTranscript(platform: Platform, accountId: string, videoId: string) {
   const account = await resolveAccount(platform, accountId);
-  const target = path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`);
+  const normalizedVideoId = normalizeVideoId(videoId);
+  const target = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
   try {
     return await fs.readFile(target, "utf8");
   } catch {
@@ -427,8 +634,9 @@ export async function readTranscript(platform: Platform, accountId: string, vide
 
 export async function deleteTranscript(platform: Platform, accountId: string, videoId: string) {
   const account = await resolveAccount(platform, accountId);
-  const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`);
-  const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+  const normalizedVideoId = normalizeVideoId(videoId);
+  const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
+  const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
   const video = await readJson<Video>(videoFile);
   if (!video) throw new Error("找不到视频元数据");
 
@@ -451,14 +659,15 @@ export async function deleteVideos(platform: Platform, accountId: string, videoI
   const deleted: string[] = [];
 
   for (const videoId of uniqueIds) {
-    const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+    const normalizedVideoId = normalizeVideoId(videoId);
+    const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
     if (!(await exists(videoFile))) continue;
 
     await Promise.all([
       fs.rm(videoFile, { force: true }),
-      fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`), { force: true })
+      fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true })
     ]);
-    deleted.push(videoId);
+    deleted.push(normalizedVideoId);
   }
 
   if (deleted.length) {
@@ -507,6 +716,7 @@ export async function saveProjectStyle(projectId: string, content: string) {
 export async function saveDraft(input: DraftInput) {
   const now = nowIso();
   const id = `${now.replace(/[:.]/g, "-")}-${shortHash(input.content)}`;
+  const title = makeDraftTitleFromContent(input.content || input.prompt || input.title, input.title);
 
   if (input.targetType === "project") {
     const project = await resolveProject(input.projectId);
@@ -514,6 +724,7 @@ export async function saveDraft(input: DraftInput) {
 
     const draft: ProjectDraft = {
       ...input,
+      title,
       id,
       createdAt: now,
       updatedAt: now
@@ -528,6 +739,7 @@ export async function saveDraft(input: DraftInput) {
 
   const draft: AccountDraft = {
     ...input,
+    title,
     id,
     createdAt: now,
     updatedAt: now
@@ -539,25 +751,48 @@ export async function saveDraft(input: DraftInput) {
 
 export async function resolveDraft(draftId: string) {
   await ensureLibrary();
+  const normalizedDraftId = normalizeDraftId(draftId);
   const [accountDraft, projectDraft] = await Promise.all([
-    findAccountDraft(draftId),
-    findProjectDraft(draftId)
+    findAccountDraft(normalizedDraftId),
+    findProjectDraft(normalizedDraftId)
   ]);
   const result = accountDraft || projectDraft;
-  if (!result) throw new Error(`找不到草稿：${draftId}`);
+  if (!result) throw new Error(`找不到草稿：${normalizedDraftId}`);
   return result;
 }
 
 export async function updateDraftAssets(draftId: string, assets: DraftAssets | ((current: DraftAssets) => DraftAssets)) {
-  const resolved = await resolveDraft(draftId);
-  const nextAssets = typeof assets === "function" ? assets(resolved.draft.assets || {}) : assets;
-  const nextDraft: Draft = {
-    ...resolved.draft,
-    assets: nextAssets,
-    updatedAt: nowIso()
-  } as Draft;
-  await writeJson(resolved.file, nextDraft);
-  return nextDraft;
+  const normalizedDraftId = normalizeDraftId(draftId);
+  return withDraftAssetsLock(normalizedDraftId, async () => {
+    const resolved = await resolveDraft(normalizedDraftId);
+    const nextAssets = typeof assets === "function" ? assets(resolved.draft.assets || {}) : assets;
+    const nextDraft: Draft = {
+      ...resolved.draft,
+      assets: nextAssets,
+      updatedAt: nowIso()
+    } as Draft;
+    await writeJson(resolved.file, nextDraft);
+    return nextDraft;
+  });
+}
+
+export async function deleteDrafts(draftIds: string[]) {
+  await ensureLibrary();
+  const uniqueIds = [...new Set(draftIds)].filter(Boolean).map(normalizeDraftId);
+  const deleted: string[] = [];
+
+  for (const draftId of uniqueIds) {
+    const resolved = await resolveDraft(draftId).catch(() => null);
+    if (!resolved) continue;
+    const assetBase = getDraftAssetBase(resolved.draft);
+    await Promise.all([
+      fs.rm(resolved.file, { force: true }),
+      fs.rm(assetBase, { recursive: true, force: true })
+    ]);
+    deleted.push(draftId);
+  }
+
+  return { deleted };
 }
 
 export async function ensureDraftAssetDir(draftId: string, kind = "") {
@@ -706,7 +941,7 @@ export async function getAccountSummary(account: Account): Promise<AccountSummar
 
 export async function resolveProject(projectIdOrSlug: string) {
   await ensureLibrary();
-  const slug = projectIdOrSlug.includes(":") ? projectIdOrSlug.split(":").at(-1)! : projectIdOrSlug;
+  const slug = normalizeProjectSlug(projectIdOrSlug);
   const project = await readJson<Project>(projectJsonPath(slug));
   if (!project) {
     throw new Error(`找不到项目：${slug}`);
@@ -716,9 +951,10 @@ export async function resolveProject(projectIdOrSlug: string) {
 
 export async function getProjectSummary(project: Project): Promise<ProjectSummary> {
   await ensureProjectDirs(project.slug);
-  const [style, libraryAccounts] = await Promise.all([
+  const [style, libraryAccounts, sourceMaterials] = await Promise.all([
     fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE),
-    getAllAccountSummaries()
+    getAllAccountSummaries(),
+    getProjectCopySources(project.sourceMaterialIds || [])
   ]);
   const sourceAccounts = libraryAccounts
     .filter((account) => project.sourceAccountIds.includes(account.id))
@@ -732,8 +968,11 @@ export async function getProjectSummary(project: Project): Promise<ProjectSummar
 
   return {
     ...project,
+    sourceMaterialIds: project.sourceMaterialIds || [],
     style,
-    sourceAccounts
+    sourceAccounts,
+    sourceMaterials,
+    sourceMaterialCount: sourceMaterials.length
   };
 }
 
@@ -792,28 +1031,36 @@ async function getAllProjectDrafts() {
 
 export async function getLibrary(): Promise<LibraryState> {
   await ensureLibrary();
-  const [accounts, projects] = await Promise.all([getAllAccountSummaries(), getAllProjectSummaries()]);
+  const [accounts, projects, copySources] = await Promise.all([
+    getAllAccountSummaries(),
+    getAllProjectSummaries(),
+    getCopySources()
+  ]);
 
   const projectDrafts = await getAllProjectDrafts();
   const drafts = [...accounts.flatMap((account) => account.drafts), ...projectDrafts];
   const recentAccounts = [...accounts].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
   const recentProjects = [...projects].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
+  const recentCopySources = [...copySources].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
   const recentDrafts = [...drafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
 
   return {
     root: libraryRoot(),
     accounts,
     projects,
+    copySources,
     drafts,
     recentAccounts,
     recentProjects,
+    recentCopySources,
     recentDrafts
   };
 }
 
 export async function getVideo(platform: Platform, accountId: string, videoId: string) {
   const account = await resolveAccount(platform, accountId);
-  const video = await readJson<Video>(path.join(videosPath(account.platform, account.slug), `${videoId}.json`));
+  const normalizedVideoId = normalizeVideoId(videoId);
+  const video = await readJson<Video>(path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`));
   if (!video) throw new Error("找不到视频");
   return { account, video };
 }
@@ -844,12 +1091,104 @@ async function findProjectDraft(draftId: string) {
 
 function getDraftAssetBase(draft: Draft) {
   if (draft.targetType === "project") {
-    const slug = draft.projectId.includes(":") ? draft.projectId.split(":").at(-1)! : draft.projectId;
-    return projectDraftAssetsPath(safeSegment(slug), draft.id);
+    return projectDraftAssetsPath(normalizeProjectSlug(draft.projectId), draft.id);
   }
 
-  const slug = draft.accountId.includes(":") ? draft.accountId.split(":").at(-1)! : draft.accountId;
-  return draftAssetsPath(draft.platform, safeSegment(slug), draft.id);
+  return draftAssetsPath(draft.platform, normalizeAccountSlug(draft.accountId), draft.id);
+}
+
+async function assertCopySourcesExist(sourceIds: string[]) {
+  const uniqueIds = [...new Set(sourceIds)].filter(Boolean).map(normalizeCopySourceId);
+  const sources: CopySource[] = [];
+
+  for (const sourceId of uniqueIds) {
+    sources.push(await resolveCopySource(sourceId));
+  }
+
+  return sources;
+}
+
+async function getProjectCopySources(sourceIds: string[]) {
+  const uniqueIds = [...new Set(sourceIds)].filter(Boolean);
+  const sources = await Promise.all(uniqueIds.map((sourceId) => resolveCopySource(sourceId).catch(() => null)));
+  return sources.filter(Boolean) as CopySource[];
+}
+
+async function syncCopySourceProjectRefs(projectId: string, nextSourceIds: string[]) {
+  const sources = await getCopySources();
+  const nextSet = new Set(nextSourceIds.map(normalizeCopySourceId));
+
+  await Promise.all(
+    sources.map(async (source) => {
+      const projectIds = new Set(source.projectIds || []);
+      const shouldHaveProject = nextSet.has(source.id);
+      const hadProject = projectIds.has(projectId);
+      if (shouldHaveProject) projectIds.add(projectId);
+      if (!shouldHaveProject) projectIds.delete(projectId);
+      if (projectIds.has(projectId) === hadProject && shouldHaveProject === hadProject) return;
+      await writeJson(copySourceJsonPath(source.id), {
+        ...source,
+        projectIds: [...projectIds],
+        updatedAt: nowIso()
+      });
+    })
+  );
+}
+
+async function removeCopySourceProjectRefs(projectIds: string[]) {
+  const deleted = new Set(projectIds);
+  const sources = await getCopySources();
+
+  await Promise.all(
+    sources.map(async (source) => {
+      const projectRefs = source.projectIds || [];
+      const nextProjectIds = projectRefs.filter((projectId) => !deleted.has(projectId));
+      if (nextProjectIds.length === projectRefs.length) return;
+      await writeJson(copySourceJsonPath(source.id), {
+        ...source,
+        projectIds: nextProjectIds,
+        updatedAt: nowIso()
+      });
+    })
+  );
+}
+
+async function removeCopySourcesFromProjects(sourceIds: string[]) {
+  const deleted = new Set(sourceIds);
+  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const project = await readJson<Project>(projectJsonPath(entry.name));
+        if (!project?.sourceMaterialIds?.length) return;
+        const sourceMaterialIds = project.sourceMaterialIds.filter((sourceId) => !deleted.has(sourceId));
+        if (sourceMaterialIds.length === project.sourceMaterialIds.length) return;
+        await writeJson(projectJsonPath(entry.name), {
+          ...project,
+          sourceMaterialIds,
+          updatedAt: nowIso()
+        });
+      })
+  );
+}
+
+function normalizeCopySource(source: CopySource): CopySource {
+  return {
+    ...source,
+    transcript: source.transcript || "",
+    transcriptPath: source.transcriptPath || copySourceTranscriptPath(source.id),
+    status: source.status || "completed",
+    source: source.source || "manual",
+    projectIds: source.projectIds || []
+  };
+}
+
+function formatPlatformName(platform: CopySource["platform"]) {
+  if (platform === "bilibili") return "B站";
+  if (platform === "douyin") return "抖音";
+  return "链接";
 }
 
 function mergeCoverReferences(existing: DraftCoverReference[], incoming: DraftCoverReference[]) {

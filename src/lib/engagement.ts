@@ -102,11 +102,12 @@ async function buildAccountSourceContext(
   const account = await resolveAccount(platform, accountId);
   const summary = await getAccountSummary(account);
   const contextVideos = prioritizeVideos(summary.videos, sourceVideoIds).slice(0, 10);
-  const related = platform === "douyin" && draft ? await collectDouyinRelatedCommentSamples(draft).catch(() => null) : null;
+  const related = platform === "douyin" && draft ? await collectDouyinRelatedCommentSamples(draft) : null;
   const relatedComments = related?.comments || [];
-  const comments = platform === "douyin" && relatedComments.length
-    ? relatedComments
-    : await collectCommentSamples(platform, accountId, contextVideos);
+  if (platform === "douyin" && !relatedComments.length) {
+    throw new Error(`没有采集到抖音相关话题评论样本：${related?.query || "未生成有效搜索词"}`);
+  }
+  const comments = platform === "douyin" ? relatedComments : await collectCommentSamples(platform, accountId, contextVideos);
   const commentStyle = comments.length >= 8 ? await analyzeCommentStyle(platform, accountName, comments) : "";
   const danmaku = platform === "bilibili" ? await collectDanmakuSamples(accountId, contextVideos) : [];
   const transcriptSamples = await Promise.all(
@@ -368,34 +369,186 @@ function prioritizeVideos<T extends { id: string }>(videos: T[], sourceVideoIds:
   return [...videos].sort((a, b) => Number(preferred.has(b.id)) - Number(preferred.has(a.id)));
 }
 
+type CommentQueryCandidate = {
+  value: string;
+  score: number;
+  index: number;
+  count: number;
+};
+
 function buildDouyinRelatedCommentQuery(draft: Draft) {
-  const source = `${draft.title}\n${draft.prompt}\n${draft.content}`;
-  const importantTerms = uniqueText([
-    /faker/i.test(source) ? "Faker" : "",
-    /柳智敏/.test(source) ? "柳智敏" : "",
-    /karina/i.test(source) ? "Karina" : "",
-    /李相赫/.test(source) ? "李相赫" : ""
-  ]).filter(Boolean);
-  if (importantTerms.length >= 2) return importantTerms.slice(0, 3).join(" ");
+  const candidates: CommentQueryCandidate[] = [];
+  let index = 0;
+  const addCandidate = (value: string, score: number) => {
+    const normalized = normalizeCommentQueryTerm(value);
+    if (!isUsableCommentQueryTerm(normalized)) return;
+    candidates.push({
+      value: normalized,
+      score: score + commentQueryTermScore(normalized),
+      index,
+      count: 1
+    });
+    index += 1;
+  };
 
+  const primarySource = draft.content;
+  const supportingSource = `${draft.input || ""}\n${draft.prompt}`;
+  for (const term of extractCommentQueryHashtags(primarySource)) {
+    addCandidate(term, 6_000);
+  }
+
+  for (const term of extractCommentQueryHashtags(supportingSource)) {
+    addCandidate(term, 1_000);
+  }
+
+  for (const title of extractDraftTitleTexts(draft)) {
+    addCandidate(title, 5_000);
+    for (const term of extractCommentQueryTerms(title)) {
+      addCandidate(term, 4_800);
+    }
+  }
+
+  for (const term of extractCommentQueryTerms(primarySource)) {
+    addCandidate(term, 2_400);
+  }
+
+  for (const term of extractCommentQueryTerms(supportingSource)) {
+    addCandidate(term, 300);
+  }
+
+  const best = new Map<string, CommentQueryCandidate>();
+  for (const candidate of candidates) {
+    const key = candidate.value.toLowerCase();
+    const current = best.get(key);
+    if (!current) {
+      best.set(key, candidate);
+      continue;
+    }
+    best.set(key, {
+      value: current.score >= candidate.score ? current.value : candidate.value,
+      score: Math.max(current.score, candidate.score) + Math.min(current.count, 6) * 25,
+      index: Math.min(current.index, candidate.index),
+      count: current.count + 1
+    });
+  }
+
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 6)
+    .map((candidate) => candidate.value)
+    .join(" ")
+    .trim();
+}
+
+function extractCommentQueryHashtags(source: string) {
+  return [...source.matchAll(/#[\t ]*([\u4e00-\u9fa5A-Za-z0-9_]{2,24})/g)].map((match) => match[1]);
+}
+
+function extractDraftTitleTexts(draft: Draft) {
   const candidates = [
-    ...source.matchAll(/[A-Za-z][A-Za-z0-9._-]{1,24}/g),
-    ...source.matchAll(/[\u4e00-\u9fa5]{2,12}/g)
-  ]
-    .map((match) => match[0])
-    .map((value) => value.replace(/^关于|最近|这个|一条|文案|视频|评论|弹幕|生成|写一条/g, "").trim())
-    .filter(Boolean)
-    .filter((value) => !COMMENT_QUERY_STOP_WORDS.has(value.toLowerCase()));
+    draft.title,
+    ...extractInlineTitleTexts(draft.content),
+    ...extractInlineTitleTexts(draft.prompt)
+  ];
+  return uniqueText(candidates.map(cleanCommentQueryTitle).filter(Boolean));
+}
 
-  const unique = uniqueText(candidates)
-    .sort((a, b) => commentQueryTermScore(b) - commentQueryTermScore(a))
-    .slice(0, 6);
-  return unique.join(" ").trim();
+function extractInlineTitleTexts(text: string) {
+  const lines = text
+    .replace(/\r/g, "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const titles: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].replace(/^[#>\s-]+/, "").trim();
+    const inline = line.match(/^(?:标题|题目|名称)\s*[：:]\s*(.+)$/);
+    if (inline?.[1]) titles.push(inline[1]);
+    if (/^(?:标题|题目|名称)$/.test(line) && lines[index + 1]) titles.push(lines[index + 1]);
+  }
+  return titles;
+}
+
+function extractCommentQueryTerms(source: string) {
+  const normalized = stripCommentQueryNoise(source)
+    .replace(/[#*_`>]+/g, " ")
+    .replace(/[，,。.!！?？；;：:、｜|/\\()[\]{}<>《》“”"‘’]+/g, "\n");
+  const terms: string[] = [];
+  for (const raw of normalized.split(/\s+/)) {
+    const cleaned = normalizeCommentQueryTerm(raw);
+    if (isUsableCommentQueryTerm(cleaned)) terms.push(cleaned);
+    if (/[\u4e00-\u9fa5]/.test(cleaned) && Array.from(cleaned).length > 8) {
+      terms.push(...extractChineseSubTerms(cleaned));
+    }
+  }
+  return uniqueText(terms);
+}
+
+function extractChineseSubTerms(value: string) {
+  const segments = segmentChineseWords(value);
+  const terms = segments.filter((word) => isUsableCommentQueryTerm(word));
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (!isUsableCommentQueryTerm(segments[index]) || !isUsableCommentQueryTerm(segments[index + 1])) continue;
+    const combined = normalizeCommentQueryTerm(`${segments[index]}${segments[index + 1]}`);
+    if (isUsableCommentQueryTerm(combined)) terms.push(combined);
+  }
+  return uniqueText(terms);
+}
+
+function segmentChineseWords(value: string) {
+  const segmenter =
+    typeof Intl !== "undefined" && "Segmenter" in Intl
+      ? new Intl.Segmenter("zh", { granularity: "word" })
+      : null;
+  if (!segmenter) return [];
+  return [...segmenter.segment(value)]
+    .filter((segment) => segment.isWordLike)
+    .map((segment) => normalizeCommentQueryTerm(segment.segment))
+    .filter(Boolean);
+}
+
+function stripCommentQueryNoise(source: string) {
+  return source
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/v\.douyin\.com\/\S+/gi, " ")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:am|pm)?\b/gi, " ")
+    .replace(/\b[a-zA-Z]\s*@\s*[a-zA-Z.]+\b/g, " ")
+    .replace(/复制此链接.*?(?:观看视频|$)/g, " ")
+    .replace(/打开Dou音搜索|打开抖音搜索|直接观看视频/g, " ");
+}
+
+function cleanCommentQueryTitle(value: string) {
+  return normalizeCommentQueryTerm(
+    value
+      .replace(/#[\t ]*[\u4e00-\u9fa5A-Za-z0-9_]{2,24}/g, " ")
+      .replace(/^(标题|题目|名称|正文|文案|口播稿)\s*[：:]?/i, " ")
+  );
+}
+
+function normalizeCommentQueryTerm(value: string) {
+  return value
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/^[\s#>*_`"'“”‘’《》-]+|[\s#>*_`"'“”‘’《》-]+$/g, "")
+    .replace(/^(?:关于|最近|这个|那个|一条|一篇|一些|一个|一种|写一条|生成|保留|素材|核心|信息|话题角)+/g, "")
+    .replace(/(?:的|了|啊|吧|吗|呢|呀|哦|哈)$/g, "")
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9._-]+/g, "")
+    .trim();
+}
+
+function isUsableCommentQueryTerm(value: string) {
+  if (!value) return false;
+  const lower = value.toLowerCase();
+  const length = Array.from(value).length;
+  if (length < 2 || length > 14) return false;
+  if (COMMENT_QUERY_STOP_WORDS.has(lower)) return false;
+  if (/^\d+$/.test(value)) return false;
+  if (/^[a-z]\.[a-z]/i.test(value)) return false;
+  if (/^(?:am|pm)$/i.test(value)) return false;
+  if (/^[\u4e00-\u9fa5]{2}$/.test(value) && COMMENT_QUERY_SHORT_STOP_WORDS.has(value)) return false;
+  return /[\u4e00-\u9fa5A-Za-z]/.test(value);
 }
 
 const COMMENT_QUERY_STOP_WORDS = new Set([
-  "faker的",
-  "karina的",
   "关于",
   "最近",
   "写一条",
@@ -415,21 +568,63 @@ const COMMENT_QUERY_STOP_WORDS = new Set([
   "他们",
   "粉丝",
   "账号",
-  "bro",
-  "aespa",
+  "标题",
+  "题目",
+  "名称",
+  "正文",
+  "口播",
+  "口播正文",
+  "素材",
+  "核心",
+  "信息",
+  "话题",
+  "话题角",
+  "热点",
+  "内容启发搜索",
+  "复制此链接",
+  "直接观看视频",
+  "dou音搜索",
+  "抖音搜索",
   "ai",
-  "sm",
-  "lpl"
+  "bro"
+]);
+
+const COMMENT_QUERY_SHORT_STOP_WORDS = new Set([
+  "视频",
+  "评论",
+  "弹幕",
+  "素材",
+  "核心",
+  "信息",
+  "话题",
+  "热点",
+  "账号",
+  "文案",
+  "生成",
+  "保留",
+  "最近",
+  "这个",
+  "那个",
+  "因为",
+  "所以",
+  "但是",
+  "我们",
+  "他们",
+  "大家",
+  "有人",
+  "没有",
+  "什么",
+  "怎么",
+  "直接",
+  "观看"
 ]);
 
 function commentQueryTermScore(value: string) {
-  if (/faker/i.test(value)) return 10_000;
-  if (/karina/i.test(value)) return 9_000;
-  if (value === "柳智敏") return 8_000;
-  if (value === "李相赫") return 7_000;
-  if (value === "Faker") return 10_000;
-  if (/^[A-Za-z]/.test(value)) return 2_000 + value.length;
-  return value.length;
+  const length = Array.from(value).length;
+  const hasChinese = /[\u4e00-\u9fa5]/.test(value);
+  if (/^[A-Za-z]/.test(value)) return 120 + Math.min(length, 24);
+  if (hasChinese && length >= 3 && length <= 7) return 180 - Math.abs(length - 4) * 8;
+  return Math.max(20, 100 - Math.abs(length - 6) * 6);
 }
 
 function cleanCommentSamples(values: string[]) {
@@ -446,10 +641,9 @@ function isLikelyCommentNoise(value: string) {
   if (/^作者$|^刚刚[·・]|^\d+\s*[分钟前小时天前]/.test(text)) return true;
   if (/© 抖音|京ICP|京公网安备|许可证|营业执照|用户服务协议|隐私政策|联系我们|友情链接|下载抖音|抖音电商|举报/.test(text)) return true;
   if (/^用户[_\d]+$/.test(text) || /^[\w.-]{1,18}$/.test(text)) return true;
-  if (/^[\p{L}\p{N}_ .·・（）()ღ￥-]{1,14}$/u.test(text) && !/[，。？！：、,.!?]|faker|柳智敏|李相赫|李哥|大飞|lpl|LPL|T1|t1|电竞|韩娱|张元英|梦泪|bin/i.test(text)) return true;
   if (/相互尊重|期待正片|不好.*评论|直接删除|Peace|控评|净化|反黑|做数据|养号|必须留|听前辈|艾特我/i.test(text)) return true;
   if (/大家别太媚韩|粉丝一直攻击|别来沾边|抱走|不约|别吵|别带/i.test(text)) return true;
-  if (/^[#\s\p{L}\p{N}]+$/u.test(text) && text.length <= 8 && !/faker|柳智敏|李相赫|李哥|大飞|lpl|LPL|T1|t1|电竞/i.test(text)) return true;
+  if (/^[#\s\p{L}\p{N}]+$/u.test(text) && text.replace(/[#\s]/g, "").length <= 1) return true;
   if (text.length > 90 && /[，,].*[，,].*[，,].*[，,]/.test(text)) return true;
   if (text.length > 100 && /因为|所以|但是|而且|同时|如果|虽然/.test(text)) return true;
   return false;

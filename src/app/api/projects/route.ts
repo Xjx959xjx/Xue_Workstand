@@ -9,7 +9,8 @@ const baseSchema = z.object({
   projectId: z.string().optional(),
   name: z.string().min(1),
   description: z.string().optional(),
-  sourceAccountIds: z.array(z.string()).default([])
+  sourceAccountIds: z.array(z.string()).default([]),
+  sourceMaterialIds: z.array(z.string()).optional()
 });
 
 export async function POST(request: Request) {

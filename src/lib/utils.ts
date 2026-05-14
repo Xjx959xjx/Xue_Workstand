@@ -49,8 +49,86 @@ export function clampText(input: string, maxLength: number) {
 }
 
 export function makeTitleFromPrompt(prompt: string) {
-  return safeSegment(clampText(prompt.replace(/\s+/g, " "), 32), "draft");
+  return makeDraftTitleFromContent(prompt, "draft");
 }
+
+export function makeDraftTitleFromContent(content: string, fallback = "未命名草稿") {
+  const candidates = collectDraftTitleCandidates(content, fallback);
+  const best = candidates
+    .map((candidate, index) => ({ title: cleanDraftTitleCandidate(candidate), index }))
+    .filter((candidate) => candidate.title && !DRAFT_TITLE_STOP_WORDS.has(candidate.title))
+    .sort((a, b) => scoreDraftTitle(b.title, b.index) - scoreDraftTitle(a.title, a.index))[0]?.title;
+
+  return clampDraftTitle(best || cleanDraftTitleCandidate(fallback) || "未命名草稿", 10);
+}
+
+function collectDraftTitleCandidates(content: string, fallback: string) {
+  const normalized = content.replace(/\r/g, "").trim();
+  const candidates: string[] = [];
+
+  for (const match of normalized.matchAll(/(?:^|\n)\s*(?:#{1,4}\s*)?(?:标题|题目|名称)\s*[：:]\s*([^\n]+)/g)) {
+    candidates.push(match[1]);
+  }
+
+  for (const match of normalized.matchAll(/[《“"]([^》”"\n]{2,30})[》”"]/g)) {
+    candidates.push(match[1]);
+  }
+
+  const lines = normalized
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  candidates.push(...lines);
+
+  const chunks = normalized
+    .replace(/[，,、]/g, "。")
+    .split(/[。！？!?；;\n]+/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .slice(0, 24);
+  candidates.push(...chunks);
+
+  if (fallback) candidates.push(fallback);
+  return candidates;
+}
+
+function cleanDraftTitleCandidate(candidate: string) {
+  return candidate
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/^[\s#>*_`-]+/, "")
+    .replace(/^\d+[.、]\s*/, "")
+    .replace(/^(标题|题目|名称|正文|文案|口播稿|开头|结尾|互动|节奏)\s*[：:]?/i, "")
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9]+/g, "")
+    .trim();
+}
+
+function scoreDraftTitle(title: string, index: number) {
+  const length = Array.from(title).length;
+  const hasChinese = /[\u4e00-\u9fa5]/.test(title);
+  const idealLength = length >= 3 && length <= 10 ? 100 : 0;
+  const lengthPenalty = Math.abs(Math.min(length, 16) - 6) * 3;
+  return idealLength + (hasChinese ? 30 : 0) - lengthPenalty - index;
+}
+
+function clampDraftTitle(title: string, maxLength: number) {
+  return Array.from(title).slice(0, maxLength).join("");
+}
+
+const DRAFT_TITLE_STOP_WORDS = new Set([
+  "标题",
+  "题目",
+  "名称",
+  "正文",
+  "文案",
+  "口播稿",
+  "开头",
+  "结尾",
+  "互动",
+  "节奏",
+  "未命名草稿",
+  "draft"
+]);
 
 export function extractBvid(input?: string) {
   if (!input) return "";

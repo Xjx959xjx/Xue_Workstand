@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { saveDraft } from "@/lib/storage";
+import { deleteDrafts, saveDraft } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -37,11 +37,15 @@ const projectDraftSchema = z.object({
   styleRef: z.object({
     projectId: z.string().min(1),
     projectName: z.string().min(1),
-    sourceAccountIds: z.array(z.string()).optional()
+    sourceAccountIds: z.array(z.string()).optional(),
+    sourceMaterialIds: z.array(z.string()).optional()
   })
 });
 
 const schema = z.union([accountDraftSchema, projectDraftSchema]);
+const deleteSchema = z.object({
+  draftIds: z.array(z.string().min(1)).min(1)
+});
 
 export async function POST(request: Request) {
   try {
@@ -50,6 +54,18 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "保存草稿失败" },
+      { status: 400 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const input = deleteSchema.parse(await request.json());
+    return NextResponse.json(await deleteDrafts(input.draftIds));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "删除草稿失败" },
       { status: 400 }
     );
   }

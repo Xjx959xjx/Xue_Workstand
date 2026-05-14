@@ -3,6 +3,7 @@ import {
   BatchTranscribeResult,
   CollectOrder,
   CollectResult,
+  CopySource,
   Draft,
   DraftCoverReference,
   DraftInput,
@@ -67,6 +68,71 @@ function summarizeHttpError(status: number, body = "", contentType?: string | nu
   }
 
   return trimmed.replace(/\s+/g, " ").slice(0, 220);
+}
+
+async function readNdjsonStream<TEvent extends { type: string }>(
+  url: string,
+  options: RequestInit,
+  onEvent: (event: TEvent) => void | Promise<void>
+) {
+  const response = await fetch(url, {
+    ...options,
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("请求失败：服务没有返回可读取的流式内容。");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const handleLine = async (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    let event: TEvent;
+    try {
+      event = JSON.parse(trimmed) as TEvent;
+    } catch {
+      throw new Error("请求失败：服务返回了无法解析的流式事件。");
+    }
+
+    if (!event || typeof event !== "object" || typeof (event as { type?: unknown }).type !== "string") {
+      throw new Error("请求失败：服务返回了无效的流式事件。");
+    }
+
+    if (event.type === "error") {
+      const message = (event as { message?: unknown }).message;
+      throw new Error(typeof message === "string" && message.trim() ? message : "请求处理失败");
+    }
+
+    await onEvent(event);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      await handleLine(line);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    await handleLine(buffer);
+  }
 }
 
 export function getLibrary() {
@@ -156,42 +222,19 @@ export async function streamBatchTranscribe(
     onResult?: (result: BatchTranscribeResult) => void;
   }
 ) {
-  const response = await fetch("/api/batch-transcribe/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    cache: "no-store"
-  }).catch((error) => {
-    throw new Error(describeRequestError(error));
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("请求失败：服务没有返回可读取的流式内容。");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const event = JSON.parse(trimmed) as
-        | { type: "stage"; stage: string; message: string; progress?: number }
-        | { type: "result"; data: BatchTranscribeResult | ({ phase: "video" } & Record<string, unknown>) }
-        | { type: "error"; message: string }
-        | { type: "done" };
-
+  await readNdjsonStream<
+    | { type: "stage"; stage: string; message: string; progress?: number }
+    | { type: "result"; data: BatchTranscribeResult | ({ phase: "video" } & Record<string, unknown>) }
+    | { type: "error"; message: string }
+    | { type: "done" }
+  >(
+    "/api/batch-transcribe/stream",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
       if (event.type === "result" && (event.data as { phase?: string }).phase === "video") {
         handlers.onVideo?.(event.data as never);
@@ -199,9 +242,8 @@ export async function streamBatchTranscribe(
       if (event.type === "result" && !(event.data as { phase?: string }).phase) {
         handlers.onResult?.(event.data as BatchTranscribeResult);
       }
-      if (event.type === "error") throw new Error(event.message);
     }
-  }
+  );
 }
 
 export function getTranscript(input: { platform: Platform; accountId: string; videoId: string }) {
@@ -218,6 +260,35 @@ export function saveTranscript(input: {
   return requestJson<{ transcript: string }>("/api/transcripts", {
     method: "PUT",
     body: JSON.stringify(input)
+  });
+}
+
+export function getCopySources() {
+  return requestJson<{ sources: CopySource[] }>("/api/copy-sources");
+}
+
+export function transcribeCopySource(input: { url: string; titleHint?: string }) {
+  return requestJson<{ source: CopySource }>("/api/copy-sources", {
+    method: "POST",
+    body: JSON.stringify({ action: "transcribe", ...input })
+  });
+}
+
+export function createProjectFromCopySources(input: {
+  name: string;
+  description?: string;
+  sourceMaterialIds: string[];
+}) {
+  return requestJson<{ project: ProjectSummary }>("/api/copy-sources", {
+    method: "POST",
+    body: JSON.stringify({ action: "create_project", ...input })
+  });
+}
+
+export function deleteCopySources(sourceIds: string[]) {
+  return requestJson<{ deleted: string[] }>("/api/copy-sources", {
+    method: "DELETE",
+    body: JSON.stringify({ sourceIds })
   });
 }
 
@@ -260,49 +331,25 @@ export async function streamGenerateStyle(
     onResult?: (result: StyleGenerationResponse) => void;
   }
 ) {
-  const response = await fetch("/api/style/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    cache: "no-store"
-  }).catch((error) => {
-    throw new Error(describeRequestError(error));
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("请求失败：服务没有返回可读取的流式内容。");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const event = JSON.parse(trimmed) as
-        | { type: "stage"; stage: string; message: string; progress?: number }
-        | { type: "delta"; delta: string }
-        | { type: "result"; data: StyleGenerationResponse }
-        | { type: "error"; message: string }
-        | { type: "done" };
-
+  await readNdjsonStream<
+    | { type: "stage"; stage: string; message: string; progress?: number }
+    | { type: "delta"; delta: string }
+    | { type: "result"; data: StyleGenerationResponse }
+    | { type: "error"; message: string }
+    | { type: "done" }
+  >(
+    "/api/style/stream",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
       if (event.type === "delta") handlers.onDelta?.(event.delta);
       if (event.type === "result") handlers.onResult?.(event.data);
-      if (event.type === "error") throw new Error(event.message);
     }
-  }
+  );
 }
 
 export function upsertProject(input: {
@@ -310,6 +357,7 @@ export function upsertProject(input: {
   name: string;
   description?: string;
   sourceAccountIds: string[];
+  sourceMaterialIds?: string[];
 }) {
   return requestJson<ProjectSummary>("/api/projects", {
     method: "POST",
@@ -337,53 +385,30 @@ export async function streamGenerateProjectStyle(
     name: string;
     description?: string;
     sourceAccountIds: string[];
+    sourceMaterialIds?: string[];
   },
   handlers: {
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
     onResult?: (result: { project: ProjectSummary } & StyleGenerationResponse) => void;
   }
 ) {
-  const response = await fetch("/api/projects/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    cache: "no-store"
-  }).catch((error) => {
-    throw new Error(describeRequestError(error));
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("请求失败：服务没有返回可读取的流式内容。");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const event = JSON.parse(trimmed) as
-        | { type: "stage"; stage: string; message: string; progress?: number }
-        | { type: "result"; data: { project: ProjectSummary } & StyleGenerationResponse }
-        | { type: "error"; message: string }
-        | { type: "done" };
-
+  await readNdjsonStream<
+    | { type: "stage"; stage: string; message: string; progress?: number }
+    | { type: "result"; data: { project: ProjectSummary } & StyleGenerationResponse }
+    | { type: "error"; message: string }
+    | { type: "done" }
+  >(
+    "/api/projects/stream",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
       if (event.type === "result") handlers.onResult?.(event.data);
-      if (event.type === "error") throw new Error(event.message);
     }
-  }
+  );
 }
 
 export function saveProjectStyle(projectId: string, content: string) {
@@ -436,45 +461,20 @@ export async function streamWriteCopy(
     onResult?: (result: { content: string; research?: string; draft?: Draft; usedModel: string; fallback: boolean; fallbackReason?: string }) => void;
   }
 ) {
-  const response = await fetch("/api/write/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    cache: "no-store"
-  }).catch((error) => {
-    throw new Error(describeRequestError(error));
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error("请求失败：服务没有返回可读取的流式内容。");
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const event = JSON.parse(trimmed) as
-        | { type: "stage"; stage: string; message: string; progress?: number }
-        | { type: "delta"; delta: string }
-        | { type: "result"; data: { research?: string; phase?: string; content?: string; draft?: Draft; usedModel?: string; fallback?: boolean; fallbackReason?: string } }
-        | { type: "error"; message: string }
-        | { type: "done" };
-
+  await readNdjsonStream<
+    | { type: "stage"; stage: string; message: string; progress?: number }
+    | { type: "delta"; delta: string }
+    | { type: "result"; data: { research?: string; phase?: string; content?: string; draft?: Draft; usedModel?: string; fallback?: boolean; fallbackReason?: string } }
+    | { type: "error"; message: string }
+    | { type: "done" }
+  >(
+    "/api/write/stream",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    (event) => {
       if (event.type === "stage") {
         handlers.onStage?.(event);
       }
@@ -494,17 +494,21 @@ export async function streamWriteCopy(
           fallbackReason: event.data.fallbackReason
         });
       }
-      if (event.type === "error") {
-        throw new Error(event.message);
-      }
     }
-  }
+  );
 }
 
 export function saveDraft(input: DraftInput) {
   return requestJson<Draft>("/api/drafts", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export function deleteDrafts(draftIds: string[]) {
+  return requestJson<{ deleted: string[] }>("/api/drafts", {
+    method: "DELETE",
+    body: JSON.stringify({ draftIds })
   });
 }
 
@@ -576,47 +580,23 @@ export async function streamGenerateDraftCover(
     onResult?: (result: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] }) => void;
   }
 ) {
-  const response = await fetch("/api/draft-assets/cover/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    cache: "no-store"
-  }).catch((error) => {
-    throw new Error(describeRequestError(error));
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("请求失败：服务没有返回可读取的流式内容。");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const event = JSON.parse(trimmed) as
-        | { type: "stage"; stage: string; message: string; progress?: number }
-        | { type: "result"; data: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] } }
-        | { type: "error"; message: string }
-        | { type: "done" };
-
+  await readNdjsonStream<
+    | { type: "stage"; stage: string; message: string; progress?: number }
+    | { type: "result"; data: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] } }
+    | { type: "error"; message: string }
+    | { type: "done" }
+  >(
+    "/api/draft-assets/cover/stream",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
       if (event.type === "result") handlers.onResult?.(event.data);
-      if (event.type === "error") throw new Error(event.message);
     }
-  }
+  );
 }
 
 export function draftAssetFileUrl(draftId: string, path: string) {

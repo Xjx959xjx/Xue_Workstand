@@ -47,6 +47,7 @@ function pushIssue(type, file, detail) {
 }
 
 const accountIds = new Set();
+const copySourceIds = new Set();
 
 for (const platform of platforms) {
   for (const slug of dirs(path.join(root, platform))) {
@@ -117,6 +118,23 @@ for (const platform of platforms) {
   }
 }
 
+for (const file of files(path.join(root, "copy-tools", "sources"), ".json")) {
+  const sourceFile = path.join(root, "copy-tools", "sources", file);
+  const source = readJson(sourceFile);
+  if (!source) continue;
+
+  const expectedSourceId = file.slice(0, -5);
+  copySourceIds.add(source.id);
+  if (source.id !== expectedSourceId) {
+    pushIssue("copy-source-id-filename-mismatch", sourceFile, `id=${source.id}, file=${expectedSourceId}`);
+  }
+
+  const transcriptFile = path.join(root, "copy-tools", "sources", `${expectedSourceId}.txt`);
+  if (!exists(transcriptFile)) {
+    pushIssue("copy-source-missing-transcript", sourceFile, "json without txt");
+  }
+}
+
 for (const slug of dirs(path.join(root, "projects"))) {
   const base = path.join(root, "projects", slug);
   const projectFile = path.join(base, "project.json");
@@ -133,6 +151,11 @@ for (const slug of dirs(path.join(root, "projects"))) {
     pushIssue("project-missing-account-ref", projectFile, missingAccounts.join(","));
   }
 
+  const missingCopySources = (project.sourceMaterialIds || []).filter((id) => !copySourceIds.has(id));
+  if (missingCopySources.length) {
+    pushIssue("project-missing-copy-source-ref", projectFile, missingCopySources.join(","));
+  }
+
   for (const file of files(path.join(base, "drafts"), ".json")) {
     const draftFile = path.join(base, "drafts", file);
     const draft = readJson(draftFile);
@@ -145,6 +168,12 @@ for (const slug of dirs(path.join(root, "projects"))) {
       const missing = draft.styleRef.sourceAccountIds.filter((id) => !accountIds.has(id));
       if (missing.length) {
         pushIssue("project-draft-missing-account-ref", draftFile, missing.join(","));
+      }
+    }
+    if (draft.styleRef?.sourceMaterialIds) {
+      const missing = draft.styleRef.sourceMaterialIds.filter((id) => !copySourceIds.has(id));
+      if (missing.length) {
+        pushIssue("project-draft-missing-copy-source-ref", draftFile, missing.join(","));
       }
     }
   }

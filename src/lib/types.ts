@@ -149,6 +149,7 @@ export type ProjectDraft = DraftBase & {
     projectId: string;
     projectName: string;
     sourceAccountIds?: string[];
+    sourceMaterialIds?: string[];
   };
 };
 
@@ -166,6 +167,7 @@ export type Project = {
   name: string;
   description?: string;
   sourceAccountIds: string[];
+  sourceMaterialIds?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -190,15 +192,39 @@ export type AccountSummary = Account & {
 export type ProjectSummary = Project & {
   style: string;
   sourceAccounts: ProjectSourceAccount[];
+  sourceMaterials: CopySource[];
+  sourceMaterialCount: number;
+};
+
+export type CopySourceStatus = "completed" | "failed";
+
+export type CopySource = {
+  id: string;
+  title: string;
+  platform: Platform | "unknown";
+  url: string;
+  resolvedUrl?: string;
+  transcript: string;
+  transcriptPath: string;
+  source: "platform_subtitle" | "volcengine" | "metadata" | "manual";
+  status: CopySourceStatus;
+  error?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
+  projectIds?: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type LibraryState = {
   root: string;
   accounts: AccountSummary[];
   projects: ProjectSummary[];
+  copySources: CopySource[];
   drafts: Draft[];
   recentAccounts: AccountSummary[];
   recentProjects: ProjectSummary[];
+  recentCopySources: CopySource[];
   recentDrafts: Draft[];
 };
 

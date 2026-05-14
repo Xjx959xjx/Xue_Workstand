@@ -238,14 +238,45 @@ function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | 
 }
 
 function isDouyinRelatedVideoRelevant(title: string, query: string) {
-  const haystack = title.toLowerCase();
-  const wantsFaker = /faker|李相赫|李哥|大飞/.test(query.toLowerCase());
-  const wantsKarina = /柳智敏|karina|aespa|lzm/i.test(query);
-  const hasFaker = /faker|李相赫|李哥|大飞/.test(haystack);
-  const hasKarina = /柳智敏|karina|aespa|lzm/i.test(haystack);
-  if (wantsFaker && wantsKarina) return hasFaker && hasKarina;
-  return hasFaker || hasKarina;
+  const normalizedTitle = normalizeSearchComparableText(title);
+  if (!normalizedTitle) return false;
+  const terms = extractRelatedSearchTerms(query);
+  if (!terms.length) return true;
+
+  const matched = terms.filter((term) => normalizedTitle.includes(normalizeSearchComparableText(term)));
+  if (matched.length >= Math.min(2, terms.length)) return true;
+  return matched.some((term) => Array.from(term).length >= 4);
 }
+
+function extractRelatedSearchTerms(query: string) {
+  return uniqueStrings(
+    query
+      .split(/[\s，,。.!！?？；;：:、｜|/\\()[\]{}<>《》“”"‘’#]+/)
+      .map((term) => term.trim())
+      .filter((term) => Array.from(term).length >= 2)
+      .filter((term) => !RELATED_SEARCH_TERM_STOP_WORDS.has(term.toLowerCase()))
+  ).slice(0, 8);
+}
+
+function normalizeSearchComparableText(value: string) {
+  return value
+    .replace(/\s+/g, "")
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9._-]+/g, "")
+    .toLowerCase();
+}
+
+const RELATED_SEARCH_TERM_STOP_WORDS = new Set([
+  "视频",
+  "评论",
+  "弹幕",
+  "文案",
+  "素材",
+  "热点",
+  "话题",
+  "生成",
+  "douyin",
+  "抖音"
+]);
 
 function selectDouyinSecUidFromRows(rows: unknown[], name: string) {
   const normalizedName = name.trim().toLowerCase();
@@ -336,6 +367,23 @@ const DOUYIN_SEARCH_EXTRACT_JS = `
 const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
 (() => {
   const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const isTitleLike = (line) => {
+    const text = clean(line);
+    if (!text || text === "相关搜索") return false;
+    if (/^@/.test(text)) return false;
+    if (/^(关注|粉丝|合集|直播中|广告|查看更多|搜索|大家都在搜|用户|音乐)$/.test(text)) return false;
+    if (/^\\d{1,2}:\\d{2}$/.test(text)) return false;
+    if (/^\\d+(\\.\\d+)?\\s*[万億亿kKmM]?$/.test(text)) return false;
+    if (/^(点赞|评论|分享|收藏|转发)\\s*\\d*/.test(text)) return false;
+    if (/^(\\d+\\s*)?(分钟前|小时前|天前|周前|月前|年前)$/.test(text)) return false;
+    return /[\\u4e00-\\u9fa5A-Za-z]/.test(text) && text.length >= 2;
+  };
+  const pickTitle = (lines, fallback = "") => {
+    const values = lines.map(clean).filter(Boolean);
+    return values.find((line) => isTitleLike(line) && !/^#/.test(line)) ||
+      values.find(isTitleLike) ||
+      clean(fallback);
+  };
   const numberValue = (text) => {
     const match = clean(text).match(/([0-9.]+)\\s*([万億亿kKmM]?)/);
     if (!match) return 0;
@@ -356,7 +404,7 @@ const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
         .split(/\\n+/)
         .map(clean)
         .filter(Boolean);
-      const title = lines.find((line) => /Faker|faker|柳智敏|Karina|karina|李相赫|T1/.test(line) && !/^@/.test(line)) || "";
+      const title = pickTitle(lines);
       const likes = numberValue(lines.find((line) => /^\\d/.test(line) && !/^\\d{1,2}:\\d{2}/.test(line)) || "");
       if (!id || seen.has(id) || !title || title === "相关搜索") return null;
       seen.add(id);
@@ -376,7 +424,7 @@ const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
         .split(/\\n+/)
         .map(clean)
         .filter(Boolean);
-      const title = lines.find((line) => /Faker|faker|柳智敏|Karina|karina|李相赫|T1/.test(line) && !/^@/.test(line)) || clean(anchor.innerText || anchor.textContent || "");
+      const title = pickTitle(lines, anchor.innerText || anchor.textContent || "");
       const likes = numberValue(lines.find((line) => /^\\d/.test(line) && !/^\\d{1,2}:\\d{2}/.test(line)) || "");
       return title ? { id, aweme_id: id, title, likes, url: location.origin + "/video/" + id } : null;
     })

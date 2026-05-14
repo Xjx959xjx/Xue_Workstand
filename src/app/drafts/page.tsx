@@ -2,24 +2,67 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Copy, MessageSquarePlus, PenLine, RefreshCw } from "lucide-react";
+import { Copy, MessageSquarePlus, PenLine, RefreshCw, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
+import { deleteDrafts } from "@/lib/client";
 import { Draft } from "@/lib/types";
 
 export default function DraftsPage() {
-  const { library, loading, refresh } = useLibrary();
+  const { library, loading, error, refresh } = useLibrary();
   const [selectedId, setSelectedId] = useState("");
+  const [draftManageMode, setDraftManageMode] = useState(false);
+  const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState("");
   const drafts = useMemo(() => library?.drafts || [], [library?.drafts]);
 
   const selectedDraft = useMemo(() => {
     return drafts.find((draft) => draft.id === selectedId) || drafts[0] || null;
   }, [drafts, selectedId]);
+  const messageIsError = message.includes("失败") || message.includes("没有") || message.includes("不合法");
 
   async function handleCopy() {
     if (!selectedDraft) return;
     await navigator.clipboard.writeText(selectedDraft.content);
+  }
+
+  function toggleManagedDraft(draftId: string) {
+    setSelectedDraftIds((current) =>
+      current.includes(draftId) ? current.filter((id) => id !== draftId) : [...current, draftId]
+    );
+  }
+
+  function selectDraft(draftId: string) {
+    if (draftManageMode) {
+      toggleManagedDraft(draftId);
+      return;
+    }
+    setSelectedId(draftId);
+  }
+
+  async function handleDeleteSelectedDrafts() {
+    if (!selectedDraftIds.length) return;
+    setBusy("draft-delete");
+    setMessage("");
+    try {
+      const result = await deleteDrafts(selectedDraftIds);
+      if (selectedDraft && selectedDraftIds.includes(selectedDraft.id)) {
+        setSelectedId("");
+      }
+      setSelectedDraftIds([]);
+      setDraftManageMode(false);
+      setDeleteConfirmOpen(false);
+      setMessage(`已删除 ${result.deleted.length} 个草稿。`);
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "删除草稿失败");
+    } finally {
+      setBusy("");
+    }
   }
 
   if (!loading && !drafts.length) {
@@ -54,11 +97,47 @@ export default function DraftsPage() {
         </div>
       </header>
 
+      {error ? <div className="error" role="alert">{error}</div> : null}
+      {message ? (
+        <div aria-live={messageIsError ? "assertive" : "polite"} className={messageIsError ? "error" : "notice"} role={messageIsError ? "alert" : "status"}>
+          {message}
+        </div>
+      ) : null}
+
       <section className="panel three-pane drafts-workspace">
-        <aside className="pane">
+        <aside className={`pane ${draftManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header">
             <h2>草稿</h2>
+            <button
+              className={`btn icon-btn ${draftManageMode ? "primary" : ""}`}
+              aria-label={draftManageMode ? "完成草稿管理" : "管理草稿"}
+              onClick={() => {
+                setDraftManageMode((current) => !current);
+                setSelectedDraftIds([]);
+              }}
+              title="管理草稿"
+              type="button"
+            >
+              {draftManageMode ? "完成" : "管理"}
+            </button>
           </div>
+          {draftManageMode ? (
+            <div className="selection-toolbar" role="toolbar" aria-label="草稿批量操作">
+              <div className="selection-copy">
+                <strong>草稿选择</strong>
+                <span>已选 {selectedDraftIds.length} 个</span>
+              </div>
+              <button
+                className="btn danger"
+                disabled={!selectedDraftIds.length || busy === "draft-delete"}
+                onClick={() => setDeleteConfirmOpen(true)}
+                type="button"
+              >
+                <Trash2 aria-hidden="true" size={14} />
+                {busy === "draft-delete" ? "删除中…" : "删除草稿"}
+              </button>
+            </div>
+          ) : null}
           <div className="pane-body">
             <div className="status-summary">
               <span>{drafts.length} 个草稿</span>
@@ -66,10 +145,13 @@ export default function DraftsPage() {
             </div>
             {drafts.map((draft) => (
               <button
-                aria-current={selectedDraft?.id === draft.id ? "true" : undefined}
-                className={`list-button ${selectedDraft?.id === draft.id ? "active" : ""}`}
+                aria-current={!draftManageMode && selectedDraft?.id === draft.id ? "true" : undefined}
+                aria-pressed={draftManageMode ? selectedDraftIds.includes(draft.id) : undefined}
+                className={`list-button ${selectedDraft?.id === draft.id ? "active" : ""} ${
+                  draftManageMode && selectedDraftIds.includes(draft.id) ? "checked" : ""
+                }`}
                 key={draft.id}
-                onClick={() => setSelectedId(draft.id)}
+                onClick={() => selectDraft(draft.id)}
                 type="button"
               >
                 <span>
@@ -135,6 +217,16 @@ export default function DraftsPage() {
           </div>
         </section>
       </section>
+      {deleteConfirmOpen ? (
+        <ConfirmDialog
+          title="删除草稿"
+          body={`将删除 ${selectedDraftIds.length} 个草稿及对应素材文件，此操作无法撤销。`}
+          busy={busy === "draft-delete"}
+          confirmLabel="删除草稿"
+          onCancel={() => setDeleteConfirmOpen(false)}
+          onConfirm={handleDeleteSelectedDrafts}
+        />
+      ) : null}
     </div>
   );
 }

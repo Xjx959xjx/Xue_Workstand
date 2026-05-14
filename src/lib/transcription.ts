@@ -5,7 +5,6 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 import {
-  downloadBilibiliVideo,
   getBilibiliSubtitle,
   parseOpenCliJsonish,
   refreshDouyinVideoDownloadUrl
@@ -13,6 +12,7 @@ import {
 import { getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
+import { extractBvid } from "./utils";
 
 const execFileAsync = promisify(execFile);
 type Timing = { stage: string; ms: number };
@@ -101,10 +101,12 @@ export async function transcribeVideo(input: {
     if (!mediaPath && shouldDownloadRemote) {
       if (input.platform === "bilibili") {
         try {
-          mediaPath = await downloadBilibiliVideo(video);
-          cleanupTargets.push(path.dirname(mediaPath));
+          const prepared = await downloadBilibiliAudio(video);
+          mediaPath = prepared.mediaPath;
+          timings.push(...prepared.timings);
+          cleanupTargets.push(...prepared.cleanupTargets);
         } catch (error) {
-          mediaError = error instanceof Error ? error.message : "B站视频下载失败";
+          mediaError = error instanceof Error ? error.message : "B站音频提取失败";
         }
       } else {
         try {
@@ -517,7 +519,59 @@ async function resolveLinkMediaUrl(input: {
     return resolveDouyinLinkMedia(input.resolvedUrl || input.url);
   }
 
+  if (input.platform === "bilibili") {
+    return resolveBilibiliLinkMedia(input.resolvedUrl || input.url);
+  }
+
   return resolveGenericLinkMedia(input.resolvedUrl || input.url);
+}
+
+async function resolveBilibiliLinkMedia(url: string) {
+  const workspace = `bilibili-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
+
+  try {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
+      "browser",
+      "--workspace",
+      workspace,
+      "--window",
+      "background",
+      "--keep-tab",
+      "true",
+      "open",
+      url
+    ], {
+      maxBuffer: 1024 * 1024 * 8,
+      timeout: 30_000
+    });
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "wait", "time", "3"], {
+      maxBuffer: 1024 * 1024,
+      timeout: 12_000
+    }).catch(() => undefined);
+    const { stdout } = await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
+      "browser",
+      "--workspace",
+      workspace,
+      "eval",
+      BILIBILI_LINK_MEDIA_EXTRACT_JS
+    ], {
+      maxBuffer: 1024 * 1024 * 20,
+      timeout: 30_000
+    });
+    const data = parseOpenCliJsonish(stdout.trim());
+    const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+    const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
+    return {
+      mediaId: String(object.bvid || extractBvid(url) || ""),
+      title: normalizeTitle(String(object.title || object.description || "")),
+      mediaUrls: sortLinkMediaUrls(mediaUrls)
+    };
+  } finally {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "close"], {
+      maxBuffer: 1024 * 1024,
+      timeout: 5_000
+    }).catch(() => undefined);
+  }
 }
 
 async function resolveDouyinLinkMedia(url: string) {
@@ -698,6 +752,93 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
 })()
 `;
 
+const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const normalizeUrl = (url) => {
+    if (!url) return "";
+    if (url.startsWith("//")) return "https:" + url;
+    return url;
+  };
+  const isCandidate = (url) => /\\/upgcxcode\\/|\\/bfs\\/archive\\/|mime_type=video|mime_type=audio|\\.m4s|\\.mp4|\\.m4a|\\.mp3|akamaized|bilivideo/i.test(url);
+  const collect = () => {
+    const urls = [];
+    const pushUrl = (value) => {
+      const normalized = normalizeUrl(String(value || "").replaceAll("\\\\/", "/"));
+      if (/^https?:\\/\\//i.test(normalized) && isCandidate(normalized)) urls.push(normalized);
+    };
+    const collectUrlsDeep = (value, depth = 0) => {
+      if (!value || depth > 8) return;
+      if (typeof value === "string") {
+        if (/^https?:|^\\/\\//i.test(value) && isCandidate(value)) pushUrl(value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value.slice(0, 240)) collectUrlsDeep(item, depth + 1);
+        return;
+      }
+      if (typeof value === "object") {
+        for (const [key, item] of Object.entries(value)) {
+          if (/url|base|audio|video|dash|backup|segment/i.test(key)) collectUrlsDeep(item, depth + 1);
+        }
+      }
+    };
+    for (const video of Array.from(document.querySelectorAll("video"))) {
+      for (const value of [video.currentSrc, video.src]) {
+        if (value) pushUrl(value);
+      }
+      for (const source of Array.from(video.querySelectorAll("source"))) {
+        const value = source.src || source.getAttribute("src") || "";
+        if (value) pushUrl(value);
+      }
+    }
+    for (const entry of performance.getEntriesByType("resource")) {
+      pushUrl(entry.name || "");
+    }
+    const stateValues = [
+      window.__playinfo__,
+      window.__INITIAL_STATE__,
+      window.__INITIAL_DATA__,
+      window.__NEXT_DATA__
+    ];
+    for (const value of stateValues) collectUrlsDeep(value);
+    for (const script of Array.from(document.querySelectorAll("script"))) {
+      const text = script.textContent || "";
+      if (!/playinfo|dash|baseUrl|backupUrl|upgcxcode|bilivideo/.test(text)) continue;
+      const matches = text.match(/https?:\\\\?\\/\\\\?\\/[^"'<>\\\\]+/g) || [];
+      for (const match of matches) pushUrl(match);
+      const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
+      if (jsonMatch && jsonMatch[0].length < 10_000_000) {
+        try {
+          collectUrlsDeep(JSON.parse(jsonMatch[0]));
+        } catch {}
+      }
+    }
+    const metas = Object.fromEntries(
+      Array.from(document.querySelectorAll("meta[property], meta[name]"))
+        .map((meta) => [meta.getAttribute("property") || meta.getAttribute("name") || "", meta.getAttribute("content") || ""])
+        .filter(([key, value]) => key && value)
+    );
+    const bvid = (location.href.match(/BV[0-9A-Za-z]+/) || [])[0] || "";
+    return {
+      bvid,
+      title: clean(metas["og:title"] || document.title || ""),
+      description: clean(metas.description || metas["og:description"] || ""),
+      mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
+    };
+  };
+  for (let i = 0; i < 8; i += 1) {
+    const data = collect();
+    if (data.mediaUrls.length) return data;
+    const video = document.querySelector("video");
+    if (video) video.play().catch(() => undefined);
+    await sleep(1000);
+  }
+  return collect();
+})()
+`;
+
 function sortLinkMediaUrls(urls: string[]) {
   const unique = [...new Set(urls.map((url) => url.trim()).filter(Boolean))];
   return unique.sort((a, b) => linkMediaUrlScore(b) - linkMediaUrlScore(a));
@@ -711,10 +852,13 @@ function linkMediaUrlScore(url: string) {
     const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
     if (mimeType.startsWith("audio_")) score += 1000;
     if (/\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(parsed.pathname)) score += 900;
+    if (/audio|30216|30232|30280|30250/.test(text)) score += 700;
     if (/douyinvod|audio|music|playwm|play_addr|download_addr/.test(text)) score += 160;
+    if (/bilivideo|upgcxcode|mime_type=audio|\.m4s/.test(text)) score += 140;
     if (mimeType === "video_mp4" || /\.(mp4|webm|mov)(\?|$)/i.test(parsed.pathname)) score += 80;
   } catch {
     if (/\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(url)) score += 900;
+    if (/audio|30216|30232|30280|30250/i.test(url)) score += 700;
     if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) score += 80;
   }
   return score;
@@ -817,6 +961,35 @@ async function downloadDouyinAudio(account: Account, video: Video, prefetchedMed
   };
 }
 
+async function downloadBilibiliAudio(video: Video) {
+  const mediaUrlStartedAt = Date.now();
+  const pageUrl = video.url || (extractBvid(video.id) ? `https://www.bilibili.com/video/${extractBvid(video.id)}` : "");
+  if (!pageUrl) {
+    throw new Error("无法解析 B站视频链接，不能提取远程音频");
+  }
+
+  const media = await resolveBilibiliLinkMedia(pageUrl);
+  const timings: Timing[] = [{ stage: "bilibili-browser-media-url", ms: Date.now() - mediaUrlStartedAt }];
+  if (!media.mediaUrls.length) {
+    throw new Error("没有解析到可转写的 B站媒体地址");
+  }
+
+  const downloaded = await downloadFirstAvailableRemoteAudio(
+    media.mediaUrls,
+    `${safeFileName(media.mediaId || video.id || "bilibili-video")}.mp3`
+  );
+
+  return {
+    mediaPath: downloaded.mediaPath,
+    cleanupTargets: [downloaded.mediaPath],
+    timings: [
+      ...timings,
+      { stage: "bilibili-ffmpeg-audio", ms: downloaded.ms },
+      ...(downloaded.attempts.length > 1 ? [{ stage: `bilibili-media-url-attempts-${downloaded.attempts.length}`, ms: 0 }] : [])
+    ]
+  };
+}
+
 async function downloadRemoteAudio(url: string, fileName: string) {
   const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
   const args = [
@@ -903,6 +1076,23 @@ function isNoAudioStreamError(error: unknown) {
 }
 
 function buildFfmpegHeaderArgs(url: string) {
+  if (/bilibili|bilivideo|akamaized|upgcxcode/i.test(url)) {
+    return [
+      "-headers",
+      [
+        "Accept: */*",
+        "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+        "Origin: https://www.bilibili.com",
+        "Referer: https://www.bilibili.com/",
+        "Sec-Fetch-Dest: video",
+        "Sec-Fetch-Mode: no-cors",
+        "Sec-Fetch-Site: cross-site",
+        `User-Agent: ${browserUserAgent()}`,
+        ""
+      ].join("\r\n")
+    ];
+  }
+
   if (!/douyinvod\.com/i.test(url)) return [];
 
   return [
@@ -940,9 +1130,9 @@ function buildMissingMediaReason(input: {
 }) {
   if (input.platform === "bilibili" && !input.hadBilibiliSubtitle) {
     if (input.mediaError) {
-      return `此 B站视频的公开字幕接口没有返回外挂或智能字幕轨；如果页面里看到的是弹幕或视频内嵌文字，这类内容无法直接当作字幕提取。回退下载音视频也失败了：${input.mediaError}`;
+      return `此 B站视频的公开字幕接口没有返回外挂或智能字幕轨，已改走远程媒体音频提取和火山转写，但音频提取失败：${input.mediaError}`;
     }
-    return "此 B站视频的公开字幕接口没有返回外挂或智能字幕轨；如果页面里看到的是弹幕或视频内嵌文字，这类内容无法直接当作字幕提取。请提供本地音视频路径，或先安装 yt-dlp 以便下载视频后再转写。";
+    return "此 B站视频的公开字幕接口没有返回外挂或智能字幕轨，也没有解析到可转写的远程媒体音频地址。";
   }
 
   if (input.mediaError) {
