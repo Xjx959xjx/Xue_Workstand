@@ -620,8 +620,10 @@ export function getHealth() {
     chat: {
       baseUrl: string;
       model: string;
-      wireApi: "responses" | "chat_completions";
+      wireApi: "responses" | "chat_completions" | "auto";
       reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh";
+      responsesUrlConfigured: boolean;
+      chatCompletionsUrlConfigured: boolean;
       proxyConfigured: boolean;
       configured: boolean;
     };

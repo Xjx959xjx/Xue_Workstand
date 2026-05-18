@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
+import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit, type Response as UndiciResponse } from "undici";
 import {
   AccountDraftInput,
   Draft,
@@ -31,7 +31,7 @@ type ChatMessage = {
   content: string;
 };
 
-export type ChatWireApi = "responses" | "chat_completions";
+export type ChatWireApi = "responses" | "chat_completions" | "auto";
 export type ChatReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 type ChatTool = {
   type: "web_search";
@@ -111,13 +111,31 @@ class StreamResponseTextError extends Error {
   }
 }
 
+class ModelHttpError extends Error {
+  status: number;
+  body: string;
+  contentType?: string | null;
+
+  constructor(status: number, body: string, contentType?: string | null) {
+    super(describeChatHttpFailure(status, body, contentType));
+    this.name = "ModelHttpError";
+    this.status = status;
+    this.body = body;
+    this.contentType = contentType;
+  }
+}
+
 function chatConfig() {
+  const chatReasoningEffort = process.env.CHAT_REASONING_EFFORT;
   return {
-    apiKey: process.env.CHAT_API_KEY || "",
-    baseUrl: (process.env.CHAT_BASE_URL || "https://www.fhl.mom").replace(/\/$/, ""),
-    model: process.env.CHAT_MODEL || "gpt-5.5",
+    apiKey: process.env.CHAT_API_KEY || process.env.OPENAI_API_KEY || "",
+    baseUrl: (process.env.CHAT_BASE_URL || process.env.OPENAI_BASE_URL || "https://www.fhl.mom").replace(/\/$/, ""),
+    responsesUrl: process.env.CHAT_RESPONSES_URL || "",
+    chatCompletionsUrl: process.env.CHAT_COMPLETIONS_URL || "",
+    model: process.env.CHAT_MODEL || process.env.OPENAI_MODEL || "gpt-5.5",
     wireApi: normalizeWireApi(process.env.CHAT_WIRE_API),
-    reasoningEffort: normalizeReasoningEffort(process.env.CHAT_REASONING_EFFORT),
+    reasoningEffort: normalizeReasoningEffort(chatReasoningEffort),
+    chatCompletionReasoningEffort: chatReasoningEffort ? normalizeReasoningEffort(chatReasoningEffort) : "none",
     proxyUrl: process.env.CHAT_PROXY_URL || ""
   };
 }
@@ -129,6 +147,8 @@ export function getChatRuntimeConfig() {
     model: config.model,
     wireApi: config.wireApi,
     reasoningEffort: config.reasoningEffort,
+    responsesUrlConfigured: Boolean(config.responsesUrl),
+    chatCompletionsUrlConfigured: Boolean(config.chatCompletionsUrl),
     proxyConfigured: Boolean(config.proxyUrl),
     configured: Boolean(config.apiKey && config.model)
   };
@@ -154,10 +174,35 @@ export async function streamResponseText(input: {
     return fallbackChatCompletion(config.model || "local-fallback");
   }
 
-  if (config.wireApi !== "responses") {
-    throw new Error("当前模型链路暂不支持流式输出，请切换到 Responses API。");
+  if (config.wireApi === "chat_completions") {
+    return streamChatCompletion(config, input);
   }
 
+  try {
+    return await streamResponseApi(config, input);
+  } catch (error) {
+    if (
+      !(error instanceof StreamResponseTextError) &&
+      !input.tools?.length &&
+      (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error))
+    ) {
+      return streamChatCompletion(config, input);
+    }
+    throw error;
+  }
+}
+
+async function streamResponseApi(
+  config: ReturnType<typeof chatConfig>,
+  input: {
+    messages: ChatMessage[];
+    reasoningEffort?: ChatReasoningEffort;
+    tools?: ChatTool[];
+    maxOutputTokens?: number;
+    signal?: AbortSignal;
+    onDelta: (delta: string) => void;
+  }
+): Promise<ChatCompletionResult> {
   const system = input.messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -169,34 +214,16 @@ export async function streamResponseText(input: {
       content: message.content
     }));
 
-  const init: FetchInitWithDispatcher = {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: config.model,
-      instructions: system || undefined,
-      input: requestInput,
-      temperature: 0.75,
-      stream: true,
-      tools: input.tools,
-      tool_choice: input.tools?.length ? "auto" : undefined,
-      max_output_tokens: input.maxOutputTokens,
-      reasoning: {
-        effort: input.reasoningEffort || config.reasoningEffort
-      },
-      store: false
-    }),
-    dispatcher: chatDispatcher(config.proxyUrl),
-    signal: input.signal
-  };
-
-  const response = await undiciFetch(`${config.baseUrl}/responses`, init);
-  if (!response.ok) {
-    throw new Error(describeChatHttpFailure(response.status, await response.text(), response.headers.get("content-type")));
-  }
+  const response = await postModelRequest(config, "/responses", {
+    model: config.model,
+    instructions: system || undefined,
+    input: requestInput,
+    stream: true,
+    tools: input.tools,
+    tool_choice: input.tools?.length ? "auto" : undefined,
+    reasoning: responseReasoning(input.reasoningEffort || config.reasoningEffort),
+    store: false
+  }, input.signal);
 
   const reader = response.body?.getReader();
   if (!reader) {
@@ -236,17 +263,16 @@ export async function streamResponseText(input: {
         if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
           aggregatedText += parsed.delta;
           input.onDelta(parsed.delta);
-        } else if (parsed.type === "response.output_text.done" && !aggregatedText.trim()) {
-          const text = typeof parsed.text === "string" ? parsed.text : "";
-          aggregatedText = text;
-          if (text) input.onDelta(text);
+        } else if (parsed.type === "response.output_text.done") {
+          aggregatedText = syncResponseText(
+            aggregatedText,
+            typeof parsed.text === "string" ? parsed.text : "",
+            input.onDelta
+          );
+        } else if (parsed.type === "response.content_part.done" || parsed.type === "response.output_item.done") {
+          aggregatedText = syncResponseText(aggregatedText, extractResponseText(parsed), input.onDelta);
         } else if (parsed.type === "response.completed") {
-          const completedText = extractResponseText(parsed.response);
-          if (completedText && completedText.length > aggregatedText.trim().length) {
-            const delta = completedText.slice(aggregatedText.length);
-            aggregatedText = completedText;
-            if (delta) input.onDelta(delta);
-          }
+          aggregatedText = syncResponseText(aggregatedText, extractResponseText(parsed.response), input.onDelta);
           streamFinished = true;
         } else if (parsed.type === "response.failed" || parsed.type === "response.incomplete") {
           const errorMessage =
@@ -257,6 +283,69 @@ export async function streamResponseText(input: {
     }
     if (streamFinished) {
       await reader.cancel().catch(() => undefined);
+    }
+  } catch (error) {
+    if (aggregatedText.trim()) {
+      throw new StreamResponseTextError(error, aggregatedText);
+    }
+    throw error;
+  }
+
+  return {
+    text: aggregatedText.trim(),
+    model: config.model,
+    fallback: false
+  } satisfies ChatCompletionResult;
+}
+
+async function streamChatCompletion(
+  config: ReturnType<typeof chatConfig>,
+  input: {
+    messages: ChatMessage[];
+    reasoningEffort?: ChatReasoningEffort;
+    maxOutputTokens?: number;
+    signal?: AbortSignal;
+    onDelta: (delta: string) => void;
+  }
+): Promise<ChatCompletionResult> {
+  const response = await postModelRequest(config, "/chat/completions", chatCompletionPayload({
+    config,
+    messages: input.messages,
+    reasoningEffort: input.reasoningEffort,
+    maxOutputTokens: input.maxOutputTokens,
+    stream: true
+  }), input.signal);
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("模型服务没有返回可读取的流式内容");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let aggregatedText = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const rawEvent of events) {
+        const delta = parseChatCompletionStreamDelta(rawEvent);
+        if (delta) {
+          aggregatedText += delta;
+          input.onDelta(delta);
+        }
+      }
+    }
+
+    const remaining = parseChatCompletionStreamDelta(buffer);
+    if (remaining) {
+      aggregatedText += remaining;
+      input.onDelta(remaining);
     }
   } catch (error) {
     if (aggregatedText.trim()) {
@@ -291,7 +380,13 @@ export async function streamResponseTextWithFallback(input: {
         fallbackReason: `${summarizeChatFailure(error)}，已保留模型已生成的内容，请检查后再使用。`
       };
     }
-    return fallbackChatCompletion("local-fallback", error);
+    try {
+      return await chatCompleteWithEffort(input.messages, input.reasoningEffort, input.tools, {
+        signal: input.signal
+      });
+    } catch (retryError) {
+      return fallbackChatCompletion("local-fallback", retryError);
+    }
   }
 }
 
@@ -306,11 +401,18 @@ async function chatCompleteWithEffort(
     return fallbackChatCompletion(config.model || "local-fallback");
   }
 
-  if (config.wireApi === "responses") {
-    return createResponse(config, messages, reasoningEffort, tools, options);
+  if (config.wireApi === "chat_completions") {
+    return createChatCompletion(config, messages, reasoningEffort, options);
   }
 
-  return createChatCompletion(config, messages, reasoningEffort, options);
+  try {
+    return await createResponse(config, messages, reasoningEffort, tools, options);
+  } catch (error) {
+    if (!tools?.length && (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error))) {
+      return createChatCompletion(config, messages, reasoningEffort, options);
+    }
+    throw error;
+  }
 }
 
 async function createChatCompletion(
@@ -319,36 +421,182 @@ async function createChatCompletion(
   reasoningEffort?: ChatReasoningEffort,
   options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
+  const response = await postModelRequest(config, "/chat/completions", chatCompletionPayload({
+    config,
+    messages,
+    reasoningEffort,
+    stream: false
+  }), options.signal);
+
+  const text = await parseChatCompletionResponseBody(response);
+
+  return {
+    text,
+    model: config.model,
+    fallback: false
+  };
+}
+
+function chatCompletionPayload(input: {
+  config: ReturnType<typeof chatConfig>;
+  messages: ChatMessage[];
+  reasoningEffort?: ChatReasoningEffort;
+  maxOutputTokens?: number;
+  stream: boolean;
+}) {
+  const effort = input.reasoningEffort || input.config.chatCompletionReasoningEffort;
+  return {
+    model: input.config.model,
+    messages: input.messages,
+    temperature: 0.75,
+    stream: input.stream,
+    max_tokens: input.maxOutputTokens,
+    ...(effort === "none" ? {} : { reasoning_effort: effort })
+  };
+}
+
+async function postModelRequest(
+  config: ReturnType<typeof chatConfig>,
+  pathName: "/responses" | "/chat/completions",
+  payload: unknown,
+  signal?: AbortSignal
+) {
   const init: FetchInitWithDispatcher = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      temperature: 0.75,
-      reasoning_effort: reasoningEffort || config.reasoningEffort
-    }),
+    body: JSON.stringify(payload),
     dispatcher: chatDispatcher(config.proxyUrl),
-    signal: options.signal
+    signal
   };
-  const response = await undiciFetch(`${config.baseUrl}/chat/completions`, init);
-
+  const response = await undiciFetch(modelEndpoint(config, pathName), init);
   if (!response.ok) {
-    throw new Error(describeChatHttpFailure(response.status, await response.text(), response.headers.get("content-type")));
+    throw new ModelHttpError(response.status, await response.text(), response.headers.get("content-type"));
+  }
+  return response;
+}
+
+function modelEndpoint(config: ReturnType<typeof chatConfig>, pathName: "/responses" | "/chat/completions") {
+  const configured = pathName === "/responses" ? config.responsesUrl : config.chatCompletionsUrl;
+  if (configured) return configured;
+
+  if (config.baseUrl.endsWith(pathName)) {
+    return config.baseUrl;
+  }
+  if (config.baseUrl.endsWith("/responses")) {
+    return `${config.baseUrl.slice(0, -"/responses".length)}${pathName}`;
+  }
+  if (config.baseUrl.endsWith("/chat/completions")) {
+    return `${config.baseUrl.slice(0, -"/chat/completions".length)}${pathName}`;
   }
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
+  return `${config.baseUrl}${pathName}`;
+}
 
-  return {
-    text: data.choices?.[0]?.message?.content?.trim() || "",
-    model: config.model,
-    fallback: false
-  };
+function responseReasoning(effort: ChatReasoningEffort) {
+  return effort === "none" ? undefined : { effort };
+}
+
+function parseChatCompletionStreamDelta(rawEvent: string) {
+  const lines = rawEvent
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const dataLines = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.replace(/^data:\s*/, ""));
+
+  for (const payload of dataLines) {
+    if (!payload || payload === "[DONE]") continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+
+    const delta = extractChatCompletionDelta(parsed);
+    if (delta) return delta;
+  }
+
+  return "";
+}
+
+async function parseChatCompletionResponseBody(response: UndiciResponse) {
+  const contentType = response.headers.get("content-type");
+  const body = await response.text();
+
+  if (contentType?.includes("text/event-stream")) {
+    return parseChatCompletionEventStream(body);
+  }
+
+  return extractChatCompletionText(parseModelJsonBody(body, contentType));
+}
+
+function parseChatCompletionEventStream(body: string) {
+  let aggregatedText = "";
+
+  for (const rawEvent of body.split("\n\n")) {
+    const delta = parseChatCompletionStreamDelta(rawEvent);
+    if (delta) aggregatedText += delta;
+  }
+
+  return aggregatedText.trim();
+}
+
+function extractChatCompletionDelta(data: unknown) {
+  if (!data || typeof data !== "object") return "";
+  const object = data as Record<string, unknown>;
+  const choices = Array.isArray(object.choices) ? object.choices : [];
+  return choices
+    .map((choice) => {
+      if (!choice || typeof choice !== "object") return "";
+      const choiceObject = choice as Record<string, unknown>;
+      const delta = choiceObject.delta && typeof choiceObject.delta === "object"
+        ? (choiceObject.delta as Record<string, unknown>)
+        : {};
+      const message = choiceObject.message && typeof choiceObject.message === "object"
+        ? (choiceObject.message as Record<string, unknown>)
+        : {};
+      return stringFromChatContent(delta.content) || stringFromChatContent(message.content) || "";
+    })
+    .filter(Boolean)
+    .join("");
+}
+
+function extractChatCompletionText(data: unknown) {
+  if (!data || typeof data !== "object") return "";
+  const object = data as Record<string, unknown>;
+  const choices = Array.isArray(object.choices) ? object.choices : [];
+
+  return choices
+    .map((choice) => {
+      if (!choice || typeof choice !== "object") return "";
+      const choiceObject = choice as Record<string, unknown>;
+      const message = choiceObject.message && typeof choiceObject.message === "object"
+        ? (choiceObject.message as Record<string, unknown>)
+        : {};
+      return stringFromChatContent(message.content) || extractChatCompletionDelta(choiceObject);
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function stringFromChatContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const object = part as Record<string, unknown>;
+      return typeof object.text === "string" ? object.text : "";
+    })
+    .join("");
 }
 
 async function createResponse(
@@ -369,43 +617,29 @@ async function createResponse(
       content: message.content
     }));
 
-  const init: FetchInitWithDispatcher = {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: config.model,
-      instructions: system || undefined,
-      input,
-      temperature: 0.75,
-      tools,
-      tool_choice: tools?.length ? "auto" : undefined,
-      reasoning: {
-        effort: reasoningEffort || config.reasoningEffort
-      },
-      store: false
-    }),
-    dispatcher: chatDispatcher(config.proxyUrl),
-    signal: options.signal
-  };
-  const response = await undiciFetch(`${config.baseUrl}/responses`, init);
+  const response = await postModelRequest(config, "/responses", {
+    model: config.model,
+    instructions: system || undefined,
+    input,
+    stream: false,
+    tools,
+    tool_choice: tools?.length ? "auto" : undefined,
+    reasoning: responseReasoning(reasoningEffort || config.reasoningEffort),
+    store: false
+  }, options.signal);
 
-  if (!response.ok) {
-    throw new Error(describeChatHttpFailure(response.status, await response.text(), response.headers.get("content-type")));
-  }
-
-  const data = (await response.json()) as unknown;
+  const text = await parseResponseApiBody(response);
   return {
-    text: extractResponseText(data),
+    text,
     model: config.model,
     fallback: false
   };
 }
 
 function normalizeWireApi(value?: string): ChatWireApi {
-  return value === "chat_completions" || value === "chat-completions" ? "chat_completions" : "responses";
+  if (value === "chat_completions" || value === "chat-completions" || value === "chat") return "chat_completions";
+  if (value === "auto") return "auto";
+  return "responses";
 }
 
 function normalizeReasoningEffort(value?: string): ChatReasoningEffort {
@@ -436,10 +670,6 @@ async function chatCompleteWithFallback(
 }
 
 function completeStyleGeneration(messages: ChatMessage[]) {
-  if (chatConfig().wireApi !== "responses") {
-    return chatCompleteWithFallback(messages);
-  }
-
   return streamResponseTextWithFallback({
     messages,
     maxOutputTokens: STYLE_MAX_OUTPUT_TOKENS,
@@ -475,6 +705,16 @@ function summarizeChatErrorBody(body: string, contentType?: string | null) {
   return trimmed.replace(/\s+/g, " ").slice(0, 240);
 }
 
+function shouldRetryResponsesAsChatCompletions(error: unknown) {
+  if (!(error instanceof ModelHttpError)) return false;
+  const detail = `${error.status} ${error.body}`.toLowerCase();
+  return (
+    error.status === 404 ||
+    error.status === 405 ||
+    /responses|response api|unknown endpoint|not found|unsupported|invalid url|no route|cannot post/.test(detail)
+  );
+}
+
 function buildChatFallbackReason(error: unknown) {
   return `${summarizeChatFailure(error)}，已自动切换到本地模板，可先编辑后再重试。`;
 }
@@ -507,26 +747,124 @@ function summarizeChatFailure(error: unknown) {
   return "对话模型暂时不可用";
 }
 
+async function parseResponseApiBody(response: UndiciResponse) {
+  const contentType = response.headers.get("content-type");
+  const body = await response.text();
+
+  if (contentType?.includes("text/event-stream")) {
+    return parseResponseEventStream(body);
+  }
+
+  return extractResponseText(parseModelJsonBody(body, contentType));
+}
+
+function parseResponseEventStream(body: string) {
+  let aggregatedText = "";
+
+  for (const rawEvent of body.split("\n\n")) {
+    const lines = rawEvent
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const dataLines = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.replace(/^data:\s*/, ""));
+
+    for (const payload of dataLines) {
+      if (!payload || payload === "[DONE]") continue;
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(payload) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+        aggregatedText += parsed.delta;
+      } else if (
+        parsed.type === "response.output_text.done" ||
+        parsed.type === "response.content_part.done" ||
+        parsed.type === "response.output_item.done"
+      ) {
+        aggregatedText = mergeResponseText(aggregatedText, extractResponseText(parsed));
+      } else if (parsed.type === "response.completed") {
+        aggregatedText = mergeResponseText(aggregatedText, extractResponseText(parsed.response));
+      } else if (parsed.type === "response.failed" || parsed.type === "response.incomplete") {
+        const errorMessage =
+          extractResponseErrorMessage(parsed.response) || extractResponseErrorMessage(parsed) || "模型输出失败";
+        throw new Error(errorMessage);
+      }
+    }
+  }
+
+  return aggregatedText.trim();
+}
+
+function parseModelJsonBody(body: string, contentType?: string | null) {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    const detail = summarizeChatErrorBody(body, contentType);
+    throw new Error(detail ? `模型服务返回了无法解析的内容：${detail}` : "模型服务返回了无法解析的内容");
+  }
+}
+
 function extractResponseText(data: unknown): string {
+  return extractResponseTextValue(data).trim();
+}
+
+function extractResponseTextValue(data: unknown): string {
   if (!data || typeof data !== "object") return "";
   const object = data as Record<string, unknown>;
-  if (typeof object.output_text === "string") return object.output_text.trim();
+
+  if (typeof object.output_text === "string") return object.output_text;
+  if (typeof object.text === "string") return object.text;
+  if (object.response) return extractResponseTextValue(object.response);
+  if (object.item) return extractResponseTextValue(object.item);
+  if (object.part) return extractResponseTextValue(object.part);
+  if (Array.isArray(object.content)) return extractResponseContentText(object.content);
   if (!Array.isArray(object.output)) return "";
 
   return object.output
-    .flatMap((item) => {
-      if (!item || typeof item !== "object") return [];
-      const itemObject = item as Record<string, unknown>;
-      if (!Array.isArray(itemObject.content)) return [];
-      return itemObject.content.map((content) => {
-        if (!content || typeof content !== "object") return "";
-        const contentObject = content as Record<string, unknown>;
-        return typeof contentObject.text === "string" ? contentObject.text : "";
-      });
+    .map((item) => extractResponseTextValue(item))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractResponseContentText(content: unknown[]) {
+  return content
+    .map((item) => {
+      if (typeof item === "string") return item;
+      return extractResponseTextValue(item);
     })
     .filter(Boolean)
-    .join("\n")
-    .trim();
+    .join("\n");
+}
+
+function mergeResponseText(current: string, candidate: string) {
+  if (!candidate.trim()) return current;
+  if (!current) return candidate;
+  if (candidate === current || current.startsWith(candidate)) return current;
+  if (candidate.startsWith(current)) return candidate;
+  return candidate.length > current.length ? candidate : current;
+}
+
+function syncResponseText(current: string, candidate: string, onDelta: (delta: string) => void) {
+  const next = mergeResponseText(current, candidate);
+  if (next === current) return current;
+
+  if (!current) {
+    onDelta(next);
+    return next;
+  }
+
+  if (next.startsWith(current)) {
+    const delta = next.slice(current.length);
+    if (delta) onDelta(delta);
+  }
+
+  return next;
 }
 
 function extractResponseErrorMessage(data: unknown) {

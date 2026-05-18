@@ -5,6 +5,7 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 import {
+  buildOpenCliBrowserArgs,
   getBilibiliSubtitle,
   parseOpenCliJsonish,
   refreshDouyinVideoDownloadUrl
@@ -559,34 +560,24 @@ async function resolveBilibiliLinkMedia(url: string) {
   const workspace = `bilibili-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
 
   try {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
-      "browser",
-      "--workspace",
-      workspace,
-      "--window",
-      "background",
-      "--keep-tab",
-      "true",
-      "open",
-      url
-    ], {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "open", [url], {
+      window: "background"
+    }), {
       maxBuffer: 1024 * 1024 * 8,
       timeout: 30_000
     });
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "wait", "time", "3"], {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]), {
       maxBuffer: 1024 * 1024,
       timeout: 12_000
     }).catch(() => undefined);
-    const { stdout } = await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
-      "browser",
-      "--workspace",
-      workspace,
-      "eval",
-      BILIBILI_LINK_MEDIA_EXTRACT_JS
-    ], {
+    const { stdout } = await execFileAsync(
+      process.env.OPENCLI_BIN || "opencli",
+      buildOpenCliBrowserArgs(workspace, "eval", [BILIBILI_LINK_MEDIA_EXTRACT_JS]),
+      {
       maxBuffer: 1024 * 1024 * 20,
       timeout: 30_000
-    });
+      }
+    );
     const data = parseOpenCliJsonish(stdout.trim());
     const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
     const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
@@ -596,7 +587,7 @@ async function resolveBilibiliLinkMedia(url: string) {
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "close"], {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "close"), {
       maxBuffer: 1024 * 1024,
       timeout: 5_000
     }).catch(() => undefined);
@@ -607,34 +598,24 @@ async function resolveDouyinLinkMedia(url: string) {
   const workspace = `douyin-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
 
   try {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
-      "browser",
-      "--workspace",
-      workspace,
-      "--window",
-      "background",
-      "--keep-tab",
-      "true",
-      "open",
-      url
-    ], {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "open", [url], {
+      window: "background"
+    }), {
       maxBuffer: 1024 * 1024 * 8,
       timeout: 30_000
     });
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "wait", "time", "2"], {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
       maxBuffer: 1024 * 1024,
       timeout: 10_000
     }).catch(() => undefined);
-    const { stdout } = await execFileAsync(process.env.OPENCLI_BIN || "opencli", [
-      "browser",
-      "--workspace",
-      workspace,
-      "eval",
-      DOUYIN_LINK_MEDIA_EXTRACT_JS
-    ], {
+    const { stdout } = await execFileAsync(
+      process.env.OPENCLI_BIN || "opencli",
+      buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]),
+      {
       maxBuffer: 1024 * 1024 * 20,
       timeout: 30_000
-    });
+      }
+    );
     const data = parseOpenCliJsonish(stdout.trim());
     const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
     const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
@@ -644,7 +625,7 @@ async function resolveDouyinLinkMedia(url: string) {
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", ["browser", "--workspace", workspace, "close"], {
+    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "close"), {
       maxBuffer: 1024 * 1024,
       timeout: 5_000
     }).catch(() => undefined);

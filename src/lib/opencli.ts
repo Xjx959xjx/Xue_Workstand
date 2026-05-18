@@ -28,6 +28,8 @@ type RunOpenCliOptions = {
   timeout?: number;
 };
 
+type OpenCliBrowserWindowMode = "foreground" | "background";
+
 export type BilibiliCommentSample = {
   rank: number;
   author: string;
@@ -73,6 +75,27 @@ async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
   }
 
   return stdout.trim();
+}
+
+export function buildOpenCliBrowserArgs(
+  session: string,
+  command: string,
+  commandArgs: string[] = [],
+  options: {
+    tab?: string;
+    window?: OpenCliBrowserWindowMode;
+  } = {}
+) {
+  const args = ["browser", session];
+  if (options.window) {
+    args.push("--window", options.window);
+  }
+  args.push(command);
+  if (options.tab) {
+    args.push("--tab", options.tab);
+  }
+  args.push(...commandArgs);
+  return args;
 }
 
 export function parseOpenCliJsonish(stdout: string): unknown {
@@ -158,14 +181,12 @@ async function searchDouyinUserSecUidWithBrowser(name: string) {
 
   try {
     const openResult = parseJsonish(
-      await runOpenCli(
-        ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", searchUrl],
-        { timeout: 30_000 }
-      )
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
+        timeout: 30_000
+      })
     );
     const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
-    const evalArgs = ["browser", "--workspace", workspace, "eval", DOUYIN_SEARCH_EXTRACT_JS];
-    if (tab) evalArgs.push("--tab", tab);
+    const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_SEARCH_EXTRACT_JS], tab ? { tab } : {});
     const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000 })));
     return selectDouyinSecUidFromRows(rows, name);
   } catch (error) {
@@ -174,7 +195,7 @@ async function searchDouyinUserSecUidWithBrowser(name: string) {
       `opencli browser 没有解析到抖音账号「${name}」：${message || "没有返回结果"}。请确认账号名能在抖音搜索到，或临时填写主页链接 / sec_uid。`
     );
   } finally {
-    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 }
 
@@ -193,13 +214,12 @@ export async function getDouyinRelatedTopicComments(
   const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(cleanQuery)}?type=general`;
 
   try {
-    await runOpenCli(
-      ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", searchUrl],
-      { timeout: 30_000 }
-    );
-    await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "5"], { timeout: 12_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
+      timeout: 30_000
+    });
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
 
-    const videos = asArray(parseJsonish(await runOpenCli(["browser", "--workspace", workspace, "eval", DOUYIN_RELATED_VIDEO_EXTRACT_JS], { timeout: 20_000 })))
+    const videos = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), { timeout: 20_000 })))
       .map(normalizeDouyinRelatedVideo)
       .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
       .filter((video) => isDouyinRelatedVideoRelevant(video.title, cleanQuery))
@@ -208,9 +228,9 @@ export async function getDouyinRelatedTopicComments(
 
     const comments: string[] = [];
     for (const video of videos) {
-      await runOpenCli(["browser", "--workspace", workspace, "open", video.url], { timeout: 30_000 }).catch(() => undefined);
-      await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "5"], { timeout: 12_000 }).catch(() => undefined);
-      const rows = asArray(parseJsonish(await runOpenCli(["browser", "--workspace", workspace, "eval", DOUYIN_VIDEO_COMMENT_EXTRACT_JS], { timeout: 35_000 })));
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [video.url]), { timeout: 30_000 }).catch(() => undefined);
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
+      const rows = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_VIDEO_COMMENT_EXTRACT_JS]), { timeout: 35_000 })));
       comments.push(...rows.map(normalizeCommentText).filter(Boolean).slice(0, commentLimit));
     }
 
@@ -220,7 +240,7 @@ export async function getDouyinRelatedTopicComments(
       comments: uniqueStrings(comments)
     };
   } finally {
-    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 }
 
@@ -585,26 +605,21 @@ async function scanDouyinPostVideoRows(
   const scanLimit = Math.min(Math.max(options.limit, 1), DOUYIN_BROWSER_VIDEO_SCAN_LIMIT);
 
   try {
-    await runOpenCli(
-      ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", profileUrl],
-      { timeout: 30_000 }
-    );
-    await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "2"], { timeout: 10_000 }).catch(() => undefined);
-    const evalArgs = [
-      "browser",
-      "--workspace",
-      workspace,
-      "eval",
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
+      timeout: 30_000
+    });
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), { timeout: 10_000 }).catch(() => undefined);
+    const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [
       buildDouyinPostExtractJs({
         secUid: account.uid,
         limit: scanLimit,
         fromDate: options.fromDate,
         toDate: options.toDate
       })
-    ];
+    ]);
     return asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 90_000 })));
   } finally {
-    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 }
 
@@ -903,11 +918,10 @@ export async function getDouyinVideoDetailMap(
   const profileUrl = `https://www.douyin.com/user/${encodeURIComponent(account.uid)}`;
 
   try {
-    await runOpenCli(
-      ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", profileUrl],
-      { timeout: 30_000 }
-    );
-    await runOpenCli(["browser", "--workspace", workspace, "wait", "time", "2"], { timeout: 10_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
+      timeout: 30_000
+    });
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), { timeout: 10_000 }).catch(() => undefined);
 
     for (const awemeId of awemeIds) {
       const detail = await getDouyinVideoDetailWithBrowser(workspace, awemeId, options).catch(() => null);
@@ -915,7 +929,7 @@ export async function getDouyinVideoDetailMap(
       details.set(awemeId, detail);
     }
   } finally {
-    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 
   return details;
@@ -928,19 +942,12 @@ async function getDouyinVideoDetailWithBrowser(
 ) {
   const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 20));
   const result = parseJsonish(
-    await runOpenCli(
-      [
-        "browser",
-        "--workspace",
-        workspace,
-        "eval",
-        buildDouyinDetailExtractJs({
-          awemeId,
-          commentLimit
-        })
-      ],
-      { timeout: 20_000 }
-    )
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [
+      buildDouyinDetailExtractJs({
+        awemeId,
+        commentLimit
+      })
+    ]), { timeout: 20_000 })
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
   const topComments = Array.isArray(object.topComments)
@@ -1049,20 +1056,18 @@ async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string) {
 
   try {
     const openResult = parseJsonish(
-      await runOpenCli(
-        ["browser", "--workspace", workspace, "--window", "background", "--keep-tab", "true", "open", videoUrl],
-        { timeout: 30_000 }
-      )
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [videoUrl], { window: "background" }), {
+        timeout: 30_000
+      })
     );
     const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
-    const evalArgs = ["browser", "--workspace", workspace, "eval", DOUYIN_MEDIA_EXTRACT_JS];
-    if (tab) evalArgs.push("--tab", tab);
+    const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_MEDIA_EXTRACT_JS], tab ? { tab } : {});
     const candidates = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000 })))
       .map((value) => String(value || "").trim())
       .filter(isLikelyDirectMediaUrl);
     return selectBestDouyinMediaUrl(candidates);
   } finally {
-    await runOpenCli(["browser", "--workspace", workspace, "close"], { timeout: 5_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 }
 

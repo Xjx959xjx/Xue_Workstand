@@ -68,7 +68,7 @@ npm run dev
 - `OPENCLI_BIN`、`FFMPEG_BIN`、`STYLE_LIBRARY_DIR`
 - `VOLCENGINE_ASR_API_KEY`、`VOLCENGINE_ASR_RESOURCE_ID`、`VOLCENGINE_ASR_SUBMIT_URL`、`VOLCENGINE_ASR_QUERY_URL`、`VOLCENGINE_ASR_AUDIO_FORMAT`、`VOLCENGINE_ASR_POLL_INTERVAL_MS`
 - `DOUYIN_TRANSCRIBE_CONCURRENCY`，默认 `3`，建议保持 `1-4`
-- `CHAT_API_KEY`、`CHAT_BASE_URL`、`CHAT_MODEL`、`CHAT_WIRE_API`、`CHAT_REASONING_EFFORT`、`CHAT_PROXY_URL`
+- `CHAT_API_KEY`、`CHAT_BASE_URL`、`CHAT_RESPONSES_URL`、`CHAT_COMPLETIONS_URL`、`CHAT_MODEL`、`CHAT_WIRE_API`、`CHAT_REASONING_EFFORT`、`CHAT_PROXY_URL`；`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 可作为对话模型兜底配置
 - `FEISHU_OPENCLI_AS`、`FEISHU_FOLDER_TOKEN`
 
 模型未配置时允许回退到本地模板生成可编辑结果，这是设计的一部分，不要当成全站阻塞错误。涉及最新事实的生成内容，优先检查写作链路是否启用联网研究。
@@ -145,7 +145,7 @@ API 位于 `src/app/api/**/route.ts`，负责入参校验、流程编排和错�
 
 转写链路在 `src/lib/transcription.ts` 和 `src/lib/batch-transcribe.ts`。B 站优先公开字幕，无字幕时下载后抽音频；抖音优先复用或预取媒体地址，再用 `ffmpeg` 抽取音频，通过火山 `audio.data` 提交识别，避免火山服务端直接拉取带防盗链的抖音 URL。转写失败必须落盘为失败状态，避免页面一直显示进行中。
 
-模型链路在 `src/lib/ai.ts`。兼容 `responses` 和 `chat_completions`，支持代理、联网研究、流式输出和本地 fallback。不要把模型不可用、部分采集失败或部分转写失败简单升级成全站失败。
+模型链路在 `src/lib/ai.ts`。兼容 `responses`、`chat_completions` 和 `auto`，支持代理、联网研究、流式输出和本地 fallback。更换中转站时优先通过环境变量切换，不要把模型不可用、部分采集失败或部分转写失败简单升级成全站失败。
 
 飞书发布在 `src/lib/feishu.ts` 和 `src/app/api/feishu/document/route.ts`，通过 `opencli lark-cli docs +create` 发布。
 
