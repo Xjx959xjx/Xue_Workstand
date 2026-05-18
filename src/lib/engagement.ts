@@ -12,16 +12,40 @@ import {
   resolveAccount,
   resolveDraft,
   resolveProject,
+  saveEngagementRecord,
   saveVideoAssetFields,
   updateDraftAssets
 } from "./storage";
+import { transcribeLinkSource } from "./transcription";
 import {
   Draft,
   DraftCommentAsset,
   DraftDanmakuAsset,
+  EngagementRecord,
   Platform
 } from "./types";
 import { clampText, nowIso, shortHash } from "./utils";
+
+type EngagementContent = {
+  id: string;
+  title: string;
+  content: string;
+  prompt?: string;
+  input?: string;
+};
+
+type EngagementOptions = {
+  includeComments?: boolean;
+  commentCount?: number;
+  includeDanmaku?: boolean;
+  danmakuCount?: number;
+};
+
+export type GenerateEngagementInput = EngagementOptions & (
+  | { sourceType: "draft"; draftId: string }
+  | { sourceType: "text"; title?: string; text: string }
+  | { sourceType: "url"; url: string }
+);
 
 type SourceContext = {
   platform: Platform;
@@ -35,47 +59,111 @@ type SourceContext = {
   transcripts: string[];
 };
 
+export async function generateEngagement(input: GenerateEngagementInput) {
+  const options = normalizeEngagementOptions(input);
+  if (!options.includeComments && !options.includeDanmaku) {
+    throw new Error("请至少选择评论或弹幕。");
+  }
+
+  const prepared = await prepareEngagementSource(input);
+  const comments = options.includeComments
+    ? await generateComments(prepared.content, prepared.contexts, options.commentCount, prepared.platform)
+    : null;
+  const danmaku = options.includeDanmaku
+    ? await generateDanmaku(prepared.content, prepared.contexts, options.danmakuCount)
+    : null;
+
+  let draft: Draft | undefined;
+  if (prepared.draft) {
+    draft = await updateDraftAssets(prepared.draft.id, (current) => ({
+      ...current,
+      comments: comments
+        ? {
+            generatedAt: nowIso(),
+            requestedCount: options.commentCount,
+            usedModel: comments.usedModel,
+            fallback: comments.fallback,
+            fallbackReason: comments.fallbackReason,
+            items: comments.items
+          }
+        : current.comments,
+      danmaku: danmaku
+        ? {
+            generatedAt: nowIso(),
+            requestedCount: options.danmakuCount,
+            usedModel: danmaku.usedModel,
+            fallback: danmaku.fallback,
+            fallbackReason: danmaku.fallbackReason,
+            items: danmaku.items
+          }
+        : current.danmaku
+    }));
+  }
+
+  const record = await saveEngagementRecord({
+    sourceType: input.sourceType,
+    title: prepared.content.title,
+    sourceUrl: prepared.sourceUrl,
+    resolvedUrl: prepared.resolvedUrl,
+    platform: prepared.platform,
+    draftId: prepared.draft?.id,
+    sourceText: prepared.content.content,
+    options,
+    comments: comments
+      ? {
+          generatedAt: nowIso(),
+          requestedCount: options.commentCount,
+          usedModel: comments.usedModel,
+          fallback: comments.fallback,
+          fallbackReason: comments.fallbackReason,
+          items: comments.items
+        }
+      : undefined,
+    danmaku: danmaku
+      ? {
+          generatedAt: nowIso(),
+          requestedCount: options.danmakuCount,
+          usedModel: danmaku.usedModel,
+          fallback: danmaku.fallback,
+          fallbackReason: danmaku.fallbackReason,
+          items: danmaku.items
+        }
+      : undefined,
+    fallback: Boolean(comments?.fallback || danmaku?.fallback || prepared.fallback),
+    fallbackReason: [prepared.fallbackReason, comments?.fallbackReason, danmaku?.fallbackReason]
+      .filter(Boolean)
+      .join("；") || undefined
+  });
+
+  return {
+    draft,
+    record,
+    comments: record.comments,
+    danmaku: record.danmaku
+  };
+}
+
 export async function generateDraftEngagement(input: {
   draftId: string;
   commentCount: number;
   danmakuCount: number;
 }) {
   const resolved = await resolveDraft(input.draftId);
-  const draft = resolved.draft;
-  const contexts = await buildSourceContexts(draft);
-  const commentCount = clampCount(input.commentCount, 1, 200, 50);
-  const danmakuCount = clampCount(input.danmakuCount, 1, 300, 100);
-  const comments = await generateComments(draft, contexts, commentCount);
-  const bilibiliContexts = contexts.filter((context) => context.platform === "bilibili");
-  const danmaku = bilibiliContexts.length ? await generateDanmaku(draft, bilibiliContexts, danmakuCount) : null;
-
-  const next = await updateDraftAssets(draft.id, (current) => ({
-    ...current,
-    comments: {
-      generatedAt: nowIso(),
-      requestedCount: commentCount,
-      usedModel: comments.usedModel,
-      fallback: comments.fallback,
-      fallbackReason: comments.fallbackReason,
-      items: comments.items
-    },
-    danmaku: danmaku
-      ? {
-          generatedAt: nowIso(),
-          requestedCount: danmakuCount,
-          usedModel: danmaku.usedModel,
-          fallback: danmaku.fallback,
-          fallbackReason: danmaku.fallbackReason,
-          items: danmaku.items
-        }
-      : current.danmaku
-  }));
-
+  const supportsDanmaku = draftSupportsBilibili(resolved.draft);
+  const result = await generateEngagement({
+    sourceType: "draft",
+    draftId: input.draftId,
+    includeComments: true,
+    commentCount: input.commentCount,
+    includeDanmaku: supportsDanmaku,
+    danmakuCount: input.danmakuCount
+  });
+  const next = result.draft ?? resolved.draft;
   return {
     draft: next,
     comments: next.assets?.comments,
     danmaku: next.assets?.danmaku,
-    supportsDanmaku: Boolean(bilibiliContexts.length)
+    supportsDanmaku
   };
 }
 
@@ -92,6 +180,106 @@ async function buildSourceContexts(draft: Draft) {
   return [await buildAccountSourceContext(draft.platform, draft.accountId, draft.accountName, draft.styleRef.videoIds || [], draft)];
 }
 
+async function prepareEngagementSource(input: GenerateEngagementInput): Promise<{
+  content: EngagementContent;
+  contexts: SourceContext[];
+  platform: Platform | "unknown";
+  draft?: Draft;
+  sourceUrl?: string;
+  resolvedUrl?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
+}> {
+  if (input.sourceType === "draft") {
+    const resolved = await resolveDraft(input.draftId);
+    const draft = resolved.draft;
+    const contexts = await buildSourceContexts(draft);
+    const platform = draft.targetType === "project" ? contexts[0]?.platform || "unknown" : draft.platform;
+    return {
+      content: draftToEngagementContent(draft),
+      contexts,
+      platform,
+      draft
+    };
+  }
+
+  if (input.sourceType === "text") {
+    const text = input.text.trim();
+    if (!text) throw new Error("请粘贴文案后再生成。");
+    return {
+      content: {
+        id: `text-${shortHash(text)}`,
+        title: input.title?.trim() || makeEngagementTitle(text, "粘贴文案"),
+        content: text,
+        prompt: "",
+        input: text
+      },
+      contexts: [],
+      platform: "unknown"
+    };
+  }
+
+  const url = input.url.trim();
+  if (!url) throw new Error("请填写视频链接。");
+  try {
+    const result = await transcribeLinkSource({ url });
+    return {
+      content: {
+        id: `url-${shortHash(result.resolvedUrl || result.url || url)}`,
+        title: result.title || makeEngagementTitle(result.text || url, "视频链接"),
+        content: result.text,
+        prompt: "",
+        input: url
+      },
+      contexts: [],
+      platform: result.platform,
+      sourceUrl: result.url,
+      resolvedUrl: result.resolvedUrl,
+      fallback: result.fallback,
+      fallbackReason: result.fallbackReason
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "链接内容读取失败";
+    if (/暂不支持|没有解析到/.test(message)) {
+      throw new Error(`暂不支持从这个链接生成评论。请使用 B站/抖音视频链接，或改用粘贴文案。${message ? `（${message}）` : ""}`);
+    }
+    throw error;
+  }
+}
+
+function normalizeEngagementOptions(input: EngagementOptions): EngagementRecord["options"] {
+  return {
+    includeComments: input.includeComments ?? true,
+    commentCount: clampCount(input.commentCount ?? 50, 1, 200, 50),
+    includeDanmaku: input.includeDanmaku ?? false,
+    danmakuCount: clampCount(input.danmakuCount ?? 100, 1, 300, 100)
+  };
+}
+
+function draftToEngagementContent(draft: Draft): EngagementContent {
+  return {
+    id: draft.id,
+    title: draft.title,
+    content: draft.content,
+    prompt: draft.prompt,
+    input: draft.input
+  };
+}
+
+function draftSupportsBilibili(draft: Draft) {
+  if (draft.targetType !== "project") return draft.platform === "bilibili";
+  return Boolean(draft.styleRef.sourceAccountIds?.some((id) => id.startsWith("bilibili:")));
+}
+
+function makeEngagementTitle(content: string, fallback: string) {
+  const firstLine = content
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  return firstLine ? firstLine.slice(0, 32) : fallback;
+}
+
 async function buildAccountSourceContext(
   platform: Platform,
   accountId: string,
@@ -104,10 +292,8 @@ async function buildAccountSourceContext(
   const contextVideos = prioritizeVideos(summary.videos, sourceVideoIds).slice(0, 10);
   const related = platform === "douyin" && draft ? await collectDouyinRelatedCommentSamples(draft) : null;
   const relatedComments = related?.comments || [];
-  if (platform === "douyin" && !relatedComments.length) {
-    throw new Error(`没有采集到抖音相关话题评论样本：${related?.query || "未生成有效搜索词"}`);
-  }
-  const comments = platform === "douyin" ? relatedComments : await collectCommentSamples(platform, accountId, contextVideos);
+  const accountComments = await collectCommentSamples(platform, accountId, contextVideos);
+  const comments = platform === "douyin" ? cleanCommentSamples([...relatedComments, ...accountComments]).slice(0, 180) : accountComments;
   const commentStyle = comments.length >= 8 ? await analyzeCommentStyle(platform, accountName, comments) : "";
   const danmaku = platform === "bilibili" ? await collectDanmakuSamples(accountId, contextVideos) : [];
   const transcriptSamples = await Promise.all(
@@ -151,7 +337,11 @@ async function collectCommentSamples(platform: Platform, accountId: string, vide
 async function collectDouyinRelatedCommentSamples(draft: Draft) {
   const query = buildDouyinRelatedCommentQuery(draft);
   if (!query) return { query: "", comments: [] };
-  const result = await getDouyinRelatedTopicComments(query, { videoLimit: 6, commentLimit: 20 });
+  const result = await getDouyinRelatedTopicComments(query, { videoLimit: 6, commentLimit: 20 }).catch(() => ({
+    query,
+    videos: [],
+    comments: []
+  }));
   return {
     query: result.query,
     comments: cleanCommentSamples(result.comments).slice(0, 120)
@@ -196,13 +386,13 @@ async function fetchBilibiliDanmaku(video: Awaited<ReturnType<typeof getAccountS
     .slice(0, 120);
 }
 
-async function generateComments(draft: Draft, contexts: SourceContext[], count: number) {
+async function generateComments(source: EngagementContent, contexts: SourceContext[], count: number, platform: Platform | "unknown") {
   const samples = contexts
     .map(
       (context) =>
         `平台：${context.platform}\n账号：${context.accountName}\n相关话题搜索词：${context.relatedQuery || "无"}\n评论区语感分析：\n${context.commentStyle || "暂无"}\n相关话题真实热评：\n${context.relatedComments.slice(0, 70).join("\n") || "暂无"}\n账号评论样本：\n${context.comments.filter((comment) => !context.relatedComments.includes(comment)).slice(0, 50).join("\n") || "暂无"}`
     )
-    .join("\n\n---\n\n");
+    .join("\n\n---\n\n") || "暂无真实评论样本，请按正文语境生成自然观众评论。";
   const result = await chatComplete(
     [
       {
@@ -212,18 +402,18 @@ async function generateComments(draft: Draft, contexts: SourceContext[], count: 
       },
       {
         role: "user",
-        content: `文案标题：${draft.title}\n文案内容：\n${clampText(draft.content, 4000)}\n\n真实评论区参考：\n${samples}\n\n请生成 ${count} 条观众评论。要求：优先模仿“相关话题真实热评”的语气、长度、标点、立场和梗，账号评论样本只作为辅助；短中长混合，包含提问、共鸣、玩梗、补充观点、轻度反驳；不要写成客服话术、营销话术、总结文案或AI评论；避免重复。`
+        content: `文案标题：${source.title}\n文案内容：\n${clampText(source.content, 4000)}\n\n真实评论区参考：\n${samples}\n\n请生成 ${count} 条观众评论。要求：优先模仿“相关话题真实热评”的语气、长度、标点、立场和梗；没有真实样本时按普通观众语气生成；短中长混合，包含提问、共鸣、玩梗、补充观点、轻度反驳；不要写成客服话术、营销话术、总结文案或AI评论；避免重复。`
       }
     ],
     "medium"
   );
   const parsed = parseStringArray(result.text);
-  const texts = parsed.length ? parsed : buildFallbackComments(draft, contexts, count);
+  const texts = parsed.length ? parsed : buildFallbackComments(source, contexts, count);
   return {
     usedModel: result.model,
     fallback: result.fallback || !parsed.length,
     fallbackReason: result.fallbackReason || (!parsed.length ? "模型没有返回可解析评论，已使用本地模板。" : undefined),
-    items: texts.slice(0, count).map((text, index) => makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || "bilibili", index))
+    items: texts.slice(0, count).map((text, index) => makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index))
   };
 }
 
@@ -245,10 +435,10 @@ async function analyzeCommentStyle(platform: Platform, accountName: string, comm
   return result.text.trim() || "";
 }
 
-async function generateDanmaku(draft: Draft, contexts: SourceContext[], count: number) {
+async function generateDanmaku(source: EngagementContent, contexts: SourceContext[], count: number) {
   const samples = contexts
     .map((context) => `账号：${context.accountName}\n弹幕样本：\n${context.danmaku.slice(0, 70).join("\n") || "暂无弹幕样本"}`)
-    .join("\n\n---\n\n");
+    .join("\n\n---\n\n") || "暂无弹幕样本，请按正文节奏生成自然短弹幕。";
   const result = await chatComplete(
     [
       {
@@ -258,13 +448,13 @@ async function generateDanmaku(draft: Draft, contexts: SourceContext[], count: n
       },
       {
         role: "user",
-        content: `文案：\n${clampText(draft.content, 4200)}\n\n参考弹幕：\n${samples}\n\n请生成 ${count} 条弹幕。时间点按约 ${estimateDurationSec(draft.content)} 秒口播均匀但有疏密变化分布。`
+        content: `文案：\n${clampText(source.content, 4200)}\n\n参考弹幕：\n${samples}\n\n请生成 ${count} 条弹幕。时间点按约 ${estimateDurationSec(source.content)} 秒口播均匀但有疏密变化分布。`
       }
     ],
     "medium"
   );
   const parsed = parseDanmakuArray(result.text);
-  const items = parsed.length ? parsed : buildFallbackDanmaku(draft, count);
+  const items = parsed.length ? parsed : buildFallbackDanmaku(source, count);
   return {
     usedModel: result.model,
     fallback: result.fallback || !parsed.length,
@@ -277,7 +467,7 @@ async function generateDanmaku(draft: Draft, contexts: SourceContext[], count: n
   };
 }
 
-function buildFallbackComments(draft: Draft, contexts: SourceContext[], count: number) {
+function buildFallbackComments(source: EngagementContent, contexts: SourceContext[], count: number) {
   const seeds = [
     "这段说得挺扎心",
     "先收藏，回头按这个思路试一下",
@@ -290,24 +480,24 @@ function buildFallbackComments(draft: Draft, contexts: SourceContext[], count: n
     "终于有人把这件事说清楚了",
     "后面那个判断很关键"
   ];
-  const platformHint = contexts.map((context) => context.platform).includes("bilibili") ? "B站" : "抖音";
+  const platformHint = contexts.length ? (contexts.map((context) => context.platform).includes("bilibili") ? "B站" : "抖音") : "视频";
   return Array.from({ length: count }, (_, index) => {
     const seed = seeds[index % seeds.length];
-    return index % 5 === 0 ? `${seed}，${draft.title.slice(0, 14)}这块太真实了` : `${seed}。`;
+    return index % 5 === 0 ? `${seed}，${source.title.slice(0, 14)}这块太真实了` : `${seed}。`;
   }).map((text, index) => (index % 11 === 0 ? `${text} ${platformHint}观众集合` : text));
 }
 
-function buildFallbackDanmaku(draft: Draft, count: number): DraftDanmakuAsset[] {
-  const duration = estimateDurationSec(draft.content);
+function buildFallbackDanmaku(source: EngagementContent, count: number): DraftDanmakuAsset[] {
+  const duration = estimateDurationSec(source.content);
   const seeds = ["来了", "这句重点", "真实", "先暂停记一下", "懂了", "这个角度可以", "有点东西", "前方高能", "说到点上了", "收藏了"];
   return Array.from({ length: count }, (_, index) => ({
-    id: `danmaku-${index + 1}-${shortHash(`${draft.id}-${index}`)}`,
+    id: `danmaku-${index + 1}-${shortHash(`${source.id}-${index}`)}`,
     timeSec: Math.round((duration / Math.max(count, 1)) * index),
     text: seeds[index % seeds.length]
   }));
 }
 
-function makeCommentItem(text: string, platform: Platform, index: number): DraftCommentAsset {
+function makeCommentItem(text: string, platform: Platform | "unknown", index: number): DraftCommentAsset {
   return {
     id: `comment-${index + 1}-${shortHash(text)}`,
     platform,

@@ -10,6 +10,7 @@ import {
   DraftCoverImage,
   DraftCoverReference,
   DraftInput,
+  EngagementRecord,
   LibraryState,
   Platform,
   Project,
@@ -62,6 +63,14 @@ function copyToolsPath() {
 
 function copySourcesPath() {
   return path.join(copyToolsPath(), "sources");
+}
+
+function engagementPath() {
+  return path.join(libraryRoot(), "engagement");
+}
+
+function engagementRecordJsonPath(id: string) {
+  return path.join(engagementPath(), `${id}.json`);
 }
 
 function copySourceJsonPath(id: string) {
@@ -155,6 +164,10 @@ function normalizeCopySourceId(sourceId: string) {
   return normalizeStorageSegment(sourceId, "文案素材 ID");
 }
 
+function normalizeEngagementRecordId(recordId: string) {
+  return normalizeStorageSegment(recordId, "互动素材 ID");
+}
+
 async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
   const previous = draftAssetQueues.get(draftId) ?? Promise.resolve();
   let release!: () => void;
@@ -227,7 +240,8 @@ export async function ensureLibrary() {
   await Promise.all([
     ...platforms.map((platform) => fs.mkdir(platformPath(platform), { recursive: true })),
     fs.mkdir(projectsPath(), { recursive: true }),
-    fs.mkdir(copySourcesPath(), { recursive: true })
+    fs.mkdir(copySourcesPath(), { recursive: true }),
+    fs.mkdir(engagementPath(), { recursive: true })
   ]);
 }
 
@@ -503,6 +517,46 @@ export async function deleteCopySources(sourceIds: string[]) {
   }
 
   return { deleted };
+}
+
+export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | "createdAt" | "updatedAt">) {
+  await ensureLibrary();
+  const now = nowIso();
+  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.sourceType}-${input.title}-${input.sourceText}`)}`;
+  const record: EngagementRecord = {
+    ...input,
+    id,
+    title: makeDraftTitleFromContent(input.title || input.sourceText, "互动素材"),
+    sourceText: input.sourceText.trim(),
+    createdAt: now,
+    updatedAt: now
+  };
+  await writeJson(engagementRecordJsonPath(id), record);
+  return record;
+}
+
+export async function getEngagementRecords() {
+  await ensureLibrary();
+  const files = await fs.readdir(engagementPath()).catch(() => []);
+  const records = (
+    await Promise.all(
+      files
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => readJson<EngagementRecord>(path.join(engagementPath(), file)))
+    )
+  ).filter(Boolean) as EngagementRecord[];
+
+  return records.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export async function resolveEngagementRecord(recordId: string) {
+  await ensureLibrary();
+  const id = normalizeEngagementRecordId(recordId);
+  const record = await readJson<EngagementRecord>(engagementRecordJsonPath(id));
+  if (!record) {
+    throw new Error(`找不到互动素材：${id}`);
+  }
+  return record;
 }
 
 export async function saveVideos(account: Account, incoming: Video[]) {
@@ -1064,10 +1118,11 @@ async function getAllProjectDrafts() {
 
 export async function getLibrary(): Promise<LibraryState> {
   await ensureLibrary();
-  const [accounts, projects, copySources] = await Promise.all([
+  const [accounts, projects, copySources, engagementRecords] = await Promise.all([
     getAllAccountSummaries(),
     getAllProjectSummaries(),
-    getCopySources()
+    getCopySources(),
+    getEngagementRecords()
   ]);
 
   const projectDrafts = await getAllProjectDrafts();
@@ -1075,6 +1130,7 @@ export async function getLibrary(): Promise<LibraryState> {
   const recentAccounts = [...accounts].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
   const recentProjects = [...projects].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
   const recentCopySources = [...copySources].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
+  const recentEngagementRecords = [...engagementRecords].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
   const recentDrafts = [...drafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
 
   return {
@@ -1082,10 +1138,12 @@ export async function getLibrary(): Promise<LibraryState> {
     accounts,
     projects,
     copySources,
+    engagementRecords,
     drafts,
     recentAccounts,
     recentProjects,
     recentCopySources,
+    recentEngagementRecords,
     recentDrafts
   };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   BookOpenText,
@@ -13,6 +13,7 @@ import {
   Settings2
 } from "lucide-react";
 import { useLibrary } from "@/components/LibraryProvider";
+import { useFeedback } from "@/components/FeedbackProvider";
 import { formatPlatform } from "@/components/Formatters";
 import { collectAccount, getHealth } from "@/lib/client";
 import { CollectOrder, Platform } from "@/lib/types";
@@ -85,6 +86,7 @@ const timeRangeOptions: Array<{ value: TimeRange; label: string; days?: number }
 
 export default function HomePage() {
   const { library, loading, error, refresh } = useLibrary();
+  const { notify } = useFeedback();
   const [platform, setPlatform] = useState<Platform>("bilibili");
   const [name, setName] = useState("");
   const [limit, setLimit] = useState(20);
@@ -116,6 +118,16 @@ export default function HomePage() {
   ]);
   const activeTimeLabel = formatTimeRangeLabel(timeRange, dateFilter.fromDate, dateFilter.toDate);
   const activeOrderOptions = collectOrderOptions[platform];
+  const messageIsError = message.includes("失败") || message.includes("不可用");
+
+  useEffect(() => {
+    if (!message) return;
+    notify({
+      tone: messageIsError ? "error" : "success",
+      message,
+      action: lastCollect && !messageIsError ? { label: "去账号库整理风格", href: "/library" } : undefined
+    });
+  }, [lastCollect, message, messageIsError, notify]);
 
   function handlePlatformChange(nextPlatform: Platform) {
     setPlatform(nextPlatform);
@@ -133,7 +145,7 @@ export default function HomePage() {
       setHealth(await getHealth());
       setMessage("环境检查完成。");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "环境检查失败");
+      setMessage(err instanceof Error ? err.message : "环境检查失败，请确认 opencli、模型或飞书配置后重试。");
     } finally {
       setBusy("");
     }
@@ -150,7 +162,7 @@ export default function HomePage() {
       setMessage(formatCollectMessage(result, activeTimeLabel, order));
       await refresh();
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "采集失败");
+      setMessage(err instanceof Error ? err.message : "采集失败，请检查账号名、主页链接或 opencli 配置后重试。");
     } finally {
       setBusy("");
     }
@@ -170,12 +182,12 @@ export default function HomePage() {
         <div>
           <p className="eyebrow">Local Workbench</p>
           <h1>工作台总览</h1>
-          <p className="subtle">采集、转写、风格沉淀和写作都在本地流转，文件沉淀到 style-library。</p>
+          <p className="subtle">采集、转写、风格沉淀和写作都在本地流转，结果会落到 style-library。</p>
         </div>
         <div className="button-row">
           <button className="btn" disabled={loading} onClick={refresh} type="button">
             <RefreshCw aria-hidden="true" size={16} />
-            {loading ? "读取中" : "刷新数据"}
+            {loading ? "正在读取" : "刷新数据"}
           </button>
         </div>
       </header>
@@ -270,11 +282,11 @@ export default function HomePage() {
           <div className="quick-actions">
             <button className="btn primary" disabled={!canSubmit} onClick={handleCollect} type="button">
               <Play aria-hidden="true" size={16} />
-              {busy === "collect" ? "采集中…" : "开始采集"}
+              {busy === "collect" ? "正在采集" : "开始采集"}
             </button>
             <button className="btn" disabled={busy === "health"} onClick={handleHealthCheck} type="button">
               <Settings2 aria-hidden="true" size={16} />
-              {busy === "health" ? "检查中…" : "检查环境"}
+              {busy === "health" ? "正在检查" : "检查环境"}
             </button>
           </div>
         </div>
@@ -307,25 +319,10 @@ export default function HomePage() {
               </span>
             </div>
           ) : (
-            <p className="subtle">点击检查环境，确认 opencli、火山转写、对话模型和飞书 lark-cli 配置。</p>
+            <p className="subtle">运行环境检查会验证 opencli、火山转写、对话模型和飞书 lark-cli 是否可用。</p>
           )}
         </aside>
       </section>
-
-      {message ? (
-        <div className={message.includes("失败") || message.includes("不可用") ? "error" : "notice"}>
-          <div className="feedback-row">
-            <span>{message}</span>
-            {lastCollect ? (
-              <span className="button-row">
-                <Link className="btn" href="/library">
-                  去账号库整理风格
-                </Link>
-              </span>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
 
       {error ? <div className="error">{error}</div> : null}
 
@@ -380,7 +377,7 @@ export default function HomePage() {
             {loading ? <p className="subtle">正在读取本地风格库…</p> : null}
             {!loading && !library?.recentAccounts.length ? (
               <div className="empty-action">
-                <p className="subtle">还没有账号。上方填入账号名后，可以直接保存或开始采集。</p>
+                <p className="subtle">还没有参考账号。先在上方输入账号名或主页链接，采集后再整理风格。</p>
                 <span className="status-pill pending">等待第一个参考账号</span>
               </div>
             ) : null}

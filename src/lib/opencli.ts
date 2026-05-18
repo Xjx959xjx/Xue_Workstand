@@ -455,7 +455,7 @@ const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
 `;
 
 const DOUYIN_VIDEO_COMMENT_EXTRACT_JS = `
-async () => {
+(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
   const collect = () => {
@@ -850,16 +850,49 @@ export async function refreshDouyinVideoDownloadUrl(
   if (!awemeId) return "";
   const excludedUrls = new Set(options.excludeUrls || []);
   if (options.preferBrowser) {
-    const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId);
+    const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId).catch(() => "");
     if (browserUrl && !excludedUrls.has(browserUrl)) return browserUrl;
   }
 
   const limit = resolveDouyinVideoLookupLimit(video);
-  const urls = await getDouyinVideoDownloadUrlsWithUserVideos(account, { limit });
+  const urls = await getDouyinVideoDownloadUrlsWithUserVideos(account, { limit }).catch(() => new Map<string, string>());
   const opencliUrl = urls.get(awemeId);
   if (opencliUrl && !excludedUrls.has(opencliUrl)) return opencliUrl;
-  const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId);
+  const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId).catch(() => "");
   return browserUrl && !excludedUrls.has(browserUrl) ? browserUrl : "";
+}
+
+export async function checkDouyinVideoAvailability(
+  account: Account,
+  video: Pick<Video, "id" | "url" | "raw">
+) {
+  const awemeId = resolveDouyinAwemeId(video);
+  if (!awemeId) {
+    return {
+      visible: false,
+      reason: "无法解析抖音视频 ID。"
+    };
+  }
+
+  try {
+    const rows = await getDouyinVideoRows(account, { limit: 50 });
+    const row = rows.find((item) => getDouyinRowAwemeId(item) === awemeId);
+    if (row) {
+      return {
+        visible: true,
+        reason: findDouyinMediaUrl(row) ? "" : "视频仍在账号列表中，但 opencli 没有返回可转写媒体地址。"
+      };
+    }
+    return {
+      visible: false,
+      reason: "当前账号最近 50 条视频里找不到这条，可能已删除、隐藏、下架，或账号权限不可见。"
+    };
+  } catch (error) {
+    return {
+      visible: null,
+      reason: `无法检查视频是否仍可见：${error instanceof Error ? error.message : "opencli 检查失败"}`
+    };
+  }
 }
 
 export async function getDouyinVideoDownloadUrls(account: Account, options: { limit?: number } = {}) {

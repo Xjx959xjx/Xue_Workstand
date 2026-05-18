@@ -57,7 +57,7 @@ export type Video = {
 
 export type DraftCommentAsset = {
   id: string;
-  platform: Platform;
+  platform: Platform | "unknown";
   text: string;
 };
 
@@ -216,15 +216,42 @@ export type CopySource = {
   updatedAt: string;
 };
 
+export type EngagementSourceType = "draft" | "text" | "url";
+
+export type EngagementRecord = {
+  id: string;
+  sourceType: EngagementSourceType;
+  title: string;
+  sourceUrl?: string;
+  resolvedUrl?: string;
+  platform: Platform | "unknown";
+  draftId?: string;
+  sourceText: string;
+  options: {
+    includeComments: boolean;
+    commentCount: number;
+    includeDanmaku: boolean;
+    danmakuCount: number;
+  };
+  comments?: NonNullable<DraftAssets["comments"]>;
+  danmaku?: NonNullable<DraftAssets["danmaku"]>;
+  fallback: boolean;
+  fallbackReason?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type LibraryState = {
   root: string;
   accounts: AccountSummary[];
   projects: ProjectSummary[];
   copySources: CopySource[];
+  engagementRecords: EngagementRecord[];
   drafts: Draft[];
   recentAccounts: AccountSummary[];
   recentProjects: ProjectSummary[];
   recentCopySources: CopySource[];
+  recentEngagementRecords: EngagementRecord[];
   recentDrafts: Draft[];
 };
 
@@ -284,3 +311,141 @@ export type BatchTranscribeResult = {
     }>;
   }>;
 };
+
+export const jobKinds = [
+  "write-copy",
+  "account-style",
+  "project-style",
+  "transcribe-video",
+  "batch-transcribe",
+  "engagement"
+] as const;
+
+export type JobKind = (typeof jobKinds)[number];
+
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "interrupted";
+
+export type JobResultRef = {
+  id?: string;
+  href: string;
+  label: string;
+};
+
+export type JobRecord = {
+  id: string;
+  kind: JobKind;
+  status: JobStatus;
+  title: string;
+  inputSummary?: string;
+  stage?: string;
+  message: string;
+  progress: number;
+  href?: string;
+  partialText?: string;
+  resultRef?: JobResultRef;
+  result?: unknown;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
+export type JobStartInput =
+  | {
+      kind: "write-copy";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        targetType?: "account" | "project";
+        platform?: Platform;
+        accountId?: string;
+        projectId?: string;
+        mode: Draft["mode"];
+        prompt: string;
+        sourceText?: string;
+        save?: boolean;
+        useWebResearch?: boolean;
+      };
+    }
+  | {
+      kind: "account-style";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        platform: Platform;
+        accountId: string;
+      };
+    }
+  | {
+      kind: "project-style";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        projectId?: string;
+        name: string;
+        description?: string;
+        sourceAccountIds: string[];
+        sourceMaterialIds?: string[];
+      };
+    }
+  | {
+      kind: "transcribe-video";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        platform: Platform;
+        accountId: string;
+        videoId: string;
+        mediaPath?: string;
+        mediaUrl?: string;
+        allowRemoteDownload?: boolean;
+      };
+    }
+  | {
+      kind: "batch-transcribe";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        platform: Platform;
+        accountId: string;
+        limit: number | "all";
+        updateStyle?: boolean;
+      };
+    }
+  | {
+      kind: "engagement";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input:
+        | {
+            sourceType: "draft";
+            draftId: string;
+            includeComments: boolean;
+            commentCount: number;
+            includeDanmaku: boolean;
+            danmakuCount: number;
+          }
+        | {
+            sourceType: "text";
+            title?: string;
+            text: string;
+            includeComments: boolean;
+            commentCount: number;
+            includeDanmaku: boolean;
+            danmakuCount: number;
+          }
+        | {
+            sourceType: "url";
+            url: string;
+            includeComments: boolean;
+            commentCount: number;
+            includeDanmaku: boolean;
+            danmakuCount: number;
+          };
+    };

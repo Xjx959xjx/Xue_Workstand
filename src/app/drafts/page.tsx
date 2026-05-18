@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Copy, MessageSquarePlus, PenLine, RefreshCw, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
+import { useFeedback } from "@/components/FeedbackProvider";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { deleteDrafts } from "@/lib/client";
@@ -12,6 +13,7 @@ import { Draft } from "@/lib/types";
 
 export default function DraftsPage() {
   const { library, loading, error, refresh } = useLibrary();
+  const { notify } = useFeedback();
   const [selectedId, setSelectedId] = useState("");
   const [draftManageMode, setDraftManageMode] = useState(false);
   const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
@@ -24,6 +26,11 @@ export default function DraftsPage() {
     return drafts.find((draft) => draft.id === selectedId) || drafts[0] || null;
   }, [drafts, selectedId]);
   const messageIsError = message.includes("失败") || message.includes("没有") || message.includes("不合法");
+
+  useEffect(() => {
+    if (!message) return;
+    notify({ tone: messageIsError ? "error" : "success", message });
+  }, [message, messageIsError, notify]);
 
   async function handleCopy() {
     if (!selectedDraft) return;
@@ -75,7 +82,7 @@ export default function DraftsPage() {
             <p className="subtle">写作台保存后的内容会沉淀到这里。</p>
           </div>
         </header>
-        <EmptyState title="还没有草稿" body="在对话写作页生成结果后点击“保存草稿”，内容会写入对应账号的 drafts 目录。" action={{ href: "/writer", label: "去写作台" }} />
+        <EmptyState title="还没有草稿" body="在对话写作页生成结果后，内容会自动写入对应账号或项目的 drafts 目录。" action={{ href: "/writer", label: "去写作台" }} />
       </div>
     );
   }
@@ -98,12 +105,6 @@ export default function DraftsPage() {
       </header>
 
       {error ? <div className="error" role="alert">{error}</div> : null}
-      {message ? (
-        <div aria-live={messageIsError ? "assertive" : "polite"} className={messageIsError ? "error" : "notice"} role={messageIsError ? "alert" : "status"}>
-          {message}
-        </div>
-      ) : null}
-
       <section className="panel three-pane drafts-workspace">
         <aside className={`pane ${draftManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header">
@@ -177,9 +178,9 @@ export default function DraftsPage() {
                 </Link>
               ) : null}
               {selectedDraft ? (
-                <Link className="btn" href={`/assets?draftId=${encodeURIComponent(selectedDraft.id)}`} title="基于这篇草稿生成评论、弹幕和封面">
+                <Link className="btn" href={`/assets?draftId=${encodeURIComponent(selectedDraft.id)}`} title="基于这篇草稿生成评论和弹幕">
                   <MessageSquarePlus size={16} />
-                  衍生素材
+                  评论生成
                 </Link>
               ) : null}
               <button className="btn" disabled={!selectedDraft} onClick={handleCopy} type="button">

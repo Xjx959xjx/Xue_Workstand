@@ -24,7 +24,7 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
     try {
       setLibrary(await getLibrary());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "读取失败");
+      setError(err instanceof Error ? err.message : "读取本地风格库失败，请确认 style-library 目录可访问。");
     } finally {
       setLoading(false);
     }

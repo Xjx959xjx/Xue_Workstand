@@ -4,12 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
+import { useFeedback } from "@/components/FeedbackProvider";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
-import { deleteProjects, saveProjectStyle, streamGenerateProjectStyle, upsertProject } from "@/lib/client";
+import { useTasks } from "@/components/TaskProvider";
+import { deleteProjects, saveProjectStyle, upsertProject } from "@/lib/client";
+import type { StyleGenerationResponse } from "@/lib/client";
+import { JobRecord, ProjectSummary } from "@/lib/types";
 
 export default function ProjectsPage() {
   const { library, loading, error, refresh } = useLibrary();
+  const { activeJobs, recentJobs, startTask } = useTasks();
+  const { notify } = useFeedback();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
@@ -19,14 +25,21 @@ export default function ProjectsPage() {
   const [message, setMessage] = useState("");
   const [projectStyleProgress, setProjectStyleProgress] = useState(0);
   const [projectStyleStage, setProjectStyleStage] = useState("");
+  const [activeProjectStyleJobId, setActiveProjectStyleJobId] = useState("");
   const [accountFilter, setAccountFilter] = useState("");
   const [projectManageMode, setProjectManageMode] = useState(false);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [handledProjectJobIds, setHandledProjectJobIds] = useState<string[]>([]);
 
   const selectedProject = useMemo(() => {
     return library?.projects.find((project) => project.id === selectedProjectId) || null;
   }, [library?.projects, selectedProjectId]);
+
+  const projectStyleJob = useMemo(
+    () => findTaskJob([...activeJobs, ...recentJobs], activeProjectStyleJobId, "project-style"),
+    [activeJobs, activeProjectStyleJobId, recentJobs]
+  );
 
   const filteredAccounts = useMemo(() => {
     const keyword = accountFilter.trim().toLowerCase();
@@ -46,7 +59,52 @@ export default function ProjectsPage() {
     setProjectStyleDraft(selectedProject.style);
   }, [selectedProject]);
 
+  useEffect(() => {
+    if (!projectStyleJob) return;
+    setActiveProjectStyleJobId(projectStyleJob.id);
+    setProjectStyleStage(projectStyleJob.message || "正在生成项目风格卡");
+    setProjectStyleProgress(projectStyleJob.progress || 0);
+    if (projectStyleJob.partialText) setProjectStyleDraft(projectStyleJob.partialText);
+    if (projectStyleJob.status === "running" || projectStyleJob.status === "queued") {
+      setBusy("project-style");
+      return;
+    }
+    if (handledProjectJobIds.includes(projectStyleJob.id)) return;
+    setHandledProjectJobIds((current) => [...current, projectStyleJob.id]);
+    setBusy("");
+    if (projectStyleJob.status === "completed") {
+      const result = projectStyleJob.result as ({ project: ProjectSummary } & StyleGenerationResponse) | undefined;
+      if (result) {
+        setSelectedProjectId(result.project.id);
+        setProjectName(result.project.name);
+        setProjectDescription(result.project.description || "");
+        setProjectAccountIds(result.project.sourceAccountIds);
+        setProjectStyleDraft(result.style);
+        setMessage(
+          result.fallback
+            ? `已降级生成项目风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+            : "项目风格卡已自动更新。"
+        );
+      } else {
+        setMessage("项目风格卡已自动更新。");
+      }
+      setProjectStyleStage("项目风格卡已更新");
+      setProjectStyleProgress(100);
+      return;
+    }
+    if (projectStyleJob.status === "failed") {
+      setProjectStyleProgress(100);
+      setProjectStyleStage("生成失败，请查看提示");
+      setMessage(projectStyleJob.error || "自动总结项目风格失败");
+    }
+  }, [handledProjectJobIds, projectStyleJob]);
+
   const messageIsError = message.includes("失败") || message.includes("没有");
+
+  useEffect(() => {
+    if (!message || isBackgroundStartMessage(message)) return;
+    notify({ tone: messageIsError ? "error" : "success", message });
+  }, [message, messageIsError, notify]);
 
   function toggleProjectAccount(accountId: string) {
     setProjectAccountIds((current) =>
@@ -114,42 +172,26 @@ export default function ProjectsPage() {
     setProjectStyleProgress(8);
     setProjectStyleStage("准备保存项目配置");
     try {
-      await streamGenerateProjectStyle({
-        projectId: selectedProject?.id,
-        name: projectName,
-        description: projectDescription,
-        sourceAccountIds: projectAccountIds
-      }, {
-        onStage(stage) {
-          setProjectStyleProgress(stage.progress || 0);
-          setProjectStyleStage(stage.message);
-        },
-        onResult(result) {
-          setProjectStyleProgress(100);
-          setProjectStyleStage("项目风格卡已更新");
-          setSelectedProjectId(result.project.id);
-          setProjectName(result.project.name);
-          setProjectDescription(result.project.description || "");
-          setProjectAccountIds(result.project.sourceAccountIds);
-          setProjectStyleDraft(result.style);
-          setMessage(
-            result.fallback
-              ? `已降级生成项目风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
-              : "项目风格卡已自动更新。"
-          );
+      const job = await startTask({
+        kind: "project-style",
+        title: "生成项目风格卡",
+        inputSummary: projectName,
+        href: "/projects",
+        input: {
+          projectId: selectedProject?.id,
+          name: projectName,
+          description: projectDescription,
+          sourceAccountIds: projectAccountIds
         }
       });
-      await refresh();
+      setActiveProjectStyleJobId(job.id);
+      setProjectStyleStage(job.message);
+      setProjectStyleProgress(job.progress);
+      setMessage("项目风格卡已在后台开始生成，可以切换到其他模块。");
     } catch (err) {
       setProjectStyleProgress(100);
       setProjectStyleStage("生成失败，请查看提示");
       setMessage(err instanceof Error ? err.message : "自动总结项目风格失败");
-    } finally {
-      window.setTimeout(() => {
-        setBusy("");
-        setProjectStyleProgress(0);
-        setProjectStyleStage("");
-      }, 900);
     }
   }
 
@@ -204,12 +246,6 @@ export default function ProjectsPage() {
       </header>
 
       {error ? <div className="error" role="alert">{error}</div> : null}
-      {message ? (
-        <div aria-live={messageIsError ? "assertive" : "polite"} className={messageIsError ? "error" : "notice"} role={messageIsError ? "alert" : "status"}>
-          {message}
-        </div>
-      ) : null}
-
       <section className="panel project-workspace">
         <div className={`project-sidebar ${projectManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header">
@@ -457,4 +493,12 @@ export default function ProjectsPage() {
       ) : null}
     </div>
   );
+}
+
+function findTaskJob(jobs: JobRecord[], jobId: string, kind: JobRecord["kind"]) {
+  return jobs.find((job) => job.id === jobId && job.kind === kind) || jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) || null;
+}
+
+function isBackgroundStartMessage(message: string) {
+  return message.includes("已在后台开始");
 }

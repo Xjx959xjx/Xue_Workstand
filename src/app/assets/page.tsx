@@ -2,19 +2,24 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Copy, Download, ExternalLink, FileUp, ImagePlus, MessageCircle, Play, RefreshCw, Upload } from "lucide-react";
-import { EmptyState } from "@/components/EmptyState";
+import {
+  Copy,
+  ExternalLink,
+  FileText,
+  FileUp,
+  Link as LinkIcon,
+  RefreshCw,
+  Send,
+  TextCursorInput
+} from "lucide-react";
+import { useFeedback } from "@/components/FeedbackProvider";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
-import {
-  collectDraftCoverReferences,
-  draftAssetFileUrl,
-  generateDraftEngagement,
-  publishFeishuDocument,
-  streamGenerateDraftCover,
-  uploadDraftCoverReferences
-} from "@/lib/client";
-import { Draft, DraftCoverReference } from "@/lib/types";
+import { useTasks } from "@/components/TaskProvider";
+import { publishFeishuDocument } from "@/lib/client";
+import { Draft, EngagementRecord, EngagementSourceType, JobRecord } from "@/lib/types";
+
+type BusyState = "generate" | "feishu-comments" | "feishu-danmaku" | "";
 
 export default function AssetsPage() {
   return (
@@ -27,128 +32,123 @@ export default function AssetsPage() {
 function AssetsPageContent() {
   const searchParams = useSearchParams();
   const { library, loading, refresh } = useLibrary();
+  const { activeJobs, recentJobs, startTask } = useTasks();
+  const { notify } = useFeedback();
+  const [sourceType, setSourceType] = useState<EngagementSourceType>("draft");
   const [selectedId, setSelectedId] = useState("");
+  const [textTitle, setTextTitle] = useState("");
+  const [textInput, setTextInput] = useState("");
+  const [urlInput, setUrlInput] = useState("");
+  const [includeComments, setIncludeComments] = useState(true);
+  const [includeDanmaku, setIncludeDanmaku] = useState(false);
   const [commentCount, setCommentCount] = useState(50);
   const [danmakuCount, setDanmakuCount] = useState(100);
-  const [coverCount, setCoverCount] = useState(2);
-  const [coverPrompt, setCoverPrompt] = useState("");
-  const [selectedReferenceIds, setSelectedReferenceIds] = useState<string[]>([]);
-  const [busy, setBusy] = useState("");
+  const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
-  const [coverStage, setCoverStage] = useState("");
-  const [coverProgress, setCoverProgress] = useState(0);
+  const [resultRecord, setResultRecord] = useState<EngagementRecord | null>(null);
   const [feishuResult, setFeishuResult] = useState<{ title: string; url: string } | null>(null);
+  const [previewDraft, setPreviewDraft] = useState<Draft | null>(null);
+  const [activeEngagementJobId, setActiveEngagementJobId] = useState("");
+  const [handledEngagementJobIds, setHandledEngagementJobIds] = useState<string[]>([]);
 
   const drafts = useMemo(() => library?.drafts || [], [library?.drafts]);
+  const records = useMemo(() => library?.engagementRecords || [], [library?.engagementRecords]);
   const selectedDraft = useMemo(() => drafts.find((draft) => draft.id === selectedId) || drafts[0] || null, [drafts, selectedId]);
-  const supportsBilibili = selectedDraft ? draftSupportsBilibili(selectedDraft) : false;
-  const references = selectedDraft?.assets?.cover?.references || [];
-  const accountReferences = references.filter((reference) => reference.source === "account");
-  const uploadedReferences = references.filter((reference) => reference.source === "upload");
-  const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持");
-  const isWritingAssets = Boolean(busy);
+  const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持") || notice.includes("请");
+  const activeComments = resultRecord?.comments?.items || [];
+  const activeDanmaku = resultRecord?.danmaku?.items || [];
+  const activeTitle = resultRecord?.title || selectedDraft?.title || "评论生成";
+  const engagementJob = useMemo(
+    () => findTaskJob([...activeJobs, ...recentJobs], activeEngagementJobId, "engagement"),
+    [activeEngagementJobId, activeJobs, recentJobs]
+  );
+  const isGenerating = Boolean(engagementJob && (engagementJob.status === "queued" || engagementJob.status === "running"));
+  const canGenerate = !busy && !isGenerating && (includeComments || includeDanmaku) && hasSourceInput(sourceType, selectedDraft, textInput, urlInput);
+
+  useEffect(() => {
+    if (!notice || isBackgroundStartMessage(notice)) return;
+    notify({ tone: noticeIsError ? "error" : "success", message: notice });
+  }, [notice, noticeIsError, notify]);
 
   useEffect(() => {
     const draftId = searchParams.get("draftId");
-    if (draftId) setSelectedId(draftId);
+    if (draftId) {
+      setSourceType("draft");
+      setSelectedId(draftId);
+    }
   }, [searchParams]);
 
   useEffect(() => {
-    if (!selectedDraft) return;
-    const available = (selectedDraft.assets?.cover?.references || []).map((reference) => reference.id);
-    setSelectedReferenceIds((current) => {
-      const kept = current.filter((id) => available.includes(id));
-      return kept.length ? kept : available.slice(0, 3);
-    });
-  }, [selectedDraft]);
+    if (!engagementJob) return;
+    setActiveEngagementJobId(engagementJob.id);
+    if (engagementJob.status === "running" || engagementJob.status === "queued") {
+      setBusy("generate");
+      setNotice(engagementJob.message || "正在生成互动素材");
+      return;
+    }
+    if (handledEngagementJobIds.includes(engagementJob.id)) return;
+    setHandledEngagementJobIds((current) => [...current, engagementJob.id]);
+    setBusy("");
+    if (engagementJob.status === "completed") {
+      const result = engagementJob.result as { record?: EngagementRecord } | undefined;
+      if (result?.record) {
+        setResultRecord(result.record);
+        setNotice(buildSuccessMessage(result.record));
+      } else {
+        setNotice("互动素材已生成。");
+      }
+      return;
+    }
+    if (engagementJob.status === "failed") {
+      setNotice(engagementJob.error || "生成评论失败，请检查输入和模型配置。");
+    }
+  }, [engagementJob, handledEngagementJobIds]);
 
-  async function handleGenerateEngagement() {
-    if (!selectedDraft) return;
-    setBusy("engagement");
+  async function handleGenerate() {
+    if (!includeComments && !includeDanmaku) {
+      setNotice("请至少选择评论或弹幕。");
+      return;
+    }
+
+    setBusy("generate");
     setNotice("");
     try {
-      const result = await generateDraftEngagement({
-        draftId: selectedDraft.id,
+      const options = {
+        includeComments,
         commentCount,
+        includeDanmaku,
         danmakuCount
+      };
+      const input =
+        sourceType === "draft"
+          ? {
+              sourceType,
+              draftId: selectedDraft?.id || "",
+              ...options
+            }
+          : sourceType === "text"
+            ? {
+                sourceType,
+                title: textTitle,
+                text: textInput,
+                ...options
+              }
+            : {
+                sourceType,
+                url: urlInput,
+                ...options
+              };
+      const job = await startTask({
+        kind: "engagement",
+        title: "生成评论素材",
+        inputSummary: activeTitle,
+        href: "/assets",
+        input
       });
-      setNotice(result.supportsDanmaku ? "评论和弹幕已生成。" : "评论已生成；当前草稿不支持 B站弹幕。");
-      await refresh();
+      setActiveEngagementJobId(job.id);
+      setNotice("评论素材已在后台开始生成，可以切换到其他模块。");
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "生成评论和弹幕失败");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function handleCollectReferences() {
-    if (!selectedDraft) return;
-    setBusy("references");
-    setNotice("");
-    try {
-      const result = await collectDraftCoverReferences(selectedDraft.id);
-      setSelectedReferenceIds(result.references.slice(0, 3).map((reference) => reference.id));
-      setNotice(result.supportsCover ? "账号封面参考图已更新。" : "当前草稿没有 B站参考账号，无法收集账号封面。");
-      await refresh();
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "收集封面参考图失败");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function handleUploadReferences(files: FileList | null) {
-    if (!selectedDraft || !files?.length) return;
-    setBusy("upload");
-    setNotice("");
-    try {
-      const result = await uploadDraftCoverReferences({
-        draftId: selectedDraft.id,
-        files: Array.from(files)
-      });
-      setSelectedReferenceIds((current) => [...new Set([...current, ...result.references.map((reference) => reference.id)])]);
-      setNotice("参考图已上传。");
-      await refresh();
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "上传参考图失败");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function handleGenerateCover() {
-    if (!selectedDraft) return;
-    setBusy("cover");
-    setNotice("");
-    setCoverStage("准备生成封面");
-    setCoverProgress(8);
-    try {
-      await streamGenerateDraftCover(
-        {
-          draftId: selectedDraft.id,
-          referenceIds: selectedReferenceIds,
-          prompt: coverPrompt,
-          count: coverCount
-        },
-        {
-          onStage(stage) {
-            setCoverStage(stage.message);
-            setCoverProgress(stage.progress || 0);
-          },
-          onResult() {
-            setNotice("封面已生成。");
-          }
-        }
-      );
-      await refresh();
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "生成封面失败");
-    } finally {
-      window.setTimeout(() => {
-        setBusy("");
-        setCoverStage("");
-        setCoverProgress(0);
-      }, 500);
+      setNotice(err instanceof Error ? err.message : "生成评论失败，请检查输入和模型配置。");
     }
   }
 
@@ -157,13 +157,13 @@ function AssetsPageContent() {
     setNotice(message);
   }
 
-  async function handlePublishAssetText(title: string, items: string[], emptyMessage: string) {
-    if (!selectedDraft || !items.length) return;
-    setBusy("feishu-comments");
+  async function handlePublishAssetText(kind: "comments" | "danmaku", items: string[], emptyMessage: string) {
+    if (!items.length) return;
+    setBusy(kind === "comments" ? "feishu-comments" : "feishu-danmaku");
     setNotice("");
     try {
       const result = await publishFeishuDocument({
-        title: `${selectedDraft.title}-${title}`,
+        title: `${activeTitle}-${kind === "comments" ? "评论池" : "弹幕池"}`,
         content: items.join("\n")
       });
       setFeishuResult({ title: result.title, url: result.url });
@@ -175,31 +175,16 @@ function AssetsPageContent() {
     }
   }
 
-  if (!loading && !drafts.length) {
-    return (
-      <div className="page">
-        <header className="page-header workbench-header">
-          <div>
-            <p className="eyebrow">Assets</p>
-            <h1>衍生素材</h1>
-            <p className="subtle">先在写作台保存一篇草稿，再生成评论、弹幕和封面。</p>
-          </div>
-        </header>
-        <EmptyState title="还没有草稿" body="衍生素材会跟随草稿保存。" action={{ href: "/writer", label: "去写作台" }} />
-      </div>
-    );
-  }
-
   return (
-    <div className="page">
+    <div className="page assets-page">
       <header className="page-header workbench-header">
         <div>
-          <p className="eyebrow">Assets</p>
-          <h1>衍生素材</h1>
-          <p className="subtle">围绕已保存草稿生成观众评论、B站弹幕和 B站封面。</p>
+          <p className="eyebrow">Engagement</p>
+          <h1>评论生成</h1>
+          <p className="subtle">从草稿、粘贴文案或 B站 / 抖音视频链接生成评论池；需要时再生成弹幕。</p>
         </div>
         <div className="button-row">
-          <span className="stat-pill">{drafts.length} 个草稿</span>
+          <span className="stat-pill">{records.length} 条记录</span>
           <button className="btn" onClick={refresh} type="button">
             <RefreshCw size={16} />
             刷新
@@ -207,199 +192,188 @@ function AssetsPageContent() {
         </div>
       </header>
 
-      {notice ? (
-        <div aria-live={noticeIsError ? "assertive" : "polite"} className={noticeIsError ? "error" : "notice"} role={noticeIsError ? "alert" : "status"}>
-          {notice}
-        </div>
-      ) : null}
-
-      <section className="panel three-pane assets-workspace">
-        <aside className="pane">
-          <div className="pane-header">
-            <h2>草稿</h2>
-          </div>
-          <div className="pane-body">
-            <div className="status-summary">
-              <span>{drafts.length} 个草稿</span>
-              <span>选择后生成素材</span>
-            </div>
-            {drafts.map((draft) => (
-              <button
-                aria-current={selectedDraft?.id === draft.id ? "true" : undefined}
-                className={`list-button ${selectedDraft?.id === draft.id ? "active" : ""}`}
-                key={draft.id}
-                onClick={() => setSelectedId(draft.id)}
-                type="button"
-              >
-                <span>
-                  <span className="list-title">{draft.title}</span>
-                  <span className="list-meta">
-                    {getDraftReferenceLabel(draft)} · {formatDate(draft.createdAt)}
-                  </span>
-                </span>
-                <span className="status-pill done">{draft.assets ? "有素材" : "草稿"}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="pane assets-main-pane">
+      <section className="panel three-pane assets-workspace engagement-workspace">
+        <section className="pane assets-main-pane engagement-generator-pane">
           <div className="pane-header">
             <div>
-              <h2>{selectedDraft?.title || "素材生成"}</h2>
-              <p className="pane-subtitle">{selectedDraft ? getDraftReferenceLabel(selectedDraft) : "选择草稿后开始"}</p>
+              <h2>生成器</h2>
+              <p className="pane-subtitle">评论默认开启，弹幕按需勾选</p>
             </div>
           </div>
           <div className="pane-body detail-stack">
-            {selectedDraft ? (
-              <>
-                <div className="stat-row">
-                  <span className="stat-pill">{selectedDraft.targetType === "project" ? "项目" : formatPlatform(selectedDraft.platform)}</span>
-                  <span className="stat-pill">评论默认 50</span>
-                  <span className="stat-pill">B站弹幕默认 100</span>
-                  <span className={supportsBilibili ? "status-pill done" : "status-pill pending"}>{supportsBilibili ? "支持 B站封面" : "仅评论可用"}</span>
-                </div>
-
-                <section className="detail-section">
-                  <div className="section-title-row">
-                    <div>
-                      <h3>观众评论与 B站弹幕</h3>
-                      <p className="subtle">评论覆盖 B站 / 抖音，弹幕仅 B站草稿可用。</p>
-                    </div>
-                    <button className="btn primary" disabled={isWritingAssets} onClick={handleGenerateEngagement} type="button">
-                      <MessageCircle size={16} />
-                      {busy === "engagement" ? "生成中..." : "生成"}
-                    </button>
-                  </div>
-                  <div className="assets-control-grid">
-                    <label className="field">
-                      <span>评论条数</span>
-                      <input min={1} max={200} type="number" value={commentCount} onChange={(event) => setCommentCount(Number(event.target.value))} />
-                    </label>
-                    <label className="field">
-                      <span>B站弹幕条数</span>
-                      <input min={1} max={300} type="number" value={danmakuCount} onChange={(event) => setDanmakuCount(Number(event.target.value))} />
-                    </label>
-                  </div>
-                  <AssetTextList
-                    empty="还没有评论。"
-                    items={(selectedDraft.assets?.comments?.items || []).map((item) => item.text)}
-                    title={`评论池 ${selectedDraft.assets?.comments?.items.length || 0}`}
-                    onCopy={() => copyText((selectedDraft.assets?.comments?.items || []).map((item) => item.text).join("\n"), "评论已复制。")}
-                    onPublish={() =>
-                      handlePublishAssetText(
-                        "评论池",
-                        (selectedDraft.assets?.comments?.items || []).map((item) => item.text),
-                        "导出评论池失败"
-                      )
-                    }
-                    publishDisabled={Boolean(busy)}
-                    publishing={busy === "feishu-comments"}
-                  />
-                  {supportsBilibili ? (
-                    <AssetTextList
-                      empty="还没有弹幕。"
-                      items={(selectedDraft.assets?.danmaku?.items || []).map((item) => `${formatTime(item.timeSec)}  ${item.text}`)}
-                      title={`B站弹幕 ${selectedDraft.assets?.danmaku?.items.length || 0}`}
-                      onCopy={() =>
-                        copyText((selectedDraft.assets?.danmaku?.items || []).map((item) => `${formatTime(item.timeSec)}\t${item.text}`).join("\n"), "弹幕已复制。")
-                      }
-                    />
-                  ) : null}
-                </section>
-
-                <section className={`detail-section ${supportsBilibili ? "" : "disabled-card"}`}>
-                  <div className="section-title-row">
-                    <div>
-                      <h3>B站封面</h3>
-                      <p className="subtle">可从账号爆款封面和上传图片里选择参考图。</p>
-                    </div>
-                    <div className="button-row">
-                      <button className="btn" disabled={!supportsBilibili || isWritingAssets} onClick={handleCollectReferences} type="button">
-                        <ImagePlus size={16} />
-                        {busy === "references" ? "收集中..." : "账号封面"}
-                      </button>
-                      <label className="btn file-button">
-                        <Upload size={16} />
-                        上传图片
-                        <input accept="image/*" disabled={!supportsBilibili || isWritingAssets} multiple type="file" onChange={(event) => handleUploadReferences(event.target.files)} />
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="assets-control-grid">
-                    <label className="field">
-                      <span>生成张数</span>
-                      <input min={1} max={4} type="number" value={coverCount} onChange={(event) => setCoverCount(Number(event.target.value))} />
-                    </label>
-                    <label className="field">
-                      <span>额外封面要求</span>
-                      <input placeholder="例如：更强对比、人物留白、标题区明显" value={coverPrompt} onChange={(event) => setCoverPrompt(event.target.value)} />
-                    </label>
-                  </div>
-
-                  {busy === "cover" ? (
-                    <div className="project-progress" role="status" aria-live="polite">
-                      <div className="project-progress-copy">
-                        <span>{coverStage || "正在生成封面"}</span>
-                        <strong>{coverProgress}%</strong>
-                      </div>
-                      <div className="progress-track" aria-hidden="true">
-                        <div className="progress-fill" style={{ width: `${coverProgress}%` }} />
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <ReferenceGrid
-                    draftId={selectedDraft.id}
-                    references={references}
-                    selectedIds={selectedReferenceIds}
-                    onToggle={(id) =>
-                      setSelectedReferenceIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
-                    }
-                  />
-
-                  <button className="btn primary" disabled={!supportsBilibili || isWritingAssets} onClick={handleGenerateCover} type="button">
-                    <Play size={16} />
-                    {busy === "cover" ? "生成中..." : "生成封面"}
+            <div className="segmented source-tabs" role="tablist" aria-label="选择来源">
+              {sourceTabs.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    aria-selected={sourceType === tab.value}
+                    className={sourceType === tab.value ? "active" : ""}
+                    key={tab.value}
+                    onClick={() => {
+                      setSourceType(tab.value);
+                      setResultRecord(null);
+                    }}
+                    role="tab"
+                    type="button"
+                  >
+                    <Icon size={15} />
+                    {tab.label}
                   </button>
+                );
+              })}
+            </div>
 
-                  <div className="cover-image-grid">
-                    {(selectedDraft.assets?.cover?.images || []).map((image) => (
-                      <a className="cover-card" href={draftAssetFileUrl(selectedDraft.id, image.path)} key={image.id} target="_blank" rel="noreferrer">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img alt="生成封面" src={draftAssetFileUrl(selectedDraft.id, image.path)} />
-                        <span>
-                          <Download size={14} />
-                          {formatDate(image.createdAt)}
-                        </span>
-                      </a>
-                    ))}
-                  </div>
+            <SourceInput
+              drafts={drafts}
+              loading={loading}
+              selectedDraft={selectedDraft}
+              selectedId={selectedId}
+              sourceType={sourceType}
+              textInput={textInput}
+              textTitle={textTitle}
+              urlInput={urlInput}
+              onSelectDraft={setSelectedId}
+              onOpenPreview={setPreviewDraft}
+              onTextInput={setTextInput}
+              onTextTitle={setTextTitle}
+              onUrlInput={setUrlInput}
+            />
 
-                  {!accountReferences.length && !uploadedReferences.length ? <p className="subtle">先收集账号封面，或上传一张参考图。</p> : null}
-                </section>
-              </>
-            ) : (
-              <p className="subtle">选择一个草稿查看和生成衍生素材。</p>
-            )}
+            <section className="detail-section engagement-options">
+              <div className="section-title-row">
+                <div>
+                  <h3>生成选项</h3>
+                  <p className="subtle">关闭评论后可以只生成弹幕。</p>
+                </div>
+              </div>
+              <div className="engagement-option-grid">
+                <label className={`engagement-option ${includeComments ? "active" : ""}`}>
+                  <input checked={includeComments} type="checkbox" onChange={(event) => setIncludeComments(event.target.checked)} />
+                  <span>
+                    <strong>评论</strong>
+                    <small>默认生成评论池</small>
+                  </span>
+                  <input
+                    aria-label="评论条数"
+                    disabled={!includeComments}
+                    max={200}
+                    min={1}
+                    type="number"
+                    value={commentCount}
+                    onChange={(event) => setCommentCount(Number(event.target.value))}
+                  />
+                </label>
+                <label className={`engagement-option ${includeDanmaku ? "active" : ""}`}>
+                  <input checked={includeDanmaku} type="checkbox" onChange={(event) => setIncludeDanmaku(event.target.checked)} />
+                  <span>
+                    <strong>弹幕</strong>
+                    <small>按口播节奏生成时间点</small>
+                  </span>
+                  <input
+                    aria-label="弹幕条数"
+                    disabled={!includeDanmaku}
+                    max={300}
+                    min={1}
+                    type="number"
+                    value={danmakuCount}
+                    onChange={(event) => setDanmakuCount(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+              <button className="btn primary engagement-submit" disabled={!canGenerate} onClick={handleGenerate} type="button">
+                <Send size={16} />
+                {busy === "generate" ? "正在生成" : "生成"}
+              </button>
+            </section>
+
+            {busy === "generate" ? (
+              <div className="project-progress" role="status" aria-live="polite">
+                <div className="project-progress-copy">
+                  <span>{sourceType === "url" ? "正在读取链接并生成互动素材" : "正在生成互动素材"}</span>
+                  <strong>处理中</strong>
+                </div>
+                <div className="progress-track" aria-hidden="true">
+                  <div className="progress-fill indeterminate" />
+                </div>
+              </div>
+            ) : null}
+
           </div>
         </section>
 
         <aside className="pane">
           <div className="pane-header">
-            <h2>文案</h2>
+            <div>
+              <h2>生成结果</h2>
+              <p className="pane-subtitle">{resultRecord ? resultRecord.title : "评论和弹幕会显示在这里"}</p>
+            </div>
+          </div>
+          <div className="pane-body engagement-results-pane">
+            <AssetTextList
+              empty="生成后会在这里显示评论池。"
+              items={activeComments.map((item) => item.text)}
+              title={`评论池 ${activeComments.length}`}
+              onCopy={() => copyText(activeComments.map((item) => item.text).join("\n"), "评论已复制。")}
+              onPublish={() =>
+                handlePublishAssetText(
+                  "comments",
+                  activeComments.map((item) => item.text),
+                  "导出评论池失败"
+                )
+              }
+              publishDisabled={Boolean(busy)}
+              publishing={busy === "feishu-comments"}
+            />
+            <AssetTextList
+              empty={includeDanmaku || activeDanmaku.length ? "生成后会在这里显示弹幕池。" : "勾选弹幕后会生成弹幕池。"}
+              items={activeDanmaku.map((item) => `${formatTime(item.timeSec)}  ${item.text}`)}
+              title={`弹幕池 ${activeDanmaku.length}`}
+              onCopy={() => copyText(activeDanmaku.map((item) => `${formatTime(item.timeSec)}\t${item.text}`).join("\n"), "弹幕已复制。")}
+              onPublish={() =>
+                handlePublishAssetText(
+                  "danmaku",
+                  activeDanmaku.map((item) => `${formatTime(item.timeSec)}\t${item.text}`),
+                  "导出弹幕池失败"
+                )
+              }
+              publishDisabled={Boolean(busy)}
+              publishing={busy === "feishu-danmaku"}
+            />
+          </div>
+        </aside>
+
+        <aside className="pane engagement-history-pane">
+          <div className="pane-header">
+            <div>
+              <h2>历史记录</h2>
+              <p className="pane-subtitle">链接、粘贴和草稿都会保存</p>
+            </div>
           </div>
           <div className="pane-body">
-            {selectedDraft ? (
-              <>
-                <div className="stat-row">
-                  <span className="stat-pill">{formatDate(selectedDraft.createdAt)}</span>
-                </div>
-                <article className="markdown-box draft-document">{selectedDraft.content}</article>
-              </>
+            <div className="status-summary">
+              <span>{records.length} 条记录</span>
+              <span>点击查看结果</span>
+            </div>
+            {records.length ? (
+              records.map((record) => (
+                <button
+                  aria-current={resultRecord?.id === record.id ? "true" : undefined}
+                  className={`list-button ${resultRecord?.id === record.id ? "active" : ""}`}
+                  key={record.id}
+                  onClick={() => setResultRecord(record)}
+                  type="button"
+                >
+                  <span>
+                    <span className="list-title">{record.title}</span>
+                    <span className="list-meta">
+                      {formatSourceType(record.sourceType)} · {formatDate(record.createdAt)}
+                    </span>
+                  </span>
+                  <span className="status-pill done">{record.comments?.items.length || 0}/{record.danmaku?.items.length || 0}</span>
+                </button>
+              ))
             ) : (
-              <p className="subtle">暂无草稿。</p>
+              <p className="subtle">生成后会在这里保留记录。</p>
             )}
           </div>
         </aside>
@@ -424,6 +398,161 @@ function AssetsPageContent() {
           </div>
         </div>
       ) : null}
+
+      {previewDraft ? (
+        <SourcePreviewModal draft={previewDraft} onClose={() => setPreviewDraft(null)} />
+      ) : null}
+    </div>
+  );
+}
+
+function SourceInput({
+  drafts,
+  loading,
+  selectedDraft,
+  selectedId,
+  sourceType,
+  textInput,
+  textTitle,
+  urlInput,
+  onSelectDraft,
+  onOpenPreview,
+  onTextInput,
+  onTextTitle,
+  onUrlInput
+}: {
+  drafts: Draft[];
+  loading: boolean;
+  selectedDraft: Draft | null;
+  selectedId: string;
+  sourceType: EngagementSourceType;
+  textInput: string;
+  textTitle: string;
+  urlInput: string;
+  onSelectDraft: (id: string) => void;
+  onOpenPreview: (draft: Draft) => void;
+  onTextInput: (value: string) => void;
+  onTextTitle: (value: string) => void;
+  onUrlInput: (value: string) => void;
+}) {
+  const [draftSearch, setDraftSearch] = useState("");
+  const filteredDrafts = useMemo(() => {
+    const keyword = draftSearch.trim().toLowerCase();
+    if (!keyword) return drafts;
+    return drafts.filter((draft) => {
+      const haystack = `${draft.title} ${getDraftReferenceLabel(draft)} ${formatDate(draft.createdAt)}`.toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [draftSearch, drafts]);
+
+  if (sourceType === "text") {
+    return (
+      <section className="detail-section engagement-source-panel">
+        <label className="field">
+          <span>标题，可不填</span>
+          <input placeholder="例如：这篇评论池" value={textTitle} onChange={(event) => onTextTitle(event.target.value)} />
+        </label>
+        <label className="field">
+          <span>文案</span>
+          <textarea className="engagement-textarea" placeholder="把要生成评论的文案粘贴到这里。" value={textInput} onChange={(event) => onTextInput(event.target.value)} />
+        </label>
+      </section>
+    );
+  }
+
+  if (sourceType === "url") {
+    return (
+      <section className="detail-section engagement-source-panel">
+        <label className="field">
+          <span>视频链接</span>
+          <input placeholder="粘贴 B站或抖音视频链接" value={urlInput} onChange={(event) => onUrlInput(event.target.value)} />
+        </label>
+        <p className="subtle">暂只支持 B站 / 抖音视频链接；普通网页文章请改用粘贴文案。</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="detail-section engagement-source-panel">
+      <div className="section-title-row">
+        <div>
+          <h3>选择草稿</h3>
+          <p className="subtle">{selectedDraft ? getDraftReferenceLabel(selectedDraft) : loading ? "正在读取草稿" : "暂无草稿"}</p>
+        </div>
+        <button className="btn" disabled={!selectedDraft} onClick={() => selectedDraft && onOpenPreview(selectedDraft)} type="button">
+          <FileText size={16} />
+          来源预览
+        </button>
+      </div>
+      <label className="field engagement-draft-search">
+        <span>搜索草稿</span>
+        <input
+          placeholder="按标题、账号或项目筛选"
+          value={draftSearch}
+          onChange={(event) => setDraftSearch(event.target.value)}
+        />
+      </label>
+      <div className="status-summary engagement-draft-summary">
+        <span>{filteredDrafts.length}/{drafts.length} 个草稿</span>
+        <span>列表内滚动</span>
+      </div>
+      <div className="engagement-draft-list" role="listbox" aria-label="草稿列表">
+        {filteredDrafts.length ? (
+          filteredDrafts.map((draft) => {
+            const active = (selectedDraft?.id || selectedId) === draft.id;
+            return (
+              <button
+                aria-current={active ? "true" : undefined}
+                aria-selected={active}
+                className={`list-button ${active ? "active" : ""}`}
+                key={draft.id}
+                onClick={() => onSelectDraft(draft.id)}
+                role="option"
+                title="选择这篇草稿"
+                type="button"
+              >
+                <span>
+                  <span className="list-title">{draft.title}</span>
+                  <span className="list-meta">
+                    {getDraftReferenceLabel(draft)} · {formatDate(draft.createdAt)}
+                  </span>
+                </span>
+                <span className="status-pill done">{draft.assets?.comments || draft.assets?.danmaku ? "有记录" : "草稿"}</span>
+              </button>
+            );
+          })
+        ) : drafts.length ? (
+          <p className="subtle">没有匹配的草稿，换个关键词试试。</p>
+        ) : (
+          <p className="subtle">还没有草稿，也可以切换到粘贴文案或视频链接。</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SourcePreviewModal({ draft, onClose }: { draft: Draft; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop">
+      <div aria-labelledby="source-preview-title" aria-modal="true" className="modal-panel source-preview-modal" role="dialog" tabIndex={-1}>
+        <div className="modal-header">
+          <div>
+            <h2 id="source-preview-title">来源预览</h2>
+            <p className="pane-subtitle">{draft.title}</p>
+          </div>
+          <button className="btn" onClick={onClose} type="button">
+            关闭
+          </button>
+        </div>
+        <div className="source-preview-body">
+          <div className="stat-row">
+            <span className="stat-pill">{draft.targetType === "project" ? "项目" : formatPlatform(draft.platform)}</span>
+            <span className="stat-pill">{getDraftReferenceLabel(draft)}</span>
+            <span className="stat-pill">{formatDate(draft.createdAt)}</span>
+          </div>
+          <article className="markdown-box draft-document">{draft.content}</article>
+        </div>
+      </div>
     </div>
   );
 }
@@ -469,67 +598,60 @@ function AssetTextList({
   );
 }
 
-function ReferenceGrid({
-  draftId,
-  references,
-  selectedIds,
-  onToggle
-}: {
-  draftId: string;
-  references: DraftCoverReference[];
-  selectedIds: string[];
-  onToggle: (id: string) => void;
-}) {
-  if (!references.length) return <p className="subtle">暂无参考图。</p>;
-  return (
-    <div className="reference-grid">
-      {references.map((reference) => {
-        const src = reference.path ? draftAssetFileUrl(draftId, reference.path) : reference.url || "";
-        const selected = selectedIds.includes(reference.id);
-        return (
-          <button className={`reference-card ${selected ? "active" : ""}`} key={reference.id} onClick={() => onToggle(reference.id)} type="button">
-            {src ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img alt={reference.label} src={src} />
-            ) : (
-              <span className="subtle">无预览</span>
-            )}
-            <span>
-              <strong>{reference.source === "upload" ? "上传" : "账号"}</strong>
-              <small>{reference.label}</small>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function AssetsFallback() {
   return (
     <div className="page">
       <header className="page-header workbench-header">
         <div>
-          <p className="eyebrow">Assets</p>
-          <h1>衍生素材</h1>
-          <p className="subtle">正在读取素材模块。</p>
+          <p className="eyebrow">Engagement</p>
+          <h1>评论生成</h1>
+          <p className="subtle">正在读取草稿和已生成记录。</p>
         </div>
       </header>
     </div>
   );
 }
 
+const sourceTabs: Array<{ value: EngagementSourceType; label: string; icon: typeof FileText }> = [
+  { value: "draft", label: "选草稿", icon: FileText },
+  { value: "text", label: "粘贴文案", icon: TextCursorInput },
+  { value: "url", label: "视频链接", icon: LinkIcon }
+];
+
+function hasSourceInput(sourceType: EngagementSourceType, selectedDraft: Draft | null, textInput: string, urlInput: string) {
+  if (sourceType === "draft") return Boolean(selectedDraft);
+  if (sourceType === "text") return Boolean(textInput.trim());
+  return Boolean(urlInput.trim());
+}
+
+function buildSuccessMessage(record: EngagementRecord) {
+  const commentCount = record.comments?.items.length || 0;
+  const danmakuCount = record.danmaku?.items.length || 0;
+  if (commentCount && danmakuCount) return `已生成 ${commentCount} 条评论和 ${danmakuCount} 条弹幕。`;
+  if (commentCount) return `已生成 ${commentCount} 条评论。`;
+  return `已生成 ${danmakuCount} 条弹幕。`;
+}
+
 function getDraftReferenceLabel(draft: Draft) {
   return draft.targetType === "project" ? `项目 ${draft.projectName}` : `${formatPlatform(draft.platform)} / ${draft.accountName}`;
 }
 
-function draftSupportsBilibili(draft: Draft) {
-  if (draft.targetType !== "project") return draft.platform === "bilibili";
-  return Boolean(draft.styleRef.sourceAccountIds?.some((id) => id.startsWith("bilibili:")));
+function formatSourceType(sourceType: EngagementSourceType) {
+  if (sourceType === "draft") return "草稿";
+  if (sourceType === "text") return "粘贴";
+  return "链接";
 }
 
 function formatTime(seconds: number) {
   const minute = Math.floor(seconds / 60);
   const second = seconds % 60;
   return `${minute}:${String(second).padStart(2, "0")}`;
+}
+
+function findTaskJob(jobs: JobRecord[], jobId: string, kind: JobRecord["kind"]) {
+  return jobs.find((job) => job.id === jobId && job.kind === kind) || jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) || null;
+}
+
+function isBackgroundStartMessage(message: string) {
+  return message.includes("已在后台开始");
 }

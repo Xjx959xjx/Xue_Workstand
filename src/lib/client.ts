@@ -7,6 +7,9 @@ import {
   Draft,
   DraftCoverReference,
   DraftInput,
+  EngagementRecord,
+  JobRecord,
+  JobStartInput,
   LibraryState,
   Platform,
   ProjectSummary,
@@ -137,6 +140,21 @@ async function readNdjsonStream<TEvent extends { type: string }>(
 
 export function getLibrary() {
   return requestJson<LibraryState>("/api/library");
+}
+
+export function getJobs() {
+  return requestJson<{ jobs: JobRecord[]; active: JobRecord[]; recent: JobRecord[] }>("/api/jobs");
+}
+
+export function getJob(jobId: string) {
+  return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function startJob(input: JobStartInput) {
+  return requestJson<{ job: JobRecord; jobId: string }>("/api/jobs", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }
 
 export function collectAccount(input: {
@@ -531,6 +549,44 @@ export function generateDraftEngagement(input: {
       : never;
     supportsDanmaku: boolean;
   }>("/api/draft-assets/engagement", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function generateEngagement(input:
+  | {
+      sourceType: "draft";
+      draftId: string;
+      includeComments: boolean;
+      commentCount: number;
+      includeDanmaku: boolean;
+      danmakuCount: number;
+    }
+  | {
+      sourceType: "text";
+      title?: string;
+      text: string;
+      includeComments: boolean;
+      commentCount: number;
+      includeDanmaku: boolean;
+      danmakuCount: number;
+    }
+  | {
+      sourceType: "url";
+      url: string;
+      includeComments: boolean;
+      commentCount: number;
+      includeDanmaku: boolean;
+      danmakuCount: number;
+    }
+) {
+  return requestJson<{
+    draft?: Draft;
+    record: EngagementRecord;
+    comments?: EngagementRecord["comments"];
+    danmaku?: EngagementRecord["danmaku"];
+  }>("/api/engagement", {
     method: "POST",
     body: JSON.stringify(input)
   });

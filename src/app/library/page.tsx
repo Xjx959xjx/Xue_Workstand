@@ -5,9 +5,11 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { Eye, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
+import { useFeedback } from "@/components/FeedbackProvider";
 import { formatDateWithYear, formatNumber, formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { StatusPill } from "@/components/StatusPill";
+import { useTasks } from "@/components/TaskProvider";
 import {
   createAccount,
   deleteAccounts,
@@ -15,13 +17,11 @@ import {
   getTranscript,
   hydrateVideo,
   saveTranscript,
-  saveStyle,
-  streamBatchTranscribe,
-  streamGenerateStyle,
-  transcribeVideo
+  saveStyle
 } from "@/lib/client";
 import type { StyleGenerationResponse } from "@/lib/client";
-import { BatchTranscribeResult, Platform, Video } from "@/lib/types";
+import { formatJobErrorMessage } from "@/lib/job-messages";
+import { BatchTranscribeResult, JobRecord, Platform, Video } from "@/lib/types";
 import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } from "@/lib/utils";
 
 type BatchLimit = 3 | 5 | 10 | "all";
@@ -56,6 +56,8 @@ function getVideoOpenUrl(video: Video | null) {
 
 export default function LibraryPage() {
   const { library, loading, error, refresh } = useLibrary();
+  const { activeJobs, recentJobs, startTask } = useTasks();
+  const { notify } = useFeedback();
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
   const [styleDraft, setStyleDraft] = useState("");
@@ -68,6 +70,9 @@ export default function LibraryPage() {
   const [transcribeStage, setTranscribeStage] = useState("");
   const [styleProgress, setStyleProgress] = useState(0);
   const [styleStage, setStyleStage] = useState("");
+  const [activeStyleJobId, setActiveStyleJobId] = useState("");
+  const [activeTranscribeJobId, setActiveTranscribeJobId] = useState("");
+  const [activeBatchJobId, setActiveBatchJobId] = useState("");
   const [openModal, setOpenModal] = useState<"" | "transcript" | "style">("");
   const [hydratedStatsAccounts, setHydratedStatsAccounts] = useState<string[]>([]);
   const [accountManageMode, setAccountManageMode] = useState(false);
@@ -82,11 +87,25 @@ export default function LibraryPage() {
   const [newAccountUidOrUrl, setNewAccountUidOrUrl] = useState("");
   const editModalRef = useRef<HTMLDivElement>(null);
   const accountModalRef = useRef<HTMLDivElement>(null);
+  const handledLibraryJobsRef = useRef<Set<string>>(new Set());
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
     return library?.accounts.find((account) => account.id === selectedAccountId) || first || null;
   }, [library?.accounts, selectedAccountId]);
+
+  const accountStyleJob = useMemo(
+    () => findTaskJob([...activeJobs, ...recentJobs], activeStyleJobId, "account-style"),
+    [activeJobs, activeStyleJobId, recentJobs]
+  );
+  const transcribeJob = useMemo(
+    () => findTaskJob([...activeJobs, ...recentJobs], activeTranscribeJobId, "transcribe-video"),
+    [activeJobs, activeTranscribeJobId, recentJobs]
+  );
+  const batchJob = useMemo(
+    () => findTaskJob([...activeJobs, ...recentJobs], activeBatchJobId, "batch-transcribe"),
+    [activeBatchJobId, activeJobs, recentJobs]
+  );
 
   const filteredAccounts = useMemo(() => {
     const keyword = accountFilter.trim().toLowerCase();
@@ -126,9 +145,6 @@ export default function LibraryPage() {
   const transcriptPreview = useMemo(() => makePreview(transcript), [transcript]);
   const stylePreview = useMemo(() => makePreview(styleDraft || selectedAccount?.style || ""), [selectedAccount?.style, styleDraft]);
   const maxPrimaryMetric = useMemo(() => Math.max(...sortedVideos.map((video) => getPrimaryMetric(video).sortValue), 1), [sortedVideos]);
-  const accountCompletion = selectedAccount?.videoCount
-    ? Math.round((selectedAccount.transcriptCount / selectedAccount.videoCount) * 100)
-    : 0;
   const completedCount = sortedVideos.filter((video) => video.transcriptStatus === "completed").length;
   const pendingCount = sortedVideos.length - completedCount;
   const selectedVideoHasTranscript = canReadTranscript(selectedVideo);
@@ -138,8 +154,101 @@ export default function LibraryPage() {
   const editModalTitle = openModal === "transcript" ? "转写稿全文" : "账号风格卡";
 
   useEffect(() => {
+    if (!visibleMessage || isBackgroundStartMessage(visibleMessage)) return;
+    notify({ tone: visibleMessageIsError ? "error" : "success", message: visibleMessage });
+  }, [notify, visibleMessage, visibleMessageIsError]);
+
+  useEffect(() => {
     if (selectedAccount) setStyleDraft(selectedAccount.style);
   }, [selectedAccount]);
+
+  useEffect(() => {
+    if (!accountStyleJob) return;
+    setActiveStyleJobId(accountStyleJob.id);
+    setStyleStage(accountStyleJob.message || "正在生成账号风格卡");
+    setStyleProgress(accountStyleJob.progress || 0);
+    if (accountStyleJob.partialText) setStyleDraft(accountStyleJob.partialText);
+    if (accountStyleJob.status === "running" || accountStyleJob.status === "queued") {
+      setBusy("style");
+      return;
+    }
+    if (handledLibraryJobsRef.current.has(accountStyleJob.id)) return;
+    handledLibraryJobsRef.current.add(accountStyleJob.id);
+    setBusy("");
+    if (accountStyleJob.status === "completed") {
+      const result = accountStyleJob.result as StyleGenerationResponse | undefined;
+      if (result?.style) setStyleDraft(result.style);
+      setStyleStage("风格卡已生成");
+      setStyleProgress(100);
+      setMessage(
+        result?.fallback
+          ? `已降级生成风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+          : "已自动总结风格卡。"
+      );
+      return;
+    }
+    if (accountStyleJob.status === "failed") {
+      setStyleStage("生成失败");
+      setStyleProgress(100);
+      setMessage(accountStyleJob.error || "自动总结失败");
+    }
+  }, [accountStyleJob]);
+
+  useEffect(() => {
+    if (!transcribeJob) return;
+    setActiveTranscribeJobId(transcribeJob.id);
+    setTranscribeStage(transcribeJob.message || "正在转写视频");
+    setTranscribeProgress(transcribeJob.progress || 0);
+    if (transcribeJob.status === "running" || transcribeJob.status === "queued") {
+      setBusy("transcribe");
+      return;
+    }
+    if (handledLibraryJobsRef.current.has(transcribeJob.id)) return;
+    handledLibraryJobsRef.current.add(transcribeJob.id);
+    setBusy("");
+    if (transcribeJob.status === "completed") {
+      const result = transcribeJob.result as { transcript?: string; video?: Video } | undefined;
+      if (result?.transcript && (!selectedVideo || result.video?.id === selectedVideo.id)) {
+        setTranscript(result.transcript);
+      }
+      setTranscribeStage("转写稿已生成");
+      setTranscribeProgress(100);
+      setMessage("转写完成。");
+      return;
+    }
+    if (transcribeJob.status === "failed") {
+      setTranscribeStage("转写失败");
+      setTranscribeProgress(100);
+      setMessage(formatJobErrorMessage(transcribeJob.error || "转写失败"));
+    }
+  }, [selectedVideo, transcribeJob]);
+
+  useEffect(() => {
+    if (!batchJob) return;
+    setActiveBatchJobId(batchJob.id);
+    setTranscribeStage(batchJob.message || "正在批量转写");
+    setTranscribeProgress(batchJob.progress || 0);
+    if (batchJob.status === "running" || batchJob.status === "queued") {
+      setBusy(batchJob.title.includes("更新风格") ? "batch-style" : "batch");
+      return;
+    }
+    if (handledLibraryJobsRef.current.has(batchJob.id)) return;
+    handledLibraryJobsRef.current.add(batchJob.id);
+    setBusy("");
+    if (batchJob.status === "completed") {
+      const result = batchJob.result as BatchTranscribeResult | undefined;
+      if (result?.style) setStyleDraft(result.style);
+      setTranscribeStage("批量任务已完成");
+      setTranscribeProgress(100);
+      setMessage(result ? summarizeBatchTranscribeResult(result) : "批量转写完成。");
+      return;
+    }
+    if (batchJob.status === "failed") {
+      setTranscribeStage("批量任务失败");
+      setTranscribeProgress(100);
+      setMessage(batchJob.error || "批量转写失败");
+    }
+  }, [batchJob]);
 
   useEffect(() => {
     if (!openModal) return;
@@ -223,50 +332,22 @@ export default function LibraryPage() {
     setStyleProgress(8);
     setStyleStage("正在读取账号转写样本");
     try {
-      const result = await new Promise<StyleGenerationResponse>(
-        async (resolve, reject) => {
-          let streamed = "";
-          try {
-            await streamGenerateStyle({
-              platform: selectedAccount.platform,
-              accountId: selectedAccount.id
-            }, {
-              onStage(stage) {
-                setStyleProgress(stage.progress || 0);
-                setStyleStage(stage.message);
-              },
-              onDelta(delta) {
-                streamed += delta;
-                setStyleDraft(streamed);
-                const nextProgress = Math.min(88, 45 + Math.floor(streamed.length / 80));
-                setStyleProgress((current) => Math.max(current, nextProgress));
-              },
-              onResult(result) {
-                setStyleProgress(100);
-                setStyleStage("风格卡已生成");
-                resolve(result);
-              }
-            });
-          } catch (error) {
-            reject(error);
-          }
+      const job = await startTask({
+        kind: "account-style",
+        title: "生成账号风格卡",
+        inputSummary: selectedAccount.name,
+        href: "/library",
+        input: {
+          platform: selectedAccount.platform,
+          accountId: selectedAccount.id
         }
-      );
-      setStyleDraft(result.style);
-      setMessage(
-        result.fallback
-          ? `已降级生成风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
-          : "已自动总结风格卡。"
-      );
-      await refresh();
+      });
+      setActiveStyleJobId(job.id);
+      setStyleStage(job.message);
+      setStyleProgress(job.progress);
+      setMessage("账号风格卡已在后台开始生成，可以切换到其他模块。");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "自动总结失败");
-    } finally {
-      window.setTimeout(() => {
-        setBusy("");
-        setStyleProgress(0);
-        setStyleStage("");
-      }, 400);
     }
   }
 
@@ -314,28 +395,25 @@ export default function LibraryPage() {
     setTranscribeStage("正在检查字幕和媒体");
     setMessage("");
     try {
-      setTranscribeProgress(35);
-      setTranscribeStage("正在转写视频");
-      await transcribeVideo({
-        platform: selectedAccount.platform,
-        accountId: selectedAccount.id,
-        videoId: selectedVideo.id,
-        allowRemoteDownload: true
+      const job = await startTask({
+        kind: "transcribe-video",
+        title: "转写视频",
+        inputSummary: selectedVideo.title,
+        href: "/library",
+        input: {
+          platform: selectedAccount.platform,
+          accountId: selectedAccount.id,
+          videoId: selectedVideo.id,
+          allowRemoteDownload: true
+        }
       });
-      setTranscribeProgress(85);
-      setTranscribeStage("正在保存转写结果");
-      setMessage("转写完成。");
-      await refresh();
-      setTranscribeProgress(100);
+      setActiveTranscribeJobId(job.id);
+      setTranscribeStage(job.message);
+      setTranscribeProgress(job.progress);
+      setMessage("转写稿已在后台开始生成，可以切换到其他模块。");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "转写失败");
       await refresh();
-    } finally {
-      window.setTimeout(() => {
-        setBusy("");
-        setTranscribeProgress(0);
-        setTranscribeStage("");
-      }, 400);
     }
   }
 
@@ -346,82 +424,26 @@ export default function LibraryPage() {
     setTranscribeStage("正在读取候选视频");
     setMessage("");
     try {
-      const result = await new Promise<BatchTranscribeResult>(async (resolve, reject) => {
-        try {
-          await streamBatchTranscribe({
-            platform: selectedAccount.platform,
-            accountId: selectedAccount.id,
-            limit: batchLimit,
-            updateStyle
-          }, {
-            onStage(stage) {
-              setTranscribeProgress(stage.progress || 0);
-              setTranscribeStage(stage.message);
-            },
-            onVideo(video) {
-              setTranscribeStage(`已处理：${video.title}`);
-            },
-            onResult(result) {
-              setTranscribeProgress(100);
-              setTranscribeStage("批量任务已完成");
-              resolve(result);
-            }
-          });
-        } catch (error) {
-          reject(error);
+      const job = await startTask({
+        kind: "batch-transcribe",
+        title: updateStyle ? "批量转写并更新风格" : "批量转写",
+        inputSummary: `${selectedAccount.name} · ${batchLimit === "all" ? "全部视频" : `${batchLimit} 条视频`}`,
+        href: "/library",
+        input: {
+          platform: selectedAccount.platform,
+          accountId: selectedAccount.id,
+          limit: batchLimit,
+          updateStyle
         }
       });
-      if (result.style) setStyleDraft(result.style);
-      const timingSummary = summarizeBatchTranscribeTimings(result);
-      const baseMessage = `批量转写完成：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。${timingSummary ? ` ${timingSummary}` : ""}`;
-      if (!updateStyle) {
-        setMessage(baseMessage);
-      } else if (result.styleUpdated) {
-        setMessage(
-          result.fallback
-            ? `${baseMessage} 风格卡已降级更新：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
-            : `${baseMessage} 风格卡已同步更新。`
-        );
-      } else if (result.styleError) {
-        setMessage(`${baseMessage} 风格卡未更新：${result.styleError}`);
-      } else {
-        setMessage(`${baseMessage} 风格卡未更新。`);
-      }
-      await refresh();
-      setTranscribeProgress(100);
+      setActiveBatchJobId(job.id);
+      setTranscribeStage(job.message);
+      setTranscribeProgress(job.progress);
+      setMessage("批量转写已在后台开始，可以切换到其他模块。");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "批量转写失败");
       await refresh();
-    } finally {
-      window.setTimeout(() => {
-        setBusy("");
-        setTranscribeProgress(0);
-        setTranscribeStage("");
-      }, 400);
     }
-  }
-
-  function summarizeBatchTranscribeTimings(result: BatchTranscribeResult) {
-    const transcribeTotal = result.timings?.find((item) => item.stage === "transcribe-phase-total")?.ms;
-    const mediaPreload = result.timings?.find((item) => item.stage === "douyin-preload-media")?.ms;
-    const completedTimings = result.results
-      .map((item) => item.timings?.find((timing) => timing.stage === "total")?.ms || 0)
-      .filter((ms) => ms > 0);
-    const maxVideoMs = completedTimings.length ? Math.max(...completedTimings) : 0;
-    const parts = [
-      transcribeTotal ? `转写阶段 ${formatDuration(transcribeTotal)}` : "",
-      mediaPreload ? `媒体预取 ${formatDuration(mediaPreload)}` : "",
-      maxVideoMs ? `最慢单条 ${formatDuration(maxVideoMs)}` : ""
-    ].filter(Boolean);
-    return parts.length ? `耗时：${parts.join("，")}。` : "";
-  }
-
-  function formatDuration(ms: number) {
-    const seconds = Math.max(0, Math.round(ms / 1000));
-    if (seconds < 60) return `${seconds} 秒`;
-    const minutes = Math.floor(seconds / 60);
-    const rest = seconds % 60;
-    return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
   }
 
   async function handleCreateAccount() {
@@ -547,12 +569,6 @@ export default function LibraryPage() {
       </header>
 
       {error ? <div className="error" role="alert">{error}</div> : null}
-      {visibleMessage ? (
-        <div aria-live={visibleMessageIsError ? "assertive" : "polite"} className={visibleMessageIsError ? "error" : "notice"} role={visibleMessageIsError ? "alert" : "status"}>
-          {visibleMessage}
-        </div>
-      ) : null}
-
       <section className="panel three-pane library-workspace">
         <aside className={`pane ${accountManageMode ? "selection-mode" : ""}`}>
           <div className="pane-header">
@@ -789,19 +805,6 @@ export default function LibraryPage() {
             <h2>详情与风格</h2>
           </div>
           <div className="pane-body detail-stack">
-            {selectedAccount ? (
-              <div className="detail-section account-health">
-                <div className="section-title-row">
-                  <h3>账号资产</h3>
-                  <span className="status-pill done">{accountCompletion}% 覆盖</span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-pill">{formatPlatform(selectedAccount.platform)}</span>
-                  <span className="stat-pill">{selectedAccount.videoCount} 条视频</span>
-                  <span className="stat-pill">{selectedAccount.transcriptCount} 份转写</span>
-                </div>
-              </div>
-            ) : null}
             {selectedVideo ? (
               <div className="detail-section">
                 <h3>{selectedVideo.title}</h3>
@@ -1123,6 +1126,50 @@ function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () =
   }
 }
 
+function summarizeBatchTranscribeResult(result: BatchTranscribeResult) {
+  const timingSummary = summarizeBatchTranscribeTimings(result);
+  const baseMessage = `批量转写完成：新增转写 ${result.completed}，跳过 ${result.skipped}，失败 ${result.failed}。${timingSummary ? ` ${timingSummary}` : ""}`;
+  if (!result.styleUpdated && !result.styleError && !result.style) return baseMessage;
+  if (result.styleUpdated) {
+    return result.fallback
+      ? `${baseMessage} 风格卡已降级更新：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+      : `${baseMessage} 风格卡已同步更新。`;
+  }
+  if (result.styleError) return `${baseMessage} 风格卡未更新：${result.styleError}`;
+  return `${baseMessage} 风格卡未更新。`;
+}
+
+function summarizeBatchTranscribeTimings(result: BatchTranscribeResult) {
+  const transcribeTotal = result.timings?.find((item) => item.stage === "transcribe-phase-total")?.ms;
+  const mediaPreload = result.timings?.find((item) => item.stage === "douyin-preload-media")?.ms;
+  const completedTimings = result.results
+    .map((item) => item.timings?.find((timing) => timing.stage === "total")?.ms || 0)
+    .filter((ms) => ms > 0);
+  const maxVideoMs = completedTimings.length ? Math.max(...completedTimings) : 0;
+  const parts = [
+    transcribeTotal ? `转写阶段 ${formatDuration(transcribeTotal)}` : "",
+    mediaPreload ? `媒体预取 ${formatDuration(mediaPreload)}` : "",
+    maxVideoMs ? `最慢单条 ${formatDuration(maxVideoMs)}` : ""
+  ].filter(Boolean);
+  return parts.length ? `耗时：${parts.join("，")}。` : "";
+}
+
+function formatDuration(ms: number) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
+}
+
 function isErrorMessage(message: string) {
   return ["失败", "没有", "未配置", "未找到", "未更新", "无法", "异常", "超时"].some((keyword) => message.includes(keyword));
+}
+
+function isBackgroundStartMessage(message: string) {
+  return message.includes("已在后台开始");
+}
+
+function findTaskJob(jobs: JobRecord[], jobId: string, kind: JobRecord["kind"]) {
+  return jobs.find((job) => job.id === jobId && job.kind === kind) || jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) || null;
 }

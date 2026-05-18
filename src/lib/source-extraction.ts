@@ -24,7 +24,7 @@ export function extractRewriteSourceMaterial(input: string): RewriteSourceExtrac
   const rawBlocks = splitSourceBlocks(input);
   const materials = rawBlocks
     .map((block, index) => {
-      const urls = extractUrls(block);
+      const urls = extractSourceUrls(block);
       return {
         index: index + 1,
         raw: block,
@@ -70,7 +70,7 @@ function splitSourceBlocks(input: string) {
     .filter(Boolean);
 }
 
-function extractUrls(input: string) {
+export function extractSourceUrls(input: string) {
   return [...input.matchAll(URL_PATTERN)]
     .map((match) => normalizeUrlToken(match[0]))
     .filter(Boolean);

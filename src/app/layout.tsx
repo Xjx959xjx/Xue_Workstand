@@ -18,12 +18,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <a className="skip-link" href="#main-content">
           跳到主要内容
         </a>
-        <div className="app-shell">
-          <AppNav />
-          <main className="main-content" id="main-content">
-            <AppProviders>{children}</AppProviders>
-          </main>
-        </div>
+        <AppProviders>
+          <div className="app-shell">
+            <AppNav />
+            <main className="main-content" id="main-content">
+              {children}
+            </main>
+          </div>
+        </AppProviders>
       </body>
     </html>
   );

@@ -6,6 +6,7 @@ import path from "path";
 import { promisify } from "util";
 import {
   buildOpenCliBrowserArgs,
+  checkDouyinVideoAvailability,
   getBilibiliSubtitle,
   parseOpenCliJsonish,
   refreshDouyinVideoDownloadUrl
@@ -82,15 +83,25 @@ export async function transcribeVideo(input: {
     const subtitle = await getBilibiliSubtitle(video).catch(() => "");
     if (subtitle.trim()) {
       hadBilibiliSubtitle = true;
+      const cleaned = await cleanTranscriptText({
+        platform: input.platform,
+        title: video.title,
+        text: subtitle
+      });
       return {
         ...(await saveTranscript({
           platform: input.platform,
           accountId: input.accountId,
           videoId: input.videoId,
-          text: subtitle,
+          text: cleaned.text,
           source: "platform_subtitle"
         })),
-        usedProvider: "bilibili-subtitle"
+        usedProvider: "bilibili-subtitle",
+        transcriptCleaning: {
+          fallback: cleaned.fallback,
+          fallbackReason: cleaned.fallbackReason,
+          usedModel: cleaned.usedModel
+        }
       };
     }
   }
@@ -135,6 +146,17 @@ export async function transcribeVideo(input: {
     }
 
     if (!mediaPath) {
+      if (input.platform === "douyin") {
+        const availability = await checkDouyinVideoAvailability(account, video);
+        if (availability.visible === false) {
+          const reason = `没有取得可转写媒体地址：${availability.reason}`;
+          await markTranscriptFailed(input.platform, input.accountId, input.videoId, reason);
+          throw new Error(reason);
+        }
+        if (availability.visible === true && availability.reason) {
+          mediaError = mediaError ? `${mediaError}；${availability.reason}` : availability.reason;
+        }
+      }
       const reason = buildMissingMediaReason({
         platform: input.platform,
         mediaError,
@@ -208,13 +230,20 @@ export async function transcribeLinkSource(input: {
       raw: resolvedUrl
     } as Video).catch(() => "");
     if (subtitle.trim()) {
+      const cleaned = await cleanTranscriptText({
+        platform,
+        title: input.titleHint,
+        text: subtitle
+      });
       return {
         url: input.url,
         resolvedUrl,
         platform,
         title: input.titleHint,
-        text: subtitle.trim(),
+        text: cleaned.text,
         source: "platform_subtitle",
+        fallback: cleaned.fallback,
+        fallbackReason: cleaned.fallbackReason,
         timings: [{ stage: "total", ms: Date.now() - startedAt }]
       };
     }
@@ -771,11 +800,28 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
     if (url.startsWith("//")) return "https:" + url;
     return url;
   };
-  const isCandidate = (url) => /\\/upgcxcode\\/|\\/bfs\\/archive\\/|mime_type=video|mime_type=audio|\\.m4s|\\.mp4|\\.m4a|\\.mp3|akamaized|bilivideo/i.test(url);
+  const trimCandidateUrl = (url) => (String(url || "").split(/[\\s|<>]/)[0] || "").replace(/,https?:\\/\\/.+$/i, "");
+  const isCandidate = (url) => {
+    try {
+      const parsed = new URL(normalizeUrl(trimCandidateUrl(url)));
+      const host = parsed.hostname.toLowerCase();
+      const path = parsed.pathname.toLowerCase();
+      const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+      if (host === "data.bilibili.com" || path.includes("/log/")) return false;
+      return (
+        mimeType.startsWith("audio_") ||
+        mimeType.startsWith("video_") ||
+        /bilivideo|akamaized/i.test(host) ||
+        /\\/upgcxcode\\/|\\/bfs\\/archive\\/|\\.m4s$|\\.mp4$|\\.m4a$|\\.mp3$/i.test(path)
+      );
+    } catch {
+      return false;
+    }
+  };
   const collect = () => {
     const urls = [];
     const pushUrl = (value) => {
-      const normalized = normalizeUrl(String(value || "").replaceAll("\\\\/", "/"));
+      const normalized = normalizeUrl(trimCandidateUrl(String(value || "").replaceAll("\\\\/", "/")));
       if (/^https?:\\/\\//i.test(normalized) && isCandidate(normalized)) urls.push(normalized);
     };
     const collectUrlsDeep = (value, depth = 0) => {
@@ -816,7 +862,7 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
     for (const script of Array.from(document.querySelectorAll("script"))) {
       const text = script.textContent || "";
       if (!/playinfo|dash|baseUrl|backupUrl|upgcxcode|bilivideo/.test(text)) continue;
-      const matches = text.match(/https?:\\\\?\\/\\\\?\\/[^"'<>\\\\]+/g) || [];
+      const matches = text.match(/https?:\\\\?\\/\\\\?\\/[^\\s"'<>\\\\|]+/g) || [];
       for (const match of matches) pushUrl(match);
       const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
       if (jsonMatch && jsonMatch[0].length < 10_000_000) {
@@ -850,7 +896,13 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
 `;
 
 function sortLinkMediaUrls(urls: string[]) {
-  const unique = [...new Set(urls.map((url) => url.trim()).filter(Boolean))];
+  const unique = [
+    ...new Set(
+      urls
+        .map((url) => normalizeRemoteMediaUrl(url))
+        .filter((url) => url && isSupportedRemoteMediaUrl(url))
+    )
+  ];
   return unique.sort((a, b) => linkMediaUrlScore(b) - linkMediaUrlScore(a));
 }
 
@@ -872,6 +924,32 @@ function linkMediaUrlScore(url: string) {
     if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) score += 80;
   }
   return score;
+}
+
+function normalizeRemoteMediaUrl(input: string) {
+  return String(input || "")
+    .trim()
+    .replaceAll("\\/", "/")
+    .split(/[\s|<>]/)[0]
+    .replace(/,https?:\/\/.+$/i, "")
+    .trim();
+}
+
+function isSupportedRemoteMediaUrl(input: string) {
+  try {
+    const parsed = new URL(input);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+
+    if (host === "data.bilibili.com" || path.includes("/log/")) return false;
+    if (mimeType.startsWith("audio_") || mimeType.startsWith("video_")) return true;
+    if (/douyinvod|bilivideo|akamaized/i.test(host)) return true;
+    if (/\/aweme\/v1\/play\/|\/upgcxcode\/|\/bfs\/archive\//i.test(path)) return true;
+    return /\.(m4s|mp4|m4a|mp3|aac|wav|flac|ogg|webm|mov)$/i.test(path);
+  } catch {
+    return false;
+  }
 }
 
 function extractHtmlTitle(html: string) {
@@ -925,7 +1003,7 @@ async function downloadDouyinAudio(account: Account, video: Video, prefetchedMed
   const mediaUrl = prefetchedMediaUrl || video.downloadUrl || (await refreshDouyinVideoDownloadUrl(account, video));
   const mediaUrlMs = Date.now() - mediaUrlStartedAt;
   if (!mediaUrl) {
-    throw new Error("opencli 没有返回当前抖音视频的媒体地址，请先重新采集账号后再试。");
+    throw new Error("没有取得当前抖音视频的可转写媒体地址。请确认 opencli 已登录抖音、视频链接仍可访问，或重新采集账号后再试。");
   }
 
   const timings = [
@@ -1146,10 +1224,10 @@ function buildMissingMediaReason(input: {
   }
 
   if (input.mediaError) {
-    return `没有可转写的本地媒体文件：${input.mediaError}`;
+    return `没有取得可转写的媒体地址或本地文件：${input.mediaError}`;
   }
 
-  return "没有平台字幕，也没有可转写的本地媒体文件。";
+  return "没有平台字幕，也没有取得可转写的媒体地址或本地文件。";
 }
 
 function buildProviderErrorReason(platform: Platform, error: unknown) {
