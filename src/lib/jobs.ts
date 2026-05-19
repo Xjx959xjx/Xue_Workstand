@@ -16,6 +16,7 @@ import {
   BatchTranscribeResult,
   EngagementRecord,
   JobKind,
+  JobListItem,
   JobRecord,
   JobStartInput,
   WriteResult
@@ -147,6 +148,11 @@ async function listJobsFromDisk() {
 export async function listJobs() {
   await ensureInitialized();
   return listJobsFromDisk();
+}
+
+export async function listJobSummaries() {
+  const jobs = await listJobs();
+  return jobs.map(toJobListItem);
 }
 
 export async function getJob(jobId: string) {
@@ -352,8 +358,8 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
     message: "正在校验项目配置",
     progress: 15
   });
-  if (!start.input.sourceAccountIds.length) {
-    throw new Error("请至少选择一个参考账号后再总结项目风格");
+  if (!start.input.sourceAccountIds.length && !start.input.sourceMaterialIds?.length) {
+    throw new Error("先加案例或账号");
   }
 
   await patchJob(jobId, {
@@ -374,8 +380,8 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
     partialText: result.style,
     resultRef: {
       id: result.project.id,
-      href: "/projects",
-      label: "查看项目库"
+      href: "/project-workbench",
+      label: "查看项目工作台"
     }
   });
 }
@@ -532,7 +538,7 @@ function defaultInputSummary(input: JobStartInput) {
 function defaultHref(input: JobStartInput) {
   if (input.kind === "write-copy") return "/writer";
   if (input.kind === "account-style" || input.kind === "transcribe-video" || input.kind === "batch-transcribe") return "/library";
-  if (input.kind === "project-style") return "/projects";
+  if (input.kind === "project-style") return "/project-workbench";
   return "/assets";
 }
 
@@ -561,4 +567,22 @@ function buildEngagementSuccessMessage(record: EngagementRecord) {
   if (commentCount && danmakuCount) return `已生成 ${commentCount} 条评论和 ${danmakuCount} 条弹幕`;
   if (commentCount) return `已生成 ${commentCount} 条评论`;
   return `已生成 ${danmakuCount} 条弹幕`;
+}
+
+function toJobListItem(job: JobRecord): JobListItem {
+  const { partialText, result, ...item } = job;
+  return {
+    ...item,
+    error: item.error ? summarizeJobListText(item.error, 240) : undefined,
+    inputSummary: item.inputSummary ? summarizeJobListText(item.inputSummary, 120) : undefined,
+    message: summarizeJobListText(item.message, 160),
+    hasPartialText: Boolean(partialText),
+    hasResult: typeof result !== "undefined"
+  };
+}
+
+function summarizeJobListText(value: string, maxLength: number) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, maxLength - 1)}…`;
 }

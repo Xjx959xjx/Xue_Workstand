@@ -83,6 +83,14 @@ export type ProjectStyleGenerationResult = {
   fallbackReason?: string;
 };
 
+export type MaterialFrameAnalysis = {
+  summary: string;
+  visualNotes?: string;
+  structureNotes?: string;
+  titleNotes?: string;
+  fallbackReason?: string;
+};
+
 export type PreparedAccountStyleContext = {
   platform: Platform;
   accountId: string;
@@ -159,6 +167,51 @@ export async function chatComplete(
   reasoningEffort?: ChatReasoningEffort
 ): Promise<ChatCompletionResult> {
   return chatCompleteWithFallback(messages, reasoningEffort);
+}
+
+export async function analyzeMaterialFrames(input: {
+  frames: string[];
+  platform: Platform | "unknown";
+  title?: string;
+  transcript: string;
+  url: string;
+  signal?: AbortSignal;
+}): Promise<MaterialFrameAnalysis> {
+  const config = chatConfig();
+  if (!config.apiKey || !config.model) {
+    throw new Error("未配置对话模型，无法生成原视频画面描述。");
+  }
+
+  const prompt = [
+    "请把这条短视频整理成“转写 + 画面描述”的素材底稿，输出严格 JSON。",
+    "不要写观点摘要，不要写营销总结，不要把内容概括成一句话。",
+    "只基于图片里能看到的内容和提供的标题/转写，不要补脑未出现的细节。",
+    "必须包含字段：visualNotes、structureNotes、titleNotes。",
+    "visualNotes 是核心字段，要按画面出现顺序描述实际看见的场景、人物、UI、字幕、道具、价格、动作、特效；写成可供后续剪辑/仿写参考的画面描述。",
+    "structureNotes 只描述镜头顺序、字幕节奏和信息推进，不要评价好坏。",
+    "titleNotes 只描述标题/封面/首帧可见钩子。",
+    '返回格式必须类似：{"visualNotes":"按顺序写画面描述","structureNotes":"镜头和信息推进","titleNotes":"标题/封面/首帧钩子"}',
+    `平台：${input.platform}`,
+    `标题：${input.title || "暂无"}`,
+    `链接：${input.url}`,
+    `转写节选：${clampText(input.transcript, 900)}`
+  ].join("\n");
+
+  let text: string;
+  if (config.wireApi === "chat_completions") {
+    text = await createVisionChatCompletion(config, prompt, input.frames, { signal: input.signal });
+  } else {
+    try {
+      text = await createVisionResponse(config, prompt, input.frames, { signal: input.signal });
+    } catch (error) {
+      if (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error)) {
+        text = await createVisionChatCompletion(config, prompt, input.frames, { signal: input.signal });
+      } else {
+        throw error;
+      }
+    }
+  }
+  return ensureMaterialFrameAnalysisFields(parseMaterialFrameAnalysis(text));
 }
 
 export async function streamResponseText(input: {
@@ -529,7 +582,7 @@ async function parseChatCompletionResponseBody(response: UndiciResponse) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
-  if (contentType?.includes("text/event-stream")) {
+  if (contentType?.includes("text/event-stream") || looksLikeEventStreamBody(body)) {
     return parseChatCompletionEventStream(body);
   }
 
@@ -636,6 +689,56 @@ async function createResponse(
   };
 }
 
+async function createVisionResponse(
+  config: ReturnType<typeof chatConfig>,
+  prompt: string,
+  frames: string[],
+  options: ChatRequestOptions = {}
+) {
+  const response = await postModelRequest(config, "/responses", {
+    model: config.model,
+    instructions: "你是短视频素材画面描述整理员。输出严格 JSON，不要 Markdown。",
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: prompt },
+          ...frames.map((imageUrl) => ({ type: "input_image", image_url: imageUrl }))
+        ]
+      }
+    ],
+    reasoning: responseReasoning("low"),
+    store: false
+  }, options.signal);
+  return parseResponseApiBody(response);
+}
+
+async function createVisionChatCompletion(
+  config: ReturnType<typeof chatConfig>,
+  prompt: string,
+  frames: string[],
+  options: ChatRequestOptions = {}
+) {
+  const response = await postModelRequest(config, "/chat/completions", {
+    model: config.model,
+    messages: [
+      {
+        role: "system",
+        content: "你是短视频素材画面描述整理员。输出严格 JSON，不要 Markdown。"
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          ...frames.map((url) => ({ type: "image_url", image_url: { url } }))
+        ]
+      }
+    ],
+    max_tokens: 900
+  }, options.signal);
+  return parseChatCompletionResponseBody(response);
+}
+
 function normalizeWireApi(value?: string): ChatWireApi {
   if (value === "chat_completions" || value === "chat-completions" || value === "chat") return "chat_completions";
   if (value === "auto") return "auto";
@@ -655,6 +758,59 @@ function fallbackChatCompletion(model = "local-fallback", error?: unknown): Chat
     fallback: true,
     fallbackReason: error ? buildChatFallbackReason(error) : undefined
   };
+}
+
+function parseMaterialFrameAnalysis(text: string): MaterialFrameAnalysis {
+  const trimmed = text.trim();
+  const jsonText = trimmed.match(/```json\s*([\s\S]*?)```/i)?.[1] || trimmed.match(/\{[\s\S]*\}/)?.[0] || trimmed;
+  try {
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    const visualNotes =
+      readStringField(parsed, "visualNotes") ||
+      readStringField(parsed, "visualDescription") ||
+      readStringField(parsed, "sceneDescription") ||
+      readStringField(parsed, "frameDescription");
+    const structureNotes = readStringField(parsed, "structureNotes");
+    const titleNotes = readStringField(parsed, "titleNotes") || readStringField(parsed, "coverNotes");
+    const summary = readStringField(parsed, "summary") || visualNotes || [structureNotes, titleNotes].filter(Boolean).join("\n");
+    if (!summary && !visualNotes) throw new Error("empty visual notes");
+    return {
+      summary,
+      visualNotes: visualNotes || undefined,
+      structureNotes: structureNotes || undefined,
+      titleNotes: titleNotes || undefined
+    };
+  } catch {
+    if (!trimmed) throw new Error("模型没有返回画面描述结果");
+    return {
+      summary: trimmed.slice(0, 1200),
+      fallbackReason: "模型没有返回标准 JSON，已保存原始分析文本。"
+    };
+  }
+}
+
+function readStringField(object: Record<string, unknown>, key: string) {
+  const value = object[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function ensureMaterialFrameAnalysisFields(analysis: MaterialFrameAnalysis): MaterialFrameAnalysis {
+  if (analysis.visualNotes || analysis.structureNotes || analysis.titleNotes) return analysis;
+
+  const summary = analysis.summary.trim();
+  return {
+    ...analysis,
+    visualNotes: bestSummarySentence(summary, /画面|场景|人物|字幕|道具|界面|截图|特效|镜头/) || summary,
+    structureNotes: bestSummarySentence(summary, /镜头|剪辑|推进|开头|结尾|转场|通过/) || summary,
+    titleNotes: bestSummarySentence(summary, /标题|封面|钩子|卖点|价格|商品|口播/) || summary,
+    fallbackReason: analysis.fallbackReason || "模型只返回了一段画面文本，已作为画面描述保存。"
+  };
+}
+
+function bestSummarySentence(summary: string, pattern: RegExp) {
+  return (summary.match(/[^。！？!?]+[。！？!?]?/g) || [summary])
+    .map((sentence) => sentence.trim())
+    .find((sentence) => pattern.test(sentence));
 }
 
 async function chatCompleteWithFallback(
@@ -751,11 +907,16 @@ async function parseResponseApiBody(response: UndiciResponse) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
-  if (contentType?.includes("text/event-stream")) {
+  if (contentType?.includes("text/event-stream") || looksLikeEventStreamBody(body)) {
     return parseResponseEventStream(body);
   }
 
   return extractResponseText(parseModelJsonBody(body, contentType));
+}
+
+function looksLikeEventStreamBody(body: string) {
+  const trimmed = body.trimStart();
+  return trimmed.startsWith("event:") || trimmed.startsWith("data:");
 }
 
 function parseResponseEventStream(body: string) {
@@ -1042,8 +1203,8 @@ export async function generateStyleProfile(platform: Platform, accountId: string
 
 export async function generateProjectStyleProfile(projectId: string) {
   const project = await resolveProject(projectId);
-  if (!project.sourceAccountIds.length) {
-    throw new Error("这个项目还没有绑定参考账号");
+  if (!project.sourceAccountIds.length && !project.sourceMaterialIds?.length) {
+    throw new Error("先加案例或账号");
   }
 
   const accountContexts = await Promise.all(
@@ -1062,7 +1223,7 @@ export async function generateProjectStyleProfile(projectId: string) {
     })
   );
 
-  const corpus = accountContexts
+  const accountCorpus = accountContexts
     .map(({ account, style, samples }) => {
       const transcriptBlock = samples
         .map(
@@ -1076,13 +1237,15 @@ export async function generateProjectStyleProfile(projectId: string) {
       )}\n\n爆款样本：\n${transcriptBlock || "暂无转写样本"}`;
     })
     .join("\n\n---\n\n");
+  const materialCorpus = await buildProjectCopySourceContext(project.sourceMaterialIds || []);
+  const corpus = [accountCorpus, materialCorpus].filter(Boolean).join("\n\n---\n\n");
 
   const fallback = buildFallbackStyle(project.name, corpus);
   const result = await completeStyleGeneration([
     {
       role: "system",
       content:
-        "你是项目级中文短视频风格策略师。请把多个账号的风格卡和爆款转写稿融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合参考账号，不要输出泛泛模板。"
+        "你是项目级中文短视频风格策略师。请把参考账号风格卡、爆款转写稿、项目案例素材，以及素材里已经保存的画面描述融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾 CTA、写作禁忌。只使用参考素材里已经存在的信息，不要假装看到了未提供的视频画面。结论要具体贴合参考素材，不要输出泛泛模板。"
     },
     {
       role: "user",
@@ -1098,11 +1261,13 @@ export async function generateProjectStyleProfile(projectId: string) {
 export async function saveAndGenerateProjectStyleProfile(
   input: SaveAndGenerateProjectStyleInput
 ): Promise<ProjectStyleGenerationResult> {
-  if (!input.sourceAccountIds.length) {
-    throw new Error("请至少选择一个参考账号后再总结项目风格");
+  if (!input.sourceAccountIds.length && !input.sourceMaterialIds?.length) {
+    throw new Error("先加案例或账号");
   }
 
-  await assertProjectSourceAccountsExist(input.sourceAccountIds);
+  if (input.sourceAccountIds.length) {
+    await assertProjectSourceAccountsExist(input.sourceAccountIds);
+  }
   const project = await upsertProject(input);
   const result = await generateProjectStyleProfile(project.id);
   const summary = await getProjectSummary(project);
@@ -1299,7 +1464,19 @@ async function buildProjectCopySourceContext(sourceIds: string[]) {
     .filter(Boolean)
     .map((source, index) => {
       if (!source) return "";
-      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${clampText(source.transcript, 1400)}`;
+      const materialAnalysis = source.materialAnalysis
+        ? [
+            `素材底稿：${source.materialAnalysis.mode === "multimodal" ? "转写 + 画面描述" : "标题/转写线索"}`,
+            `状态：${source.materialAnalysis.status}`,
+            source.materialAnalysis.visualNotes ? `画面描述：${source.materialAnalysis.visualNotes}` : "",
+            source.materialAnalysis.structureNotes ? `镜头顺序：${source.materialAnalysis.structureNotes}` : "",
+            source.materialAnalysis.titleNotes ? `标题/封面线索：${source.materialAnalysis.titleNotes}` : "",
+            source.materialAnalysis.fallbackReason ? `说明：${source.materialAnalysis.fallbackReason}` : ""
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "素材底稿：只有转写，未做原视频画面描述";
+      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n转写：\n${clampText(source.transcript, 1400)}`;
     })
     .filter(Boolean)
     .join("\n\n");

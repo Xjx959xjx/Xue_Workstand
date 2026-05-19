@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteDrafts, saveDraft } from "@/lib/storage";
+import { deleteDrafts, getDrafts, saveDraft } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -46,6 +46,17 @@ const schema = z.union([accountDraftSchema, projectDraftSchema]);
 const deleteSchema = z.object({
   draftIds: z.array(z.string().min(1)).min(1)
 });
+
+export async function GET() {
+  try {
+    return NextResponse.json({ drafts: await getDrafts() });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "读取草稿失败" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: Request) {
   try {

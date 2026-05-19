@@ -1,0 +1,73 @@
+.field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field label {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.field > span {
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.field input,
+.field select,
+.field textarea,
+.writer-ref-select,
+.writer-textarea,
+.project-style-textarea,
+.copy-links-textarea,
+.account-filter-input,
+.modal-editor textarea,
+.pane-search input {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: var(--panel);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.field textarea,
+.writer-textarea,
+.project-style-textarea,
+.copy-links-textarea,
+.modal-editor textarea {
+  resize: vertical;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.writer-ref-select:focus,
+.writer-textarea:focus,
+.project-style-textarea:focus,
+.copy-links-textarea:focus,
+.account-filter-input:focus,
+.modal-editor textarea:focus,
+.pane-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible,
+.writer-ref-select:focus-visible,
+.writer-textarea:focus-visible,
+.project-style-textarea:focus-visible,
+.copy-links-textarea:focus-visible,
+.account-filter-input:focus-visible,
+.modal-editor textarea:focus-visible,
+.pane-search input:focus-visible {
+  outline-color: var(--accent);
+}

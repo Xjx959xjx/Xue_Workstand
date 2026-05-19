@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteAccounts, findAccountByName, getAccountSummary, upsertAccount } from "@/lib/storage";
+import { deleteAccounts, findAccountByName, getAccountDetail, getAccountSummary, upsertAccount } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 import { resolveAccountUid } from "@/lib/opencli";
 
@@ -16,6 +16,33 @@ const schema = z.object({
 const deleteSchema = z.object({
   accountIds: z.array(z.string().min(1)).min(1)
 });
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const input = z.object({
+      platform: z.enum(platforms),
+      accountId: z.string().min(1)
+    }).parse({
+      platform: searchParams.get("platform"),
+      accountId: searchParams.get("accountId")
+    });
+    return NextResponse.json(
+      await getAccountDetail(input.platform, input.accountId, {
+        includeStyle: parseBooleanFlag(searchParams.get("includeStyle"))
+      })
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "读取账号详情失败" },
+      { status: 400 }
+    );
+  }
+}
+
+function parseBooleanFlag(value: string | null) {
+  return value === "1" || value === "true";
+}
 
 export async function POST(request: Request) {
   try {

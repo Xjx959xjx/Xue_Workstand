@@ -1,12 +1,13 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import type { FeedbackInput } from "./FeedbackProvider";
 import { useFeedback } from "./FeedbackProvider";
-import { getJobs, startJob } from "@/lib/client";
+import { getJob, getJobs, startJob } from "@/lib/client";
 import { formatJobErrorMessage } from "@/lib/job-messages";
-import { JobRecord, JobStartInput } from "@/lib/types";
+import type { JobListItem, JobRecord, JobStartInput } from "@/lib/types";
 import { useLibrary } from "./LibraryProvider";
 
 type TaskContextValue = {
@@ -21,43 +22,79 @@ type TaskContextValue = {
 
 const TaskContext = createContext<TaskContextValue | null>(null);
 const NOTIFIED_STORAGE_KEY = "style-workbench-notified-jobs";
+const ACTIVE_POLL_INTERVAL_MS = 3000;
+const IDLE_POLL_INTERVAL_MS = 30000;
+const HIDDEN_POLL_INTERVAL_MS = 60000;
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const { refresh } = useLibrary();
   const { notify } = useFeedback();
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [pageVisible, setPageVisible] = useState(true);
   const firstLoadRef = useRef(true);
+  const fullJobCacheRef = useRef<Map<string, JobRecord>>(new Map());
   const initialFailureShownRef = useRef(false);
   const notifiedRef = useRef<Set<string>>(new Set());
+  const pendingRefreshRef = useRef(false);
   const previousStatusRef = useRef<Map<string, JobRecord["status"]>>(new Map());
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     notifiedRef.current = readNotifiedJobIds();
   }, []);
 
   const refreshJobs = useCallback(async () => {
-    try {
-      const data = await getJobs();
-      setJobs(data.jobs);
-      setError("");
-      handleJobNotifications(
-        data.jobs,
-        firstLoadRef.current,
-        notifiedRef.current,
-        previousStatusRef.current,
-        notify,
-        refresh,
-        initialFailureShownRef
-      );
-      firstLoadRef.current = false;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "读取任务状态失败");
-    } finally {
-      setLoading(false);
+    if (refreshPromiseRef.current) {
+      pendingRefreshRef.current = true;
+      return refreshPromiseRef.current;
     }
-  }, [notify, refresh]);
+
+    const run = async (): Promise<void> => {
+      try {
+        const data = await getJobs();
+        const summaries = data.jobs;
+        await hydrateTrackedJobs(
+          summaries,
+          firstLoadRef.current,
+          previousStatusRef.current,
+          fullJobCacheRef.current,
+          pathname
+        );
+        pruneFullJobCache(fullJobCacheRef.current, summaries);
+
+        const mergedJobs = mergeJobSummaries(summaries, fullJobCacheRef.current);
+        setJobs(mergedJobs);
+        setError("");
+        handleJobNotifications(
+          mergedJobs,
+          firstLoadRef.current,
+          notifiedRef.current,
+          previousStatusRef.current,
+          notify,
+          refresh,
+          initialFailureShownRef
+        );
+        firstLoadRef.current = false;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "读取任务状态失败");
+      } finally {
+        setLoading(false);
+      }
+
+      if (pendingRefreshRef.current) {
+        pendingRefreshRef.current = false;
+        return run();
+      }
+    };
+
+    refreshPromiseRef.current = run().finally(() => {
+      refreshPromiseRef.current = null;
+    });
+    return refreshPromiseRef.current;
+  }, [notify, pathname, refresh]);
 
   useEffect(() => {
     refreshJobs();
@@ -69,9 +106,30 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    const interval = window.setInterval(refreshJobs, activeJobs.length ? 1800 : 5000);
-    return () => window.clearInterval(interval);
-  }, [activeJobs.length, refreshJobs]);
+    const onVisibilityChange = () => setPageVisible(!document.hidden);
+    onVisibilityChange();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeout = 0;
+
+    const schedule = () => {
+      const delay = pageVisible ? (activeJobs.length ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS) : HIDDEN_POLL_INTERVAL_MS;
+      timeout = window.setTimeout(async () => {
+        await refreshJobs();
+        if (!cancelled) schedule();
+      }, delay);
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [activeJobs.length, pageVisible, refreshJobs]);
 
   const startTask = useCallback(
     async (input: JobStartInput) => {
@@ -149,9 +207,85 @@ function isTerminalJob(job: JobRecord) {
   return job.status === "completed" || job.status === "failed";
 }
 
+function isActiveJob(job: JobRecord | JobListItem) {
+  return job.status === "queued" || job.status === "running";
+}
+
 function isRecentJob(job: JobRecord) {
   const time = Date.parse(job.completedAt || job.updatedAt || job.createdAt);
   return Number.isFinite(time) && Date.now() - time < 15 * 60 * 1000;
+}
+
+async function hydrateTrackedJobs(
+  jobs: JobListItem[],
+  isFirstLoad: boolean,
+  previousStatus: Map<string, JobRecord["status"]>,
+  cache: Map<string, JobRecord>,
+  pathname: string
+) {
+  const jobIds = jobs
+    .filter((job, index) => shouldHydrateJob(job, index, isFirstLoad, previousStatus, pathname))
+    .map((job) => job.id);
+  if (!jobIds.length) return;
+
+  const fullJobs = await Promise.all(
+    [...new Set(jobIds)].map(async (jobId) => {
+      try {
+        return (await getJob(jobId)).job;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  for (const job of fullJobs) {
+    if (job) cache.set(job.id, job);
+  }
+}
+
+function shouldHydrateJob(
+  job: JobListItem,
+  index: number,
+  isFirstLoad: boolean,
+  previousStatus: Map<string, JobRecord["status"]>,
+  pathname: string
+) {
+  const relevantToCurrentPage = isJobRelevantToPath(job, pathname);
+  if (isActiveJob(job)) return relevantToCurrentPage && Boolean(job.hasPartialText || job.hasResult);
+  if (!isTerminalJob(job)) return false;
+  if (isFirstLoad) return relevantToCurrentPage && index < 3 && (job.hasResult || job.hasPartialText) && isRecentJob(job);
+
+  const previous = previousStatus.get(job.id);
+  return relevantToCurrentPage && Boolean(previous && previous !== job.status && (job.hasResult || job.hasPartialText));
+}
+
+function isJobRelevantToPath(job: JobListItem, pathname: string) {
+  const href = job.resultRef?.href || job.href || defaultJobHref(job.kind);
+  if (!href) return false;
+  const jobPath = href.split("?")[0] || "/";
+  if (jobPath === "/") return pathname === "/";
+  return pathname === jobPath || pathname.startsWith(`${jobPath}/`);
+}
+
+function defaultJobHref(kind: JobRecord["kind"]) {
+  if (kind === "write-copy") return "/writer";
+  if (kind === "project-style") return "/project-workbench";
+  if (kind === "engagement") return "/assets";
+  return "/library";
+}
+
+function mergeJobSummaries(jobs: JobListItem[], cache: Map<string, JobRecord>) {
+  return jobs.map((job) => {
+    const fullJob = cache.get(job.id);
+    return fullJob ? { ...fullJob, ...job } : job;
+  });
+}
+
+function pruneFullJobCache(cache: Map<string, JobRecord>, jobs: JobListItem[]) {
+  const keepIds = new Set(jobs.slice(0, 20).map((job) => job.id));
+  for (const jobId of cache.keys()) {
+    if (!keepIds.has(jobId)) cache.delete(jobId);
+  }
 }
 
 function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {

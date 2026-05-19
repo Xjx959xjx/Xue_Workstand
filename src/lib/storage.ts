@@ -2,7 +2,9 @@ import { promises as fs } from "fs";
 import path from "path";
 import {
   Account,
+  AccountDetail,
   AccountDraft,
+  AccountListItem,
   AccountSummary,
   CopySource,
   Draft,
@@ -11,12 +13,23 @@ import {
   DraftCoverReference,
   DraftInput,
   EngagementRecord,
+  GrossMarginCategory,
+  GrossMarginAccountPrice,
+  GrossMarginLibrary,
+  GrossMarginPriceOption,
+  GrossMarginPriceTable,
+  GrossMarginServiceKind,
+  GrossMarginTier,
+  LibraryOverviewResponse,
   LibraryState,
   Platform,
   Project,
+  ProjectDetail,
   ProjectDraft,
+  ProjectListItem,
   ProjectSummary,
   Video,
+  VideoListItem,
   platforms
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
@@ -40,9 +53,21 @@ const DEFAULT_STYLE = `# 风格卡
 `;
 
 const draftAssetQueues = new Map<string, Promise<unknown>>();
+const grossMarginTablePlatforms = ["douyin", "bilibili"] as const;
+const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"] as const;
+
+type DetailReadOptions = {
+  includeStyle?: boolean;
+};
 
 function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {
   return video.transcriptStatus === "completed" || Boolean(video.transcriptPath);
+}
+
+function stripVideoRaw(video: Video): VideoListItem {
+  const copy = { ...video };
+  delete copy.raw;
+  return copy;
 }
 
 export function libraryRoot() {
@@ -67,6 +92,26 @@ function copySourcesPath() {
 
 function engagementPath() {
   return path.join(libraryRoot(), "engagement");
+}
+
+function grossMarginPath() {
+  return path.join(libraryRoot(), "gross-margin");
+}
+
+function grossMarginCategoriesPath() {
+  return path.join(grossMarginPath(), "categories");
+}
+
+function grossMarginCategoryJsonPath(id: string) {
+  return path.join(grossMarginCategoriesPath(), `${id}.json`);
+}
+
+function grossMarginPriceTablePath(platform: GrossMarginPriceTable["platform"]) {
+  return path.join(grossMarginPath(), `${platform}.json`);
+}
+
+function grossMarginAccountsPath() {
+  return path.join(grossMarginPath(), "accounts.json");
 }
 
 function engagementRecordJsonPath(id: string) {
@@ -168,6 +213,14 @@ function normalizeEngagementRecordId(recordId: string) {
   return normalizeStorageSegment(recordId, "互动素材 ID");
 }
 
+function normalizeGrossMarginCategoryId(categoryId: string) {
+  return normalizeStorageSegment(categoryId, "毛利类目 ID");
+}
+
+function normalizeGrossMarginTierId(tierId: string) {
+  return normalizeStorageSegment(tierId, "毛利档位 ID");
+}
+
 async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
   const previous = draftAssetQueues.get(draftId) ?? Promise.resolve();
   let release!: () => void;
@@ -241,7 +294,9 @@ export async function ensureLibrary() {
     ...platforms.map((platform) => fs.mkdir(platformPath(platform), { recursive: true })),
     fs.mkdir(projectsPath(), { recursive: true }),
     fs.mkdir(copySourcesPath(), { recursive: true }),
-    fs.mkdir(engagementPath(), { recursive: true })
+    fs.mkdir(engagementPath(), { recursive: true }),
+    fs.mkdir(grossMarginPath(), { recursive: true }),
+    fs.mkdir(grossMarginCategoriesPath(), { recursive: true })
   ]);
 }
 
@@ -416,6 +471,7 @@ export async function saveCopySource(input: {
   error?: string;
   fallback?: boolean;
   fallbackReason?: string;
+  materialAnalysis?: CopySource["materialAnalysis"];
 }) {
   await ensureLibrary();
   const now = nowIso();
@@ -442,6 +498,7 @@ export async function saveCopySource(input: {
     error: input.error,
     fallback: input.fallback,
     fallbackReason: input.fallbackReason,
+    materialAnalysis: input.materialAnalysis,
     projectIds: [],
     createdAt: now,
     updatedAt: now
@@ -449,6 +506,21 @@ export async function saveCopySource(input: {
 
   await writeJson(copySourceJsonPath(id), source);
   return source;
+}
+
+export async function updateCopySourceMaterialAnalysis(
+  sourceId: string,
+  materialAnalysis: CopySource["materialAnalysis"]
+) {
+  await ensureLibrary();
+  const source = await resolveCopySource(sourceId);
+  const updated: CopySource = {
+    ...source,
+    materialAnalysis,
+    updatedAt: nowIso()
+  };
+  await writeJson(copySourceJsonPath(updated.id), updated);
+  return updated;
 }
 
 export async function createCopySourceProject(input: {
@@ -557,6 +629,154 @@ export async function resolveEngagementRecord(recordId: string) {
     throw new Error(`找不到互动素材：${id}`);
   }
   return record;
+}
+
+export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
+  await ensureLibrary();
+  const tables = await Promise.all(
+    grossMarginTablePlatforms.map(async (platform) => {
+      const table = await readJson<GrossMarginPriceTable>(grossMarginPriceTablePath(platform));
+      return normalizeGrossMarginPriceTable(platform, table);
+    })
+  );
+
+  return {
+    root: grossMarginPath(),
+    tables,
+    accounts: normalizeGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath()))
+  };
+}
+
+export async function saveGrossMarginPriceTable(input: {
+  platform: GrossMarginPriceTable["platform"];
+  items: Array<Pick<GrossMarginPriceOption, "id" | "service" | "name" | "unitPrice" | "quantityUnit" | "minimumQuantity" | "note">>;
+}) {
+  await ensureLibrary();
+  const platform = normalizeGrossMarginPlatform(input.platform);
+  const now = nowIso();
+  const current = normalizeGrossMarginPriceTable(platform, await readJson<GrossMarginPriceTable>(grossMarginPriceTablePath(platform)));
+  const byId = new Map(current.items.map((item) => [item.id, item]));
+
+  for (const incoming of input.items) {
+    const service = normalizeGrossMarginService(incoming.service);
+    const id = normalizeStorageSegment(incoming.id, "单价项 ID");
+    const currentItem = byId.get(id);
+    byId.set(id, {
+      id,
+      service,
+      name: incoming.name.trim() || formatGrossMarginServiceName(service),
+      unitPrice: normalizeGrossMarginUnitPrice(incoming.unitPrice),
+      quantityUnit: normalizeGrossMarginQuantityUnit(incoming.quantityUnit),
+      minimumQuantity: normalizeGrossMarginMinimumQuantity(incoming.minimumQuantity) ?? currentItem?.minimumQuantity,
+      note: incoming.note?.trim() || undefined,
+      updatedAt: now
+    });
+  }
+
+  const table = normalizeGrossMarginPriceTable(platform, {
+    platform,
+    items: [...byId.values()],
+    updatedAt: now
+  });
+
+  await writeJson(grossMarginPriceTablePath(platform), table);
+  return table;
+}
+
+export async function upsertGrossMarginCategory(input: {
+  categoryId?: string;
+  name: string;
+  description?: string;
+}) {
+  await ensureLibrary();
+  const now = nowIso();
+  const fallbackId = safeSegment(input.name, shortHash(input.name));
+  const existing = input.categoryId
+    ? await resolveGrossMarginCategory(input.categoryId)
+    : await readJson<GrossMarginCategory>(grossMarginCategoryJsonPath(fallbackId));
+  const id = existing?.id ?? normalizeGrossMarginCategoryId(fallbackId);
+  const category: GrossMarginCategory = {
+    id,
+    name: input.name.trim() || existing?.name || "未命名类目",
+    description: input.description?.trim() || undefined,
+    tiers: existing?.tiers || [],
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  };
+
+  await writeJson(grossMarginCategoryJsonPath(id), normalizeGrossMarginCategory(category));
+  return normalizeGrossMarginCategory(category);
+}
+
+export async function deleteGrossMarginCategories(categoryIds: string[]) {
+  await ensureLibrary();
+  const uniqueIds = [...new Set(categoryIds)].filter(Boolean).map(normalizeGrossMarginCategoryId);
+  const deleted: string[] = [];
+
+  for (const categoryId of uniqueIds) {
+    const target = grossMarginCategoryJsonPath(categoryId);
+    if (!(await exists(target))) continue;
+    await fs.rm(target, { force: true });
+    deleted.push(categoryId);
+  }
+
+  return { deleted };
+}
+
+export async function upsertGrossMarginTier(input: {
+  categoryId: string;
+  tierId?: string;
+  name: string;
+  originalPrice: number;
+  maintenanceCost: number;
+  note?: string;
+}) {
+  await ensureLibrary();
+  const now = nowIso();
+  const category = await resolveGrossMarginCategory(input.categoryId);
+  const existingTier = input.tierId
+    ? category.tiers.find((tier) => tier.id === normalizeGrossMarginTierId(input.tierId!))
+    : undefined;
+  if (input.tierId && !existingTier) {
+    throw new Error(`找不到毛利档位：${input.tierId}`);
+  }
+  const id = existingTier?.id ?? safeSegment(`${input.name}-${shortHash(`${input.name}-${now}`)}`);
+  const tier: GrossMarginTier = {
+    id,
+    name: input.name.trim() || existingTier?.name || "未命名档位",
+    originalPrice: normalizeMoney(input.originalPrice),
+    maintenanceCost: normalizeMoney(input.maintenanceCost),
+    note: input.note?.trim() || undefined,
+    createdAt: existingTier?.createdAt ?? now,
+    updatedAt: now
+  };
+  const tiers = category.tiers.filter((item) => item.id !== id);
+  const updated = normalizeGrossMarginCategory({
+    ...category,
+    tiers: [...tiers, tier],
+    updatedAt: now
+  });
+
+  await writeJson(grossMarginCategoryJsonPath(category.id), updated);
+  return { category: updated, tier };
+}
+
+export async function deleteGrossMarginTier(categoryId: string, tierId: string) {
+  await ensureLibrary();
+  const category = await resolveGrossMarginCategory(categoryId);
+  const normalizedTierId = normalizeGrossMarginTierId(tierId);
+  const tiers = category.tiers.filter((tier) => tier.id !== normalizedTierId);
+  if (tiers.length === category.tiers.length) {
+    throw new Error(`找不到毛利档位：${normalizedTierId}`);
+  }
+
+  const updated = normalizeGrossMarginCategory({
+    ...category,
+    tiers,
+    updatedAt: nowIso()
+  });
+  await writeJson(grossMarginCategoryJsonPath(category.id), updated);
+  return { category: updated, deleted: normalizedTierId };
 }
 
 export async function saveVideos(account: Account, incoming: Video[]) {
@@ -1026,6 +1246,77 @@ export async function getAccountSummary(account: Account): Promise<AccountSummar
   };
 }
 
+export async function getAccountDetail(
+  platform: Platform,
+  accountIdOrSlug: string,
+  options: DetailReadOptions = {}
+): Promise<AccountDetail> {
+  const account = await resolveAccount(platform, accountIdOrSlug);
+  await ensureAccountDirs(account.platform, account.slug);
+
+  const [videoFiles, draftFiles, style] = await Promise.all([
+    fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
+    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []),
+    options.includeStyle
+      ? fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE)
+      : Promise.resolve<string | undefined>(undefined)
+  ]);
+
+  const videos = (
+    await Promise.all(
+      videoFiles
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => readJson<Video>(path.join(videosPath(account.platform, account.slug), file)))
+    )
+  )
+    .filter(Boolean)
+    .sort((a, b) => b!.hotScore - a!.hotScore) as Video[];
+
+  const drafts = (
+    await Promise.all(
+      draftFiles
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => readJson<Draft>(path.join(draftsPath(account.platform, account.slug), file)))
+    )
+  )
+    .filter(Boolean)
+    .sort((a, b) => +new Date(b!.createdAt) - +new Date(a!.createdAt)) as Draft[];
+
+  return {
+    ...account,
+    ...(style !== undefined ? { style } : {}),
+    videos: videos.map(stripVideoRaw),
+    drafts,
+    videoCount: videos.length,
+    transcriptCount: videos.filter(videoHasTranscript).length,
+    draftCount: drafts.length
+  };
+}
+
+async function getAccountListItem(account: Account): Promise<AccountListItem> {
+  await ensureAccountDirs(account.platform, account.slug);
+
+  const [videoFiles, draftFiles] = await Promise.all([
+    fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
+    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => [])
+  ]);
+
+  const videos = (
+    await Promise.all(
+      videoFiles
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => readJson<Video>(path.join(videosPath(account.platform, account.slug), file)))
+    )
+  ).filter(Boolean) as Video[];
+
+  return {
+    ...account,
+    videoCount: videos.length,
+    transcriptCount: videos.filter(videoHasTranscript).length,
+    draftCount: draftFiles.filter((file) => file.endsWith(".json")).length
+  };
+}
+
 export async function resolveProject(projectIdOrSlug: string) {
   await ensureLibrary();
   const slug = normalizeProjectSlug(projectIdOrSlug);
@@ -1040,7 +1331,7 @@ export async function getProjectSummary(project: Project): Promise<ProjectSummar
   await ensureProjectDirs(project.slug);
   const [style, libraryAccounts, sourceMaterials] = await Promise.all([
     fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE),
-    getAllAccountSummaries(),
+    getAllAccountListItems(),
     getProjectCopySources(project.sourceMaterialIds || [])
   ]);
   const sourceAccounts = libraryAccounts
@@ -1063,6 +1354,39 @@ export async function getProjectSummary(project: Project): Promise<ProjectSummar
   };
 }
 
+export async function getProjectDetail(
+  projectIdOrSlug: string,
+  options: DetailReadOptions = {}
+): Promise<ProjectDetail> {
+  const project = await resolveProject(projectIdOrSlug);
+  await ensureProjectDirs(project.slug);
+  const [style, libraryAccounts, sourceMaterials] = await Promise.all([
+    options.includeStyle
+      ? fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE)
+      : Promise.resolve<string | undefined>(undefined),
+    getAllAccountListItems(),
+    getProjectCopySources(project.sourceMaterialIds || [])
+  ]);
+  const sourceAccounts = libraryAccounts
+    .filter((account) => project.sourceAccountIds.includes(account.id))
+    .map((account) => ({
+      id: account.id,
+      name: account.name,
+      platform: account.platform,
+      videoCount: account.videoCount,
+      transcriptCount: account.transcriptCount
+    }));
+
+  return {
+    ...project,
+    sourceMaterialIds: project.sourceMaterialIds || [],
+    ...(style !== undefined ? { style } : {}),
+    sourceAccounts,
+    sourceMaterials,
+    sourceMaterialCount: sourceMaterials.length
+  };
+}
+
 async function getAllAccountSummaries() {
   const accounts: AccountSummary[] = [];
 
@@ -1073,6 +1397,22 @@ async function getAllAccountSummaries() {
       const account = await readJson<Account>(accountJsonPath(platform, entry.name));
       if (!account) continue;
       accounts.push(await getAccountSummary(account));
+    }
+  }
+
+  return accounts.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+}
+
+async function getAllAccountListItems() {
+  const accounts: AccountListItem[] = [];
+
+  for (const platform of platforms) {
+    const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const account = await readJson<Account>(accountJsonPath(platform, entry.name));
+      if (!account) continue;
+      accounts.push(await getAccountListItem(account));
     }
   }
 
@@ -1092,6 +1432,61 @@ async function getAllProjectSummaries() {
   return (
     await Promise.all(projects.map((project) => getProjectSummary(project)))
   ).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+}
+
+async function getAllProjectListItems(accounts?: AccountListItem[]): Promise<ProjectListItem[]> {
+  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const projects = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => readJson<Project>(projectJsonPath(entry.name)))
+    )
+  ).filter(Boolean) as Project[];
+  const libraryAccounts = accounts || await getAllAccountListItems();
+
+  return projects
+    .map((project) => {
+      const sourceAccounts = libraryAccounts
+        .filter((account) => project.sourceAccountIds.includes(account.id))
+        .map((account) => ({
+          id: account.id,
+          name: account.name,
+          platform: account.platform,
+          videoCount: account.videoCount,
+          transcriptCount: account.transcriptCount
+        }));
+
+      return {
+        ...project,
+        sourceMaterialIds: project.sourceMaterialIds || [],
+        sourceAccounts,
+        sourceMaterialCount: project.sourceMaterialIds?.length || 0
+      };
+    })
+    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+}
+
+async function getAllAccountDrafts() {
+  const draftGroups = await Promise.all(
+    platforms.map(async (platform) => {
+      const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+      return Promise.all(
+        entries
+          .filter((entry) => entry.isDirectory())
+          .flatMap(async (entry) => {
+            const files = await fs.readdir(draftsPath(platform, entry.name)).catch(() => []);
+            return Promise.all(
+              files
+                .filter((file) => file.endsWith(".json"))
+                .map((file) => readJson<AccountDraft>(path.join(draftsPath(platform, entry.name), file)))
+            );
+          })
+      );
+    })
+  );
+
+  return draftGroups.flat(2).filter(Boolean) as AccountDraft[];
 }
 
 async function getAllProjectDrafts() {
@@ -1114,6 +1509,37 @@ async function getAllProjectDrafts() {
     .filter(Boolean) as ProjectDraft[];
 
   return drafts.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export async function getDrafts() {
+  await ensureLibrary();
+  const [accountDrafts, projectDrafts] = await Promise.all([
+    getAllAccountDrafts(),
+    getAllProjectDrafts()
+  ]);
+  return [...accountDrafts, ...projectDrafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export async function getLibraryOverview(): Promise<LibraryOverviewResponse> {
+  await ensureLibrary();
+  const [accounts, copySources, engagementRecords, accountDrafts, projectDrafts] = await Promise.all([
+    getAllAccountListItems(),
+    getCopySources(),
+    getEngagementRecords(),
+    getAllAccountDrafts(),
+    getAllProjectDrafts()
+  ]);
+  const projects = await getAllProjectListItems(accounts);
+  const drafts = [...accountDrafts, ...projectDrafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+
+  return {
+    root: libraryRoot(),
+    accounts,
+    projects,
+    copySources: copySources.map(stripCopySourceForOverview),
+    engagementRecords: engagementRecords.map(stripEngagementRecordForOverview),
+    drafts: drafts.map(stripDraftForOverview)
+  };
 }
 
 export async function getLibrary(): Promise<LibraryState> {
@@ -1265,6 +1691,354 @@ async function removeCopySourcesFromProjects(sourceIds: string[]) {
   );
 }
 
+async function resolveGrossMarginCategory(categoryId: string) {
+  const id = normalizeGrossMarginCategoryId(categoryId);
+  const category = await readJson<GrossMarginCategory>(grossMarginCategoryJsonPath(id));
+  if (!category) {
+    throw new Error(`找不到毛利类目：${id}`);
+  }
+  return normalizeGrossMarginCategory(category);
+}
+
+function normalizeGrossMarginCategory(category: GrossMarginCategory): GrossMarginCategory {
+  return {
+    ...category,
+    description: category.description?.trim() || undefined,
+    tiers: (category.tiers || [])
+      .map((tier) => ({
+        ...tier,
+        originalPrice: normalizeMoney(tier.originalPrice),
+        maintenanceCost: normalizeMoney(tier.maintenanceCost),
+        note: tier.note?.trim() || undefined
+      }))
+      .sort((a, b) => {
+        if (a.originalPrice !== b.originalPrice) return a.originalPrice - b.originalPrice;
+        return +new Date(a.createdAt) - +new Date(b.createdAt);
+      })
+  };
+}
+
+function normalizeGrossMarginPriceTable(
+  platform: GrossMarginPriceTable["platform"],
+  table?: GrossMarginPriceTable | null
+): GrossMarginPriceTable {
+  const now = table?.updatedAt || nowIso();
+  const defaults = getDefaultGrossMarginPriceOptions(platform, now);
+  const byId = new Map(defaults.map((item) => [item.id, item]));
+
+  for (const item of table?.items || []) {
+    const service = grossMarginServices.includes(item.service) ? item.service : undefined;
+    if (!service) continue;
+    const id = safeSegment(item.id, shortHash(`${platform}-${service}-${item.name}`));
+    if (isRetiredGrossMarginOption(platform, id)) continue;
+    const defaultItem = byId.get(id);
+    byId.set(id, {
+      id,
+      service,
+      name: item.name?.trim() || formatGrossMarginServiceName(service),
+      unitPrice: normalizeGrossMarginUnitPrice(item.unitPrice),
+      quantityUnit: normalizeGrossMarginQuantityUnit(item.quantityUnit),
+      minimumQuantity: normalizeGrossMarginMinimumQuantity(item.minimumQuantity) ?? defaultItem?.minimumQuantity,
+      note: item.note?.trim() || undefined,
+      updatedAt: item.updatedAt || now
+    });
+  }
+
+  return {
+    platform,
+    items: [...byId.values()].sort(compareGrossMarginPriceOptions),
+    updatedAt: now
+  };
+}
+
+function normalizeGrossMarginAccounts(accounts?: GrossMarginAccountPrice[] | null): GrossMarginAccountPrice[] {
+  const normalized: GrossMarginAccountPrice[] = [];
+
+  for (const account of accounts || []) {
+      const platform = account.platform === "bilibili" ? "bilibili" : account.platform === "douyin" ? "douyin" : undefined;
+      const name = account.name?.trim();
+      if (!platform || !name) continue;
+      normalized.push({
+        platform,
+        name,
+        defaultPrice: normalizeMoney(account.defaultPrice),
+        priceLabel: account.priceLabel?.trim() || (platform === "douyin" ? "20-60秒报价" : "定制报价"),
+        secondaryPrice: account.secondaryPrice ? normalizeMoney(account.secondaryPrice) : undefined,
+        secondaryPriceLabel: account.secondaryPriceLabel?.trim() || undefined,
+        douyinId: account.douyinId?.trim() || undefined,
+        cooperationCode: account.cooperationCode?.trim() || undefined,
+        bilibiliUid: account.bilibiliUid?.trim() || undefined,
+        homepage: account.homepage?.trim() || undefined
+      });
+  }
+
+  return normalized.sort((a, b) => {
+    if (a.platform !== b.platform) return a.platform.localeCompare(b.platform);
+    return a.name.localeCompare(b.name, "zh-CN");
+  });
+}
+
+function getDefaultGrossMarginPriceOptions(
+  platform: GrossMarginPriceTable["platform"],
+  now: string
+): GrossMarginPriceOption[] {
+  if (platform === "douyin") {
+    return [
+      {
+        id: "douyin-play-tech",
+        service: "play",
+        name: "科技（5w起）",
+        unitPrice: 55,
+        quantityUnit: "万",
+        minimumQuantity: 5,
+        note: "5w 起播放，55 元 / 万",
+        updatedAt: now
+      },
+      {
+        id: "douyin-play-qianchuan-10w",
+        service: "play",
+        name: "低质千川（10w起）",
+        unitPrice: 23,
+        quantityUnit: "万",
+        minimumQuantity: 10,
+        note: "低质千川，10w 起播放，23 元 / 万",
+        updatedAt: now
+      },
+      {
+        id: "douyin-play-qianchuan-high-10w",
+        service: "play",
+        name: "高质千川（10w起）",
+        unitPrice: 55,
+        quantityUnit: "万",
+        minimumQuantity: 10,
+        note: "高质千川，10w 起播放，55 元 / 万",
+        updatedAt: now
+      },
+      {
+        id: "douyin-like-tech",
+        service: "like",
+        name: "科技",
+        unitPrice: 20,
+        quantityUnit: "千",
+        note: "20 / 千",
+        updatedAt: now
+      },
+      {
+        id: "douyin-like-qianchuan-1000",
+        service: "like",
+        name: "千川（1000起）",
+        unitPrice: 110,
+        quantityUnit: "千",
+        minimumQuantity: 1,
+        note: "110 / 千，1000 起安排",
+        updatedAt: now
+      },
+      {
+        id: "douyin-douplus-default",
+        service: "douPlus",
+        name: "默认",
+        unitPrice: 1,
+        quantityUnit: "元",
+        note: "按实际投放金额计入成本",
+        updatedAt: now
+      },
+      {
+        id: "douyin-comment-custom",
+        service: "comment",
+        name: "自定义",
+        unitPrice: 1,
+        quantityUnit: "个",
+        note: "1 / 个",
+        updatedAt: now
+      },
+      {
+        id: "douyin-share-standard",
+        service: "share",
+        name: "默认",
+        unitPrice: 0.2,
+        quantityUnit: "个",
+        note: "0.2 / 个",
+        updatedAt: now
+      },
+      {
+        id: "douyin-favorite-standard",
+        service: "favorite",
+        name: "默认",
+        unitPrice: 0.1,
+        quantityUnit: "个",
+        note: "0.1 / 个",
+        updatedAt: now
+      }
+    ];
+  }
+
+  return [
+    {
+      id: "bilibili-play-default",
+      service: "play",
+      name: "正常通道（日速几千）",
+      unitPrice: 60,
+      quantityUnit: "万",
+      note: "正常通道，日速几千，60 元 / 万",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-play-fast",
+      service: "play",
+      name: "高速通道（日速2w）",
+      unitPrice: 180,
+      quantityUnit: "万",
+      note: "高速通道，日速 2w，180 元 / 万",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-like-default",
+      service: "like",
+      name: "默认",
+      unitPrice: 30,
+      quantityUnit: "千",
+      note: "30 / 千",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-coin-default",
+      service: "coin",
+      name: "默认",
+      unitPrice: 0.2,
+      quantityUnit: "个",
+      note: "0.2 / 个",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-comment-custom",
+      service: "comment",
+      name: "自定义",
+      unitPrice: 0.7,
+      quantityUnit: "个",
+      note: "0.7 / 个",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-share-standard",
+      service: "share",
+      name: "默认",
+      unitPrice: 20,
+      quantityUnit: "千",
+      note: "20 / 千",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-favorite-standard",
+      service: "favorite",
+      name: "默认",
+      unitPrice: 20,
+      quantityUnit: "千",
+      note: "20 / 千",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-danmaku-custom",
+      service: "danmaku",
+      name: "自定义",
+      unitPrice: 0.15,
+      quantityUnit: "个",
+      note: "0.15 / 个",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-blue-link-default",
+      service: "blueLink",
+      name: "默认",
+      unitPrice: 0.8,
+      quantityUnit: "个",
+      note: "0.8 / 个",
+      updatedAt: now
+    }
+  ];
+}
+
+function compareGrossMarginPriceOptions(a: GrossMarginPriceOption, b: GrossMarginPriceOption) {
+  const serviceOrder = grossMarginServices.indexOf(a.service) - grossMarginServices.indexOf(b.service);
+  if (serviceOrder !== 0) return serviceOrder;
+  const optionOrder = grossMarginOptionRank(a.id) - grossMarginOptionRank(b.id);
+  if (optionOrder !== 0) return optionOrder;
+  return a.name.localeCompare(b.name, "zh-CN");
+}
+
+function grossMarginOptionRank(id: string) {
+  if (id.includes("-play-tech")) return 10;
+  if (id.includes("-play-qianchuan-10w")) return 20;
+  if (id.includes("-play-qianchuan-high-10w")) return 30;
+  if (id.includes("-play-qianchuan")) return 30;
+  if (id.includes("-play-default")) return 40;
+  if (id.includes("-play-fast")) return 50;
+  if (id.includes("-like-tech")) return 10;
+  if (id.includes("-like-qianchuan-1000")) return 20;
+  if (id.includes("-like-default")) return 30;
+  if (id.includes("-coin-default")) return 10;
+  if (id.includes("-comment-custom")) return 10;
+  if (id.includes("-danmaku-custom")) return 10;
+  if (id.includes("-blue-link-default")) return 10;
+  if (id.includes("-share-standard")) return 10;
+  if (id.includes("-favorite-standard")) return 10;
+  return 100;
+}
+
+function isRetiredGrossMarginOption(
+  platform: GrossMarginPriceTable["platform"],
+  id: string
+) {
+  if (platform !== "douyin") return false;
+  return [
+    "douyin-play-qianchuan-1-9w",
+    "douyin-play-qianchuan-100w",
+    "douyin-like-qianchuan-500",
+    "douyin-comment-standard-boost",
+    "douyin-comment-standard-quality"
+  ].includes(id);
+}
+
+function normalizeGrossMarginPlatform(platform: string): GrossMarginPriceTable["platform"] {
+  if (platform === "douyin" || platform === "bilibili") return platform;
+  throw new Error("平台不支持");
+}
+
+function normalizeGrossMarginService(service: string): GrossMarginServiceKind {
+  if (grossMarginServices.includes(service as GrossMarginServiceKind)) return service as GrossMarginServiceKind;
+  throw new Error("维护项目不支持");
+}
+
+function formatGrossMarginServiceName(service: GrossMarginServiceKind) {
+  if (service === "play") return "播放";
+  if (service === "like") return "点赞";
+  if (service === "douPlus") return "dou+";
+  if (service === "coin") return "投币";
+  if (service === "comment") return "评论";
+  if (service === "share") return "转发量";
+  if (service === "favorite") return "收藏量";
+  if (service === "danmaku") return "自定义弹幕";
+  return "蓝链点击";
+}
+
+function normalizeMoney(value: number) {
+  return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+}
+
+function normalizeGrossMarginUnitPrice(value: number) {
+  return Number.isFinite(value) ? Number(value.toFixed(6)) : 0;
+}
+
+function normalizeGrossMarginQuantityUnit(value: string | undefined) {
+  return value?.trim() || "个";
+}
+
+function normalizeGrossMarginMinimumQuantity(value: number | undefined) {
+  if (!Number.isFinite(value)) return undefined;
+  const safeValue = Number(value);
+  if (safeValue <= 0) return undefined;
+  return Number(safeValue.toFixed(6));
+}
+
 function normalizeCopySource(source: CopySource): CopySource {
   return {
     ...source,
@@ -1272,8 +2046,40 @@ function normalizeCopySource(source: CopySource): CopySource {
     transcriptPath: source.transcriptPath || copySourceTranscriptPath(source.id),
     status: source.status || "completed",
     source: source.source || "manual",
+    materialAnalysis: source.materialAnalysis,
     projectIds: source.projectIds || []
   };
+}
+
+function stripCopySourceForOverview(source: CopySource): CopySource {
+  return {
+    ...source,
+    transcript: ""
+  };
+}
+
+function stripEngagementRecordForOverview(record: EngagementRecord): EngagementRecord {
+  return {
+    ...record,
+    sourceText: ""
+  };
+}
+
+function stripDraftForOverview(draft: Draft): Draft {
+  const strippedAssets = draft.assets
+    ? {
+        comments: draft.assets.comments ? { ...draft.assets.comments, items: [] } : undefined,
+        danmaku: draft.assets.danmaku ? { ...draft.assets.danmaku, items: [] } : undefined,
+        cover: draft.assets.cover ? { ...draft.assets.cover, references: [], images: [] } : undefined
+      }
+    : undefined;
+
+  return {
+    ...draft,
+    input: undefined,
+    content: "",
+    assets: strippedAssets
+  } as Draft;
 }
 
 function formatPlatformName(platform: CopySource["platform"]) {

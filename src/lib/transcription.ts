@@ -24,6 +24,7 @@ export type LinkTranscriptionResult = {
   resolvedUrl?: string;
   platform: Platform | "unknown";
   title?: string;
+  mediaUrls?: string[];
   text: string;
   source: "platform_subtitle" | "volcengine" | "metadata";
   fallback?: boolean;
@@ -218,10 +219,12 @@ export async function transcribeVideo(input: {
 export async function transcribeLinkSource(input: {
   url: string;
   titleHint?: string;
+  analyzeVideo?: boolean;
 }): Promise<LinkTranscriptionResult> {
   const startedAt = Date.now();
   const resolvedUrl = await resolveShareUrl(input.url).catch(() => input.url);
   const platform = detectLinkPlatform(resolvedUrl || input.url);
+  let subtitleResult: LinkTranscriptionResult | null = null;
 
   if (platform === "bilibili") {
     const subtitle = await getBilibiliSubtitle({
@@ -235,7 +238,7 @@ export async function transcribeLinkSource(input: {
         title: input.titleHint,
         text: subtitle
       });
-      return {
+      subtitleResult = {
         url: input.url,
         resolvedUrl,
         platform,
@@ -246,6 +249,7 @@ export async function transcribeLinkSource(input: {
         fallbackReason: cleaned.fallbackReason,
         timings: [{ stage: "total", ms: Date.now() - startedAt }]
       };
+      if (!input.analyzeVideo) return subtitleResult;
     }
   }
 
@@ -258,6 +262,14 @@ export async function transcribeLinkSource(input: {
     resolvedUrl,
     platform
   });
+  if (subtitleResult) {
+    return {
+      ...subtitleResult,
+      title: media.title || subtitleResult.title,
+      mediaUrls: media.mediaUrls,
+      timings: [{ stage: "resolve-video-media", ms: Date.now() - startedAt }]
+    };
+  }
   if (!media.mediaUrls.length) {
     if (media.title) {
       return {
@@ -265,6 +277,7 @@ export async function transcribeLinkSource(input: {
         resolvedUrl,
         platform,
         title: media.title,
+        mediaUrls: [],
         text: media.title,
         source: "metadata",
         fallback: true,
@@ -294,6 +307,7 @@ export async function transcribeLinkSource(input: {
       resolvedUrl,
       platform,
       title: media.title || input.titleHint,
+      mediaUrls: media.mediaUrls,
       text: cleaned.text,
       source: "volcengine",
       fallback: cleaned.fallback,
@@ -309,6 +323,38 @@ export async function transcribeLinkSource(input: {
   } finally {
     await Promise.all(cleanupTargets.map((target) => fs.rm(target, { recursive: true, force: true }).catch(() => undefined)));
   }
+}
+
+export async function resolveLinkSourceMedia(input: {
+  url: string;
+  resolvedUrl?: string;
+  platform?: Platform | "unknown";
+}) {
+  const resolvedUrl = input.resolvedUrl || (await resolveShareUrl(input.url).catch(() => input.url));
+  const platform = input.platform && input.platform !== "unknown"
+    ? input.platform
+    : detectLinkPlatform(resolvedUrl || input.url);
+  if (platform !== "douyin" && platform !== "bilibili") {
+    return {
+      url: input.url,
+      resolvedUrl,
+      platform,
+      title: undefined,
+      mediaUrls: []
+    };
+  }
+  const media = await resolveLinkMediaUrl({
+    url: input.url,
+    resolvedUrl,
+    platform
+  });
+  return {
+    url: input.url,
+    resolvedUrl,
+    platform,
+    title: media.title,
+    mediaUrls: media.mediaUrls
+  };
 }
 
 async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: string; timings: Timing[] }> {

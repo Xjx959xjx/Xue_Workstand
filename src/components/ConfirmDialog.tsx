@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
+import { isBackdropEvent } from "@/components/dialog-events";
 
 export function ConfirmDialog({
   body,
@@ -32,7 +33,12 @@ export function ConfirmDialog({
   }, []);
 
   return (
-    <div className="modal-backdrop">
+    <div
+      className="modal-backdrop"
+      onClick={(event) => {
+        if (!busy && isBackdropEvent(event)) onCancel();
+      }}
+    >
       <div
         aria-labelledby="confirm-dialog-title"
         aria-modal="true"

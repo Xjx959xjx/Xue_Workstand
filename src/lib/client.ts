@@ -1,5 +1,6 @@
 import {
   AccountSummary,
+  AccountDetail,
   BatchTranscribeResult,
   CollectOrder,
   CollectResult,
@@ -8,10 +9,15 @@ import {
   DraftCoverReference,
   DraftInput,
   EngagementRecord,
+  GrossMarginLibrary,
+  GrossMarginPriceTable,
+  JobListItem,
   JobRecord,
   JobStartInput,
+  LibraryOverviewResponse,
   LibraryState,
   Platform,
+  ProjectDetail,
   ProjectSummary,
   Video
 } from "./types";
@@ -39,9 +45,43 @@ async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(data.error || summarizeHttpError(response.status));
+    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
   }
   return data as T;
+}
+
+function normalizeApiError(error: unknown) {
+  if (typeof error !== "string") return "";
+  const message = error.trim();
+  if (!message) return "";
+
+  const zodMessage = summarizeZodErrorMessage(message);
+  return zodMessage || message;
+}
+
+function summarizeZodErrorMessage(message: string) {
+  if (!message.startsWith("[") && !message.startsWith("{")) return "";
+
+  try {
+    const parsed = JSON.parse(message) as unknown;
+    const issues = Array.isArray(parsed) ? parsed : [parsed];
+    const firstIssue = issues.find(
+      (issue): issue is { code?: unknown; message?: unknown; path?: unknown; validation?: unknown } =>
+        Boolean(issue) && typeof issue === "object"
+    );
+    if (!firstIssue) return "";
+
+    const path = Array.isArray(firstIssue.path) ? firstIssue.path.join(".") : "";
+    if (firstIssue.validation === "url" || path.endsWith("url") || path.endsWith("mediaUrl")) {
+      return "链接格式不正确，请粘贴完整的 http(s) 地址。";
+    }
+    if (typeof firstIssue.message === "string" && firstIssue.message.trim() && !/^Invalid\b/i.test(firstIssue.message)) {
+      return firstIssue.message.trim();
+    }
+    return "请求参数不完整或格式不正确。";
+  } catch {
+    return "";
+  }
 }
 
 function describeRequestError(error: unknown) {
@@ -142,8 +182,38 @@ export function getLibrary() {
   return requestJson<LibraryState>("/api/library");
 }
 
+export function getLibraryOverview() {
+  return requestJson<LibraryOverviewResponse>("/api/library/overview");
+}
+
+export function getGrossMarginLibrary() {
+  return requestJson<GrossMarginLibrary>("/api/gross-margin");
+}
+
+export function saveGrossMarginPriceTable(input: Pick<GrossMarginPriceTable, "platform" | "items">) {
+  return requestJson<{ table: GrossMarginPriceTable; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "savePriceTable", ...input })
+  });
+}
+
+export function getAccountDetail(input: { platform: Platform; accountId: string; includeStyle?: boolean }) {
+  const params = new URLSearchParams({
+    platform: input.platform,
+    accountId: input.accountId
+  });
+  if (input.includeStyle) params.set("includeStyle", "1");
+  return requestJson<AccountDetail>(`/api/accounts?${params.toString()}`);
+}
+
+export function getProjectDetail(projectId: string, options: { includeStyle?: boolean } = {}) {
+  const params = new URLSearchParams({ projectId });
+  if (options.includeStyle) params.set("includeStyle", "1");
+  return requestJson<ProjectDetail>(`/api/projects?${params.toString()}`);
+}
+
 export function getJobs() {
-  return requestJson<{ jobs: JobRecord[]; active: JobRecord[]; recent: JobRecord[] }>("/api/jobs");
+  return requestJson<{ jobs: JobListItem[] }>("/api/jobs");
 }
 
 export function getJob(jobId: string) {
@@ -285,7 +355,7 @@ export function getCopySources() {
   return requestJson<{ sources: CopySource[] }>("/api/copy-sources");
 }
 
-export function transcribeCopySource(input: { url: string; titleHint?: string }) {
+export function transcribeCopySource(input: { url: string; titleHint?: string; analyzeVideo?: boolean }) {
   return requestJson<{ source: CopySource }>("/api/copy-sources", {
     method: "POST",
     body: JSON.stringify({ action: "transcribe", ...input })
@@ -521,6 +591,10 @@ export function saveDraft(input: DraftInput) {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export function getDrafts() {
+  return requestJson<{ drafts: Draft[] }>("/api/drafts");
 }
 
 export function deleteDrafts(draftIds: string[]) {

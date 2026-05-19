@@ -6,15 +6,13 @@ import { useState } from "react";
 import {
   Activity,
   BookOpenText,
+  Calculator,
   ChevronDown,
   FileText,
   FolderKanban,
   Home,
-  Layers3,
   MessageSquareMore,
-  MessageSquareText,
-  NotebookText,
-  Sparkles
+  MessageSquareText
 } from "lucide-react";
 import { TaskStatusIcon, useTasks } from "./TaskProvider";
 import { formatJobErrorMessage } from "@/lib/job-messages";
@@ -22,13 +20,12 @@ import { JobRecord } from "@/lib/types";
 
 const navItems = [
   { href: "/", label: "首页", icon: Home },
-  { href: "/copy-tools", label: "文案工具", icon: NotebookText },
   { href: "/library", label: "账号库", icon: BookOpenText },
-  { href: "/projects", label: "项目库", icon: Layers3 },
   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban },
   { href: "/writer", label: "对话写作", icon: MessageSquareText },
+  { href: "/drafts", label: "草稿", icon: FileText },
   { href: "/assets", label: "评论生成", icon: MessageSquareMore },
-  { href: "/drafts", label: "草稿", icon: FileText }
+  { href: "/gross-margin", label: "毛利计算", icon: Calculator }
 ];
 
 export function AppNav() {
@@ -39,7 +36,7 @@ export function AppNav() {
     <aside className="sidebar">
       <Link href="/" className="brand">
         <span className="brand-mark">
-          <Sparkles aria-hidden="true" size={20} />
+          <BookOpenText aria-hidden="true" size={19} />
         </span>
         <span>
           <strong>账号风格库</strong>

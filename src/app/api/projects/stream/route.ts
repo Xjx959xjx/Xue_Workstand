@@ -19,8 +19,8 @@ export async function POST(request: Request) {
 
     const stream = createNdjsonStream(async (emit) => {
       emit({ type: "stage", stage: "validate", message: "正在校验项目配置", progress: 15 });
-      if (!input.sourceAccountIds.length) {
-        throw new Error("请至少选择一个参考账号后再总结项目风格");
+      if (!input.sourceAccountIds.length && !input.sourceMaterialIds?.length) {
+        throw new Error("先加案例或账号");
       }
 
       emit({ type: "stage", stage: "generate", message: "正在保存项目并读取参考样本", progress: 45 });

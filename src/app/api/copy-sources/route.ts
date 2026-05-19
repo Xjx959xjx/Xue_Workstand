@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createCopySourceProject, deleteCopySources, getCopySources, saveCopySource } from "@/lib/storage";
-import { transcribeLinkSource } from "@/lib/transcription";
+import {
+  createCopySourceProject,
+  deleteCopySources,
+  getCopySources,
+  resolveCopySource,
+  saveCopySource,
+  updateCopySourceMaterialAnalysis
+} from "@/lib/storage";
+import { resolveLinkSourceMedia, transcribeLinkSource } from "@/lib/transcription";
+import { analyzeCopySourceMaterial } from "@/lib/material-analysis";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,7 +17,8 @@ export const runtime = "nodejs";
 const transcribeSchema = z.object({
   action: z.literal("transcribe").optional(),
   url: z.string().url(),
-  titleHint: z.string().optional()
+  titleHint: z.string().optional(),
+  analyzeVideo: z.boolean().optional()
 });
 
 const projectSchema = z.object({
@@ -21,6 +30,11 @@ const projectSchema = z.object({
 
 const deleteSchema = z.object({
   sourceIds: z.array(z.string().min(1)).min(1)
+});
+
+const reanalyzeSchema = z.object({
+  action: z.literal("reanalyze"),
+  sourceId: z.string().min(1)
 });
 
 export async function GET() {
@@ -44,11 +58,40 @@ export async function POST(request: Request) {
       });
     }
 
+    const reanalyzeInput = reanalyzeSchema.safeParse(body);
+    if (reanalyzeInput.success) {
+      const source = await resolveCopySource(reanalyzeInput.data.sourceId);
+      const media = await resolveLinkSourceMedia({
+        url: source.url,
+        resolvedUrl: source.resolvedUrl,
+        platform: source.platform
+      });
+      const materialAnalysis = await analyzeCopySourceMaterial({
+        mediaUrls: media.mediaUrls,
+        platform: media.platform,
+        title: media.title || source.title,
+        transcript: source.transcript,
+        url: media.resolvedUrl || source.resolvedUrl || source.url
+      });
+      const updated = await updateCopySourceMaterialAnalysis(source.id, materialAnalysis);
+      return NextResponse.json({ source: updated });
+    }
+
     const input = transcribeSchema.parse(body);
     const result = await transcribeLinkSource({
       url: input.url,
-      titleHint: input.titleHint
+      titleHint: input.titleHint,
+      analyzeVideo: Boolean(input.analyzeVideo)
     });
+    const materialAnalysis = input.analyzeVideo
+      ? await analyzeCopySourceMaterial({
+          mediaUrls: result.mediaUrls || [],
+          platform: result.platform,
+          title: result.title,
+          transcript: result.text,
+          url: result.resolvedUrl || result.url
+        })
+      : undefined;
     const source = await saveCopySource({
       title: result.title,
       platform: result.platform,
@@ -57,7 +100,8 @@ export async function POST(request: Request) {
       transcript: result.text,
       source: result.source,
       fallback: result.fallback,
-      fallbackReason: result.fallbackReason
+      fallbackReason: result.fallbackReason,
+      materialAnalysis
     });
 
     return NextResponse.json({ source, result });

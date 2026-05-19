@@ -1,0 +1,185 @@
+.page {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 1440px);
+  margin: 0 auto;
+}
+
+.page-header {
+  position: relative;
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.page-header::after {
+  display: none;
+  content: none;
+}
+
+.page-header .subtle {
+  margin-top: 5px;
+}
+
+.eyebrow {
+  margin-bottom: 5px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.subtle {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.panel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.panel::before {
+  display: none;
+  content: none;
+}
+
+.panel > * {
+  position: relative;
+}
+
+.panel-inner {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+@media (min-width: 1181px) {
+  :is(.library-page, .projects-page, .assets-page, .drafts-page, .writer-page, .gross-margin-page, .project-workbench-page) {
+    grid-template-rows: auto minmax(0, 1fr);
+    height: calc(100vh - (var(--page-pad) * 2));
+  }
+
+  :is(.library-page, .projects-page, .assets-page, .drafts-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
+  :is(.library-page, .projects-page, .assets-page, .drafts-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  :is(.library-page:has(> .notice), .library-page:has(> .error)) > .library-workspace,
+  :is(.projects-page:has(> .notice), .projects-page:has(> .error)) > .project-workspace,
+  :is(.assets-page:has(> .notice), .assets-page:has(> .error)) > .assets-workspace,
+  :is(.drafts-page:has(> .notice), .drafts-page:has(> .error)) > .drafts-workspace,
+  :is(.writer-page:has(> .notice), .writer-page:has(> .error)) > .writer-workbench,
+  :is(.gross-margin-page:has(> .notice), .gross-margin-page:has(> .error)) > .gross-margin-workspace,
+  :is(.project-workbench-page:has(> .notice), .project-workbench-page:has(> .error)) > .project-workbench-shell {
+    grid-row: 3;
+  }
+
+  .library-page > .panel.three-pane,
+  .assets-page > .panel.three-pane,
+  .drafts-page > .panel.three-pane,
+  .projects-page > .project-workspace,
+  .writer-page > .writer-workbench,
+  .gross-margin-page > .gross-margin-workspace,
+  .project-workbench-page > .project-workbench-shell {
+    min-height: 0;
+    height: 100%;
+  }
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+  gap: 12px;
+}
+
+.button-row,
+.stat-row,
+.account-manage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.button-row {
+  justify-content: flex-end;
+}
+
+.account-manage-actions {
+  justify-content: flex-end;
+}
+
+.video-header-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-title-row > * {
+  min-width: 0;
+}
+
+.section-title-row h2,
+.section-title-row h3 {
+  overflow-wrap: anywhere;
+}
+
+.detail-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.empty-action {
+  display: grid;
+  gap: 8px;
+}
+
+.empty-state-panel .btn {
+  justify-self: start;
+}
+
+.empty-state-panel {
+  border-style: dashed;
+  background: var(--panel);
+}
+
+.empty-state-panel .panel-inner {
+  justify-items: start;
+  min-height: 144px;
+  align-content: center;
+}
+
+.empty-state-mark {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid color-mix(in oklch, var(--accent) 28%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+}

@@ -1,0 +1,243 @@
+/* Assets */
+.assets-workspace {
+  grid-template-columns: 300px minmax(520px, 1fr) 360px;
+}
+
+.engagement-workspace {
+  grid-template-columns: minmax(480px, 1fr) minmax(340px, 0.72fr) 280px;
+}
+
+.assets-main-pane .pane-body {
+  gap: 12px;
+}
+
+.engagement-generator-pane .pane-body {
+  gap: 10px;
+  padding: 9px 10px;
+}
+
+.source-tabs {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+}
+
+.source-tabs button {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  color: var(--muted-strong);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.source-tabs button:last-child {
+  border-right: 0;
+}
+
+.source-tabs button.active {
+  color: var(--control-active-text);
+  background: var(--control-active-bg);
+  box-shadow: var(--active-underline-shadow);
+}
+
+.source-tabs svg {
+  flex: 0 0 auto;
+}
+
+.engagement-source-panel {
+  gap: 8px;
+  padding: 10px;
+}
+
+.engagement-draft-search input {
+  min-height: 32px;
+}
+
+.engagement-draft-summary {
+  justify-content: space-between;
+}
+
+.engagement-textarea {
+  min-height: 180px;
+}
+
+.engagement-draft-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(172px, 25vh);
+  overflow: auto;
+  padding-right: 2px;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.engagement-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.engagement-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.engagement-option.active {
+  border-color: var(--selected-border);
+  background: var(--surface-selected);
+}
+
+.engagement-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.engagement-option span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.engagement-option strong {
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.engagement-option small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engagement-option input[type="number"] {
+  width: 76px;
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: var(--panel);
+}
+
+.engagement-option input[type="number"]:disabled {
+  color: var(--muted);
+  background: var(--panel-muted);
+}
+
+.engagement-submit {
+  justify-self: start;
+}
+
+.engagement-results-pane {
+  gap: 12px;
+}
+
+.engagement-results-pane .asset-text-list {
+  max-height: calc((100vh - 305px) / 2);
+  min-height: 150px;
+}
+
+.engagement-history-pane .pane-body {
+  gap: 8px;
+}
+
+.engagement-history-pane .status-summary span {
+  min-height: 20px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+
+.asset-list-block {
+  display: grid;
+  gap: 8px;
+}
+
+.asset-text-list {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.asset-text-list.empty {
+  place-items: center;
+  min-height: 80px;
+  color: var(--muted);
+}
+
+.asset-text-list p {
+  padding: 7px 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.progress-fill.indeterminate {
+  width: 42%;
+  animation: progress-indeterminate 1.15s ease-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(240%);
+  }
+}
+
+@media (max-width: 1180px) {
+  .assets-workspace {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .engagement-workspace {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+
+  .engagement-history-pane {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 780px) {
+  .assets-workspace,
+  .engagement-workspace,
+  .engagement-option-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .engagement-option {
+    grid-template-columns: auto minmax(0, 1fr) 72px;
+  }
+}

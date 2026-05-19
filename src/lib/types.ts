@@ -180,6 +180,14 @@ export type ProjectSourceAccount = {
   transcriptCount: number;
 };
 
+export type VideoListItem = Omit<Video, "raw">;
+
+export type AccountListItem = Account & {
+  videoCount: number;
+  transcriptCount: number;
+  draftCount: number;
+};
+
 export type AccountSummary = Account & {
   videoCount: number;
   transcriptCount: number;
@@ -189,6 +197,16 @@ export type AccountSummary = Account & {
   drafts: Draft[];
 };
 
+export type AccountDetail = Omit<AccountSummary, "videos" | "style"> & {
+  style?: string;
+  videos: VideoListItem[];
+};
+
+export type ProjectListItem = Project & {
+  sourceAccounts: ProjectSourceAccount[];
+  sourceMaterialCount: number;
+};
+
 export type ProjectSummary = Project & {
   style: string;
   sourceAccounts: ProjectSourceAccount[];
@@ -196,7 +214,24 @@ export type ProjectSummary = Project & {
   sourceMaterialCount: number;
 };
 
+export type ProjectDetail = Omit<ProjectSummary, "style"> & {
+  style?: string;
+};
+
 export type CopySourceStatus = "completed" | "failed";
+
+export type CopySourceMaterialAnalysis = {
+  mode: "multimodal" | "textual";
+  status: "completed" | "skipped" | "failed";
+  summary: string;
+  visualNotes?: string;
+  structureNotes?: string;
+  titleNotes?: string;
+  frameCount?: number;
+  fallbackReason?: string;
+  error?: string;
+  generatedAt: string;
+};
 
 export type CopySource = {
   id: string;
@@ -211,6 +246,7 @@ export type CopySource = {
   error?: string;
   fallback?: boolean;
   fallbackReason?: string;
+  materialAnalysis?: CopySourceMaterialAnalysis;
   projectIds?: string[];
   createdAt: string;
   updatedAt: string;
@@ -241,6 +277,100 @@ export type EngagementRecord = {
   updatedAt: string;
 };
 
+export type GrossMarginTier = {
+  id: string;
+  name: string;
+  originalPrice: number;
+  maintenanceCost: number;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GrossMarginCategory = {
+  id: string;
+  name: string;
+  description?: string;
+  tiers: GrossMarginTier[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GrossMarginServiceKind =
+  | "play"
+  | "like"
+  | "douPlus"
+  | "coin"
+  | "comment"
+  | "share"
+  | "favorite"
+  | "danmaku"
+  | "blueLink";
+
+export type GrossMarginPriceOption = {
+  id: string;
+  service: GrossMarginServiceKind;
+  name: string;
+  unitPrice: number;
+  quantityUnit: string;
+  minimumQuantity?: number;
+  note?: string;
+  updatedAt: string;
+};
+
+export type GrossMarginPriceTable = {
+  platform: Extract<Platform, "bilibili" | "douyin">;
+  items: GrossMarginPriceOption[];
+  updatedAt: string;
+};
+
+export type GrossMarginAccountPrice = {
+  platform: GrossMarginPriceTable["platform"];
+  name: string;
+  defaultPrice: number;
+  priceLabel: string;
+  secondaryPrice?: number;
+  secondaryPriceLabel?: string;
+  douyinId?: string;
+  cooperationCode?: string;
+  bilibiliUid?: string;
+  homepage?: string;
+};
+
+export type GrossMarginCalculationLine = {
+  service: GrossMarginServiceKind;
+  label: string;
+  optionId: string;
+  optionName: string;
+  quantity: number;
+  unitPrice: number;
+  quantityUnit: string;
+  total: number;
+};
+
+export type GrossMarginLibrary = {
+  root: string;
+  tables: GrossMarginPriceTable[];
+  accounts: GrossMarginAccountPrice[];
+};
+
+export type GrossMarginCalculationInput = {
+  platform: GrossMarginPriceTable["platform"];
+  originalPrice: number;
+  discountPrice: number;
+  lines: GrossMarginCalculationLine[];
+};
+
+export type GrossMarginCalculationResult = {
+  originalPrice: number;
+  discountPrice: number;
+  maintenanceCost: number;
+  grossProfit: number;
+  grossMarginRate: number;
+  discountRate: number;
+  lines: GrossMarginCalculationLine[];
+};
+
 export type LibraryState = {
   root: string;
   accounts: AccountSummary[];
@@ -254,6 +384,25 @@ export type LibraryState = {
   recentEngagementRecords: EngagementRecord[];
   recentDrafts: Draft[];
 };
+
+export type LibraryOverview = {
+  root: string;
+  accounts: AccountListItem[];
+  projects: ProjectListItem[];
+  copySources: CopySource[];
+  engagementRecords: EngagementRecord[];
+  drafts: Draft[];
+  recentAccounts: AccountListItem[];
+  recentProjects: ProjectListItem[];
+  recentCopySources: CopySource[];
+  recentEngagementRecords: EngagementRecord[];
+  recentDrafts: Draft[];
+};
+
+export type LibraryOverviewResponse = Omit<
+  LibraryOverview,
+  "recentAccounts" | "recentProjects" | "recentCopySources" | "recentEngagementRecords" | "recentDrafts"
+>;
 
 export type CollectResult = {
   account: AccountSummary;
@@ -348,6 +497,11 @@ export type JobRecord = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+};
+
+export type JobListItem = Omit<JobRecord, "partialText" | "result"> & {
+  hasPartialText?: boolean;
+  hasResult?: boolean;
 };
 
 export type JobStartInput =

@@ -1,0 +1,110 @@
+.btn {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  background: var(--control-bg);
+  box-shadow: var(--shadow-soft);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.btn svg {
+  flex: 0 0 auto;
+}
+
+.btn:hover {
+  border-color: var(--control-hover-border);
+  color: var(--text-strong);
+  background: var(--control-hover-bg);
+  box-shadow: var(--control-hover-shadow);
+}
+
+.btn.primary {
+  border-color: var(--control-primary-border);
+  color: var(--control-primary-text);
+  background: var(--control-primary-bg);
+  box-shadow: var(--control-primary-shadow);
+}
+
+.btn.primary::after {
+  display: none;
+  content: none;
+}
+
+.btn.primary:hover {
+  border-color: var(--control-primary-hover-border);
+  color: var(--control-primary-text);
+  background: var(--control-primary-hover-bg);
+}
+
+.btn.primary:hover::after {
+  opacity: 0;
+}
+
+.btn.danger {
+  border-color: var(--danger-border);
+  color: var(--rose);
+  background: var(--rose-soft);
+}
+
+.btn.danger:hover {
+  border-color: var(--danger-hover-border);
+  color: var(--danger-hover-text);
+  background: var(--danger-hover-bg);
+}
+
+.btn:disabled,
+.btn.disabled,
+.btn[aria-disabled="true"] {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--panel-muted);
+  box-shadow: none;
+}
+
+.btn.disabled,
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn.icon-btn {
+  min-width: 32px;
+}
+
+.btn.icon-only {
+  width: 32px;
+  padding: 0;
+}
+
+.btn.compact {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.btn.icon-toggle.active {
+  border-color: color-mix(in oklch, var(--blue) 35%, transparent);
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.text-link {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}

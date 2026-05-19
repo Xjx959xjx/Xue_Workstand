@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateProjectStyleProfile, saveAndGenerateProjectStyleProfile } from "@/lib/ai";
-import { deleteProjects, getProjectSummary, saveProjectStyle, upsertProject } from "@/lib/storage";
+import { deleteProjects, getProjectDetail, getProjectSummary, saveProjectStyle, upsertProject } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
@@ -12,6 +12,29 @@ const baseSchema = z.object({
   sourceAccountIds: z.array(z.string()).default([]),
   sourceMaterialIds: z.array(z.string()).optional()
 });
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const input = z.object({ projectId: z.string().min(1) }).parse({
+      projectId: searchParams.get("projectId")
+    });
+    return NextResponse.json(
+      await getProjectDetail(input.projectId, {
+        includeStyle: parseBooleanFlag(searchParams.get("includeStyle"))
+      })
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "读取项目详情失败" },
+      { status: 400 }
+    );
+  }
+}
+
+function parseBooleanFlag(value: string | null) {
+  return value === "1" || value === "true";
+}
 
 export async function POST(request: Request) {
   try {

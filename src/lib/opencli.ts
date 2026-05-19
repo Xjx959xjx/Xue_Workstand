@@ -767,9 +767,16 @@ export async function getBilibiliSubtitle(video: Video) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) return "";
 
-  const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "-f", "json"]);
-  const raw = parseJsonish(stdout);
-  return extractSubtitleText(raw);
+  const preferredLangs = ["zh-CN", "ai-zh"];
+  for (const lang of preferredLangs) {
+    const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "--lang", lang, "-f", "json"]).catch(() => "");
+    const text = extractSubtitleText(parseJsonish(stdout));
+    if (isUsableBilibiliSubtitle(text, video)) return text;
+  }
+
+  const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "-f", "json"]).catch(() => "");
+  const text = extractSubtitleText(parseJsonish(stdout));
+  return isUsableBilibiliSubtitle(text, video) ? text : "";
 }
 
 export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw">, limit = 50) {
@@ -1495,6 +1502,31 @@ function extractSubtitleText(raw: unknown): string {
   }
 
   return "";
+}
+
+function isUsableBilibiliSubtitle(text: string, video: Video) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const title = String(video.title || "");
+  const expectedChinese = hasCjkText(title);
+  if (!expectedChinese) return true;
+
+  const cjkCount = countMatches(trimmed, /[\u3400-\u9fff]/gu);
+  const latinWordCount = countMatches(trimmed, /[A-Za-z]{2,}/g);
+  const totalSignal = cjkCount + latinWordCount;
+  if (!totalSignal) return true;
+
+  const cjkRatio = cjkCount / totalSignal;
+  return cjkCount >= 20 || cjkRatio >= 0.15;
+}
+
+function hasCjkText(text: string) {
+  return /[\u3400-\u9fff]/u.test(text);
+}
+
+function countMatches(text: string, pattern: RegExp) {
+  return Array.from(text.matchAll(pattern)).length;
 }
 
 async function collectMediaFiles(root: string) {

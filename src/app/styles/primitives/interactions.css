@@ -1,0 +1,258 @@
+/* Shared interaction and motion states */
+@media (min-width: 781px) {
+  .brand,
+  .nav-link,
+  .btn,
+  .text-link,
+  .panel,
+  .task-row,
+  .account-row,
+  .list-button,
+  .copy-source-card,
+  .copy-project-row,
+  .check-card,
+  .detail-section,
+  .compact-card,
+  .style-summary-card,
+  .metric-item,
+  .status-pill,
+  .segmented button,
+  .source-tabs button,
+  .inline-sort-control select,
+  .field input,
+  .field select,
+  .field textarea,
+  .writer-ref-select,
+  .writer-textarea,
+  .project-style-textarea,
+  .account-filter-input,
+  .modal-editor textarea,
+  .pane-search input {
+    transition:
+      background-color var(--motion-fast) ease,
+      border-color var(--motion-fast) ease,
+      box-shadow var(--motion-fast) ease,
+      color var(--motion-fast) ease,
+      opacity var(--motion-fast) ease,
+      transform var(--motion-base) var(--ease-out);
+  }
+
+  .btn.primary::after,
+  .task-row::after {
+    transition:
+      opacity var(--motion-base) var(--ease-out),
+      transform var(--motion-base) var(--ease-out);
+  }
+
+  .page-header,
+  .panel {
+    box-shadow: var(--shadow-panel);
+  }
+
+  .brand:hover,
+  .nav-link:hover,
+  .task-row:hover,
+  .account-row:hover,
+  .list-button:hover,
+  .copy-source-card:hover,
+  .copy-project-row:hover,
+  .check-card:hover,
+  .compact-link-row:hover,
+  .btn:hover {
+    transform: none;
+  }
+
+  .btn:active,
+  .nav-link:active,
+  .task-row:active,
+  .account-row:active,
+  .list-button:active,
+  .copy-source-card:active,
+  .copy-project-row:active,
+  .check-card:active {
+    transform: translateY(0);
+  }
+
+  .btn:focus-visible,
+  .nav-link:focus-visible,
+  .brand:focus-visible,
+  .list-button:focus-visible,
+  .copy-source-card:focus-visible,
+  .copy-project-row:focus-visible,
+  .task-row:focus-visible,
+  .account-row:focus-visible,
+  .check-card:focus-within,
+  .segmented button:focus-visible,
+  .source-tabs button:focus-visible,
+  .style-reference summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: var(--focus-ring-shadow);
+  }
+
+  .field:focus-within label {
+    color: var(--accent-strong);
+  }
+
+  .field input:hover,
+  .field select:hover,
+  .field textarea:hover,
+  .inline-sort-control select:hover,
+  .writer-ref-select:hover,
+  .writer-textarea:hover,
+  .project-style-textarea:hover,
+  .account-filter-input:hover,
+  .modal-editor textarea:hover,
+  .pane-search input:hover {
+    border-color: var(--control-hover-border);
+    box-shadow: var(--control-field-hover-shadow);
+  }
+
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus,
+  .inline-sort-control select:focus,
+  .writer-ref-select:focus,
+  .writer-textarea:focus,
+  .project-style-textarea:focus,
+  .account-filter-input:focus,
+  .modal-editor textarea:focus,
+  .pane-search input:focus {
+    background: var(--panel);
+  }
+
+  .pane {
+    background: var(--surface-panel);
+  }
+
+  .pane-header,
+  .writer-refbar,
+  .selection-toolbar,
+  .modal-header {
+    box-shadow: var(--surface-inset-highlight);
+  }
+
+  .video-table tbody tr {
+    transition:
+      background-color 140ms ease,
+      box-shadow 140ms ease;
+  }
+
+  .video-table tbody tr:hover,
+  .video-table tbody tr.active,
+  .video-table tbody tr.checked {
+    box-shadow: var(--selected-row-shadow);
+  }
+
+  .video-row-button:hover .video-title-line strong,
+  .list-button:hover .list-title,
+  .account-row:hover .list-title,
+  .task-row:hover strong {
+    color: var(--text-strong);
+  }
+
+  .metric-item {
+    box-shadow: none;
+  }
+
+  .metric-bar span,
+  .list-progress span,
+  .progress-fill,
+  .progress-button-fill {
+    transition: width var(--motion-base) ease;
+  }
+
+  .copy-job-row .status-pill.pending::after,
+  .status-pill.transcribing::after,
+  .status-pill.pending[data-busy="true"]::after,
+  .progress-fill::after,
+  .progress-button-fill::after,
+  .project-progress::after {
+    animation: none;
+  }
+
+  .modal-backdrop {
+    animation: modal-fade-in 160ms ease-out both;
+  }
+
+  .modal-panel {
+    animation: modal-rise 190ms var(--ease-out) both;
+  }
+
+  .markdown-box,
+  .code-box,
+  .result-box,
+  .project-style-textarea,
+  .writer-textarea,
+  .modal-editor textarea {
+    line-height: 1.72;
+  }
+
+  .draft-document {
+    padding: 18px 20px;
+  }
+}
+
+@keyframes workbench-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes task-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes task-toast-exit {
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes toast-progress {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes modal-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

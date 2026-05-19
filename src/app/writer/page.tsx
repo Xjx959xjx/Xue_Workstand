@@ -1,19 +1,23 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Copy, ExternalLink, Eye, FileUp, Globe2, MessageSquarePlus, RotateCcw, Send } from "lucide-react";
+import { Copy, FileUp, Globe2, MessageSquarePlus, RotateCcw, Send } from "lucide-react";
+import { FeishuResultModal } from "./_components/FeishuResultModal";
+import { WriterStyleModal } from "./_components/WriterStyleModal";
+import { WriterStylePanel } from "./_components/WriterStylePanel";
+import { useFeishuPublish } from "./_hooks/useFeishuPublish";
+import { useWriterGeneration } from "./_hooks/useWriterGeneration";
+import { useWriterReferenceDetails } from "./_hooks/useWriterReferenceDetails";
 import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
-import { publishFeishuDocument, saveDraft } from "@/lib/client";
+import { isTaskProgressMessage } from "@/lib/feedback-messages";
+import { getDrafts } from "@/lib/client";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
-import { AccountDraftInput, Draft, DraftInput, ProjectDraftInput, WriteResult } from "@/lib/types";
-
-type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
+import type { Draft } from "@/lib/types";
 
 export default function WriterPage() {
   return (
@@ -36,21 +40,10 @@ function WriterPageContent() {
   const [prompt, setPrompt] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
-  const [lastContent, setLastContent] = useState("");
-  const [lastResearch, setLastResearch] = useState("");
-  const [lastSavedContent, setLastSavedContent] = useState("");
-  const [lastDraftBase, setLastDraftBase] = useState<DraftSaveBase | null>(null);
-  const [lastDraftId, setLastDraftId] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
-  const [generateStage, setGenerateStage] = useState("");
-  const [generateProgress, setGenerateProgress] = useState(0);
-  const [activeWriteJobId, setActiveWriteJobId] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
-  const [feishuResult, setFeishuResult] = useState<{ title: string; url: string } | null>(null);
-  const styleDialogRef = useRef<HTMLDivElement>(null);
-  const feishuDialogRef = useRef<HTMLDivElement>(null);
-  const handledWriteJobsRef = useRef<Set<string>>(new Set());
+  const [rewriteSourceDraft, setRewriteSourceDraft] = useState<Draft | null>(null);
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
@@ -62,49 +55,88 @@ function WriterPageContent() {
     return library?.projects.find((project) => project.id === projectId) || first || null;
   }, [library?.projects, projectId]);
 
-  const activeStyle = targetType === "project" ? selectedProject?.style : selectedAccount?.style;
-  const activeTitle = targetType === "project" ? selectedProject?.name : selectedAccount?.name;
-  const activeSubtitle =
-    targetType === "project"
-      ? `${selectedProject?.sourceAccounts.length || 0} 个参考账号`
-      : selectedAccount
-        ? `${formatPlatform(selectedAccount.platform)} / ${selectedAccount.videoCount} 条视频 / ${selectedAccount.transcriptCount} 份转写`
-        : "";
+  const { activeStyle, activeSubtitle, activeTitle } = useWriterReferenceDetails({
+    selectedAccount,
+    selectedProject,
+    setNotice,
+    targetType
+  });
   const sourceExtraction = useMemo(() => extractRewriteSourceMaterial(sourceText), [sourceText]);
   const normalizedPrompt = useMemo(() => normalizeRewritePrompt(mode, prompt, sourceText), [mode, prompt, sourceText]);
   const normalizedSourceText = sourceText;
   const hasRewriteSource = Boolean(normalizedSourceText.trim());
   const hasTaskInput = mode === "topic" ? Boolean(normalizedPrompt.trim()) : Boolean(normalizedPrompt.trim() || hasRewriteSource);
-  const activeWriteJob = useMemo(() => {
-    const candidates = [...activeJobs, ...recentJobs].filter((job) => job.kind === "write-copy");
-    return candidates.find((job) => job.id === activeWriteJobId) || activeJobs.find((job) => job.kind === "write-copy") || null;
-  }, [activeJobs, activeWriteJobId, recentJobs]);
-  const isGenerating = Boolean(activeWriteJob && (activeWriteJob.status === "queued" || activeWriteJob.status === "running"));
-  const canGenerate = Boolean(hasTaskInput && !busy && !isGenerating && (targetType === "project" ? selectedProject : selectedAccount));
   const noticeIsError = notice.includes("失败") || notice.includes("未配置");
 
+  const {
+    canGenerate,
+    copyLast,
+    generateProgress,
+    generateStage,
+    handleGenerate,
+    handleOpenAssets,
+    lastContent,
+    lastDraftBase,
+    lastResearch
+  } = useWriterGeneration({
+    activeJobs,
+    activeTitle,
+    busy,
+    hasTaskInput,
+    mode,
+    normalizedPrompt,
+    normalizedSourceText,
+    recentJobs,
+    refresh,
+    routerPush: router.push,
+    selectedAccount,
+    selectedProject,
+    setBusy,
+    setNotice,
+    startTask,
+    targetType,
+    useWebResearch
+  });
+
+  const { feishuResult, handlePublishFeishu, setFeishuResult } = useFeishuPublish({
+    activeTitle,
+    lastContent,
+    setBusy,
+    setNotice
+  });
+
   useEffect(() => {
-    if (!notice || isBackgroundStartMessage(notice)) return;
+    if (!notice || isTaskProgressMessage(notice)) return;
     notify({ tone: noticeIsError ? "error" : "success", message: notice });
   }, [notice, noticeIsError, notify]);
 
   useEffect(() => {
-    if (!styleOpen) return;
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    styleDialogRef.current?.focus();
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, [styleOpen]);
+    let ignore = false;
+    const draftId = searchParams.get("draftId");
+    if (!draftId || loading) {
+      setRewriteSourceDraft(null);
+      return;
+    }
 
-  useEffect(() => {
-    if (!feishuResult) return;
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    feishuDialogRef.current?.focus();
+    const overviewDraft = library?.drafts.find((draft) => draft.id === draftId);
+    if (overviewDraft?.content) {
+      setRewriteSourceDraft(overviewDraft);
+      return;
+    }
+
+    getDrafts()
+      .then((result) => {
+        if (ignore) return;
+        setRewriteSourceDraft(result.drafts.find((draft) => draft.id === draftId) || null);
+      })
+      .catch((err) => {
+        if (!ignore) setNotice(err instanceof Error ? err.message : "读取草稿失败");
+      });
+
     return () => {
-      previouslyFocused?.focus();
+      ignore = true;
     };
-  }, [feishuResult]);
+  }, [library?.drafts, loading, searchParams]);
 
   useEffect(() => {
     const target = searchParams.get("targetType");
@@ -114,7 +146,11 @@ function WriterPageContent() {
     const nextAccountId = searchParams.get("accountId");
     const nextProjectId = searchParams.get("projectId");
     const draftId = searchParams.get("draftId");
-    const sourceDraft = draftId ? library?.drafts.find((draft) => draft.id === draftId) : null;
+    const sourceDraft = draftId
+      ? rewriteSourceDraft?.id === draftId
+        ? rewriteSourceDraft
+        : library?.drafts.find((draft) => draft.id === draftId)
+      : null;
 
     if (target === "project") setTargetType("project");
     if (target === "account") setTargetType("account");
@@ -128,150 +164,20 @@ function WriterPageContent() {
     }
     if (nextAccountId) setAccountId(nextAccountId);
     if (nextProjectId) setProjectId(nextProjectId);
-  }, [library?.drafts, searchParams]);
-
-  useEffect(() => {
-    if (!activeWriteJob) return;
-    setActiveWriteJobId(activeWriteJob.id);
-    setGenerateStage(activeWriteJob.message || "正在生成文案");
-    setGenerateProgress(activeWriteJob.progress || 0);
-    if (activeWriteJob.partialText) setLastContent(activeWriteJob.partialText);
-
-    if (activeWriteJob.status === "running" || activeWriteJob.status === "queued") {
-      setBusy("generate");
-      return;
-    }
-
-    if (handledWriteJobsRef.current.has(activeWriteJob.id)) return;
-    handledWriteJobsRef.current.add(activeWriteJob.id);
-    setBusy("");
-
-    if (activeWriteJob.status === "completed") {
-      const result = activeWriteJob.result as WriteResult | undefined;
-      if (result) {
-        setLastContent(result.content);
-        setLastResearch(result.research || "");
-        setLastSavedContent(result.draft ? result.content : "");
-        setLastDraftId(result.draft?.id || "");
-        setLastDraftBase(result.draft ? draftToSaveBase(result.draft) : null);
-        setNotice(
-          `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到草稿箱。`
-        );
-      } else {
-        setNotice("文案生成完成。");
-      }
-      setGenerateStage("生成完成");
-      setGenerateProgress(100);
-      return;
-    }
-
-    if (activeWriteJob.status === "failed") {
-      setNotice(activeWriteJob.error || "生成失败，请检查模型配置、代理或输入内容后重试。");
-      setGenerateStage("生成失败");
-      setGenerateProgress(100);
-    }
-  }, [activeWriteJob, useWebResearch]);
-
-  async function handleGenerate() {
-    if (!canGenerate) return;
-    setBusy("generate");
-    setNotice("");
-    setGenerateStage("准备写作任务");
-    setGenerateProgress(6);
-    setLastContent("");
-    setLastResearch("");
-
-    try {
-      const payload = {
-        targetType,
-        platform: targetType === "account" ? selectedAccount?.platform : undefined,
-        accountId: targetType === "account" ? selectedAccount?.id : undefined,
-        projectId: targetType === "project" ? selectedProject?.id : undefined,
-        mode,
-        prompt: normalizedPrompt,
-        sourceText: normalizedSourceText,
-        save: true,
-        useWebResearch
-      };
-
-      const job = await startTask({
-        kind: "write-copy",
-        title: mode === "topic" ? "生成主题文案" : "改写文案",
-        inputSummary: activeTitle ? `${activeTitle} · ${mode === "topic" ? "主题写作" : "文案改写"}` : undefined,
-        href: "/writer",
-        input: payload
-      });
-      setActiveWriteJobId(job.id);
-      setGenerateStage(job.message);
-      setGenerateProgress(job.progress);
-      setNotice("文案生成已在后台开始，可以切换到其他模块。");
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "生成失败，请检查模型配置、代理或输入内容后重试。");
-    }
-  }
-
-  async function handleOpenAssets() {
-    if (!lastContent || !lastDraftBase) return;
-    setBusy("assets");
-    setNotice("");
-    try {
-      let draftId = lastDraftId;
-      if (!draftId || lastSavedContent !== lastContent) {
-        const payload: DraftInput =
-          lastDraftBase.targetType === "project"
-            ? {
-                ...lastDraftBase,
-                content: lastContent
-              }
-            : {
-                ...lastDraftBase,
-                content: lastContent
-              };
-        const draft = await saveDraft(payload);
-        draftId = draft.id;
-        setLastDraftId(draft.id);
-        setLastSavedContent(lastContent);
-        await refresh();
-      }
-      router.push(`/assets?draftId=${encodeURIComponent(draftId)}`);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "打开评论生成失败，请先保存当前草稿后重试。");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function copyLast() {
-    if (!lastContent) return;
-    await navigator.clipboard.writeText(lastContent);
-    setNotice("生成结果已复制到剪贴板。");
-  }
-
-  async function handlePublishFeishu() {
-    if (!lastContent) return;
-    setBusy("feishu");
-    setNotice("");
-    try {
-      const result = await publishFeishuDocument({
-        title: `${activeTitle || "写作台"}｜${new Date().toLocaleDateString("zh-CN")}`,
-        content: lastContent
-      });
-      setFeishuResult({ title: result.title, url: result.url });
-      setNotice("已发布到飞书文档，可以在弹窗中打开。");
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "发布飞书文档失败，请检查 lark-cli 登录状态和文件夹配置。");
-    } finally {
-      setBusy("");
-    }
-  }
+  }, [library?.drafts, rewriteSourceDraft, searchParams]);
 
   if (!loading && !library?.accounts.length && !library?.projects.length) {
     return (
       <div className="page writer-page">
-        <header className="page-header workbench-header">
+        <header className="page-header">
           <div>
             <p className="eyebrow">Writer</p>
-            <h1>对话写作</h1>
+            <h1 className="title-with-emoji">
+              <span aria-hidden="true" className="title-emoji">
+                ✍️
+              </span>
+              <span>对话写作</span>
+            </h1>
             <p className="subtle">需要至少一个账号或项目风格作为引用。</p>
           </div>
         </header>
@@ -282,10 +188,15 @@ function WriterPageContent() {
 
   return (
     <div className="page writer-page">
-      <header className="page-header workbench-header">
+      <header className="page-header">
         <div>
           <p className="eyebrow">Writer</p>
-          <h1>对话写作</h1>
+          <h1 className="title-with-emoji">
+            <span aria-hidden="true" className="title-emoji">
+              ✍️
+            </span>
+            <span>对话写作</span>
+          </h1>
           <p className="subtle">选择引用风格，填写主题或原文，生成后会自动进入草稿箱，也可发布飞书或继续生成评论。</p>
         </div>
         <div className="stat-row">
@@ -467,7 +378,7 @@ function WriterPageContent() {
                       <small>本次生成使用的研究摘要</small>
                     </span>
                   </summary>
-                  <div className="style-reference-body">
+                  <div>
                     <pre className="result-box" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
                       {lastResearch}
                     </pre>
@@ -478,103 +389,22 @@ function WriterPageContent() {
           </div>
         </section>
 
-        <aside className="panel writer-style-panel">
-          <div className="panel-inner detail-stack">
-            <details className="style-reference" open>
-              <summary>
-                <span className="style-reference-heading">
-                  <span className="style-reference-title">引用风格</span>
-                  <small>{activeTitle || "未选择风格"}</small>
-                </span>
-              </summary>
-              <div className="stat-row">
-                {targetType === "project" && selectedProject ? (
-                  <>
-                    <span className="stat-pill">项目</span>
-                    <span className="stat-pill">{selectedProject.sourceAccounts.length} 个账号</span>
-                  </>
-                ) : selectedAccount ? (
-                  <>
-                    <span className="stat-pill">{formatPlatform(selectedAccount.platform)}</span>
-                    <span className="stat-pill">{selectedAccount.transcriptCount} 份转写</span>
-                  </>
-                ) : null}
-              </div>
-            </details>
-
-            <div className="style-summary-card">
-              <h3>{activeTitle || "未选择风格"}</h3>
-              <p>{makeStylePreview(activeStyle)}</p>
-              <button className="btn" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
-                <Eye aria-hidden="true" size={16} />
-                查看风格卡
-              </button>
-            </div>
-
-            {targetType === "project" && selectedProject ? (
-              <div>
-                <h3>参考账号</h3>
-                <div className="stat-row">
-                  {selectedProject.sourceAccounts.map((account) => (
-                    <span className="stat-pill" key={account.id}>
-                      {formatPlatform(account.platform)} / {account.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </aside>
+        <WriterStylePanel
+          activeStyle={activeStyle}
+          activeTitle={activeTitle}
+          selectedAccount={selectedAccount}
+          selectedProject={selectedProject}
+          targetType={targetType}
+          onOpenStyle={() => setStyleOpen(true)}
+        />
       </section>
 
       {styleOpen ? (
-        <div className="modal-backdrop">
-          <div
-            aria-labelledby="writer-style-dialog-title"
-            aria-modal="true"
-            className="modal-panel"
-            onKeyDown={(event) => handleDialogKeyDown(event, () => setStyleOpen(false))}
-            ref={styleDialogRef}
-            role="dialog"
-            tabIndex={-1}
-          >
-            <div className="modal-header">
-              <h2 id="writer-style-dialog-title">{activeTitle || "风格卡"}</h2>
-              <button className="btn" onClick={() => setStyleOpen(false)} type="button">
-                关闭
-              </button>
-            </div>
-            <div className="markdown-box modal-content">{activeStyle || "暂无风格卡"}</div>
-          </div>
-        </div>
+        <WriterStyleModal activeStyle={activeStyle} activeTitle={activeTitle} onClose={() => setStyleOpen(false)} />
       ) : null}
 
       {feishuResult ? (
-        <div className="modal-backdrop">
-          <div
-            aria-labelledby="writer-feishu-dialog-title"
-            aria-modal="true"
-            className="modal-panel feishu-modal"
-            onKeyDown={(event) => handleDialogKeyDown(event, () => setFeishuResult(null))}
-            ref={feishuDialogRef}
-            role="dialog"
-            tabIndex={-1}
-          >
-            <div className="modal-header">
-              <h2 id="writer-feishu-dialog-title">飞书文档已创建</h2>
-              <button className="btn" onClick={() => setFeishuResult(null)} type="button">
-                关闭
-              </button>
-            </div>
-            <div className="feishu-success-card">
-              <p>{feishuResult.title}</p>
-              <a className="btn primary" href={feishuResult.url} rel="noreferrer" target="_blank">
-                <ExternalLink aria-hidden="true" size={16} />
-                打开飞书文档
-              </a>
-            </div>
-          </div>
-        </div>
+        <FeishuResultModal result={feishuResult} onClose={() => setFeishuResult(null)} />
       ) : null}
     </div>
   );
@@ -583,10 +413,15 @@ function WriterPageContent() {
 function WriterFallback() {
   return (
     <div className="page writer-page">
-      <header className="page-header workbench-header">
+      <header className="page-header">
         <div>
           <p className="eyebrow">Writer</p>
-          <h1>对话写作</h1>
+          <h1 className="title-with-emoji">
+            <span aria-hidden="true" className="title-emoji">
+              ✍️
+            </span>
+            <span>对话写作</span>
+          </h1>
           <p className="subtle">正在读取写作台引用和草稿状态。</p>
         </div>
       </header>
@@ -597,75 +432,4 @@ function WriterFallback() {
       </section>
     </div>
   );
-}
-
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    onClose();
-    return;
-  }
-
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
-
-function makeStylePreview(style?: string) {
-  const text = (style || "").replace(/[#*_>`-]/g, "").replace(/\s+/g, " ").trim();
-  return text ? text.slice(0, 180) : "暂无风格卡";
-}
-
-function draftToSaveBase(draft: Draft): DraftSaveBase {
-  if (draft.targetType === "project") {
-    return {
-      targetType: "project",
-      projectId: draft.projectId,
-      projectName: draft.projectName,
-      title: draft.title,
-      mode: draft.mode,
-      prompt: draft.prompt,
-      input: draft.input,
-      styleRef: draft.styleRef
-    };
-  }
-
-  return {
-    platform: draft.platform,
-    accountId: draft.accountId,
-    accountName: draft.accountName,
-    title: draft.title,
-    mode: draft.mode,
-    prompt: draft.prompt,
-    input: draft.input,
-    styleRef: draft.styleRef
-  };
-}
-
-function isBackgroundStartMessage(message: string) {
-  return message.includes("已在后台开始");
 }

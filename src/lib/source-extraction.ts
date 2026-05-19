@@ -76,6 +76,10 @@ export function extractSourceUrls(input: string) {
     .filter(Boolean);
 }
 
+export function extractFirstSourceUrl(input: string) {
+  return extractSourceUrls(input)[0] || "";
+}
+
 function normalizeUrlToken(url: string) {
   return url.replace(/[)\]}>，。！？、；;,.!?]+$/g, "");
 }

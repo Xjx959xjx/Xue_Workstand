@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createJob, listJobs } from "@/lib/jobs";
+import { createJob, listJobSummaries } from "@/lib/jobs";
+import { extractFirstSourceUrl } from "@/lib/source-extraction";
 import { platforms } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const urlSchema = z.preprocess(
+  (value) => (typeof value === "string" ? extractFirstSourceUrl(value) || value.trim() : value),
+  z.string().url("链接格式不正确，请粘贴完整的 http(s) 地址。")
+);
 
 const writeCopySchema = z.object({
   kind: z.literal("write-copy"),
@@ -59,7 +65,7 @@ const transcribeVideoSchema = z.object({
     accountId: z.string().min(1),
     videoId: z.string().min(1),
     mediaPath: z.string().optional(),
-    mediaUrl: z.string().url().optional(),
+    mediaUrl: urlSchema.optional(),
     allowRemoteDownload: z.boolean().optional()
   })
 });
@@ -103,7 +109,7 @@ const engagementSchema = z.object({
     }),
     z.object({
       sourceType: z.literal("url"),
-      url: z.string().url(),
+      url: urlSchema,
       ...engagementOptionsSchema
     })
   ])
@@ -120,11 +126,9 @@ const startJobSchema = z.discriminatedUnion("kind", [
 
 export async function GET() {
   try {
-    const jobs = await listJobs();
+    const jobs = await listJobSummaries();
     return NextResponse.json({
-      jobs,
-      active: jobs.filter((job) => job.status === "queued" || job.status === "running"),
-      recent: jobs.slice(0, 12)
+      jobs
     });
   } catch (error) {
     return NextResponse.json(
@@ -141,8 +145,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ job, jobId: job.id });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "创建任务失败" },
+      { error: formatStartJobError(error) },
       { status: 400 }
     );
   }
+}
+
+function formatStartJobError(error: unknown) {
+  if (error instanceof z.ZodError) {
+    const issue = error.issues[0];
+    if (!issue) return "创建任务失败：参数不完整。";
+
+    const field = issue.path.join(".");
+    if (field === "input.url" || field === "input.mediaUrl") {
+      return "链接格式不正确，请粘贴完整的 http(s) 地址。";
+    }
+    if (issue.message && !/^Invalid\b/i.test(issue.message)) {
+      return issue.message;
+    }
+    return "创建任务失败：参数不完整或格式不正确。";
+  }
+
+  return error instanceof Error ? error.message : "创建任务失败";
 }
