@@ -46,10 +46,6 @@ export function getPrimaryMetric(video: Pick<Video, "platform" | "hotScore" | "s
   };
 }
 
-export function normalizeBatchLimit(value: string): BatchLimit {
-  return value === "all" ? "all" : (Number(value) as BatchLimit);
-}
-
 export function getAvailableSortOptions(platform?: Platform) {
   return VIDEO_SORT_OPTIONS.filter((option) => !(platform === "douyin" && option.value === "views"));
 }

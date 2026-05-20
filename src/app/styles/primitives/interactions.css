@@ -5,8 +5,6 @@
   .btn,
   .text-link,
   .panel,
-  .task-row,
-  .account-row,
   .list-button,
   .copy-source-card,
   .copy-project-row,
@@ -37,35 +35,28 @@
       transform var(--motion-base) var(--ease-out);
   }
 
-  .btn.primary::after,
-  .task-row::after {
+  .btn.primary::after {
     transition:
       opacity var(--motion-base) var(--ease-out),
       transform var(--motion-base) var(--ease-out);
   }
 
-  .page-header,
   .panel {
     box-shadow: var(--shadow-panel);
   }
 
   .brand:hover,
   .nav-link:hover,
-  .task-row:hover,
-  .account-row:hover,
   .list-button:hover,
   .copy-source-card:hover,
   .copy-project-row:hover,
   .check-card:hover,
-  .compact-link-row:hover,
   .btn:hover {
     transform: none;
   }
 
   .btn:active,
   .nav-link:active,
-  .task-row:active,
-  .account-row:active,
   .list-button:active,
   .copy-source-card:active,
   .copy-project-row:active,
@@ -79,8 +70,6 @@
   .list-button:focus-visible,
   .copy-source-card:focus-visible,
   .copy-project-row:focus-visible,
-  .task-row:focus-visible,
-  .account-row:focus-visible,
   .check-card:focus-within,
   .segmented button:focus-visible,
   .source-tabs button:focus-visible,
@@ -145,9 +134,7 @@
   }
 
   .video-row-button:hover .video-title-line strong,
-  .list-button:hover .list-title,
-  .account-row:hover .list-title,
-  .task-row:hover strong {
+  .list-button:hover .list-title {
     color: var(--text-strong);
   }
 

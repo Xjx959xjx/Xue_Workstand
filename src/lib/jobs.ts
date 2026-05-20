@@ -9,6 +9,7 @@ import {
   streamResponseTextWithFallback
 } from "./ai";
 import { runBatchTranscribe } from "./batch-transcribe";
+import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
 import { libraryRoot } from "./storage";
 import { transcribeVideo } from "./transcription";
@@ -287,7 +288,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   if (start.input.save) {
     await patchJob(jobId, {
       stage: "save-draft",
-      message: "正在保存草稿",
+      message: "正在保存历史记录",
       progress: 88
     });
   }
@@ -552,8 +553,8 @@ function writeResultRef(result: WriteResult) {
 
   return {
     id: result.draft.id,
-    href: `/drafts?draftId=${encodeURIComponent(result.draft.id)}`,
-    label: "查看草稿"
+    href: buildWriterDraftHref(result.draft),
+    label: "查看历史"
   };
 }
 

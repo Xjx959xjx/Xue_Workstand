@@ -34,7 +34,7 @@ export function useWriterReferenceDetails({
     targetType === "project"
       ? `${selectedProject?.sourceAccounts.length || 0} 个参考账号`
       : selectedAccount
-        ? `${formatPlatform(selectedAccount.platform)} / ${selectedAccount.videoCount} 条视频 / ${selectedAccount.transcriptCount} 份转写`
+        ? formatPlatform(selectedAccount.platform)
         : "";
 
   useEffect(() => {

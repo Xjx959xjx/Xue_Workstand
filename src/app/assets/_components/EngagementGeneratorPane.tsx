@@ -61,13 +61,7 @@ export function EngagementGeneratorPane({
   onUrlInputChange
 }: EngagementGeneratorPaneProps) {
   return (
-    <section className="pane assets-main-pane engagement-generator-pane">
-      <div className="pane-header">
-        <div>
-          <h2>生成器</h2>
-          <p className="pane-subtitle">评论默认开启，弹幕按需勾选</p>
-        </div>
-      </div>
+    <section className="engagement-generator-pane">
       <div className="pane-body detail-stack">
         <div className="segmented source-tabs" role="tablist" aria-label="选择来源">
           {sourceTabs.map((tab) => {

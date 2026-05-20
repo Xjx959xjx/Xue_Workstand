@@ -8,15 +8,15 @@
 .page-header {
   position: relative;
   display: flex;
-  min-height: 92px;
+  min-height: auto;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow);
+  padding: 0 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .page-header::after {
@@ -25,7 +25,7 @@
 }
 
 .page-header .subtle {
-  margin-top: 5px;
+  margin-top: 4px;
 }
 
 .eyebrow {
@@ -69,20 +69,19 @@
 }
 
 @media (min-width: 1181px) {
-  :is(.library-page, .projects-page, .assets-page, .drafts-page, .writer-page, .gross-margin-page, .project-workbench-page) {
-    grid-template-rows: auto minmax(0, 1fr);
-    height: calc(100vh - (var(--page-pad) * 2));
+  :is(.library-page, .projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page) {
+    grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
+    height: var(--workspace-page-height);
   }
 
-  :is(.library-page, .projects-page, .assets-page, .drafts-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
-  :is(.library-page, .projects-page, .assets-page, .drafts-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
-    grid-template-rows: auto auto minmax(0, 1fr);
+  :is(.library-page, .projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
+  :is(.library-page, .projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
+    grid-template-rows: auto auto minmax(0, auto) minmax(0, 1fr);
   }
 
   :is(.library-page:has(> .notice), .library-page:has(> .error)) > .library-workspace,
   :is(.projects-page:has(> .notice), .projects-page:has(> .error)) > .project-workspace,
-  :is(.assets-page:has(> .notice), .assets-page:has(> .error)) > .assets-workspace,
-  :is(.drafts-page:has(> .notice), .drafts-page:has(> .error)) > .drafts-workspace,
+  :is(.assets-page:has(> .notice), .assets-page:has(> .error)) > :is(.assets-workspace, .engagement-workbench),
   :is(.writer-page:has(> .notice), .writer-page:has(> .error)) > .writer-workbench,
   :is(.gross-margin-page:has(> .notice), .gross-margin-page:has(> .error)) > .gross-margin-workspace,
   :is(.project-workbench-page:has(> .notice), .project-workbench-page:has(> .error)) > .project-workbench-shell {
@@ -90,14 +89,13 @@
   }
 
   .library-page > .panel.three-pane,
-  .assets-page > .panel.three-pane,
-  .drafts-page > .panel.three-pane,
+  .assets-page > :is(.panel.three-pane, .engagement-workbench),
   .projects-page > .project-workspace,
   .writer-page > .writer-workbench,
   .gross-margin-page > .gross-margin-workspace,
   .project-workbench-page > .project-workbench-shell {
     min-height: 0;
-    height: 100%;
+    height: var(--workspace-default-height);
   }
 }
 

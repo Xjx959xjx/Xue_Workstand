@@ -12,7 +12,7 @@ type EngagementHistoryPaneProps = {
 
 export function EngagementHistoryPane({ records, resultRecord, onSelectRecord }: EngagementHistoryPaneProps) {
   return (
-    <aside className="pane engagement-history-pane">
+    <aside className="panel engagement-history-pane">
       <div className="pane-header">
         <div>
           <h2>历史记录</h2>

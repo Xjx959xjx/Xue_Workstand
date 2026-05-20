@@ -217,12 +217,11 @@ export default function GrossMarginPage() {
     <div className="page gross-margin-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Gross Margin</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               🧮
             </span>
-            <span>毛利计算</span>
+            <span>数据维护</span>
           </h1>
           <p className="subtle">左边改报价，中间填本次数量，右边自动算维护成本和毛利率。</p>
         </div>
@@ -236,7 +235,7 @@ export default function GrossMarginPage() {
         </div>
       </header>
 
-      <section className="panel three-pane gross-margin-workspace" aria-label="毛利计算工作区">
+      <section className="panel three-pane gross-margin-workspace" aria-label="数据维护工作区">
         <aside className="pane gross-price-pane">
           <div className="pane-header">
             <div>

@@ -2,7 +2,7 @@
 .three-pane {
   display: grid;
   grid-template-columns: 250px minmax(460px, 1fr) 360px;
-  min-height: calc(100vh - 158px);
+  min-height: var(--workspace-default-height);
 }
 
 .pane {
@@ -350,8 +350,7 @@
 }
 
 @media (max-width: 780px) {
-  .three-pane,
-  .drafts-workspace {
+  .three-pane {
     grid-template-columns: 1fr;
   }
 

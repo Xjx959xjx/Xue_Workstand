@@ -39,12 +39,18 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const initialFailureShownRef = useRef(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const pendingRefreshRef = useRef(false);
+  const pathnameRef = useRef(pathname);
   const previousStatusRef = useRef<Map<string, JobRecord["status"]>>(new Map());
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     notifiedRef.current = readNotifiedJobIds();
   }, []);
+
+  useEffect(() => {
+    pathnameRef.current = pathname;
+    setJobs((current) => mergeJobSummaries(current, fullJobCacheRef.current, pathname));
+  }, [pathname]);
 
   const refreshJobs = useCallback(async () => {
     if (refreshPromiseRef.current) {
@@ -61,11 +67,11 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
           firstLoadRef.current,
           previousStatusRef.current,
           fullJobCacheRef.current,
-          pathname
+          pathnameRef.current
         );
         pruneFullJobCache(fullJobCacheRef.current, summaries);
 
-        const mergedJobs = mergeJobSummaries(summaries, fullJobCacheRef.current);
+        const mergedJobs = mergeJobSummaries(summaries, fullJobCacheRef.current, pathnameRef.current);
         setJobs(mergedJobs);
         setError("");
         handleJobNotifications(
@@ -94,7 +100,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       refreshPromiseRef.current = null;
     });
     return refreshPromiseRef.current;
-  }, [notify, pathname, refresh]);
+  }, [notify, refresh]);
 
   useEffect(() => {
     refreshJobs();
@@ -274,10 +280,12 @@ function defaultJobHref(kind: JobRecord["kind"]) {
   return "/library";
 }
 
-function mergeJobSummaries(jobs: JobListItem[], cache: Map<string, JobRecord>) {
+function mergeJobSummaries(jobs: JobListItem[], cache: Map<string, JobRecord>, pathname: string) {
   return jobs.map((job) => {
     const fullJob = cache.get(job.id);
-    return fullJob ? { ...fullJob, ...job } : job;
+    if (fullJob) return { ...fullJob, ...job };
+    if (isJobRelevantToPath(job, pathname)) return job;
+    return { ...job, partialText: undefined, result: undefined };
   });
 }
 

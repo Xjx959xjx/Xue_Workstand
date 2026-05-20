@@ -1,20 +1,18 @@
 "use client";
 
-import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, type Dispatch, type SetStateAction } from "react";
 import {
-  createAccount,
   deleteAccounts,
   deleteVideos,
   saveStyle
 } from "@/lib/client";
-import { cachedGetAccountDetail, invalidateAccountDetail } from "@/lib/detail-cache";
+import { invalidateAccountDetail } from "@/lib/detail-cache";
 import type { AccountDetail, Platform, VideoListItem } from "@/lib/types";
 
 type ReloadAccountDetail = (options?: { includeStyle?: boolean; force?: boolean }) => Promise<AccountDetail | null>;
 
 type UseLibraryMutationsInput = {
   clearTranscript: () => void;
-  closeAccountModal: () => void;
   closeDeleteDialog: () => void;
   refresh: () => Promise<void>;
   reloadSelectedAccountDetail: ReloadAccountDetail;
@@ -36,7 +34,6 @@ type UseLibraryMutationsInput = {
 
 export function useLibraryMutations({
   clearTranscript,
-  closeAccountModal,
   closeDeleteDialog,
   refresh,
   reloadSelectedAccountDetail,
@@ -55,10 +52,6 @@ export function useLibraryMutations({
   setVideoManageMode,
   styleDraft
 }: UseLibraryMutationsInput) {
-  const [newAccountPlatform, setNewAccountPlatform] = useState<Platform>("bilibili");
-  const [newAccountName, setNewAccountName] = useState("");
-  const [newAccountUidOrUrl, setNewAccountUidOrUrl] = useState("");
-
   const handleSaveStyle = useCallback(async () => {
     if (!selectedAccount) return;
     setBusy("save-style");
@@ -74,42 +67,6 @@ export function useLibraryMutations({
       setBusy("");
     }
   }, [refresh, reloadSelectedAccountDetail, selectedAccount, setBusy, setMessage, styleDraft]);
-
-  const handleCreateAccount = useCallback(async () => {
-    if (!newAccountName.trim()) return;
-    setBusy("account-create");
-    setMessage("");
-    try {
-      const account = await createAccount({
-        platform: newAccountPlatform,
-        name: newAccountName,
-        uidOrUrl: newAccountUidOrUrl || undefined
-      });
-      setSelectedAccountId(account.id);
-      setSelectedVideoId("");
-      setNewAccountName("");
-      setNewAccountUidOrUrl("");
-      closeAccountModal();
-      setMessage("账号已添加。");
-      await refresh();
-      setAccountDetail(await cachedGetAccountDetail({ platform: account.platform, accountId: account.id, force: true }));
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "添加账号失败");
-    } finally {
-      setBusy("");
-    }
-  }, [
-    closeAccountModal,
-    newAccountName,
-    newAccountPlatform,
-    newAccountUidOrUrl,
-    refresh,
-    setAccountDetail,
-    setBusy,
-    setMessage,
-    setSelectedAccountId,
-    setSelectedVideoId
-  ]);
 
   const handleDeleteSelectedAccounts = useCallback(async () => {
     if (!selectedAccountIds.length) return;
@@ -197,15 +154,8 @@ export function useLibraryMutations({
   ]);
 
   return {
-    handleCreateAccount,
     handleDeleteSelectedAccounts,
     handleDeleteSelectedVideos,
-    handleSaveStyle,
-    newAccountName,
-    newAccountPlatform,
-    newAccountUidOrUrl,
-    setNewAccountName,
-    setNewAccountPlatform,
-    setNewAccountUidOrUrl
+    handleSaveStyle
   };
 }

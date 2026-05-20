@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       }
 
       if (input.save) {
-        emit({ type: "stage", stage: "save-draft", message: "正在保存草稿", progress: 88 });
+        emit({ type: "stage", stage: "save-draft", message: "正在保存历史记录", progress: 88 });
       }
 
       const finalResult = await completePreparedWriteCopy({

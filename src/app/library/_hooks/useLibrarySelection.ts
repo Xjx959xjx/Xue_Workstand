@@ -59,7 +59,6 @@ export function useLibrarySelection({
   const maxPrimaryMetric = useMemo(() => Math.max(...sortedVideos.map((video) => getPrimaryMetric(video).sortValue), 1), [sortedVideos]);
   const completedCount = sortedVideos.filter((video) => video.transcriptStatus === "completed").length;
   const pendingCount = sortedVideos.length - completedCount;
-  const selectedVideoViewCount = selectedVideo?.platform === "bilibili" ? selectedVideo.stats.views : null;
   const totalTranscriptCount = useMemo(
     () => accounts.reduce((sum, account) => sum + account.transcriptCount, 0),
     [accounts]
@@ -124,7 +123,6 @@ export function useLibrarySelection({
     selectedVideo,
     selectedVideoIds,
     selectedVideoOpenUrl,
-    selectedVideoViewCount,
     setAccountFilter,
     setAccountManageMode,
     setSelectedAccountId,

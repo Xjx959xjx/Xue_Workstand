@@ -1,16 +1,18 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
+import { ArrowRight, CheckCircle2, CircleDashed, FileText, FolderKanban, PenLine, RefreshCw, Sparkles, UsersRound } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
-import { deleteCopySources, getCopySources, saveProjectStyle, transcribeCopySource, upsertProject } from "@/lib/client";
+import { deleteCopySources, getCopySources, refreshCopySources, saveProjectStyle, transcribeCopySource, upsertProject } from "@/lib/client";
 import { cachedGetProjectDetail, invalidateProjectDetail } from "@/lib/detail-cache";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import { extractSourceUrls } from "@/lib/source-extraction";
-import type { CopySource, ProjectDetail, ProjectSummary } from "@/lib/types";
+import type { CopySource, ProjectDetail, ProjectListItem, ProjectSummary } from "@/lib/types";
 import { ProjectPickerModal } from "./_components/ProjectPickerModal";
 import { CasePipelinePanel } from "./_components/CasePipelinePanel";
 import { AccountPickerModal } from "./_components/AccountPickerModal";
@@ -115,6 +117,8 @@ export default function ProjectWorkbenchPage() {
   const writerHref = selectedProjectMeta
     ? `/writer?targetType=project&projectId=${encodeURIComponent(selectedProjectMeta.id)}`
     : "/writer?targetType=project";
+  const styleCount = styleDraft.trim().length;
+  const hasReferenceInput = Boolean(sourceAccountIds.length || sourceMaterialIds.length);
 
   useEffect(() => {
     if (loading || pickedInitialProject || selectedProjectId || !projects.length) return;
@@ -442,7 +446,7 @@ export default function ProjectWorkbenchPage() {
 
   async function handleRefresh() {
     try {
-      const [sourceResult] = await Promise.all([getCopySources(), refresh()]);
+      const [sourceResult] = await Promise.all([refreshCopySources(), refresh()]);
       setFullCopySources(sourceResult.sources);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "刷新失败");
@@ -501,7 +505,6 @@ export default function ProjectWorkbenchPage() {
     <div className="page project-workbench-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Project Workbench</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               🗂️
@@ -523,6 +526,23 @@ export default function ProjectWorkbenchPage() {
       {message ? <div className={message.includes("失败") || message.includes("先") ? "error" : "notice"}>{message}</div> : null}
 
       <section className="project-workbench-shell">
+        <ProjectWorkbenchFlow
+          accountCount={sourceAccountIds.length}
+          busy={busy}
+          canSaveWorkspace={canSaveWorkspace}
+          canWrite={canWrite}
+          hasReferenceInput={hasReferenceInput}
+          isDirty={isDirty}
+          projectName={projectName}
+          selectedProjectMeta={selectedProjectMeta}
+          sourceCount={sourceMaterialIds.length}
+          styleCount={styleCount}
+          writerHref={writerHref}
+          onGenerateStyle={handleStartStyleJob}
+          onOpenProjectModal={() => setProjectModalOpen(true)}
+          onOpenSourceAddModal={openSourceAddModal}
+          onSaveWorkspace={handleSaveWorkspace}
+        />
         <main className="project-workbench-canvas">
           <div className="project-workbench-grid">
             <CasePipelinePanel
@@ -618,6 +638,128 @@ export default function ProjectWorkbenchPage() {
         />
       ) : null}
 
+    </div>
+  );
+}
+
+type ProjectWorkbenchFlowProps = {
+  accountCount: number;
+  busy: string;
+  canSaveWorkspace: boolean;
+  canWrite: boolean;
+  hasReferenceInput: boolean;
+  isDirty: boolean;
+  projectName: string;
+  selectedProjectMeta: ProjectListItem | null;
+  sourceCount: number;
+  styleCount: number;
+  writerHref: string;
+  onGenerateStyle: () => void;
+  onOpenProjectModal: () => void;
+  onOpenSourceAddModal: () => void;
+  onSaveWorkspace: () => void;
+};
+
+function ProjectWorkbenchFlow({
+  accountCount,
+  busy,
+  canSaveWorkspace,
+  canWrite,
+  hasReferenceInput,
+  isDirty,
+  projectName,
+  selectedProjectMeta,
+  sourceCount,
+  styleCount,
+  writerHref,
+  onGenerateStyle,
+  onOpenProjectModal,
+  onOpenSourceAddModal,
+  onSaveWorkspace
+}: ProjectWorkbenchFlowProps) {
+  const projectReady = Boolean(projectName.trim() || selectedProjectMeta);
+  const projectState = selectedProjectMeta ? (isDirty ? "pending" : "done") : projectReady ? "pending" : "neutral";
+  const styleState = busy === "style" ? "active" : styleCount ? "done" : "pending";
+
+  return (
+    <div className="project-workbench-flow" aria-label="项目工作流">
+      <div className="project-flow-steps">
+        <ProjectFlowStep
+          icon={<FolderKanban aria-hidden="true" size={15} />}
+          label="项目"
+          state={projectState}
+          value={selectedProjectMeta ? (isDirty ? "未保存" : "已保存") : projectReady ? "待保存" : "未命名"}
+        />
+        <ProjectFlowStep
+          icon={<FileText aria-hidden="true" size={15} />}
+          label="案例素材"
+          state={sourceCount ? "done" : "pending"}
+          value={sourceCount ? `${sourceCount} 份` : "待添加"}
+        />
+        <ProjectFlowStep
+          icon={<UsersRound aria-hidden="true" size={15} />}
+          label="参考账号"
+          state={accountCount ? "done" : "neutral"}
+          value={accountCount ? `${accountCount} 个` : "可选"}
+        />
+        <ProjectFlowStep
+          icon={<PenLine aria-hidden="true" size={15} />}
+          label="风格卡"
+          state={styleState}
+          value={busy === "style" ? "生成中" : styleCount ? `${styleCount} 字` : "待生成"}
+        />
+      </div>
+      <div className="project-flow-action">
+        <span>下一步</span>
+        {!projectReady ? (
+          <button className="btn primary" onClick={onOpenProjectModal} type="button">
+            选择项目
+            <ArrowRight aria-hidden="true" size={15} />
+          </button>
+        ) : !hasReferenceInput ? (
+          <button className="btn primary" onClick={onOpenSourceAddModal} type="button">
+            添加素材
+            <ArrowRight aria-hidden="true" size={15} />
+          </button>
+        ) : !styleCount ? (
+          <button className="btn primary" disabled={busy === "style"} onClick={onGenerateStyle} type="button">
+            <Sparkles aria-hidden="true" size={15} />
+            {busy === "style" ? "生成中" : "生成风格"}
+          </button>
+        ) : isDirty ? (
+          <button className="btn primary" disabled={!canSaveWorkspace} onClick={onSaveWorkspace} type="button">
+            保存修改
+            <ArrowRight aria-hidden="true" size={15} />
+          </button>
+        ) : (
+          <Link className={`btn primary ${canWrite ? "" : "disabled"}`} href={writerHref} aria-disabled={!canWrite}>
+            进入写作
+            <ArrowRight aria-hidden="true" size={15} />
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type ProjectFlowStepProps = {
+  icon: ReactNode;
+  label: string;
+  state: "active" | "done" | "neutral" | "pending";
+  value: string;
+};
+
+function ProjectFlowStep({ icon, label, state, value }: ProjectFlowStepProps) {
+  const StateIcon = state === "done" ? CheckCircle2 : CircleDashed;
+
+  return (
+    <div className={`project-flow-step ${state}`}>
+      <span className="project-flow-icon">{icon}</span>
+      <span className="project-flow-copy">
+        <strong>{label}</strong>
+        <small>{value}</small>
+      </span>
+      <StateIcon aria-hidden="true" className="project-flow-state" size={15} />
     </div>
   );
 }

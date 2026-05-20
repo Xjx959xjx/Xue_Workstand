@@ -89,7 +89,6 @@ npm run dev
 - `src/app/library/page.tsx`：账号风格库
 - `src/app/projects/page.tsx`：项目库
 - `src/app/writer/page.tsx`：写作台
-- `src/app/drafts/page.tsx`：草稿管理
 
 API 入口：
 

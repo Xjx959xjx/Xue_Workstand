@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { CheckSquare, Plus, Trash2, X } from "lucide-react";
+import { CheckSquare, Trash2, X } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountListItem } from "@/lib/types";
 
@@ -15,7 +15,6 @@ type AccountSidebarProps = {
   selectedAccountIds: string[];
   totalTranscriptCount: number;
   onAccountFilterChange: (value: string) => void;
-  onOpenAccountModal: () => void;
   onRequestDeleteAccounts: () => void;
   onSelectAccount: (accountId: string) => void;
   onToggleAccountManage: () => void;
@@ -32,7 +31,6 @@ export const AccountSidebar = memo(function AccountSidebar({
   selectedAccountIds,
   totalTranscriptCount,
   onAccountFilterChange,
-  onOpenAccountModal,
   onRequestDeleteAccounts,
   onSelectAccount,
   onToggleAccountManage,
@@ -48,17 +46,6 @@ export const AccountSidebar = memo(function AccountSidebar({
           </p>
         </div>
         <div className="account-manage-actions">
-          {!accountManageMode ? (
-            <button
-              aria-label="新增账号"
-              className="btn icon-btn icon-only"
-              onClick={onOpenAccountModal}
-              title="新增账号"
-              type="button"
-            >
-              <Plus aria-hidden="true" size={15} />
-            </button>
-          ) : null}
           <button
             className={`btn icon-btn icon-only ${accountManageMode ? "primary" : ""}`}
             aria-label={accountManageMode ? "退出账号选择" : "批量选择账号"}

@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
-import { LibraryAccountModal } from "./_components/LibraryAccountModal";
 import { LibraryDetailPane } from "./_components/LibraryDetailPane";
+import { LibraryQuickStartPanel, type LibraryStats } from "./_components/LibraryQuickStartPanel";
 import { TranscriptEditorModal } from "./_components/TranscriptEditorModal";
 import { VideoTable } from "./_components/VideoTable";
-import { makePreview, type BatchLimit } from "./_components/library-view-utils";
+import { collectOrderOptions, formatTimeRangeLabel, getDateFilter, type TimeRange } from "./_components/library-collect-utils";
+import { makePreview } from "./_components/library-view-utils";
 import { useBilibiliStatsHydration } from "./_hooks/useBilibiliStatsHydration";
 import { useLibraryAccountDetail } from "./_hooks/useLibraryAccountDetail";
 import { useLibraryMutations } from "./_hooks/useLibraryMutations";
@@ -22,7 +23,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
+import { collectAccount, getHealth } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
+import type { CollectOrder, Platform } from "@/lib/types";
 
 export default function LibraryPage() {
   const { library, loading, error, refresh } = useLibrary();
@@ -33,12 +36,20 @@ export default function LibraryPage() {
   const [styleDraft, setStyleDraft] = useState("");
   const [styleLoading, setStyleLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [batchLimit, setBatchLimit] = useState<BatchLimit>(5);
+  const batchLimit = "all" as const;
   const [openModal, setOpenModal] = useState<"" | "transcript" | "style">("");
   const [deleteTarget, setDeleteTarget] = useState<"" | "accounts" | "videos">("");
-  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [collectPlatform, setCollectPlatform] = useState<Platform>("bilibili");
+  const [collectName, setCollectName] = useState("");
+  const [collectLimit, setCollectLimit] = useState(20);
+  const [collectOrder, setCollectOrder] = useState<CollectOrder>("views");
+  const [collectTimeRange, setCollectTimeRange] = useState<TimeRange>("all");
+  const [customFromDate, setCustomFromDate] = useState("");
+  const [customToDate, setCustomToDate] = useState("");
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null);
+  const [healthBusy, setHealthBusy] = useState(false);
+  const [lastCollect, setLastCollect] = useState<Awaited<ReturnType<typeof collectAccount>> | null>(null);
   const editModalRef = useRef<HTMLDivElement>(null);
-  const accountModalRef = useRef<HTMLDivElement>(null);
 
   const accounts = useMemo(() => library?.accounts || [], [library?.accounts]);
   const selectedAccountMeta = useMemo(() => {
@@ -72,7 +83,6 @@ export default function LibraryPage() {
     selectedVideo,
     selectedVideoIds,
     selectedVideoOpenUrl,
-    selectedVideoViewCount,
     setAccountFilter,
     setAccountManageMode,
     setSelectedAccountIds,
@@ -95,8 +105,6 @@ export default function LibraryPage() {
   });
 
   const openTranscriptEditor = useCallback(() => setOpenModal("transcript"), []);
-  const openAccountModal = useCallback(() => setAccountModalOpen(true), []);
-  const closeAccountModal = useCallback(() => setAccountModalOpen(false), []);
   const closeDeleteDialog = useCallback(() => setDeleteTarget(""), []);
   const closeEditorModal = useCallback(() => setOpenModal(""), []);
   const requestDeleteAccounts = useCallback(() => setDeleteTarget("accounts"), []);
@@ -168,19 +176,11 @@ export default function LibraryPage() {
   });
 
   const {
-    handleCreateAccount,
     handleDeleteSelectedAccounts,
     handleDeleteSelectedVideos,
-    handleSaveStyle,
-    newAccountName,
-    newAccountPlatform,
-    newAccountUidOrUrl,
-    setNewAccountName,
-    setNewAccountPlatform,
-    setNewAccountUidOrUrl
+    handleSaveStyle
   } = useLibraryMutations({
     clearTranscript,
-    closeAccountModal,
     closeDeleteDialog,
     refresh,
     reloadSelectedAccountDetail,
@@ -205,15 +205,38 @@ export default function LibraryPage() {
   const stylePreview = useMemo(() => makePreview(styleDraft || selectedAccount?.style || ""), [selectedAccount?.style, styleDraft]);
   const visibleMessage = message && message !== error ? message : "";
   const visibleMessageIsError = isErrorMessage(visibleMessage);
+  const stats: LibraryStats = useMemo(() => {
+    const videoCount = accounts.reduce((sum, account) => sum + account.videoCount, 0);
+    const transcriptCount = accounts.reduce((sum, account) => sum + account.transcriptCount, 0);
+    return {
+      accountCount: accounts.length,
+      videoCount,
+      transcriptCount,
+      copySourceCount: library?.copySources.length || 0,
+      projectCount: library?.projects.length || 0,
+      draftCount: library?.drafts.length || 0
+    };
+  }, [accounts, library?.copySources.length, library?.drafts.length, library?.projects.length]);
+  const collectDateFilter = useMemo(() => getDateFilter(collectTimeRange, customFromDate, customToDate), [
+    collectTimeRange,
+    customFromDate,
+    customToDate
+  ]);
+  const activeTimeLabel = formatTimeRangeLabel(collectTimeRange, collectDateFilter.fromDate, collectDateFilter.toDate);
+  const activeOrderOptions = collectOrderOptions[collectPlatform];
+  const canCollect = Boolean(collectName.trim()) && !busy && !healthBusy;
 
   useBilibiliStatsHydration({ refresh, reloadSelectedAccountDetail, selectedAccount });
   useRestoreFocus(Boolean(openModal), editModalRef);
-  useRestoreFocus(accountModalOpen, accountModalRef);
 
   useEffect(() => {
     if (!visibleMessage || isTaskProgressMessage(visibleMessage)) return;
-    notify({ tone: visibleMessageIsError ? "error" : "success", message: visibleMessage });
-  }, [notify, visibleMessage, visibleMessageIsError]);
+    notify({
+      tone: visibleMessageIsError ? "error" : "success",
+      message: visibleMessage,
+      action: lastCollect && visibleMessage.startsWith("采集完成") && !visibleMessageIsError ? { label: "整理账号", href: "/library" } : undefined
+    });
+  }, [lastCollect, notify, visibleMessage, visibleMessageIsError]);
 
   useEffect(() => {
     if (!selectedAccount) return;
@@ -251,12 +274,67 @@ export default function LibraryPage() {
     void handleSaveTranscript(setBusy);
   }, [handleSaveTranscript, setBusy]);
 
+  const handleCollectPlatformChange = useCallback((nextPlatform: Platform) => {
+    setCollectPlatform(nextPlatform);
+    setCollectOrder((currentOrder) =>
+      collectOrderOptions[nextPlatform].some((option) => option.value === currentOrder)
+        ? currentOrder
+        : collectOrderOptions[nextPlatform][0].value
+    );
+  }, []);
+
+  const handleHealthCheck = useCallback(async () => {
+    setHealthBusy(true);
+    setMessage("");
+    setLastCollect(null);
+    try {
+      setHealth(await getHealth());
+      setMessage("环境检查完成。");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "环境检查失败，请确认 opencli、模型或飞书配置后重试。");
+    } finally {
+      setHealthBusy(false);
+    }
+  }, []);
+
+  const handleCollect = useCallback(async () => {
+    if (!canCollect) return;
+    setBusy("collect");
+    setMessage("");
+    setLastCollect(null);
+    try {
+      const result = await collectAccount({
+        platform: collectPlatform,
+        name: collectName,
+        limit: collectLimit,
+        order: collectOrder,
+        ...collectDateFilter
+      });
+      setLastCollect(result);
+      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder));
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "采集失败，请检查账号名、主页链接或 opencli 配置后重试。");
+    } finally {
+      setBusy("");
+    }
+  }, [
+    activeTimeLabel,
+    canCollect,
+    collectDateFilter,
+    collectLimit,
+    collectName,
+    collectOrder,
+    collectPlatform,
+    refresh,
+    setBusy
+  ]);
+
   if (!loading && !library?.accounts.length) {
     return (
       <div className="page library-page">
         <header className="page-header">
           <div>
-            <p className="eyebrow">Library</p>
             <h1 className="title-with-emoji">
               <span aria-hidden="true" className="title-emoji">
                 📚
@@ -265,7 +343,30 @@ export default function LibraryPage() {
             </h1>
           </div>
         </header>
-        <EmptyState title="还没有账号" body="先在首页添加 B站或抖音账号并采集，采集结果会自动写入本地风格库。" />
+        <LibraryQuickStartPanel
+          activeOrderOptions={activeOrderOptions}
+          busy={healthBusy ? "health" : busy}
+          canSubmit={canCollect}
+          customFromDate={customFromDate}
+          customToDate={customToDate}
+          health={health}
+          limit={collectLimit}
+          name={collectName}
+          order={collectOrder}
+          platform={collectPlatform}
+          stats={stats}
+          timeRange={collectTimeRange}
+          onCollect={handleCollect}
+          onCustomFromDateChange={setCustomFromDate}
+          onCustomToDateChange={setCustomToDate}
+          onHealthCheck={handleHealthCheck}
+          onLimitChange={setCollectLimit}
+          onNameChange={setCollectName}
+          onOrderChange={setCollectOrder}
+          onPlatformChange={handleCollectPlatformChange}
+          onTimeRangeChange={setCollectTimeRange}
+        />
+        <EmptyState title="还没有账号" body="在上方添加 B站或抖音账号并采集，采集结果会自动写入本地风格库。" />
       </div>
     );
   }
@@ -274,7 +375,6 @@ export default function LibraryPage() {
     <div className="page library-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Library</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               📚
@@ -291,6 +391,29 @@ export default function LibraryPage() {
         </div>
       </header>
 
+      <LibraryQuickStartPanel
+        activeOrderOptions={activeOrderOptions}
+        busy={healthBusy ? "health" : busy}
+        canSubmit={canCollect}
+        customFromDate={customFromDate}
+        customToDate={customToDate}
+        health={health}
+        limit={collectLimit}
+        name={collectName}
+        order={collectOrder}
+        platform={collectPlatform}
+        stats={stats}
+        timeRange={collectTimeRange}
+        onCollect={handleCollect}
+        onCustomFromDateChange={setCustomFromDate}
+        onCustomToDateChange={setCustomToDate}
+        onHealthCheck={handleHealthCheck}
+        onLimitChange={setCollectLimit}
+        onNameChange={setCollectName}
+        onOrderChange={setCollectOrder}
+        onPlatformChange={handleCollectPlatformChange}
+        onTimeRangeChange={setCollectTimeRange}
+      />
       {error ? <div className="error" role="alert">{error}</div> : null}
       {accountDetailError ? <div className="error" role="alert">{accountDetailError}</div> : null}
       <section className="panel three-pane library-workspace">
@@ -304,7 +427,6 @@ export default function LibraryPage() {
           selectedAccountIds={selectedAccountIds}
           totalTranscriptCount={totalTranscriptCount}
           onAccountFilterChange={setAccountFilter}
-          onOpenAccountModal={openAccountModal}
           onRequestDeleteAccounts={requestDeleteAccounts}
           onSelectAccount={selectAccount}
           onToggleAccountManage={toggleAccountManage}
@@ -333,13 +455,11 @@ export default function LibraryPage() {
 
         <LibraryDetailPane
           activeTranscript={activeTranscript}
-          batchLimit={batchLimit}
           busy={busy}
           selectedAccount={selectedAccount}
           selectedVideo={selectedVideo}
           selectedVideoHasTranscript={selectedVideoHasTranscript}
           selectedVideoOpenUrl={selectedVideoOpenUrl}
-          selectedVideoViewCount={selectedVideoViewCount}
           stylePreview={stylePreview}
           styleLoaded={styleLoaded}
           styleLoading={styleLoading}
@@ -347,7 +467,6 @@ export default function LibraryPage() {
           transcriptPreview={transcriptPreview}
           transcribeProgress={transcribeProgress}
           transcribeStage={transcribeStage}
-          onBatchLimitChange={setBatchLimit}
           onGenerateBatchStyle={generateBatchStyle}
           onOpenStyleModal={openStyleModal}
           onOpenTranscriptModal={openTranscriptModal}
@@ -378,20 +497,6 @@ export default function LibraryPage() {
           onSaveStyle={handleSaveStyle}
         />
       ) : null}
-      {accountModalOpen ? (
-        <LibraryAccountModal
-          busy={busy}
-          newAccountName={newAccountName}
-          newAccountPlatform={newAccountPlatform}
-          newAccountUidOrUrl={newAccountUidOrUrl}
-          panelRef={accountModalRef}
-          onClose={closeAccountModal}
-          onCreateAccount={handleCreateAccount}
-          onNewAccountNameChange={setNewAccountName}
-          onNewAccountPlatformChange={setNewAccountPlatform}
-          onNewAccountUidOrUrlChange={setNewAccountUidOrUrl}
-        />
-      ) : null}
       {deleteTarget === "accounts" ? (
         <ConfirmDialog
           body={`会删除 ${selectedAccountIds.length} 个账号的本地资料、视频记录和转写稿。`}
@@ -418,4 +523,23 @@ export default function LibraryPage() {
 
 function isErrorMessage(message: string) {
   return ["失败", "没有", "未配置", "未找到", "未更新", "无法", "异常", "超时"].some((keyword) => message.includes(keyword));
+}
+
+function formatCollectMessage(
+  result: Awaited<ReturnType<typeof collectAccount>>,
+  activeTimeLabel: string,
+  order: CollectOrder
+) {
+  const base = `采集完成：opencli 返回 ${result.rawCount} 条，${activeTimeLabel}内写入 ${result.filteredCount} 条到「${result.account.name}」。`;
+  const filter = result.dateFilter;
+  if (!filter?.applied || result.filteredCount > 0 || result.rawCount === 0) return base;
+
+  const dateRange =
+    filter.earliestPublishedAt && filter.latestPublishedAt
+      ? `本次返回视频发布时间为 ${filter.earliestPublishedAt} 至 ${filter.latestPublishedAt}`
+      : filter.missingDateCount
+        ? `本次返回的视频有 ${filter.missingDateCount} 条缺少发布时间`
+        : "本次返回视频不在所选时间范围内";
+  const orderHint = order === "pubdate" ? "" : "，或把排序改成「时间优先」";
+  return `${base} ${dateRange}，都不在当前时间范围内；请把时间改成「不限」/更早的范围${orderHint}后再采集。`;
 }

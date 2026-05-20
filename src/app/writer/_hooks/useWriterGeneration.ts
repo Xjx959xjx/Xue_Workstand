@@ -25,6 +25,7 @@ type UseWriterGenerationInput = {
   normalizedPrompt: string;
   normalizedSourceText: string;
   recentJobs: JobRecord[];
+  onDraftSaved?: (draft: Draft) => void;
   refresh: () => Promise<void>;
   routerPush: (href: string) => void;
   selectedAccount: AccountListItem | null;
@@ -45,6 +46,7 @@ export function useWriterGeneration({
   normalizedPrompt,
   normalizedSourceText,
   recentJobs,
+  onDraftSaved,
   refresh,
   routerPush,
   selectedAccount,
@@ -96,8 +98,12 @@ export function useWriterGeneration({
         setLastSavedContent(result.draft ? result.content : "");
         setLastDraftId(result.draft?.id || "");
         setLastDraftBase(result.draft ? draftToSaveBase(result.draft) : null);
+        if (result.draft) {
+          onDraftSaved?.(result.draft);
+          void refresh();
+        }
         setNotice(
-          `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到草稿箱。`
+          `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到历史记录。`
         );
       } else {
         setNotice("文案生成完成。");
@@ -112,7 +118,7 @@ export function useWriterGeneration({
       setGenerateStage("生成失败");
       setGenerateProgress(100);
     }
-  }, [activeWriteJob, setBusy, setNotice, useWebResearch]);
+  }, [activeWriteJob, onDraftSaved, refresh, setBusy, setNotice, useWebResearch]);
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;
@@ -184,21 +190,32 @@ export function useWriterGeneration({
         draftId = draft.id;
         setLastDraftId(draft.id);
         setLastSavedContent(lastContent);
+        onDraftSaved?.(draft);
         await refresh();
       }
       routerPush(`/assets?draftId=${encodeURIComponent(draftId)}`);
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "打开评论生成失败，请先保存当前草稿后重试。");
+      setNotice(err instanceof Error ? err.message : "打开评论生成失败，请先保存当前结果后重试。");
     } finally {
       setBusy("");
     }
-  }, [lastContent, lastDraftBase, lastDraftId, lastSavedContent, refresh, routerPush, setBusy, setNotice]);
+  }, [lastContent, lastDraftBase, lastDraftId, lastSavedContent, onDraftSaved, refresh, routerPush, setBusy, setNotice]);
 
   const copyLast = useCallback(async () => {
     if (!lastContent) return;
     await navigator.clipboard.writeText(lastContent);
     setNotice("生成结果已复制到剪贴板。");
   }, [lastContent, setNotice]);
+
+  const loadDraftResult = useCallback((draft: Draft) => {
+    setLastContent(draft.content);
+    setLastResearch("");
+    setLastSavedContent(draft.content);
+    setLastDraftId(draft.id);
+    setLastDraftBase(draftToSaveBase(draft));
+    setGenerateStage("");
+    setGenerateProgress(100);
+  }, []);
 
   return {
     canGenerate,
@@ -209,7 +226,9 @@ export function useWriterGeneration({
     handleOpenAssets,
     lastContent,
     lastDraftBase,
-    lastResearch
+    lastDraftId,
+    lastResearch,
+    loadDraftResult
   };
 }
 

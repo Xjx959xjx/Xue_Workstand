@@ -15,7 +15,7 @@ import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { getDrafts } from "@/lib/client";
+import { getDrafts, refreshDrafts } from "@/lib/client";
 import type { Draft, EngagementSourceType } from "@/lib/types";
 
 export default function AssetsPage() {
@@ -116,7 +116,7 @@ function AssetsPageContent() {
 
   async function handleRefresh() {
     try {
-      const [draftResult] = await Promise.all([getDrafts(), refresh()]);
+      const [draftResult] = await Promise.all([refreshDrafts(), refresh()]);
       setFullDrafts(draftResult.drafts);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "刷新失败");
@@ -127,7 +127,6 @@ function AssetsPageContent() {
     <div className="page assets-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Engagement</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               💬
@@ -145,46 +144,55 @@ function AssetsPageContent() {
         </div>
       </header>
 
-      <section className="panel three-pane assets-workspace engagement-workspace">
-        <EngagementGeneratorPane
-          busy={busy}
-          canGenerate={canGenerate}
-          commentCount={commentCount}
-          danmakuCount={danmakuCount}
-          drafts={drafts}
-          includeComments={includeComments}
-          includeDanmaku={includeDanmaku}
-          loading={draftsLoading}
-          selectedDraft={selectedDraft}
-          selectedId={selectedId}
-          sourceType={sourceType}
-          textInput={textInput}
-          textTitle={textTitle}
-          urlInput={urlInput}
-          onCommentCountChange={setCommentCount}
-          onDanmakuCountChange={setDanmakuCount}
-          onGenerate={handleGenerate}
-          onIncludeCommentsChange={setIncludeComments}
-          onIncludeDanmakuChange={setIncludeDanmaku}
-          onOpenPreview={setPreviewDraft}
-          onSelectDraft={setSelectedId}
-          onSourceTypeChange={(value) => {
-            setSourceType(value);
-            setResultRecord(null);
-          }}
-          onTextInputChange={setTextInput}
-          onTextTitleChange={setTextTitle}
-          onUrlInputChange={setUrlInput}
-        />
+      <section className="engagement-workbench">
+        <section className="panel engagement-main">
+          <div className="engagement-refbar">
+            <div>
+              <h2>生成器</h2>
+              <p className="pane-subtitle">评论默认开启，弹幕按需勾选</p>
+            </div>
+          </div>
+          <div className="engagement-content-grid">
+            <EngagementGeneratorPane
+              busy={busy}
+              canGenerate={canGenerate}
+              commentCount={commentCount}
+              danmakuCount={danmakuCount}
+              drafts={drafts}
+              includeComments={includeComments}
+              includeDanmaku={includeDanmaku}
+              loading={draftsLoading}
+              selectedDraft={selectedDraft}
+              selectedId={selectedId}
+              sourceType={sourceType}
+              textInput={textInput}
+              textTitle={textTitle}
+              urlInput={urlInput}
+              onCommentCountChange={setCommentCount}
+              onDanmakuCountChange={setDanmakuCount}
+              onGenerate={handleGenerate}
+              onIncludeCommentsChange={setIncludeComments}
+              onIncludeDanmakuChange={setIncludeDanmaku}
+              onOpenPreview={setPreviewDraft}
+              onSelectDraft={setSelectedId}
+              onSourceTypeChange={(value) => {
+                setSourceType(value);
+                setResultRecord(null);
+              }}
+              onTextInputChange={setTextInput}
+              onTextTitleChange={setTextTitle}
+              onUrlInputChange={setUrlInput}
+            />
 
-        <EngagementResultsPane
-          busy={busy}
-          includeDanmaku={includeDanmaku}
-          resultRecord={resultRecord}
-          onCopyText={copyText}
-          onPublishAssetText={handlePublishAssetText}
-        />
-
+            <EngagementResultsPane
+              busy={busy}
+              includeDanmaku={includeDanmaku}
+              resultRecord={resultRecord}
+              onCopyText={copyText}
+              onPublishAssetText={handlePublishAssetText}
+            />
+          </div>
+        </section>
         <EngagementHistoryPane records={records} resultRecord={resultRecord} onSelectRecord={setResultRecord} />
       </section>
 
@@ -204,7 +212,6 @@ function AssetsFallback() {
     <div className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Engagement</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               💬

@@ -24,13 +24,7 @@ export function EngagementResultsPane({
   const activeDanmaku = resultRecord?.danmaku?.items || [];
 
   return (
-    <aside className="pane">
-      <div className="pane-header">
-        <div>
-          <h2>生成结果</h2>
-          <p className="pane-subtitle">{resultRecord ? resultRecord.title : "评论和弹幕会显示在这里"}</p>
-        </div>
-      </div>
+    <section className="engagement-result-pane">
       <div className="pane-body engagement-results-pane">
         <AssetTextList
           empty="生成后会在这里显示评论池。"
@@ -63,6 +57,6 @@ export function EngagementResultsPane({
           publishing={busy === "feishu-danmaku"}
         />
       </div>
-    </aside>
+    </section>
   );
 }

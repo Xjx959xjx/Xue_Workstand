@@ -1,11 +1,11 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Copy, FileUp, Globe2, MessageSquarePlus, RotateCcw, Send } from "lucide-react";
+import { Copy, Eye, FileUp, Globe2, MessageSquarePlus, RotateCcw, Send } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
+import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
-import { WriterStylePanel } from "./_components/WriterStylePanel";
 import { useFeishuPublish } from "./_hooks/useFeishuPublish";
 import { useWriterGeneration } from "./_hooks/useWriterGeneration";
 import { useWriterReferenceDetails } from "./_hooks/useWriterReferenceDetails";
@@ -16,6 +16,7 @@ import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import { getDrafts } from "@/lib/client";
+import { buildWriterDraftHref } from "@/lib/draft-links";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import type { Draft } from "@/lib/types";
 
@@ -43,7 +44,8 @@ function WriterPageContent() {
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
-  const [rewriteSourceDraft, setRewriteSourceDraft] = useState<Draft | null>(null);
+  const [fullDrafts, setFullDrafts] = useState<Draft[] | null>(null);
+  const loadedDraftParamRef = useRef("");
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
@@ -55,7 +57,18 @@ function WriterPageContent() {
     return library?.projects.find((project) => project.id === projectId) || first || null;
   }, [library?.projects, projectId]);
 
-  const { activeStyle, activeSubtitle, activeTitle } = useWriterReferenceDetails({
+  const allDrafts = useMemo(() => fullDrafts || [], [fullDrafts]);
+  const historyLoading = loading || (fullDrafts === null && Boolean(library?.drafts.length));
+  const historyDrafts = useMemo(() => [...allDrafts].sort(compareCreatedAtDesc), [allDrafts]);
+
+  const handleDraftSaved = useCallback(
+    (draft: Draft) => {
+      setFullDrafts((current) => mergeDraftLists(current || [], [draft]));
+    },
+    []
+  );
+
+  const { activeStyle, activeTitle } = useWriterReferenceDetails({
     selectedAccount,
     selectedProject,
     setNotice,
@@ -77,7 +90,9 @@ function WriterPageContent() {
     handleOpenAssets,
     lastContent,
     lastDraftBase,
-    lastResearch
+    lastDraftId,
+    lastResearch,
+    loadDraftResult
   } = useWriterGeneration({
     activeJobs,
     activeTitle,
@@ -87,6 +102,7 @@ function WriterPageContent() {
     normalizedPrompt,
     normalizedSourceText,
     recentJobs,
+    onDraftSaved: handleDraftSaved,
     refresh,
     routerPush: router.push,
     selectedAccount,
@@ -112,31 +128,26 @@ function WriterPageContent() {
 
   useEffect(() => {
     let ignore = false;
-    const draftId = searchParams.get("draftId");
-    if (!draftId || loading) {
-      setRewriteSourceDraft(null);
-      return;
-    }
+    if (loading) return;
 
-    const overviewDraft = library?.drafts.find((draft) => draft.id === draftId);
-    if (overviewDraft?.content) {
-      setRewriteSourceDraft(overviewDraft);
+    if (!library?.drafts.length) {
+      setFullDrafts([]);
       return;
     }
 
     getDrafts()
       .then((result) => {
         if (ignore) return;
-        setRewriteSourceDraft(result.drafts.find((draft) => draft.id === draftId) || null);
+        setFullDrafts((current) => mergeDraftLists(result.drafts, current || []));
       })
       .catch((err) => {
-        if (!ignore) setNotice(err instanceof Error ? err.message : "读取草稿失败");
+        if (!ignore) setNotice(err instanceof Error ? err.message : "读取历史记录失败");
       });
 
     return () => {
       ignore = true;
     };
-  }, [library?.drafts, loading, searchParams]);
+  }, [library?.drafts.length, loading]);
 
   useEffect(() => {
     const target = searchParams.get("targetType");
@@ -146,32 +157,48 @@ function WriterPageContent() {
     const nextAccountId = searchParams.get("accountId");
     const nextProjectId = searchParams.get("projectId");
     const draftId = searchParams.get("draftId");
-    const sourceDraft = draftId
-      ? rewriteSourceDraft?.id === draftId
-        ? rewriteSourceDraft
-        : library?.drafts.find((draft) => draft.id === draftId)
-      : null;
+    const sourceDraft = draftId ? allDrafts.find((draft) => draft.id === draftId) : null;
 
     if (target === "project") setTargetType("project");
     if (target === "account") setTargetType("account");
-    if (nextMode === "topic" || nextMode === "rewrite") setMode(nextMode);
-    if (sourceDraft) {
-      setPrompt(sourceDraft.prompt);
-      setSourceText(sourceDraft.content);
-    } else {
-      if (nextPrompt !== null) setPrompt(nextPrompt);
-      if (nextSourceText !== null) setSourceText(nextSourceText);
-    }
     if (nextAccountId) setAccountId(nextAccountId);
     if (nextProjectId) setProjectId(nextProjectId);
-  }, [library?.drafts, rewriteSourceDraft, searchParams]);
+
+    if (sourceDraft) {
+      if (loadedDraftParamRef.current === sourceDraft.id) return;
+      loadedDraftParamRef.current = sourceDraft.id;
+      setMode(sourceDraft.mode);
+      setPrompt(sourceDraft.prompt);
+      setSourceText(sourceDraft.input || "");
+      loadDraftResult(sourceDraft);
+      return;
+    }
+
+    if (draftId && historyLoading) return;
+    if (!draftId) loadedDraftParamRef.current = "";
+
+    if (nextMode === "topic" || nextMode === "rewrite") setMode(nextMode);
+    if (nextPrompt !== null) setPrompt(nextPrompt);
+    if (nextSourceText !== null) setSourceText(nextSourceText);
+  }, [allDrafts, historyLoading, loadDraftResult, searchParams]);
+
+  const handleSelectHistoryDraft = useCallback(
+    (draft: Draft) => {
+      loadedDraftParamRef.current = draft.id;
+      setMode(draft.mode);
+      setPrompt(draft.prompt);
+      setSourceText(draft.input || "");
+      loadDraftResult(draft);
+      router.replace(buildWriterDraftHref(draft), { scroll: false });
+    },
+    [loadDraftResult, router]
+  );
 
   if (!loading && !library?.accounts.length && !library?.projects.length) {
     return (
       <div className="page writer-page">
         <header className="page-header">
           <div>
-            <p className="eyebrow">Writer</p>
             <h1 className="title-with-emoji">
               <span aria-hidden="true" className="title-emoji">
                 ✍️
@@ -181,7 +208,7 @@ function WriterPageContent() {
             <p className="subtle">需要至少一个账号或项目风格作为引用。</p>
           </div>
         </header>
-        <EmptyState title="还没有可参考的风格" body="先采集一个账号，或在账号库里创建项目风格卡，再来这里生成文案。" action={{ href: "/", label: "去采集账号" }} />
+        <EmptyState title="还没有可参考的风格" body="先采集一个账号，或在账号库里创建项目风格卡，再来这里生成文案。" action={{ href: "/library", label: "去采集账号" }} />
       </div>
     );
   }
@@ -190,14 +217,13 @@ function WriterPageContent() {
     <div className="page writer-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Writer</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               ✍️
             </span>
             <span>对话写作</span>
           </h1>
-          <p className="subtle">选择引用风格，填写主题或原文，生成后会自动进入草稿箱，也可发布飞书或继续生成评论。</p>
+          <p className="subtle">选择引用风格，填写主题或原文，生成后会自动保存到历史记录，也可发布飞书或继续生成评论。</p>
         </div>
         <div className="stat-row">
           <span className="stat-pill">{library?.accounts.length || 0} 个账号</span>
@@ -255,10 +281,10 @@ function WriterPageContent() {
               </select>
             )}
 
-            <div className="writer-ref-summary">
-              <strong>{activeTitle || "未选择"}</strong>
-              <span>{activeSubtitle || "暂无引用信息"}</span>
-            </div>
+            <button className="btn writer-style-trigger" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
+              <Eye aria-hidden="true" size={16} />
+              查看风格卡
+            </button>
           </div>
 
           <div className="writer-content-grid">
@@ -389,13 +415,11 @@ function WriterPageContent() {
           </div>
         </section>
 
-        <WriterStylePanel
-          activeStyle={activeStyle}
-          activeTitle={activeTitle}
-          selectedAccount={selectedAccount}
-          selectedProject={selectedProject}
-          targetType={targetType}
-          onOpenStyle={() => setStyleOpen(true)}
+        <WriterHistoryPanel
+          drafts={historyDrafts}
+          loading={historyLoading}
+          selectedDraftId={lastDraftId}
+          onSelectDraft={handleSelectHistoryDraft}
         />
       </section>
 
@@ -410,19 +434,46 @@ function WriterPageContent() {
   );
 }
 
+function mergeDraftLists(...groups: Draft[][]) {
+  const byId = new Map<string, Draft>();
+
+  for (const group of groups) {
+    for (const draft of group) {
+      const current = byId.get(draft.id);
+      if (!current) {
+        byId.set(draft.id, draft);
+        continue;
+      }
+      if (current.content && !draft.content) continue;
+      if (!current.content && draft.content) {
+        byId.set(draft.id, draft);
+        continue;
+      }
+      if (+new Date(draft.updatedAt) > +new Date(current.updatedAt)) {
+        byId.set(draft.id, draft);
+      }
+    }
+  }
+
+  return [...byId.values()].sort(compareCreatedAtDesc);
+}
+
+function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
+  return +new Date(right.createdAt) - +new Date(left.createdAt);
+}
+
 function WriterFallback() {
   return (
     <div className="page writer-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Writer</p>
           <h1 className="title-with-emoji">
             <span aria-hidden="true" className="title-emoji">
               ✍️
             </span>
             <span>对话写作</span>
           </h1>
-          <p className="subtle">正在读取写作台引用和草稿状态。</p>
+          <p className="subtle">正在读取写作台引用和历史记录。</p>
         </div>
       </header>
       <section className="panel">

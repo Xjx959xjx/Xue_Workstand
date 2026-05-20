@@ -49,6 +49,9 @@ export function CasePipelinePanel({
   const title = projectName.trim() || selectedProjectMeta?.name || "未命名项目";
   const saveState = selectedProjectMeta ? (isDirty ? "未保存" : "已保存") : projectName.trim() ? "待保存" : "未命名";
   const emptyAccountHint = accounts.length ? "未选择时，仅用素材池生成风格卡。" : "暂无账号，可只用素材池生成。";
+  const contextSummary = projectSources.length
+    ? `${projectSources.length} 份案例素材将参与风格提炼`
+    : "先放入 1-3 个高质量案例，风格卡会更稳。";
 
   return (
     <aside className="project-workbench-section project-context-panel" aria-label="项目上下文">
@@ -56,15 +59,27 @@ export function CasePipelinePanel({
         <span className="project-context-icon">
           <FolderKanban aria-hidden="true" size={15} />
         </span>
-        <span className="project-context-summary-copy">
-          <span className="project-context-title-row">
-            <strong>{title}</strong>
-            <span className={`project-save-state ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveState}</span>
+          <span className="project-context-summary-copy">
+            <span className="project-context-title-row">
+              <strong>{title}</strong>
+              <span className={`project-save-state ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveState}</span>
+            </span>
+            <small>{projectDescription.trim() || "填写项目说明"}</small>
           </span>
-          <small>{projectDescription.trim() || "填写项目说明"}</small>
-        </span>
-        <ChevronDown aria-hidden="true" size={15} />
+          <ChevronDown aria-hidden="true" size={15} />
       </button>
+
+      <div className="project-context-readiness" aria-label="当前输入">
+        <div>
+          <strong>{projectSources.length}</strong>
+          <span>案例素材</span>
+        </div>
+        <div>
+          <strong>{selectedAccounts.length}</strong>
+          <span>参考账号</span>
+        </div>
+      </div>
+      <p className="project-context-note">{contextSummary}</p>
 
       <div className="project-context-block">
         <div className="project-context-block-head">

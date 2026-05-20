@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Save, Sparkles } from "lucide-react";
+import { ArrowRight, FileText, Save, Sparkles } from "lucide-react";
 import type { JobRecord, ProjectListItem } from "@/lib/types";
 import { EMPTY_STYLE } from "./project-workbench-utils";
 
@@ -38,13 +38,18 @@ export function ProjectStylePanel({
   const saveLabel = selectedProjectMeta ? (isDirty ? "未保存" : "已保存") : "待保存";
   const canShowSave = canSaveWorkspace || busy === "save";
   const generateLabel = styleCount ? "重生成" : "生成";
+  const styleStatus = busy === "style" ? "正在生成项目风格卡" : styleCount ? "可继续编辑，也可以直接进入写作" : "等待素材生成";
 
   return (
     <section className="project-workbench-section style-editor-panel" aria-label="项目风格卡">
       <div className="project-style-head">
         <div className="project-style-heading">
+          <span className="project-style-kicker">
+            <FileText aria-hidden="true" size={14} />
+            项目资产
+          </span>
           <h2>风格卡</h2>
-          <p className="pane-subtitle">{styleCount ? `${styleCount} 字` : "待生成"}</p>
+          <p className="pane-subtitle">{styleStatus}</p>
         </div>
         <div className="project-style-actions">
           <span className={`status-pill ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveLabel}</span>
@@ -65,6 +70,21 @@ export function ProjectStylePanel({
         </div>
       </div>
 
+      <div className="project-style-meta" aria-label="风格卡状态">
+        <div>
+          <span>字数</span>
+          <strong>{styleCount || "0"}</strong>
+        </div>
+        <div>
+          <span>来源</span>
+          <strong>{selectedProjectMeta ? "当前项目" : "未绑定项目"}</strong>
+        </div>
+        <div>
+          <span>状态</span>
+          <strong>{busy === "style" ? "生成中" : isDirty ? "有修改" : "已同步"}</strong>
+        </div>
+      </div>
+
       {activeStyleJob && (activeStyleJob.status === "running" || activeStyleJob.status === "queued") ? (
         <div className="project-progress" role="status" aria-live="polite">
           <div className="project-progress-copy">
@@ -79,14 +99,16 @@ export function ProjectStylePanel({
 
       {projectDetailLoading && selectedProjectMeta ? <p className="subtle">正在读取项目详情…</p> : null}
 
-      <textarea
-        aria-label="项目风格卡"
-        autoComplete="off"
-        className="project-workbench-style"
-        value={styleDraft}
-        onChange={(event) => onStyleDraftChange(event.target.value)}
-        placeholder={EMPTY_STYLE}
-      />
+      <div className="project-style-document">
+        <textarea
+          aria-label="项目风格卡"
+          autoComplete="off"
+          className="project-workbench-style"
+          value={styleDraft}
+          onChange={(event) => onStyleDraftChange(event.target.value)}
+          placeholder={EMPTY_STYLE}
+        />
+      </div>
     </section>
   );
 }

@@ -1,8 +1,4 @@
-/* Drafts and document blocks */
-.drafts-workspace {
-  grid-template-columns: 320px minmax(0, 1fr);
-}
-
+/* Document blocks */
 .markdown-box,
 .code-box {
   padding: 12px;

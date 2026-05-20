@@ -1,7 +1,7 @@
 /* Writer */
 .writer-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 312px;
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 12px;
 }
 
@@ -11,14 +11,14 @@
 }
 
 .writer-main,
-.writer-style-panel {
+.writer-history-panel {
   min-width: 0;
   background: var(--surface-panel);
 }
 
 .writer-refbar {
   display: grid;
-  grid-template-columns: auto minmax(220px, 320px) minmax(0, 1fr);
+  grid-template-columns: auto minmax(200px, 280px) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 12px;
@@ -60,39 +60,21 @@
   opacity: 0.45;
 }
 
-.writer-ref-summary {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.writer-ref-summary strong,
-.writer-ref-summary span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.writer-style-trigger {
+  justify-self: end;
   white-space: nowrap;
-}
-
-.writer-ref-summary strong {
-  color: var(--text-strong);
-  font-weight: 600;
-}
-
-.writer-ref-summary span {
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .writer-content-grid {
   display: grid;
-  grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.1fr);
-  min-height: calc(100vh - 276px);
+  grid-template-columns: minmax(340px, 0.95fr) minmax(420px, 1.05fr);
+  min-height: calc(100vh - 244px);
 }
 
 .writer-task,
 .writer-result {
   display: grid;
-  align-content: start;
+  align-content: stretch;
   gap: 12px;
   padding: 14px;
 }
@@ -102,11 +84,11 @@
 }
 
 .writer-textarea.main {
-  min-height: 166px;
+  min-height: 220px;
 }
 
 .writer-textarea.source {
-  min-height: 126px;
+  min-height: 166px;
 }
 
 .source-detect-row {
@@ -123,8 +105,8 @@
 }
 
 .result-box {
-  min-height: 360px;
-  max-height: min(520px, calc(100vh - 368px));
+  min-height: 420px;
+  max-height: min(680px, calc(100vh - 332px));
   overflow: auto;
   padding: 14px;
   border: 1px solid var(--line);
@@ -218,6 +200,50 @@
   font-size: 11px;
 }
 
+.writer-history-panel {
+  display: grid;
+  min-height: 0;
+}
+
+.writer-history-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.writer-history-header {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.writer-history-header h2 {
+  color: var(--text-strong);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.writer-history-body {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.writer-history-list {
+  display: grid;
+  gap: 8px;
+}
+
 .feishu-success-card {
   display: grid;
   gap: 12px;
@@ -225,6 +251,15 @@
 }
 
 @media (min-width: 1181px) {
+  .page.writer-page {
+    grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
+  }
+
+  .page.writer-page:has(> .notice),
+  .page.writer-page:has(> .error) {
+    grid-template-rows: auto auto minmax(0, auto) minmax(0, 1fr);
+  }
+
   .writer-workbench {
     min-height: 0;
   }
@@ -234,7 +269,7 @@
   }
 
   .writer-main,
-  .writer-style-panel {
+  .writer-history-panel {
     min-height: 0;
   }
 
@@ -244,14 +279,20 @@
   }
 
   .writer-content-grid {
+    height: 100%;
     min-height: 0;
   }
 
   .writer-task,
-  .writer-result,
-  .writer-style-panel > .panel-inner {
+  .writer-result {
     min-height: 0;
     overflow: hidden;
+    padding: 12px;
+  }
+
+  .writer-history-body {
+    min-height: 0;
+    overflow: auto;
     padding: 12px;
   }
 
@@ -265,7 +306,7 @@
   }
 
   .writer-textarea.source {
-    min-height: 92px;
+    min-height: 132px;
   }
 
   .result-box {
@@ -289,11 +330,21 @@
   .writer-content-grid {
     grid-template-columns: 1fr;
   }
+
+  .writer-task {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 @media (max-width: 780px) {
   .writer-refbar {
     grid-template-columns: 1fr;
+  }
+
+  .writer-style-trigger {
+    width: 100%;
+    justify-self: stretch;
   }
 
   .writer-actionbar {

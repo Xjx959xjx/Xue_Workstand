@@ -22,6 +22,11 @@ import {
   Video
 } from "./types";
 
+let draftsCache: { drafts: Draft[] } | null = null;
+let draftsRequest: Promise<{ drafts: Draft[] }> | null = null;
+let copySourcesCache: { sources: CopySource[] } | null = null;
+let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
+
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   let response: Response;
 
@@ -176,6 +181,34 @@ async function readNdjsonStream<TEvent extends { type: string }>(
   if (buffer.trim()) {
     await handleLine(buffer);
   }
+}
+
+function rememberDrafts(drafts: Draft[]) {
+  if (!drafts.length || !draftsCache) return;
+  draftsCache = {
+    drafts: mergeById(drafts, draftsCache.drafts, compareCreatedAtDesc)
+  };
+}
+
+function rememberCopySources(sources: CopySource[]) {
+  if (!sources.length || !copySourcesCache) return;
+  copySourcesCache = {
+    sources: mergeById(sources, copySourcesCache.sources, compareCreatedAtDesc)
+  };
+}
+
+function mergeById<T extends { id: string }>(
+  nextItems: T[],
+  currentItems: T[],
+  compare: (left: T, right: T) => number
+) {
+  const byId = new Map(currentItems.map((item) => [item.id, item]));
+  for (const item of nextItems) byId.set(item.id, item);
+  return [...byId.values()].sort(compare);
+}
+
+function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
+  return +new Date(right.createdAt) - +new Date(left.createdAt);
 }
 
 export function getLibrary() {
@@ -352,13 +385,33 @@ export function saveTranscript(input: {
 }
 
 export function getCopySources() {
-  return requestJson<{ sources: CopySource[] }>("/api/copy-sources");
+  if (copySourcesCache) return Promise.resolve(copySourcesCache);
+  if (copySourcesRequest) return copySourcesRequest;
+
+  copySourcesRequest = requestJson<{ sources: CopySource[] }>("/api/copy-sources")
+    .then((result) => {
+      copySourcesCache = result;
+      return result;
+    })
+    .finally(() => {
+      copySourcesRequest = null;
+    });
+  return copySourcesRequest;
+}
+
+export function refreshCopySources() {
+  copySourcesCache = null;
+  copySourcesRequest = null;
+  return getCopySources();
 }
 
 export function transcribeCopySource(input: { url: string; titleHint?: string; analyzeVideo?: boolean }) {
   return requestJson<{ source: CopySource }>("/api/copy-sources", {
     method: "POST",
     body: JSON.stringify({ action: "transcribe", ...input })
+  }).then((result) => {
+    rememberCopySources([result.source]);
+    return result;
   });
 }
 
@@ -377,6 +430,14 @@ export function deleteCopySources(sourceIds: string[]) {
   return requestJson<{ deleted: string[] }>("/api/copy-sources", {
     method: "DELETE",
     body: JSON.stringify({ sourceIds })
+  }).then((result) => {
+    if (copySourcesCache) {
+      const deleted = new Set(result.deleted);
+      copySourcesCache = {
+        sources: copySourcesCache.sources.filter((source) => !deleted.has(source.id))
+      };
+    }
+    return result;
   });
 }
 
@@ -590,17 +651,45 @@ export function saveDraft(input: DraftInput) {
   return requestJson<Draft>("/api/drafts", {
     method: "POST",
     body: JSON.stringify(input)
+  }).then((draft) => {
+    rememberDrafts([draft]);
+    return draft;
   });
 }
 
 export function getDrafts() {
-  return requestJson<{ drafts: Draft[] }>("/api/drafts");
+  if (draftsCache) return Promise.resolve(draftsCache);
+  if (draftsRequest) return draftsRequest;
+
+  draftsRequest = requestJson<{ drafts: Draft[] }>("/api/drafts")
+    .then((result) => {
+      draftsCache = result;
+      return result;
+    })
+    .finally(() => {
+      draftsRequest = null;
+    });
+  return draftsRequest;
+}
+
+export function refreshDrafts() {
+  draftsCache = null;
+  draftsRequest = null;
+  return getDrafts();
 }
 
 export function deleteDrafts(draftIds: string[]) {
   return requestJson<{ deleted: string[] }>("/api/drafts", {
     method: "DELETE",
     body: JSON.stringify({ draftIds })
+  }).then((result) => {
+    if (draftsCache) {
+      const deleted = new Set(result.deleted);
+      draftsCache = {
+        drafts: draftsCache.drafts.filter((draft) => !deleted.has(draft.id))
+      };
+    }
+    return result;
   });
 }
 
@@ -625,6 +714,9 @@ export function generateDraftEngagement(input: {
   }>("/api/draft-assets/engagement", {
     method: "POST",
     body: JSON.stringify(input)
+  }).then((result) => {
+    rememberDrafts([result.draft]);
+    return result;
   });
 }
 
@@ -663,6 +755,9 @@ export function generateEngagement(input:
   }>("/api/engagement", {
     method: "POST",
     body: JSON.stringify(input)
+  }).then((result) => {
+    if (result.draft) rememberDrafts([result.draft]);
+    return result;
   });
 }
 
@@ -670,6 +765,9 @@ export function collectDraftCoverReferences(draftId: string) {
   return requestJson<{ draft: Draft; references: DraftCoverReference[]; supportsCover: boolean }>("/api/draft-assets/cover/references", {
     method: "POST",
     body: JSON.stringify({ draftId })
+  }).then((result) => {
+    rememberDrafts([result.draft]);
+    return result;
   });
 }
 
@@ -695,6 +793,7 @@ export async function uploadDraftCoverReferences(input: { draftId: string; files
   if (!response.ok) {
     throw new Error(data.error || summarizeHttpError(response.status));
   }
+  if (data.draft) rememberDrafts([data.draft as Draft]);
   return data as { draft: Draft; references: DraftCoverReference[] };
 }
 
@@ -724,7 +823,10 @@ export async function streamGenerateDraftCover(
     },
     (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
-      if (event.type === "result") handlers.onResult?.(event.data);
+      if (event.type === "result") {
+        rememberDrafts([event.data.draft]);
+        handlers.onResult?.(event.data);
+      }
     }
   );
 }
