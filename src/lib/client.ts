@@ -9,6 +9,8 @@ import {
   DraftCoverReference,
   DraftInput,
   EngagementRecord,
+  GrossMarginDifferenceQueryInput,
+  GrossMarginDifferenceQueryResult,
   GrossMarginLibrary,
   GrossMarginPriceTable,
   JobListItem,
@@ -227,6 +229,13 @@ export function saveGrossMarginPriceTable(input: Pick<GrossMarginPriceTable, "pl
   return requestJson<{ table: GrossMarginPriceTable; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "savePriceTable", ...input })
+  });
+}
+
+export function queryGrossMarginDifference(input: GrossMarginDifferenceQueryInput) {
+  return requestJson<GrossMarginDifferenceQueryResult>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "queryDifference", ...input })
   });
 }
 

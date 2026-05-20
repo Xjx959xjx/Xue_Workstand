@@ -60,6 +60,14 @@ export type DouyinRelatedCommentResult = {
   comments: string[];
 };
 
+type DouyinVideoStatsSnapshot = {
+  title: string;
+  likeCount: number;
+  commentCount: number;
+  favoriteCount: number;
+  shareCount: number;
+};
+
 function opencliBin() {
   return process.env.OPENCLI_BIN || "opencli";
 }
@@ -975,6 +983,257 @@ export async function getDouyinVideoDetailMap(
   return details;
 }
 
+export async function getDouyinVideoStatsByUrl(url: string) {
+  const inputUrl = url.trim();
+  const initialAwemeId = extractDouyinAwemeId(inputUrl);
+  const workspace = `douyin-single-video-${process.pid}-${Date.now()}-${shortHash(inputUrl || initialAwemeId)}`;
+  const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || inputUrl : inputUrl;
+
+  try {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
+      timeout: 30_000
+    });
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "state"), { timeout: 12_000 }).catch(() => undefined);
+    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId);
+    const awemeId = resolved.awemeId;
+    if (!awemeId) {
+      throw new Error("没有从链接里解析到抖音视频 ID，请确认是单条视频链接，或粘贴完整视频页链接。");
+    }
+    const detail =
+      (await getDouyinVideoDetailFromNetwork(workspace, awemeId).catch(() => null)) ||
+      (await getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null));
+
+    if (!detail) {
+      throw new Error("抖音页面已打开，但没有从真实浏览器网络里抓到点赞、评论、收藏或转发数据。");
+    }
+
+    return {
+      platform: "douyin" as const,
+      title: detail.title,
+      url: resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl,
+      stats: {
+        like: detail.likeCount,
+        comment: detail.commentCount,
+        favorite: detail.favoriteCount,
+        share: detail.shareCount
+      }
+    };
+  } finally {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
+export async function getDouyinVideoStatsFromAccount(input: {
+  account: Account;
+  url: string;
+  limit?: number;
+}) {
+  const awemeId = extractDouyinAwemeId(input.url);
+  if (!awemeId) {
+    throw new Error("没有从链接里解析到抖音视频 ID，请粘贴完整视频链接。");
+  }
+
+  const result = await collectVideos({
+    platform: "douyin",
+    account: input.account,
+    limit: input.limit || 500
+  });
+  const matched = result.videos.find((video) => getDouyinAwemeId(video) === awemeId);
+  if (!matched) {
+    throw new Error(`账号「${input.account.name}」最近 ${result.videos.length} 条视频里没有找到这条视频。`);
+  }
+
+  return {
+    platform: "douyin" as const,
+    title: matched.title,
+    url: matched.url || buildDouyinVideoUrl(awemeId) || input.url,
+    stats: {
+      like: matched.stats.likes,
+      comment: matched.stats.comments,
+      favorite: matched.stats.favorites,
+      share: matched.stats.shares || 0
+    }
+  };
+}
+
+async function getDouyinVideoDetailFromNetwork(workspace: string, awemeId: string): Promise<DouyinVideoStatsSnapshot | null> {
+  const previews = await getDouyinNetworkPreviews(workspace);
+  const candidates = getOpenCliNetworkEntries(previews)
+    .filter((entry) => isLikelyDouyinAwemeDetailEntry(entry, awemeId))
+    .sort(compareDouyinNetworkEntries);
+
+  for (const entry of candidates) {
+    const key = stringField(entry.key);
+    if (!key) continue;
+
+    const detail = parseJsonish(
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "network", ["--detail", key, "--max-body", "0"]), {
+        timeout: 20_000
+      })
+    );
+    const snapshot = extractDouyinStatsSnapshotFromNetworkDetail(detail, awemeId);
+    if (snapshot) return snapshot;
+  }
+
+  return null;
+}
+
+async function getDouyinNetworkPreviews(workspace: string) {
+  const filtered = await runOpenCli(
+    buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s", "--filter", "aweme_detail,statistics"]),
+    { timeout: 12_000 }
+  ).catch(() => "");
+  const parsedFiltered = parseJsonish(filtered);
+  if (getOpenCliNetworkEntries(parsedFiltered).length) return parsedFiltered;
+
+  const all = await runOpenCli(buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s"]), {
+    timeout: 12_000
+  }).catch(() => "");
+  return parseJsonish(all);
+}
+
+function getOpenCliNetworkEntries(raw: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(raw)) {
+    return raw.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object");
+  }
+  if (!raw || typeof raw !== "object") return [];
+
+  const object = raw as Record<string, unknown>;
+  for (const key of ["entries", "items", "results", "requests", "list", "data"]) {
+    const value = object[key];
+    if (Array.isArray(value)) {
+      return value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object");
+    }
+  }
+  return [];
+}
+
+function isLikelyDouyinAwemeDetailEntry(entry: Record<string, unknown>, awemeId: string) {
+  const url = stringField(entry.url);
+  const shape = JSON.stringify(entry.shape || entry.body_shape || entry.preview || "");
+  if (url.includes("/aweme/v1/web/aweme/detail/")) return !awemeId || url.includes(awemeId) || url.includes("aweme_id=");
+  return /aweme_detail|statistics|digg_count|comment_count|collect_count|share_count/i.test(shape);
+}
+
+function compareDouyinNetworkEntries(left: Record<string, unknown>, right: Record<string, unknown>) {
+  return getDouyinNetworkEntryScore(right) - getDouyinNetworkEntryScore(left);
+}
+
+function getDouyinNetworkEntryScore(entry: Record<string, unknown>) {
+  const url = stringField(entry.url);
+  const shape = JSON.stringify(entry.shape || entry.body_shape || entry.preview || "");
+  let score = 0;
+  if (url.includes("/aweme/v1/web/aweme/detail/")) score += 50;
+  if (shape.includes("aweme_detail")) score += 30;
+  if (shape.includes("statistics")) score += 20;
+  return score;
+}
+
+function extractDouyinStatsSnapshotFromNetworkDetail(detail: unknown, awemeId: string): DouyinVideoStatsSnapshot | null {
+  const payload = parseOpenCliNetworkBody(detail);
+  const awemeDetail = findDouyinAwemeDetail(payload, awemeId);
+  if (!awemeDetail) return null;
+
+  const statistics = awemeDetail.statistics && typeof awemeDetail.statistics === "object"
+    ? (awemeDetail.statistics as Record<string, unknown>)
+    : null;
+  if (!statistics) return null;
+
+  return {
+    title: stringField(awemeDetail.desc) || stringField(awemeDetail.title),
+    likeCount: toNumber(statistics.digg_count),
+    commentCount: toNumber(statistics.comment_count),
+    favoriteCount: toNumber(statistics.collect_count),
+    shareCount: toNumber(statistics.share_count)
+  };
+}
+
+function parseOpenCliNetworkBody(detail: unknown): unknown {
+  const object = detail && typeof detail === "object" && !Array.isArray(detail) ? (detail as Record<string, unknown>) : null;
+  const body = object && "body" in object ? object.body : detail;
+  if (typeof body !== "string") return body;
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    const jsonMatch = body.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return body;
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch {
+      return body;
+    }
+  }
+}
+
+function findDouyinAwemeDetail(value: unknown, awemeId: string, depth = 0): Record<string, unknown> | null {
+  if (!value || depth > 8) return null;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findDouyinAwemeDetail(item, awemeId, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  if (typeof value !== "object") return null;
+
+  const object = value as Record<string, unknown>;
+  const direct = object.aweme_detail || object.awemeDetail;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    const found = findDouyinAwemeDetail(direct, awemeId, depth + 1);
+    if (found) return found;
+  }
+
+  if (object.statistics && typeof object.statistics === "object" && matchesDouyinAwemeId(object, awemeId)) {
+    return object;
+  }
+
+  for (const nested of Object.values(object)) {
+    const found = findDouyinAwemeDetail(nested, awemeId, depth + 1);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function matchesDouyinAwemeId(object: Record<string, unknown>, awemeId: string) {
+  if (!awemeId) return true;
+  const candidates = [
+    object.aweme_id,
+    object.awemeId,
+    object.id,
+    object.item_id,
+    object.itemId,
+    object.group_id,
+    object.groupId
+  ];
+  return candidates.some((candidate) => String(candidate || "") === awemeId);
+}
+
+async function resolveDouyinAwemeIdFromOpenPage(workspace: string, fallbackAwemeId = "") {
+  if (fallbackAwemeId) {
+    return {
+      awemeId: fallbackAwemeId,
+      url: buildDouyinVideoUrl(fallbackAwemeId)
+    };
+  }
+
+  const result = parseJsonish(
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_AWEME_ID_EXTRACT_JS]), {
+      timeout: 20_000
+    })
+  );
+  const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
+  const awemeId = extractDouyinAwemeId(stringField(object.awemeId)) || extractDouyinAwemeId(stringField(object.url));
+  return {
+    awemeId,
+    url: stringField(object.url)
+  };
+}
+
 async function getDouyinVideoDetailWithBrowser(
   workspace: string,
   awemeId: string,
@@ -998,6 +1257,23 @@ async function getDouyinVideoDetailWithBrowser(
   return {
     commentCount: commentCount > 0 ? commentCount : undefined,
     topComments
+  };
+}
+
+async function getDouyinVideoDetailSnapshot(workspace: string, awemeId: string): Promise<DouyinVideoStatsSnapshot | null> {
+  const result = parseJsonish(
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinStatsExtractJs(awemeId)]), {
+      timeout: 20_000
+    })
+  );
+  const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
+  if (!object.hasStats) return null;
+  return {
+    title: stringField(object.title),
+    likeCount: toNumber(object.likeCount),
+    commentCount: toNumber(object.commentCount),
+    favoriteCount: toNumber(object.favoriteCount),
+    shareCount: toNumber(object.shareCount)
   };
 }
 
@@ -1059,6 +1335,66 @@ function buildDouyinDetailExtractJs(options: { awemeId: string; commentLimit: nu
 })()
 `;
 }
+
+function buildDouyinStatsExtractJs(awemeId: string) {
+  return `
+(async () => {
+  const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
+  detailUrl.searchParams.set("aweme_id", ${JSON.stringify(awemeId)});
+  detailUrl.searchParams.set("aid", "6383");
+  const response = await fetch(detailUrl.toString(), {
+    credentials: "include",
+    headers: {
+      accept: "application/json, text/plain, */*"
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  const awemeDetail = payload && typeof payload === "object" ? payload.aweme_detail || {} : {};
+  const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
+  const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
+  return {
+    hasStats,
+    title: awemeDetail.desc || awemeDetail.title || "",
+    likeCount: Number(statistics.digg_count || 0),
+    commentCount: Number(statistics.comment_count || 0),
+    favoriteCount: Number(statistics.collect_count || 0),
+    shareCount: Number(statistics.share_count || 0)
+  };
+})()
+`;
+}
+
+const DOUYIN_AWEME_ID_EXTRACT_JS = `
+(() => {
+  const candidates = [location.href];
+  for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+    const href = anchor.href || anchor.getAttribute("href") || "";
+    if (href) candidates.push(href);
+  }
+  for (const entry of performance.getEntriesByType("resource")) {
+    if (entry.name) candidates.push(entry.name);
+  }
+  const html = document.documentElement?.innerHTML || "";
+  const textMatches = html.match(/(?:\\/video\\/|aweme_id["'=:\\s]+)(\\d{10,})/g) || [];
+  candidates.push(...textMatches);
+
+  const extract = (value) => {
+    const text = String(value || "");
+    return (
+      text.match(/\\/video\\/(\\d{10,})/)?.[1] ||
+      text.match(/[?&]aweme_id=(\\d{10,})/)?.[1] ||
+      text.match(/aweme_id["'=:\\s]+(\\d{10,})/)?.[1] ||
+      text.match(/awemeId["'=:\\s]+(\\d{10,})/)?.[1] ||
+      ""
+    );
+  };
+  const awemeId = candidates.map(extract).find(Boolean) || "";
+  return {
+    awemeId,
+    url: awemeId ? "https://www.douyin.com/video/" + awemeId : location.href
+  };
+})()
+`;
 
 export async function getDouyinTopComments(account: Account, options: { limit?: number; commentLimit?: number } = {}) {
   const stdout = await runOpenCli([
@@ -1241,6 +1577,39 @@ export async function hydrateBilibiliVideoStats(video: Video) {
     },
     raw: { ...(typeof video.raw === "object" && video.raw ? video.raw : {}), metadata },
     updatedAt: nowIso()
+  };
+}
+
+export async function getBilibiliVideoStatsByUrl(url: string) {
+  const bvid = extractBvid(url);
+  if (!bvid) {
+    throw new Error("没有从链接里解析到 B 站 BV 号，请粘贴完整视频链接。");
+  }
+
+  const [opencliFields, publicFields] = await Promise.all<Record<string, unknown>>([
+    getBilibiliVideoFields(bvid).catch(() => ({})),
+    getBilibiliPublicVideoFields(bvid).catch(() => ({}))
+  ]);
+  const stat = publicFields.stat && typeof publicFields.stat === "object" ? (publicFields.stat as Record<string, unknown>) : {};
+  const metadata = {
+    ...publicFields,
+    ...stat,
+    ...opencliFields
+  };
+
+  return {
+    platform: "bilibili" as const,
+    title: stringField(metadata.title),
+    url: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`,
+    stats: {
+      play: firstNumber(metadata.view, metadata.views),
+      like: firstNumber(metadata.like, metadata.likes),
+      coin: firstNumber(metadata.coin),
+      favorite: firstNumber(metadata.favorite, metadata.favorites),
+      comment: firstNumber(metadata.reply, metadata.comments),
+      share: firstNumber(metadata.share, metadata.shares),
+      danmaku: firstNumber(metadata.danmaku)
+    }
   };
 }
 

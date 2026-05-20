@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, Copy, RefreshCw, Save } from "lucide-react";
+import { Calculator, Copy, RefreshCw, Save, Search, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { getGrossMarginLibrary, saveGrossMarginPriceTable } from "@/lib/client";
+import { GrossMarginDifferenceModal } from "./_components/GrossMarginDifferenceModal";
+import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
 import type {
   GrossMarginCalculationLine,
   GrossMarginCalculationResult,
@@ -47,6 +49,7 @@ export default function GrossMarginPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [accountName, setAccountName] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
   const [originalPrice, setOriginalPrice] = useState("");
   const [discountRate, setDiscountRate] = useState("");
   const [discountPrice, setDiscountPrice] = useState("");
@@ -63,6 +66,8 @@ export default function GrossMarginPage() {
   });
   const [selectedOptions, setSelectedOptions] = useState<Partial<Record<GrossMarginServiceKind, string>>>({});
   const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [differenceModalOpen, setDifferenceModalOpen] = useState(false);
   const tables = useMemo(() => library?.tables || [], [library]);
   const table = useMemo(
     () => tables.find((item) => item.platform === platform) || tables[0] || null,
@@ -101,9 +106,10 @@ export default function GrossMarginPage() {
       account: matchedAccount,
       accountName,
       calculation,
-      platform
+      platform,
+      videoUrl
     }),
-    [accountName, calculation, matchedAccount, platform]
+    [accountName, calculation, matchedAccount, platform, videoUrl]
   );
   const configuredPriceCount = table?.items.filter((item) => toAmount(priceInputs[item.id] ?? item.unitPrice) > 0).length || 0;
 
@@ -205,12 +211,58 @@ export default function GrossMarginPage() {
   }
 
   async function handleExportReview() {
+    if (!videoUrl.trim()) {
+      notify({ tone: "error", message: "请先补视频链接，再导出审核文案" });
+      return;
+    }
     try {
       await navigator.clipboard.writeText(reviewDraft);
       notify({ tone: "success", message: "审核文案已复制" });
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "复制失败" });
     }
+  }
+
+  function handleImportTemplate(template: GrossMarginImportedTemplate) {
+    const nextPlatform = template.platform || platform;
+    const nextTable = tables.find((item) => item.platform === nextPlatform) || table;
+    const defaultSelections = nextTable ? makeDefaultSelections(nextTable) : {};
+    const nextSelectedOptions: Partial<Record<GrossMarginServiceKind, string>> = { ...defaultSelections };
+    const nextQuantityInputs = makeEmptyQuantityInputs();
+
+    if (nextTable) {
+      for (const metric of template.metrics) {
+        const options = getServiceOptions(nextTable, metric.service);
+        const option = findImportedOption(options, metric);
+        if (option) nextSelectedOptions[metric.service] = option.id;
+        const selectedOption = option || getSelectedOption(options, nextSelectedOptions[metric.service]);
+        if (selectedOption) {
+          nextQuantityInputs[metric.service] = formatImportedQuantity(metric.rawValue, selectedOption.quantityUnit);
+        }
+      }
+    }
+
+    setPlatform(nextPlatform);
+    if (nextTable) {
+      setPriceInputs(makePriceInputs(nextTable));
+    }
+    setSelectedOptions(nextSelectedOptions);
+    setQuantityInputs(nextQuantityInputs);
+    const nextAccountName = template.accountName || accountName;
+    setAccountName(nextAccountName);
+    if (template.videoUrl) setVideoUrl(template.videoUrl);
+
+    const importedAccounts = (library?.accounts || []).filter((account) => account.platform === nextPlatform);
+    const nextAccount = findGrossMarginAccount(importedAccounts, nextAccountName);
+    if (nextAccount) {
+      updateOriginalPrice(String(nextAccount.defaultPrice));
+    }
+
+    setImportModalOpen(false);
+    notify({
+      tone: "success",
+      message: `已导入${template.metrics.length}个维护项${template.videoUrl ? "，链接已填" : ""}`
+    });
   }
 
   return (
@@ -307,29 +359,42 @@ export default function GrossMarginPage() {
           </div>
           <div className="pane-body">
             <div className="detail-section gross-price-summary-form">
-              <div className="field">
-                <label htmlFor="gross-account-name">账号名</label>
-                <input
-                  autoComplete="off"
-                  id="gross-account-name"
-                  list="gross-account-options"
-                  type="text"
-                  value={accountName}
-                  onChange={(event) => handleAccountNameChange(event.target.value)}
-                  placeholder="输入账号名自动带价格"
-                />
-                <datalist id="gross-account-options">
-                  {platformAccounts.map((account) => (
-                    <option key={`${account.platform}-${account.name}`} value={account.name} />
-                  ))}
-                </datalist>
-                {matchedAccount ? (
-                  <span className="field-hint">
-                    已匹配{matchedAccount.priceLabel}：{formatMoney(matchedAccount.defaultPrice)}
-                  </span>
-                ) : accountName.trim() ? (
-                  <span className="field-hint warning">未匹配账号，价格可手填</span>
-                ) : null}
+              <div className="gross-account-row">
+                <div className="field">
+                  <label htmlFor="gross-account-name">账号名</label>
+                  <input
+                    autoComplete="off"
+                    id="gross-account-name"
+                    list="gross-account-options"
+                    type="text"
+                    value={accountName}
+                    onChange={(event) => handleAccountNameChange(event.target.value)}
+                    placeholder="输入账号名自动带价格"
+                  />
+                  <datalist id="gross-account-options">
+                    {platformAccounts.map((account) => (
+                      <option key={`${account.platform}-${account.name}`} value={account.name} />
+                    ))}
+                  </datalist>
+                  {matchedAccount ? (
+                    <span className="field-hint">
+                      已匹配{matchedAccount.priceLabel}：{formatMoney(matchedAccount.defaultPrice)}
+                    </span>
+                  ) : accountName.trim() ? (
+                    <span className="field-hint warning">未匹配账号，价格可手填</span>
+                  ) : null}
+                </div>
+                <div className="field">
+                  <label htmlFor="gross-video-url">视频链接</label>
+                  <input
+                    autoComplete="off"
+                    id="gross-video-url"
+                    type="url"
+                    value={videoUrl}
+                    onChange={(event) => setVideoUrl(event.target.value)}
+                    placeholder="粘贴视频链接，导出时会带上"
+                  />
+                </div>
               </div>
               <div className="gross-price-summary-grid">
                 <div className="field">
@@ -480,15 +545,38 @@ export default function GrossMarginPage() {
             </div>
 
             <div className="button-row gross-export-row">
+              <button aria-label="导入维护模板" className="btn" onClick={() => setImportModalOpen(true)} type="button">
+                <Upload aria-hidden="true" size={15} />
+                导入
+              </button>
+            </div>
+
+            <div className="button-row gross-export-row">
               <button aria-label="导出审核文案" className="btn primary" onClick={() => void handleExportReview()} type="button">
                 <Copy aria-hidden="true" size={15} />
                 导出
               </button>
             </div>
 
+            <div className="button-row gross-export-row secondary">
+              <button className="btn" onClick={() => setDifferenceModalOpen(true)} type="button">
+                <Search aria-hidden="true" size={15} />
+                查询差额
+              </button>
+            </div>
+
           </div>
         </aside>
       </section>
+
+      {importModalOpen ? (
+        <GrossMarginImportModal
+          initialPlatform={platform}
+          onClose={() => setImportModalOpen(false)}
+          onImport={handleImportTemplate}
+        />
+      ) : null}
+      {differenceModalOpen ? <GrossMarginDifferenceModal platform={platform} onClose={() => setDifferenceModalOpen(false)} /> : null}
     </div>
   );
 }
@@ -613,6 +701,20 @@ function makePriceInputs(table: GrossMarginPriceTable) {
   return Object.fromEntries(table.items.map((item) => [item.id, String(item.unitPrice)]));
 }
 
+function makeEmptyQuantityInputs(): Record<GrossMarginServiceKind, string> {
+  return {
+    play: "",
+    like: "",
+    douPlus: "",
+    coin: "",
+    comment: "",
+    share: "",
+    favorite: "",
+    danmaku: "",
+    blueLink: ""
+  };
+}
+
 function makeDefaultSelections(table: GrossMarginPriceTable) {
   return Object.fromEntries(
     serviceConfigs.map((config) => [config.service, getServiceOptions(table, config.service)[0]?.id || ""])
@@ -625,6 +727,55 @@ function getServiceOptions(table: GrossMarginPriceTable, service: GrossMarginSer
 
 function getSelectedOption(options: GrossMarginPriceOption[], selectedId?: string) {
   return options.find((option) => option.id === selectedId) || options[0] || null;
+}
+
+function findImportedOption(options: GrossMarginPriceOption[], metric: GrossMarginImportedTemplate["metrics"][number]) {
+  const hint = normalizeOptionHint(metric.optionHint);
+  if (!hint) return options[0] || null;
+  if (metric.service === "play" && /快速|高速|快/.test(hint)) {
+    return options.find((option) => option.id.includes("play-fast") || /快速|高速|快/.test(option.name)) || options[0] || null;
+  }
+  if (metric.service === "play" && /正常|普通|默认/.test(hint)) {
+    return options.find((option) => !option.id.includes("play-fast") && /正常|普通|默认/.test(option.name)) || options[0] || null;
+  }
+  return (
+    options.find((option) => normalizeOptionHint(formatTypeOptionName(option.name)) === hint) ||
+    options.find((option) => {
+      const optionName = normalizeOptionHint(formatTypeOptionName(option.name));
+      return optionName.includes(hint) || hint.includes(optionName);
+    }) ||
+    options[0] ||
+    null
+  );
+}
+
+function normalizeOptionHint(value: string) {
+  return value
+    .replace(/[（(][^）)]*[）)]/g, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function formatImportedQuantity(rawValue: string, quantityUnit: string) {
+  const metricValue = parseMetricValue(rawValue);
+  if (!metricValue) return "";
+  let quantity = metricValue.value;
+  if (quantityUnit === "万") {
+    quantity = metricValue.unit === "万" ? metricValue.value : metricValue.value / 10000;
+  } else if (quantityUnit === "千") {
+    quantity = metricValue.unit === "万" ? metricValue.value * 10 : metricValue.value / 1000;
+  }
+  return formatAmountInput(quantity);
+}
+
+function parseMetricValue(rawValue: string) {
+  const value = rawValue.trim().replace(/,/g, "");
+  const match = value.match(/([\d.]+)/);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const unit = /[wW万]/.test(value) ? "万" : "";
+  return { value: number, unit };
 }
 
 function findGrossMarginAccount(accounts: GrossMarginAccountPrice[], rawName: string) {
@@ -664,22 +815,26 @@ function buildGrossMarginReview({
   account,
   accountName,
   calculation,
-  platform
+  platform,
+  videoUrl
 }: {
   account: GrossMarginAccountPrice | null;
   accountName: string;
   calculation: GrossMarginCalculationResult;
   platform: PlatformKey;
+  videoUrl: string;
 }) {
   const lines = new Map(calculation.lines.map((line) => [line.service, line]));
   const displayName = account?.name || accountName.trim();
+  const displayVideoUrl = videoUrl.trim();
+  const reviewFooter = "@罗娜 @姚琳琳(Lin.) @罗雪莲 @翁林湑(空白) @罗月琴 辛苦审核";
 
   if (platform === "bilibili") {
     return [
       "【B站】",
       `账号：${displayName}`,
-      "视频链接：",
-      `播放量：${formatReviewMetricValue(lines.get("play"), platform)}`,
+      `视频链接：${displayVideoUrl}`,
+      `播放量（${formatBilibiliPlayChannel(lines.get("play"))}）：${formatReviewMetricValue(lines.get("play"), platform)}`,
       `点赞：${formatReviewMetricValue(lines.get("like"), platform)}`,
       `投币：${formatReviewMetricValue(lines.get("coin"), platform)}`,
       `收藏：${formatReviewMetricValue(lines.get("favorite"), platform)}`,
@@ -687,7 +842,8 @@ function buildGrossMarginReview({
       `分享：${formatReviewMetricValue(lines.get("share"), platform)}`,
       `弹幕：${formatReviewMetricValue(lines.get("danmaku"), platform)}`,
       `蓝链点击：${formatReviewMetricValue(lines.get("blueLink"), platform)}`,
-      `维护成本：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`
+      `维护成本：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`,
+      reviewFooter
     ].join("\n");
   }
 
@@ -696,20 +852,27 @@ function buildGrossMarginReview({
     `账号：${displayName}`,
     `抖音ID：${account?.douyinId || ""}`,
     `合作码：${account?.cooperationCode || ""}`,
-    "视频链接：",
+    `视频链接：${displayVideoUrl}`,
     `播放量${formatReviewLabelSuffix(lines.get("play"))}：${formatReviewMetricValue(lines.get("play"), platform)}`,
     `点赞${formatReviewLabelSuffix(lines.get("like"))}：${formatReviewMetricValue(lines.get("like"), platform)}`,
     `评论${formatReviewLabelSuffix(lines.get("comment"))}：${formatReviewMetricValue(lines.get("comment"), platform)}`,
     `收藏：${formatReviewMetricValue(lines.get("favorite"), platform)}`,
     `转发：${formatReviewMetricValue(lines.get("share"), platform)}`,
     `抖加：${formatReviewMetricValue(lines.get("douPlus"), platform)}`,
-    `维护成本预计：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`
+    `维护成本预计：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`,
+    reviewFooter
   ].join("\n");
 }
 
 function formatReviewLabelSuffix(line?: GrossMarginCalculationLine) {
   const name = formatTypeOptionName(line?.optionName || "");
   return name ? `（${name}）` : "";
+}
+
+function formatBilibiliPlayChannel(line?: GrossMarginCalculationLine) {
+  if (!line?.optionId) return "正常通道";
+  if (line.optionId.includes("play-fast")) return "快速通道";
+  return "正常通道";
 }
 
 function formatReviewMetricValue(line: GrossMarginCalculationLine | undefined, platform: PlatformKey) {
@@ -725,21 +888,15 @@ function formatReviewMetricValue(line: GrossMarginCalculationLine | undefined, p
 }
 
 function formatReviewNumber(value: number) {
-  if (Number.isInteger(value)) return value.toLocaleString("zh-CN");
-  return value.toLocaleString("zh-CN", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
-  });
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toFixed(2)));
 }
 
 function formatReviewMoney(value: number) {
   if (Math.abs(value - Math.round(value)) < 0.000001) {
-    return Math.round(value).toLocaleString("zh-CN");
+    return String(Math.round(value));
   }
-  return value.toLocaleString("zh-CN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
+  return value.toFixed(2);
 }
 
 function formatReviewPercent(value: number) {

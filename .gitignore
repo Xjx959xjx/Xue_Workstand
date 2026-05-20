@@ -4,6 +4,7 @@ node_modules
 out
 dist
 coverage
+output
 tsconfig.tsbuildinfo
 .env
 .env*.local

@@ -26,7 +26,7 @@ export function toNumber(value: unknown) {
   const normalized = value.trim().replace(/,/g, "");
   if (!normalized) return 0;
 
-  const unit = normalized.match(/^([\d.]+)\s*([万億亿kKmM]?)$/);
+  const unit = normalized.match(/^([\d.]+)\s*([万億亿wWkKmM]?)$/);
   if (!unit) {
     const parsed = Number(normalized.replace(/[^\d.]/g, ""));
     return Number.isFinite(parsed) ? parsed : 0;
@@ -36,6 +36,7 @@ export function toNumber(value: unknown) {
   if (!Number.isFinite(base)) return 0;
 
   const suffix = unit[2].toLowerCase();
+  if (suffix === "w") return Math.round(base * 10_000);
   if (suffix === "万") return Math.round(base * 10_000);
   if (suffix === "亿" || suffix === "億") return Math.round(base * 100_000_000);
   if (suffix === "k") return Math.round(base * 1_000);

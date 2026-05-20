@@ -371,6 +371,21 @@ export type GrossMarginCalculationResult = {
   lines: GrossMarginCalculationLine[];
 };
 
+export type GrossMarginDifferenceQueryInput = {
+  template: string;
+  platformHint?: GrossMarginPriceTable["platform"];
+  videoUrl?: string;
+  manualCurrentStats?: Partial<Record<GrossMarginServiceKind, number>>;
+};
+
+export type GrossMarginDifferenceQueryResult = {
+  platform: GrossMarginPriceTable["platform"];
+  title?: string;
+  url: string;
+  result: string;
+  warnings: string[];
+};
+
 export type LibraryState = {
   root: string;
   accounts: AccountSummary[];
