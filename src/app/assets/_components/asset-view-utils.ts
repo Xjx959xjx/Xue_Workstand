@@ -19,8 +19,6 @@ export function formatTime(seconds: number) {
   return `${minute}:${String(second).padStart(2, "0")}`;
 }
 
-export function hasSourceInput(sourceType: EngagementSourceType, selectedDraft: Draft | null, textInput: string, urlInput: string) {
-  if (sourceType === "draft") return Boolean(selectedDraft);
-  if (sourceType === "text") return Boolean(textInput.trim());
-  return Boolean(urlInput.trim());
+export function hasSourceInput(sourceInput: string) {
+  return Boolean(sourceInput.trim());
 }

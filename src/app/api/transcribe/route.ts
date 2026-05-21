@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { transcribeVideo } from "@/lib/transcription";
+import { createUrlPreprocessor } from "@/lib/link-input";
 import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -10,7 +11,7 @@ const schema = z.object({
   accountId: z.string().min(1),
   videoId: z.string().min(1),
   mediaPath: z.string().optional(),
-  mediaUrl: z.string().url().optional(),
+  mediaUrl: z.preprocess(createUrlPreprocessor(), z.string().url()).optional(),
   allowRemoteDownload: z.boolean().optional()
 });
 

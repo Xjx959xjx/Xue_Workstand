@@ -99,6 +99,39 @@ export type DraftAssets = {
     usedModel: string;
     fallback: boolean;
     fallbackReason?: string;
+    diagnostics?: {
+      research?: {
+        originalCommentCount: number;
+        originalCommentUsed: number;
+        relatedCommentCount: number;
+        relatedCommentUsed: number;
+        relatedVideoCount: number;
+        usedQueries: string[];
+        failedQueries: string[];
+        skippedRelatedSearch: boolean;
+        sourceCommentCount?: number;
+        sourceAwemeId?: string;
+        sourceTitle?: string;
+        originalFetchError?: string;
+      }[];
+      generation?: {
+        mode?: "keyword_local" | "model_batch";
+        requestedCount: number;
+        batchSize: number;
+        batchCount: number;
+        parsedCount: number;
+        completedCount: number;
+        supplementedCount: number;
+        batches: {
+          index: number;
+          requestedCount: number;
+          parsedCount: number;
+          model: string;
+          fallback: boolean;
+          fallbackReason?: string;
+        }[];
+      };
+    };
     items: DraftCommentAsset[];
   };
   danmaku?: {
@@ -348,10 +381,45 @@ export type GrossMarginCalculationLine = {
   total: number;
 };
 
+export type GrossMarginMonitorStatus = "pending" | "completed" | "failed";
+
+export type GrossMarginMonitorMetric = {
+  service: GrossMarginServiceKind;
+  label: string;
+  target: number;
+  current?: number;
+  difference: number;
+  differencePercent: number;
+  highRisk: boolean;
+  manualOnly?: boolean;
+};
+
+export type GrossMarginMonitorRecord = {
+  id: string;
+  platform: GrossMarginPriceTable["platform"];
+  accountName: string;
+  videoUrl: string;
+  videoKey: string;
+  title?: string;
+  publishedAt?: string;
+  sourceText: string;
+  targetStats: Partial<Record<GrossMarginServiceKind, number>>;
+  currentStats?: Partial<Record<GrossMarginServiceKind, number>>;
+  metrics: GrossMarginMonitorMetric[];
+  maxDifferencePercent: number;
+  highRisk: boolean;
+  status: GrossMarginMonitorStatus;
+  warnings: string[];
+  lastRefreshedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type GrossMarginLibrary = {
   root: string;
   tables: GrossMarginPriceTable[];
   accounts: GrossMarginAccountPrice[];
+  monitorRecords: GrossMarginMonitorRecord[];
 };
 
 export type GrossMarginCalculationInput = {

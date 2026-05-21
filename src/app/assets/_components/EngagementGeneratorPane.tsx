@@ -1,36 +1,23 @@
 "use client";
 
-import { FileText, Link as LinkIcon, Send, TextCursorInput } from "lucide-react";
+import { Send } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
-import type { Draft, EngagementSourceType } from "@/lib/types";
 
 type EngagementGeneratorPaneProps = {
   busy: BusyState;
   canGenerate: boolean;
   commentCount: number;
   danmakuCount: number;
-  drafts: Draft[];
   includeComments: boolean;
   includeDanmaku: boolean;
-  loading: boolean;
-  selectedDraft: Draft | null;
-  selectedId: string;
-  sourceType: EngagementSourceType;
-  textInput: string;
-  textTitle: string;
-  urlInput: string;
+  sourceInput: string;
   onCommentCountChange: (count: number) => void;
   onDanmakuCountChange: (count: number) => void;
   onGenerate: () => void;
   onIncludeCommentsChange: (enabled: boolean) => void;
   onIncludeDanmakuChange: (enabled: boolean) => void;
-  onOpenPreview: (draft: Draft) => void;
-  onSelectDraft: (id: string) => void;
-  onSourceTypeChange: (sourceType: EngagementSourceType) => void;
-  onTextInputChange: (value: string) => void;
-  onTextTitleChange: (value: string) => void;
-  onUrlInputChange: (value: string) => void;
+  onSourceInputChange: (value: string) => void;
 };
 
 export function EngagementGeneratorPane({
@@ -38,71 +25,26 @@ export function EngagementGeneratorPane({
   canGenerate,
   commentCount,
   danmakuCount,
-  drafts,
   includeComments,
   includeDanmaku,
-  loading,
-  selectedDraft,
-  selectedId,
-  sourceType,
-  textInput,
-  textTitle,
-  urlInput,
+  sourceInput,
   onCommentCountChange,
   onDanmakuCountChange,
   onGenerate,
   onIncludeCommentsChange,
   onIncludeDanmakuChange,
-  onOpenPreview,
-  onSelectDraft,
-  onSourceTypeChange,
-  onTextInputChange,
-  onTextTitleChange,
-  onUrlInputChange
+  onSourceInputChange
 }: EngagementGeneratorPaneProps) {
   return (
     <section className="engagement-generator-pane">
       <div className="pane-body detail-stack">
-        <div className="segmented source-tabs" role="tablist" aria-label="选择来源">
-          {sourceTabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                aria-selected={sourceType === tab.value}
-                className={sourceType === tab.value ? "active" : ""}
-                key={tab.value}
-                onClick={() => onSourceTypeChange(tab.value)}
-                role="tab"
-                type="button"
-              >
-                <Icon size={15} />
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-
-        <SourceInput
-          drafts={drafts}
-          loading={loading}
-          selectedDraft={selectedDraft}
-          selectedId={selectedId}
-          sourceType={sourceType}
-          textInput={textInput}
-          textTitle={textTitle}
-          urlInput={urlInput}
-          onSelectDraft={onSelectDraft}
-          onOpenPreview={onOpenPreview}
-          onTextInput={onTextInputChange}
-          onTextTitle={onTextTitleChange}
-          onUrlInput={onUrlInputChange}
-        />
+        <SourceInput value={sourceInput} onChange={onSourceInputChange} />
 
         <section className="detail-section">
           <div className="section-title-row">
             <div>
               <h3>生成选项</h3>
-              <p className="subtle">关闭评论后可以只生成弹幕。</p>
+              <p className="subtle">评论默认开启，弹幕按需勾选。</p>
             </div>
             <button className="btn primary engagement-submit" disabled={!canGenerate} onClick={onGenerate} type="button">
               <Send size={16} />
@@ -130,7 +72,7 @@ export function EngagementGeneratorPane({
               <input checked={includeDanmaku} type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
               <span>
                 <strong>弹幕</strong>
-                <small>按口播节奏生成时间点</small>
+                <small>按正文节奏生成时间点</small>
               </span>
               <input
                 aria-label="弹幕条数"
@@ -148,7 +90,7 @@ export function EngagementGeneratorPane({
         {busy === "generate" ? (
           <div className="project-progress" role="status" aria-live="polite">
             <div className="project-progress-copy">
-              <span>{sourceType === "url" ? "正在读取链接并生成互动素材" : "正在生成互动素材"}</span>
+              <span>正在读取素材并生成互动内容</span>
               <strong>处理中</strong>
             </div>
             <div className="progress-track" aria-hidden="true">
@@ -160,9 +102,3 @@ export function EngagementGeneratorPane({
     </section>
   );
 }
-
-const sourceTabs: Array<{ value: EngagementSourceType; label: string; icon: typeof FileText }> = [
-  { value: "draft", label: "选择草稿", icon: FileText },
-  { value: "text", label: "粘贴文案", icon: TextCursorInput },
-  { value: "url", label: "视频链接", icon: LinkIcon }
-];

@@ -66,6 +66,7 @@ type DouyinVideoStatsSnapshot = {
   commentCount: number;
   favoriteCount: number;
   shareCount: number;
+  publishedAt?: string;
 };
 
 function opencliBin() {
@@ -1012,12 +1013,61 @@ export async function getDouyinVideoStatsByUrl(url: string) {
       platform: "douyin" as const,
       title: detail.title,
       url: resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl,
+      publishedAt: detail.publishedAt,
       stats: {
         like: detail.likeCount,
         comment: detail.commentCount,
         favorite: detail.favoriteCount,
         share: detail.shareCount
       }
+    };
+  } finally {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
+export async function getDouyinVideoCommentsByUrl(
+  url: string,
+  options: { commentLimit?: number } = {}
+) {
+  const inputUrl = url.trim();
+  const initialAwemeId = extractDouyinAwemeId(inputUrl);
+  const workspace = `douyin-video-comments-${process.pid}-${Date.now()}-${shortHash(inputUrl || initialAwemeId)}`;
+  const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || inputUrl : inputUrl;
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 30, 50));
+
+  try {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
+      timeout: 30_000
+    });
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "state"), { timeout: 12_000 }).catch(() => undefined);
+
+    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId);
+    const awemeId = resolved.awemeId;
+    if (!awemeId) {
+      return {
+        url: inputUrl,
+        resolvedUrl: resolved.url || inputUrl,
+        awemeId: "",
+        title: "",
+        commentCount: 0,
+        comments: []
+      };
+    }
+
+    const [detail, snapshot] = await Promise.all([
+      getDouyinVideoDetailWithBrowser(workspace, awemeId, { commentLimit }).catch(() => null),
+      getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null)
+    ]);
+
+    return {
+      url: inputUrl,
+      resolvedUrl: resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl,
+      awemeId,
+      title: snapshot?.title || "",
+      commentCount: detail?.commentCount || snapshot?.commentCount || 0,
+      comments: detail?.topComments || []
     };
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
@@ -1048,6 +1098,7 @@ export async function getDouyinVideoStatsFromAccount(input: {
     platform: "douyin" as const,
     title: matched.title,
     url: matched.url || buildDouyinVideoUrl(awemeId) || input.url,
+    publishedAt: matched.publishedAt,
     stats: {
       like: matched.stats.likes,
       comment: matched.stats.comments,
@@ -1145,7 +1196,8 @@ function extractDouyinStatsSnapshotFromNetworkDetail(detail: unknown, awemeId: s
     likeCount: toNumber(statistics.digg_count),
     commentCount: toNumber(statistics.comment_count),
     favoriteCount: toNumber(statistics.collect_count),
-    shareCount: toNumber(statistics.share_count)
+    shareCount: toNumber(statistics.share_count),
+    publishedAt: normalizeTimestamp(awemeDetail.create_time || awemeDetail.createTime)
   };
 }
 
@@ -1239,7 +1291,7 @@ async function getDouyinVideoDetailWithBrowser(
   awemeId: string,
   options: { commentLimit?: number } = {}
 ) {
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 20));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 50));
   const result = parseJsonish(
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [
       buildDouyinDetailExtractJs({
@@ -1273,7 +1325,8 @@ async function getDouyinVideoDetailSnapshot(workspace: string, awemeId: string):
     likeCount: toNumber(object.likeCount),
     commentCount: toNumber(object.commentCount),
     favoriteCount: toNumber(object.favoriteCount),
-    shareCount: toNumber(object.shareCount)
+    shareCount: toNumber(object.shareCount),
+    publishedAt: normalizeTimestamp(object.publishedAt || object.createTime || object.create_time)
   };
 }
 
@@ -1358,7 +1411,8 @@ function buildDouyinStatsExtractJs(awemeId: string) {
     likeCount: Number(statistics.digg_count || 0),
     commentCount: Number(statistics.comment_count || 0),
     favoriteCount: Number(statistics.collect_count || 0),
-    shareCount: Number(statistics.share_count || 0)
+    shareCount: Number(statistics.share_count || 0),
+    publishedAt: awemeDetail.create_time || awemeDetail.createTime || ""
   };
 })()
 `;
@@ -1601,6 +1655,7 @@ export async function getBilibiliVideoStatsByUrl(url: string) {
     platform: "bilibili" as const,
     title: stringField(metadata.title),
     url: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`,
+    publishedAt: normalizeTimestamp(metadata.pubdate || metadata.publish_time || metadata.created_at || metadata.date),
     stats: {
       play: firstNumber(metadata.view, metadata.views),
       like: firstNumber(metadata.like, metadata.likes),

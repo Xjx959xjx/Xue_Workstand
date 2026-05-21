@@ -3,6 +3,7 @@ import { z } from "zod";
 import { deleteAccounts, findAccountByName, getAccountDetail, getAccountSummary, upsertAccount } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 import { resolveAccountUid } from "@/lib/opencli";
+import { normalizeLinkInput } from "@/lib/link-input";
 
 export const runtime = "nodejs";
 
@@ -47,15 +48,17 @@ function parseBooleanFlag(value: string | null) {
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
-    const existing = !input.uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
+    const uidOrUrl = normalizeAccountLinkInput(input.uidOrUrl);
+    const sourceUrl = normalizeAccountLinkInput(input.sourceUrl);
+    const existing = !uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
     if (existing) return NextResponse.json(await getAccountSummary(existing));
 
-    const uid = await resolveAccountUid(input.platform, input.name, input.uidOrUrl);
+    const uid = await resolveAccountUid(input.platform, input.name, uidOrUrl);
     const account = await upsertAccount({
       platform: input.platform,
       name: input.name,
       uid,
-      sourceUrl: input.sourceUrl || input.uidOrUrl || input.name
+      sourceUrl: sourceUrl || uidOrUrl || input.name
     });
 
     return NextResponse.json(await getAccountSummary(account));
@@ -65,6 +68,10 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+}
+
+function normalizeAccountLinkInput(input?: string) {
+  return input ? normalizeLinkInput(input, { kind: "account" }) : "";
 }
 
 export async function DELETE(request: Request) {

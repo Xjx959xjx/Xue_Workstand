@@ -7,7 +7,7 @@ import type { FeedbackInput } from "./FeedbackProvider";
 import { useFeedback } from "./FeedbackProvider";
 import { getJob, getJobs, startJob } from "@/lib/client";
 import { formatJobErrorMessage } from "@/lib/job-messages";
-import type { JobListItem, JobRecord, JobStartInput } from "@/lib/types";
+import type { JobKind, JobListItem, JobRecord, JobStartInput } from "@/lib/types";
 import { useLibrary } from "./LibraryProvider";
 
 type TaskContextValue = {
@@ -25,6 +25,7 @@ const NOTIFIED_STORAGE_KEY = "style-workbench-notified-jobs";
 const ACTIVE_POLL_INTERVAL_MS = 3000;
 const IDLE_POLL_INTERVAL_MS = 30000;
 const HIDDEN_POLL_INTERVAL_MS = 60000;
+const TASKS_CHANGED_EVENT = "style-workbench:tasks-changed";
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -106,6 +107,14 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     refreshJobs();
   }, [refreshJobs]);
 
+  useEffect(() => {
+    const onTasksChanged = () => {
+      void refreshJobs();
+    };
+    window.addEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
+    return () => window.removeEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
+  }, [refreshJobs]);
+
   const activeJobs = useMemo(
     () => jobs.filter((job) => job.status === "queued" || job.status === "running"),
     [jobs]
@@ -140,6 +149,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const startTask = useCallback(
     async (input: JobStartInput) => {
       const result = await startJob(input);
+      emitTasksChanged();
       await refreshJobs();
       return result.job;
     },
@@ -170,6 +180,116 @@ export function useTasks() {
   const context = useContext(TaskContext);
   if (!context) throw new Error("useTasks must be used inside TaskProvider");
   return context;
+}
+
+type UseScopedTasksOptions = {
+  href?: string;
+  kinds?: JobKind[];
+  includeRecent?: boolean;
+};
+
+export function useScopedTasks(options: UseScopedTasksOptions = {}) {
+  const kindKey = options.kinds?.join("|") || "";
+  const kindSet = useMemo(() => (kindKey ? new Set(kindKey.split("|") as JobKind[]) : null), [kindKey]);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [pageVisible, setPageVisible] = useState(true);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingRefreshRef = useRef(false);
+  const includeRecent = options.includeRecent ?? true;
+  const recentLimit = includeRecent ? 12 : Number.POSITIVE_INFINITY;
+
+  const refreshJobs = useCallback(async () => {
+    if (refreshPromiseRef.current) {
+      pendingRefreshRef.current = true;
+      return refreshPromiseRef.current;
+    }
+
+    const run = async (): Promise<void> => {
+      try {
+        const summaries = (await getJobs()).jobs.filter((job) => isJobInScope(job, options.href, kindSet));
+        const limitedSummaries = includeRecent ? summaries.slice(0, recentLimit) : summaries.filter((job) => isActiveJob(job));
+        const hydrated = await Promise.all(limitedSummaries.map((job) => hydrateScopedJob(job)));
+        setJobs(hydrated);
+        setError("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "读取任务状态失败");
+      } finally {
+        setLoading(false);
+      }
+
+      if (pendingRefreshRef.current) {
+        pendingRefreshRef.current = false;
+        return run();
+      }
+    };
+
+    refreshPromiseRef.current = run().finally(() => {
+      refreshPromiseRef.current = null;
+    });
+    return refreshPromiseRef.current;
+  }, [includeRecent, kindSet, options.href, recentLimit]);
+
+  useEffect(() => {
+    refreshJobs();
+  }, [refreshJobs]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => setPageVisible(!document.hidden);
+    onVisibilityChange();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  const activeJobs = useMemo(() => jobs.filter((job) => isActiveJob(job)), [jobs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeout = 0;
+
+    const schedule = () => {
+      const delay = pageVisible ? (activeJobs.length ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS) : HIDDEN_POLL_INTERVAL_MS;
+      timeout = window.setTimeout(async () => {
+        await refreshJobs();
+        if (!cancelled) schedule();
+      }, delay);
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [activeJobs.length, pageVisible, refreshJobs]);
+
+  useEffect(() => {
+    const onTasksChanged = () => {
+      void refreshJobs();
+    };
+    window.addEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
+    return () => window.removeEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
+  }, [refreshJobs]);
+
+  const startTask = useCallback(async (input: JobStartInput) => {
+    const result = await startJob(input);
+    emitTasksChanged();
+    await refreshJobs();
+    return result.job;
+  }, [refreshJobs]);
+
+  return useMemo(
+    () => ({
+      jobs,
+      activeJobs,
+      recentJobs: jobs.slice(0, 12),
+      loading,
+      error,
+      refreshJobs,
+      startTask
+    }),
+    [activeJobs, error, jobs, loading, refreshJobs, startTask]
+  );
 }
 
 function handleJobNotifications(
@@ -266,11 +386,31 @@ function shouldHydrateJob(
 }
 
 function isJobRelevantToPath(job: JobListItem, pathname: string) {
-  const href = job.resultRef?.href || job.href || defaultJobHref(job.kind);
-  if (!href) return false;
-  const jobPath = href.split("?")[0] || "/";
-  if (jobPath === "/") return pathname === "/";
-  return pathname === jobPath || pathname.startsWith(`${jobPath}/`);
+  return isJobRelevantToHref(job, pathname);
+}
+
+function isJobRelevantToHref(job: Pick<JobRecord, "kind" | "href" | "resultRef">, targetHref: string) {
+  const relevantHref = job.resultRef?.href || job.href || defaultJobHref(job.kind);
+  if (!relevantHref) return false;
+  const jobPath = relevantHref.split("?")[0] || "/";
+  const targetPath = targetHref.split("?")[0] || "/";
+  if (jobPath === "/") return targetPath === "/";
+  return targetPath === jobPath || targetPath.startsWith(`${jobPath}/`);
+}
+
+function isJobInScope(job: JobListItem, href: string | undefined, kinds: Set<JobKind> | null) {
+  if (kinds && !kinds.has(job.kind)) return false;
+  if (href && !isJobRelevantToHref(job, href)) return false;
+  return true;
+}
+
+async function hydrateScopedJob(job: JobListItem): Promise<JobRecord> {
+  if (!job.hasPartialText && !job.hasResult) return job;
+  try {
+    return (await getJob(job.id)).job;
+  } catch {
+    return job;
+  }
 }
 
 function defaultJobHref(kind: JobRecord["kind"]) {
@@ -332,4 +472,9 @@ export function TaskStatusIcon({ status }: { status: JobRecord["status"] }) {
   if (status === "running" || status === "queued") return <Loader2 aria-hidden="true" size={14} />;
   if (status === "completed") return <CheckCircle2 aria-hidden="true" size={14} />;
   return <XCircle aria-hidden="true" size={14} />;
+}
+
+function emitTasksChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(TASKS_CHANGED_EVENT));
 }

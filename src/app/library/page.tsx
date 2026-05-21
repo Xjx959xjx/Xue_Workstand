@@ -22,14 +22,17 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
-import { useTasks } from "@/components/TaskProvider";
+import { useScopedTasks } from "@/components/TaskProvider";
 import { collectAccount, getHealth } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import type { CollectOrder, Platform } from "@/lib/types";
 
 export default function LibraryPage() {
   const { library, loading, error, refresh } = useLibrary();
-  const { activeJobs, recentJobs, startTask } = useTasks();
+  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+    href: "/library",
+    kinds: ["account-style", "transcribe-video", "batch-transcribe"]
+  });
   const { notify } = useFeedback();
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");

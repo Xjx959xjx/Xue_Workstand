@@ -244,6 +244,38 @@
   gap: 8px;
 }
 
+.writer-history-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.writer-history-editing {
+  align-items: start;
+  cursor: text;
+}
+
+.writer-history-title-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 0 3px;
+  border: 0;
+  border-bottom: 1px dashed var(--line-strong);
+  color: var(--text-strong);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.writer-history-title-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+
+.writer-history-title-input:disabled {
+  opacity: 0.72;
+}
+
 .feishu-success-card {
   display: grid;
   gap: 12px;

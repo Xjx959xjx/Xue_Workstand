@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, Copy, RefreshCw, Save, Search, Upload } from "lucide-react";
+import type { ClipboardEvent } from "react";
+import Link from "next/link";
+import { Activity, Calculator, Copy, RefreshCw, Save, Search, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { getGrossMarginLibrary, saveGrossMarginPriceTable } from "@/lib/client";
+import { getGrossMarginLibrary, saveGrossMarginMonitorRecord, saveGrossMarginPriceTable } from "@/lib/client";
+import { detectVideoPlatform, extractVideoUrl, normalizeVideoUrlInput } from "@/lib/video-links";
 import { GrossMarginDifferenceModal } from "./_components/GrossMarginDifferenceModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
 import type {
@@ -68,6 +71,7 @@ export default function GrossMarginPage() {
   const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [differenceModalOpen, setDifferenceModalOpen] = useState(false);
+  const [splitDeliveryEnabled, setSplitDeliveryEnabled] = useState(false);
   const tables = useMemo(() => library?.tables || [], [library]);
   const table = useMemo(
     () => tables.find((item) => item.platform === platform) || tables[0] || null,
@@ -107,9 +111,10 @@ export default function GrossMarginPage() {
       accountName,
       calculation,
       platform,
+      splitDeliveryEnabled,
       videoUrl
     }),
-    [accountName, calculation, matchedAccount, platform, videoUrl]
+    [accountName, calculation, matchedAccount, platform, splitDeliveryEnabled, videoUrl]
   );
   const configuredPriceCount = table?.items.filter((item) => toAmount(priceInputs[item.id] ?? item.unitPrice) > 0).length || 0;
 
@@ -154,6 +159,22 @@ export default function GrossMarginPage() {
     setAccountName(value);
     const nextAccount = findGrossMarginAccount(platformAccounts, value);
     if (nextAccount) updateOriginalPrice(String(nextAccount.defaultPrice));
+  }
+
+  function handleVideoUrlChange(value: string) {
+    const nextUrl = normalizeVideoUrlInput(value);
+    setVideoUrl(nextUrl);
+    const nextPlatform = detectVideoPlatform(nextUrl);
+    if (nextPlatform && nextPlatform !== platform) {
+      handlePlatformChange(nextPlatform);
+    }
+  }
+
+  function handleVideoUrlPaste(event: ClipboardEvent<HTMLInputElement>) {
+    const extractedUrl = extractVideoUrl(event.clipboardData.getData("text"));
+    if (!extractedUrl) return;
+    event.preventDefault();
+    handleVideoUrlChange(extractedUrl);
   }
 
   function updateOriginalPrice(value: string) {
@@ -217,9 +238,25 @@ export default function GrossMarginPage() {
     }
     try {
       await navigator.clipboard.writeText(reviewDraft);
-      notify({ tone: "success", message: "审核文案已复制" });
+      if (platform !== "bilibili") {
+        notify({ tone: "success", message: "审核文案已复制" });
+        return;
+      }
+      const result = await saveGrossMarginMonitorRecord({
+        platform,
+        accountName: matchedAccount?.name || accountName,
+        videoUrl,
+        sourceText: reviewDraft,
+        targetStats: Object.fromEntries(
+          calculation.lines
+            .filter((line) => line.quantity > 0)
+            .map((line) => [line.service, toAbsoluteMetricValue(line)])
+        )
+      });
+      setLibrary(result.library);
+      notify({ tone: "success", message: "审核文案已复制，监控目标已保存" });
     } catch (error) {
-      notify({ tone: "error", message: error instanceof Error ? error.message : "复制失败" });
+      notify({ tone: "error", message: error instanceof Error ? error.message : "复制或保存监控目标失败" });
     }
   }
 
@@ -391,7 +428,9 @@ export default function GrossMarginPage() {
                     id="gross-video-url"
                     type="url"
                     value={videoUrl}
-                    onChange={(event) => setVideoUrl(event.target.value)}
+                    onBlur={() => handleVideoUrlChange(videoUrl)}
+                    onChange={(event) => handleVideoUrlChange(event.target.value)}
+                    onPaste={handleVideoUrlPaste}
                     placeholder="粘贴视频链接，导出时会带上"
                   />
                 </div>
@@ -544,6 +583,18 @@ export default function GrossMarginPage() {
               <MetricItem label="维护成本占折前" value={formatPercent(calculation.originalPrice ? calculation.maintenanceCost / calculation.originalPrice : 0)} />
             </div>
 
+            <label className={`gross-export-option${splitDeliveryEnabled ? " active" : ""}`}>
+              <input
+                checked={splitDeliveryEnabled}
+                onChange={(event) => setSplitDeliveryEnabled(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                <strong>分两轮投放</strong>
+                <small>第一轮 60%，第二轮 40%，导出时会追加首轮维护目标</small>
+              </span>
+            </label>
+
             <div className="button-row gross-export-row">
               <button aria-label="导入维护模板" className="btn" onClick={() => setImportModalOpen(true)} type="button">
                 <Upload aria-hidden="true" size={15} />
@@ -559,6 +610,10 @@ export default function GrossMarginPage() {
             </div>
 
             <div className="button-row gross-export-row secondary">
+              <Link className="btn" href="/gross-margin/monitor">
+                <Activity aria-hidden="true" size={15} />
+                打开监控板
+              </Link>
               <button className="btn" onClick={() => setDifferenceModalOpen(true)} type="button">
                 <Search aria-hidden="true" size={15} />
                 查询差额
@@ -816,20 +871,24 @@ function buildGrossMarginReview({
   accountName,
   calculation,
   platform,
+  splitDeliveryEnabled,
   videoUrl
 }: {
   account: GrossMarginAccountPrice | null;
   accountName: string;
   calculation: GrossMarginCalculationResult;
   platform: PlatformKey;
+  splitDeliveryEnabled: boolean;
   videoUrl: string;
 }) {
   const lines = new Map(calculation.lines.map((line) => [line.service, line]));
   const displayName = account?.name || accountName.trim();
   const displayVideoUrl = videoUrl.trim();
   const reviewFooter = "@罗娜 @姚琳琳(Lin.) @罗雪莲 @翁林湑(空白) @罗月琴 辛苦审核";
+  const splitRoundLine = splitDeliveryEnabled ? buildSplitRoundLine(lines, platform) : "";
 
   if (platform === "bilibili") {
+    const blueLinkLine = lines.get("blueLink");
     return [
       "【B站】",
       `账号：${displayName}`,
@@ -841,8 +900,9 @@ function buildGrossMarginReview({
       `评论：${formatReviewMetricValue(lines.get("comment"), platform)}`,
       `分享：${formatReviewMetricValue(lines.get("share"), platform)}`,
       `弹幕：${formatReviewMetricValue(lines.get("danmaku"), platform)}`,
-      `蓝链点击：${formatReviewMetricValue(lines.get("blueLink"), platform)}`,
+      ...(blueLinkLine && blueLinkLine.quantity > 0 ? [`蓝链点击：${formatReviewMetricValue(blueLinkLine, platform)}`] : []),
       `维护成本：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`,
+      ...(splitRoundLine ? [splitRoundLine] : []),
       reviewFooter
     ].join("\n");
   }
@@ -860,6 +920,7 @@ function buildGrossMarginReview({
     `转发：${formatReviewMetricValue(lines.get("share"), platform)}`,
     `抖加：${formatReviewMetricValue(lines.get("douPlus"), platform)}`,
     `维护成本预计：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`,
+    ...(splitRoundLine ? [splitRoundLine] : []),
     reviewFooter
   ].join("\n");
 }
@@ -867,6 +928,77 @@ function buildGrossMarginReview({
 function formatReviewLabelSuffix(line?: GrossMarginCalculationLine) {
   const name = formatTypeOptionName(line?.optionName || "");
   return name ? `（${name}）` : "";
+}
+
+function buildSplitRoundLine(
+  lines: Map<GrossMarginServiceKind, GrossMarginCalculationLine>,
+  platform: PlatformKey
+) {
+  const metrics: Array<{ service: GrossMarginServiceKind; label: string }> =
+    platform === "bilibili"
+      ? [
+          { service: "play", label: "播放" },
+          { service: "like", label: "点赞" },
+          { service: "coin", label: "投币" },
+          { service: "favorite", label: "收藏" },
+          { service: "comment", label: "评论" },
+          { service: "share", label: "分享" },
+          { service: "danmaku", label: "弹幕" },
+          { service: "blueLink", label: "蓝链点击" }
+        ]
+      : [
+          { service: "play", label: "播放" },
+          { service: "like", label: "点赞" },
+          { service: "comment", label: "评论" },
+          { service: "favorite", label: "收藏" },
+          { service: "share", label: "转发" },
+          { service: "douPlus", label: "抖加" }
+        ];
+  const summary = metrics
+    .map(({ label, service }) => {
+      const target = formatSplitRoundMetricValue(lines.get(service), 0.6);
+      return target ? `${label}${target}` : "";
+    })
+    .filter(Boolean)
+    .join("，");
+
+  if (!summary) return "分两轮维护：第一轮";
+  return `分两轮维护：第一轮，${summary}`;
+}
+
+function formatSplitRoundMetricValue(line: GrossMarginCalculationLine | undefined, ratio: number) {
+  if (!line || line.quantity <= 0) return "";
+  if (line.service === "douPlus") return `${formatReviewMoney(roundUpToStep(line.quantity * ratio, 1))}元`;
+  const absoluteValue = toAbsoluteMetricValue(line);
+  const roundedValue = roundUpToStep(absoluteValue * ratio, getSplitRoundStep(line.service));
+  return formatSplitRoundCount(line.service, roundedValue);
+}
+
+function toAbsoluteMetricValue(line: GrossMarginCalculationLine) {
+  if (line.quantityUnit === "万") return line.quantity * 10000;
+  if (line.quantityUnit === "千") return line.quantity * 1000;
+  return line.quantity;
+}
+
+function getSplitRoundStep(service: GrossMarginServiceKind) {
+  if (service === "play") return 10000;
+  if (service === "like") return 1000;
+  if (service === "comment" || service === "favorite" || service === "share") return 10;
+  return 1;
+}
+
+function roundUpToStep(value: number, step: number) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.ceil(value / step) * step;
+}
+
+function formatSplitRoundCount(service: GrossMarginServiceKind, value: number) {
+  if (value <= 0) return "";
+  if (service === "play") return `${formatReviewNumber(value / 10000)}万`;
+  if (service === "like" && value >= 10000) {
+    return `${formatReviewNumber(Number((value / 10000).toFixed(1)))}w`;
+  }
+  return formatReviewNumber(value);
 }
 
 function formatBilibiliPlayChannel(line?: GrossMarginCalculationLine) {

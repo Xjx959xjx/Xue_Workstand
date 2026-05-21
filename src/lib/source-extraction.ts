@@ -1,3 +1,5 @@
+import { extractLinksFromInput } from "./link-input";
+
 export const DEFAULT_REWRITE_PROMPT = "按当前选中的账号/项目风格改写，保留素材核心信息和话题角度。";
 
 export type SourceMaterial = {
@@ -71,17 +73,11 @@ function splitSourceBlocks(input: string) {
 }
 
 export function extractSourceUrls(input: string) {
-  return [...input.matchAll(URL_PATTERN)]
-    .map((match) => normalizeUrlToken(match[0]))
-    .filter(Boolean);
+  return extractLinksFromInput(input).map((link) => link.url);
 }
 
 export function extractFirstSourceUrl(input: string) {
   return extractSourceUrls(input)[0] || "";
-}
-
-function normalizeUrlToken(url: string) {
-  return url.replace(/[)\]}>，。！？、；;,.!?]+$/g, "");
 }
 
 function cleanShareText(block: string, urls: string[]) {
@@ -89,6 +85,11 @@ function cleanShareText(block: string, urls: string[]) {
 
   for (const url of urls) {
     text = text.replaceAll(url, " ");
+  }
+
+  for (const link of extractLinksFromInput(block)) {
+    text = text.replaceAll(link.raw, " ");
+    text = text.replaceAll(link.url, " ");
   }
 
   text = text

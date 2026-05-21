@@ -27,18 +27,33 @@ import { nowIso, safeSegment, shortHash } from "./utils";
 type JobRuntime = {
   initialized: boolean;
   active: Map<string, Promise<void>>;
+  records: Map<string, JobRecord>;
+};
+
+type PatchJobOptions = {
+  persist?: boolean;
 };
 
 const globalJobs = globalThis as typeof globalThis & {
   __styleWorkbenchJobs?: JobRuntime;
 };
 
-const runtime =
-  globalJobs.__styleWorkbenchJobs ||
-  (globalJobs.__styleWorkbenchJobs = {
+const runtime = (() => {
+  const existing = globalJobs.__styleWorkbenchJobs;
+  if (existing) {
+    existing.active ||= new Map();
+    existing.records ||= new Map();
+    return existing;
+  }
+
+  const created: JobRuntime = {
     initialized: false,
-    active: new Map()
-  });
+    active: new Map(),
+    records: new Map()
+  };
+  globalJobs.__styleWorkbenchJobs = created;
+  return created;
+})();
 
 const jobWriteQueues = new Map<string, Promise<unknown>>();
 
@@ -73,21 +88,28 @@ async function writeJson(target: string, value: unknown) {
   await fs.rename(temp, target);
 }
 
-async function writeJob(job: JobRecord) {
+async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
+  runtime.records.set(job.id, job);
+  if (options.persist === false) return;
   await writeJson(jobJsonPath(job.id), job);
 }
 
-async function patchJob(jobId: string, patch: Partial<JobRecord>) {
+async function patchJob(jobId: string, patch: Partial<JobRecord>, options: PatchJobOptions = {}) {
   return enqueueJobWrite(jobId, async () => {
-    const current = await getJob(jobId);
+    const current = runtime.records.get(jobId) || (await readJson<JobRecord>(jobJsonPath(jobId)));
+    if (!current) throw new Error("找不到任务记录");
     const next: JobRecord = {
       ...current,
       ...patch,
       updatedAt: nowIso()
     };
-    await writeJob(next);
+    await writeJob(next, options);
     return next;
   });
+}
+
+function patchTransientJob(jobId: string, patch: Partial<JobRecord>) {
+  return patchJob(jobId, patch, { persist: false });
 }
 
 async function enqueueJobWrite<T>(jobId: string, run: () => Promise<T>) {
@@ -116,6 +138,7 @@ async function ensureInitialized() {
   await ensureJobs();
 
   const jobs = await listJobsFromDisk();
+  runtime.records = new Map(jobs.map((job) => [job.id, job]));
   await Promise.all(
     jobs
       .filter((job) => (job.status === "running" || job.status === "queued") && !runtime.active.has(job.id))
@@ -143,12 +166,12 @@ async function listJobsFromDisk() {
   );
   return jobs
     .filter((job): job is JobRecord => Boolean(job))
-    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+    .sort(compareJobsByUpdatedAtDesc);
 }
 
 export async function listJobs() {
   await ensureInitialized();
-  return listJobsFromDisk();
+  return [...runtime.records.values()].sort(compareJobsByUpdatedAtDesc);
 }
 
 export async function listJobSummaries() {
@@ -158,9 +181,12 @@ export async function listJobSummaries() {
 
 export async function getJob(jobId: string) {
   await ensureInitialized();
-  await ensureJobs();
+  const cached = runtime.records.get(jobId);
+  if (cached) return cached;
+
   const job = await readJson<JobRecord>(jobJsonPath(jobId));
   if (!job) throw new Error("找不到任务记录");
+  runtime.records.set(job.id, job);
   return job;
 }
 
@@ -268,7 +294,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     messages: prepared.messages,
     onDelta(delta) {
       partialText += delta;
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "generate",
         message: "正在生成文案",
         progress: Math.min(86, 60 + Math.floor(partialText.length / 120)),
@@ -326,7 +352,7 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
     maxOutputTokens: 3200,
     onDelta(delta) {
       partialText += delta;
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "generate",
         message: "正在生成账号风格卡",
         progress: Math.min(88, 45 + Math.floor(partialText.length / 90)),
@@ -421,14 +447,14 @@ async function runTranscribeVideoJob(jobId: string, start: Extract<JobStartInput
 async function runBatchTranscribeJob(jobId: string, start: Extract<JobStartInput, { kind: "batch-transcribe" }>) {
   const result = await runBatchTranscribe(start.input, {
     onPrepare() {
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "prepare",
         message: "正在读取账号和候选视频",
         progress: 8
       });
     },
     onMediaPreloadStart({ total }) {
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "media-preload",
         message: `正在预取 ${total} 条抖音视频的媒体地址`,
         progress: 12
@@ -436,27 +462,27 @@ async function runBatchTranscribeJob(jobId: string, start: Extract<JobStartInput
     },
     onVideoStart({ index, total, video }) {
       const progress = total ? 18 + Math.round((index / total) * 64) : 70;
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "transcribe",
         message: `正在处理第 ${index + 1}/${total} 条视频：${video.title}`,
         progress
       });
     },
     onVideoResult(video) {
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         message: `已处理：${video.title}`,
         result: { latestVideo: video }
       });
     },
     onStyleStart() {
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "style",
         message: "正在更新账号风格卡",
         progress: 88
       });
     },
     onFinalize() {
-      void patchJob(jobId, {
+      void patchTransientJob(jobId, {
         stage: "finalize",
         message: "正在整理转写结果",
         progress: 98
@@ -586,4 +612,8 @@ function summarizeJobListText(value: string, maxLength: number) {
   const compact = value.replace(/\s+/g, " ").trim();
   if (compact.length <= maxLength) return compact;
   return `${compact.slice(0, maxLength - 1)}…`;
+}
+
+function compareJobsByUpdatedAtDesc(left: JobRecord, right: JobRecord) {
+  return +new Date(right.updatedAt) - +new Date(left.updatedAt);
 }

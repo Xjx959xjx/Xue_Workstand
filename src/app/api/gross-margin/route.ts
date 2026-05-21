@@ -1,9 +1,26 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getBilibiliVideoStatsByUrl, getDouyinVideoStatsByUrl, getDouyinVideoStatsFromAccount, resolveAccountUid } from "@/lib/opencli";
-import { findAccountByName, getGrossMarginLibrary, saveGrossMarginPriceTable, upsertAccount } from "@/lib/storage";
-import type { GrossMarginAccountPrice, GrossMarginDifferenceQueryResult, GrossMarginPriceTable, GrossMarginServiceKind } from "@/lib/types";
+import {
+  deleteGrossMarginMonitorRecord,
+  findAccountByName,
+  getGrossMarginLibrary,
+  getGrossMarginMonitorRecords,
+  resolveGrossMarginMonitorRecord,
+  saveGrossMarginMonitorRecord,
+  saveGrossMarginPriceTable,
+  upsertAccount,
+  upsertGrossMarginMonitorRecord
+} from "@/lib/storage";
+import type {
+  GrossMarginAccountPrice,
+  GrossMarginDifferenceQueryResult,
+  GrossMarginMonitorRecord,
+  GrossMarginPriceTable,
+  GrossMarginServiceKind
+} from "@/lib/types";
 import { extractBvid, extractDouyinAwemeId, extractDouyinSecUid, toNumber } from "@/lib/utils";
+import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey } from "@/lib/video-links";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,7 +50,7 @@ const mutationSchema = z.discriminatedUnion("action", [
     action: z.literal("queryDifference"),
     template: z.string().trim().min(1, "请先粘贴维护模板"),
     platformHint: platformSchema.optional(),
-    videoUrl: z.string().trim().url("请粘贴完整的视频链接").optional(),
+    videoUrl: z.string().trim().optional(),
     manualCurrentStats: z
       .object({
         play: z.coerce.number().finite().min(0).optional(),
@@ -47,6 +64,30 @@ const mutationSchema = z.discriminatedUnion("action", [
         blueLink: z.coerce.number().finite().min(0).optional()
       })
       .optional()
+  }),
+  z.object({
+    action: z.literal("saveMonitorRecord"),
+    platform: platformSchema,
+    accountName: z.string().trim().optional(),
+    videoUrl: z.string().trim().min(1, "请填写视频链接"),
+    sourceText: z.string().min(1, "监控记录缺少维护目标文案"),
+    targetStats: z.record(serviceSchema, z.coerce.number().finite().min(0)).optional()
+  }),
+  z.object({
+    action: z.literal("refreshMonitorRecord"),
+    recordId: z.string().trim().min(1, "缺少监控记录 ID")
+  }),
+  z.object({
+    action: z.literal("refreshMonitorRecords")
+  }),
+  z.object({
+    action: z.literal("updateMonitorPlayTarget"),
+    recordId: z.string().trim().min(1, "缺少监控记录 ID"),
+    target: z.coerce.number().finite().gt(0, "播放量目标必须大于 0").max(100_000_000, "播放量目标过大，请检查输入")
+  }),
+  z.object({
+    action: z.literal("deleteMonitorRecord"),
+    recordId: z.string().trim().min(1, "缺少监控记录 ID")
   })
 ]);
 
@@ -66,6 +107,26 @@ export async function POST(request: Request) {
     const input = mutationSchema.parse(await request.json());
     if (input.action === "queryDifference") {
       return NextResponse.json(await queryGrossMarginDifference(input));
+    }
+    if (input.action === "saveMonitorRecord") {
+      const record = await saveMonitorRecordFromInput(input);
+      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+    }
+    if (input.action === "refreshMonitorRecord") {
+      const record = await refreshMonitorRecord(input.recordId);
+      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+    }
+    if (input.action === "refreshMonitorRecords") {
+      const records = await refreshMonitorRecords();
+      return NextResponse.json({ records, library: await getGrossMarginLibrary() });
+    }
+    if (input.action === "updateMonitorPlayTarget") {
+      const record = await updateMonitorPlayTarget(input.recordId, input.target);
+      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+    }
+    if (input.action === "deleteMonitorRecord") {
+      const result = await deleteGrossMarginMonitorRecord(input.recordId);
+      return NextResponse.json({ ...result, library: await getGrossMarginLibrary() });
     }
     const table = await saveGrossMarginPriceTable(input);
     return NextResponse.json({ table, library: await getGrossMarginLibrary() });
@@ -89,7 +150,8 @@ type DifferencePlatform = GrossMarginPriceTable["platform"];
 
 async function queryGrossMarginDifference(input: z.infer<typeof mutationSchema> & { action: "queryDifference" }) {
   const parsed = parseMaintenanceTemplate(input.template);
-  const url = resolveVideoUrl(input.videoUrl || "", input.template);
+  const resolvedVideo = resolveVideoUrl(input.videoUrl || "", input.template);
+  const url = resolvedVideo.url;
   const platform = resolveDifferencePlatform(url, parsed.platform, input.platformHint);
   const library = platform === "douyin" ? await getGrossMarginLibrary() : null;
   const fetched =
@@ -111,9 +173,114 @@ async function queryGrossMarginDifference(input: z.infer<typeof mutationSchema> 
     templateStats: parsed.stats,
     templateText: input.template,
     url: fetched.url || url,
-    warnings: "warning" in fetched && fetched.warning ? [fetched.warning] : []
+    warnings: [...resolvedVideo.warnings, "warning" in fetched && fetched.warning ? fetched.warning : ""].filter(Boolean)
   });
   return result satisfies GrossMarginDifferenceQueryResult;
+}
+
+async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> & { action: "saveMonitorRecord" }) {
+  const parsed = parseMaintenanceTemplate(input.sourceText);
+  const targetStats = {
+    ...parsed.stats,
+    ...(input.targetStats || {})
+  };
+  const videoUrl = resolveVideoUrl(input.videoUrl, input.sourceText).url;
+  const platform = resolveDifferencePlatform(videoUrl, parsed.platform, input.platform);
+  if (platform !== "bilibili") {
+    throw new Error("监控板目前只记录 B 站维护目标。");
+  }
+  const videoKey = getVideoComparableKey(videoUrl);
+  return upsertGrossMarginMonitorRecord({
+    platform,
+    accountName: input.accountName || parsed.accountName,
+    videoUrl,
+    videoKey,
+    sourceText: input.sourceText,
+    targetStats
+  });
+}
+
+async function refreshMonitorRecord(recordId: string) {
+  const record = await resolveGrossMarginMonitorRecord(recordId);
+  const warnings: string[] = [];
+
+  try {
+    const fetched =
+      record.platform === "bilibili"
+        ? await getBilibiliVideoStatsByUrl(record.videoUrl)
+        : await getDouyinDifferenceStats({
+            accountName: record.accountName,
+            accounts: (await getGrossMarginLibrary()).accounts,
+            url: record.videoUrl
+          });
+    if ("warning" in fetched && fetched.warning) warnings.push(fetched.warning);
+    return saveGrossMarginMonitorRecord({
+      ...record,
+      title: fetched.title || record.title,
+      videoUrl: fetched.url || record.videoUrl,
+      publishedAt: fetched.publishedAt || record.publishedAt,
+      currentStats: normalizeFetchedStatsForMonitor(record.platform, fetched.stats),
+      status: "completed",
+      warnings,
+      lastRefreshedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    return saveGrossMarginMonitorRecord({
+      ...record,
+      status: "failed",
+      warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
+      lastRefreshedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+  }
+}
+
+async function refreshMonitorRecords() {
+  const records = await getGrossMarginMonitorRecords();
+  const refreshed: GrossMarginMonitorRecord[] = [];
+  for (const record of records) {
+    refreshed.push(await refreshMonitorRecord(record.id));
+  }
+  return refreshed;
+}
+
+async function updateMonitorPlayTarget(recordId: string, target: number) {
+  const record = await resolveGrossMarginMonitorRecord(recordId);
+  if (record.platform !== "bilibili") {
+    throw new Error("只有 B 站监控支持修改播放量目标。");
+  }
+  return saveGrossMarginMonitorRecord({
+    ...record,
+    targetStats: {
+      ...record.targetStats,
+      play: Math.round(target)
+    },
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function normalizeFetchedStatsForMonitor(
+  platform: DifferencePlatform,
+  stats: Partial<Record<GrossMarginServiceKind, number>>
+) {
+  if (platform === "bilibili") {
+    return {
+      play: stats.play,
+      like: stats.like,
+      coin: stats.coin,
+      favorite: stats.favorite,
+      comment: stats.comment,
+      share: stats.share,
+      danmaku: stats.danmaku
+    };
+  }
+  return {
+    like: stats.like,
+    comment: stats.comment,
+    favorite: stats.favorite,
+    share: stats.share
+  };
 }
 
 function parseMaintenanceTemplate(template: string) {
@@ -184,6 +351,7 @@ async function getDouyinDifferenceStats(input: {
     platform: "douyin" as const,
     title: "",
     url: input.url,
+    publishedAt: "",
     stats: {},
     warning: error instanceof Error ? error.message : "抖音当前数据抓取失败，请手动补充。"
   }));
@@ -230,6 +398,8 @@ function extractLineValue(lines: string[], label: string) {
 }
 
 function resolveDifferencePlatform(url: string, templatePlatform?: DifferencePlatform, platformHint?: DifferencePlatform) {
+  const platformFromUrl = detectVideoPlatform(url);
+  if (platformFromUrl) return platformFromUrl;
   if (extractBvid(url)) return "bilibili" as const;
   if (extractDouyinAwemeId(url)) return "douyin" as const;
   if (templatePlatform) return templatePlatform;
@@ -238,16 +408,19 @@ function resolveDifferencePlatform(url: string, templatePlatform?: DifferencePla
 }
 
 function resolveVideoUrl(explicitUrl: string, template: string) {
-  const direct = explicitUrl.trim();
-  if (direct) return direct;
+  const direct = extractVideoUrl(explicitUrl) || explicitUrl.trim();
   const urlMatch = extractTemplateUrl(template);
-  if (urlMatch) return urlMatch;
+  const warnings: string[] = [];
+  if (direct && urlMatch && getVideoComparableKey(direct) !== getVideoComparableKey(urlMatch)) {
+    warnings.push("视频链接与维护模板里的链接不一致，已优先使用维护模板里的链接。");
+  }
+  if (urlMatch) return { url: urlMatch, warnings };
+  if (direct) return { url: direct, warnings };
   throw new Error("没有从模板里识别到视频链接，请补充链接后再查询。");
 }
 
 function extractTemplateUrl(template: string) {
-  const matched = template.match(/https?:\/\/[^\s，。；;）)]+/i)?.[0] || "";
-  return matched.replace(/[，。；;,.)）]+$/g, "");
+  return extractVideoUrl(template);
 }
 
 function buildDifferenceResult(input: {
@@ -283,12 +456,17 @@ function buildDifferenceResult(input: {
     .map(({ service, label }) => {
       const current = input.currentStats[service];
       const templateValue = input.templateStats[service];
+      const hasTemplateValue = typeof templateValue === "number" && !Number.isNaN(templateValue);
+
+      if (service === "blueLink" && (!hasTemplateValue || templateValue <= 0)) {
+        return "";
+      }
 
       const hasCurrent = typeof current === "number" && !Number.isNaN(current);
       if (!hasCurrent && service !== "blueLink") {
         warnings.push(`${label} 没有抓到当前数据，暂时按 0 处理。`);
       }
-      if (typeof templateValue !== "number" || Number.isNaN(templateValue)) {
+      if (!hasTemplateValue) {
         warnings.push(`${label} 没有从维护模板里识别到，暂时按 0 处理。`);
       }
 
@@ -299,10 +477,6 @@ function buildDifferenceResult(input: {
 
   if (input.platform === "douyin" && ("play" in input.templateStats || "play" in input.currentStats)) {
     warnings.push("抖音播放量不参与自动差额，已跳过。");
-  }
-
-  if (input.platform === "bilibili" && !("blueLink" in input.currentStats)) {
-    warnings.push("B 站蓝链点击目前没有稳定公开抓取来源，如需精确值请手动补填。");
   }
 
   return {

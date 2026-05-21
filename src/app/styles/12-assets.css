@@ -38,6 +38,7 @@
 .engagement-content-grid {
   display: grid;
   grid-template-columns: minmax(340px, 0.95fr) minmax(420px, 1.05fr);
+  align-items: stretch;
   min-height: calc(100vh - 244px);
 }
 
@@ -57,8 +58,8 @@
 }
 
 .engagement-generator-pane .pane-body {
-  gap: 10px;
-  padding: 9px 10px;
+  gap: 12px;
+  padding: 12px;
 }
 
 .source-tabs {
@@ -104,6 +105,15 @@
 .engagement-source-panel {
   gap: 8px;
   padding: 10px;
+}
+
+.engagement-source-input {
+  min-height: 164px;
+  resize: none;
+}
+
+.engagement-source-summary {
+  justify-content: space-between;
 }
 
 .engagement-draft-search input {
@@ -199,9 +209,22 @@
   gap: 12px;
 }
 
-.engagement-results-pane .asset-text-list {
-  max-height: calc((100vh - 245px) / 2);
-  min-height: 150px;
+.engagement-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.engagement-diagnostics span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 11px;
 }
 
 .engagement-history-pane {

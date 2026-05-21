@@ -217,8 +217,20 @@ export function useWriterGeneration({
     setGenerateProgress(100);
   }, []);
 
+  const clearDraftResult = useCallback(() => {
+    setLastContent("");
+    setLastResearch("");
+    setLastSavedContent("");
+    setLastDraftBase(null);
+    setLastDraftId("");
+    setGenerateStage("");
+    setGenerateProgress(0);
+    setActiveWriteJobId("");
+  }, []);
+
   return {
     canGenerate,
+    clearDraftResult,
     copyLast,
     generateProgress,
     generateStage,

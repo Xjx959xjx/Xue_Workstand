@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteDrafts, getDrafts, saveDraft } from "@/lib/storage";
+import { deleteDrafts, getDrafts, saveDraft, updateDraftTitle } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -46,6 +46,10 @@ const schema = z.union([accountDraftSchema, projectDraftSchema]);
 const deleteSchema = z.object({
   draftIds: z.array(z.string().min(1)).min(1)
 });
+const updateSchema = z.object({
+  draftId: z.string().min(1),
+  title: z.string().trim().min(1)
+});
 
 export async function GET() {
   try {
@@ -77,6 +81,18 @@ export async function DELETE(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "删除草稿失败" },
+      { status: 400 }
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const input = updateSchema.parse(await request.json());
+    return NextResponse.json(await updateDraftTitle(input.draftId, input.title));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "更新草稿名称失败" },
       { status: 400 }
     );
   }

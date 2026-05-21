@@ -22,10 +22,19 @@ export function EngagementResultsPane({
 }: EngagementResultsPaneProps) {
   const activeComments = resultRecord?.comments?.items || [];
   const activeDanmaku = resultRecord?.danmaku?.items || [];
+  const diagnostics = resultRecord?.comments?.diagnostics;
+  const generation = diagnostics?.generation;
 
   return (
     <section className="engagement-result-pane">
       <div className="pane-body engagement-results-pane">
+        {generation ? (
+          <div className="engagement-diagnostics">
+            <span>{generation.mode === "keyword_local" ? "关键词生成" : `${generation.batchCount} 批增强`}</span>
+            <span>完成 {generation.completedCount}/{generation.requestedCount}</span>
+            {generation.mode === "model_batch" ? <span>模型解析 {generation.parsedCount}</span> : null}
+          </div>
+        ) : null}
         <AssetTextList
           empty="生成后会在这里显示评论池。"
           items={activeComments.map((item) => item.text)}

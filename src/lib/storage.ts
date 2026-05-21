@@ -16,9 +16,12 @@ import {
   GrossMarginCategory,
   GrossMarginAccountPrice,
   GrossMarginLibrary,
+  GrossMarginMonitorMetric,
+  GrossMarginMonitorRecord,
   GrossMarginPriceOption,
   GrossMarginPriceTable,
   GrossMarginServiceKind,
+  GrossMarginMonitorStatus,
   GrossMarginTier,
   LibraryOverviewResponse,
   LibraryState,
@@ -100,6 +103,14 @@ function grossMarginPath() {
 
 function grossMarginCategoriesPath() {
   return path.join(grossMarginPath(), "categories");
+}
+
+function grossMarginMonitorRecordsPath() {
+  return path.join(grossMarginPath(), "monitor-records");
+}
+
+function grossMarginMonitorRecordJsonPath(id: string) {
+  return path.join(grossMarginMonitorRecordsPath(), `${id}.json`);
 }
 
 function grossMarginCategoryJsonPath(id: string) {
@@ -205,6 +216,14 @@ function normalizeDraftId(draftId: string) {
   return normalizeStorageSegment(draftId, "草稿 ID");
 }
 
+function normalizeDraftTitle(title: string) {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    throw new Error("草稿名称不能为空");
+  }
+  return normalized;
+}
+
 function normalizeCopySourceId(sourceId: string) {
   return normalizeStorageSegment(sourceId, "文案素材 ID");
 }
@@ -219,6 +238,10 @@ function normalizeGrossMarginCategoryId(categoryId: string) {
 
 function normalizeGrossMarginTierId(tierId: string) {
   return normalizeStorageSegment(tierId, "毛利档位 ID");
+}
+
+function normalizeGrossMarginMonitorRecordId(recordId: string) {
+  return normalizeStorageSegment(recordId, "维护监控记录 ID");
 }
 
 async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
@@ -296,7 +319,8 @@ export async function ensureLibrary() {
     fs.mkdir(copySourcesPath(), { recursive: true }),
     fs.mkdir(engagementPath(), { recursive: true }),
     fs.mkdir(grossMarginPath(), { recursive: true }),
-    fs.mkdir(grossMarginCategoriesPath(), { recursive: true })
+    fs.mkdir(grossMarginCategoriesPath(), { recursive: true }),
+    fs.mkdir(grossMarginMonitorRecordsPath(), { recursive: true })
   ]);
 }
 
@@ -631,6 +655,21 @@ export async function resolveEngagementRecord(recordId: string) {
   return record;
 }
 
+export async function deleteEngagementRecords(recordIds: string[]) {
+  await ensureLibrary();
+  const uniqueIds = [...new Set(recordIds)].filter(Boolean).map(normalizeEngagementRecordId);
+  const deleted: string[] = [];
+
+  for (const recordId of uniqueIds) {
+    const target = engagementRecordJsonPath(recordId);
+    if (!(await exists(target))) continue;
+    await fs.rm(target, { force: true });
+    deleted.push(recordId);
+  }
+
+  return { deleted };
+}
+
 export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
   await ensureLibrary();
   const tables = await Promise.all(
@@ -643,8 +682,92 @@ export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
   return {
     root: grossMarginPath(),
     tables,
-    accounts: normalizeGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath()))
+    accounts: normalizeGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath())),
+    monitorRecords: await getGrossMarginMonitorRecords()
   };
+}
+
+export async function getGrossMarginMonitorRecords() {
+  await ensureLibrary();
+  const files = await fs.readdir(grossMarginMonitorRecordsPath()).catch(() => []);
+  const records = (
+    await Promise.all(
+      files
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => readJson<GrossMarginMonitorRecord>(path.join(grossMarginMonitorRecordsPath(), file)))
+    )
+  ).filter(Boolean) as GrossMarginMonitorRecord[];
+
+  return records
+    .map(normalizeGrossMarginMonitorRecord)
+    .filter((record) => record.platform === "bilibili")
+    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+}
+
+export async function upsertGrossMarginMonitorRecord(input: {
+  platform: GrossMarginPriceTable["platform"];
+  accountName: string;
+  videoUrl: string;
+  videoKey: string;
+  sourceText: string;
+  targetStats: Partial<Record<GrossMarginServiceKind, number>>;
+}) {
+  await ensureLibrary();
+  const now = nowIso();
+  const platform = normalizeGrossMarginPlatform(input.platform);
+  const videoKey = input.videoKey.trim();
+  if (!videoKey) throw new Error("监控记录缺少视频标识");
+  const id = normalizeGrossMarginMonitorRecordId(`${platform}-${safeSegment(videoKey, shortHash(videoKey))}`);
+  const existing = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
+  const record = normalizeGrossMarginMonitorRecord({
+    id,
+    platform,
+    accountName: input.accountName.trim(),
+    videoUrl: input.videoUrl.trim(),
+    videoKey,
+    title: existing?.title,
+    publishedAt: existing?.publishedAt,
+    sourceText: input.sourceText,
+    targetStats: normalizeGrossMarginTargetStats(input.targetStats, platform),
+    currentStats: existing?.currentStats,
+    metrics: [],
+    maxDifferencePercent: 0,
+    highRisk: false,
+    status: existing?.status || "pending",
+    warnings: existing?.warnings || [],
+    lastRefreshedAt: existing?.lastRefreshedAt,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
+  });
+  await writeJson(grossMarginMonitorRecordJsonPath(id), record);
+  return record;
+}
+
+export async function saveGrossMarginMonitorRecord(record: GrossMarginMonitorRecord) {
+  await ensureLibrary();
+  const normalized = normalizeGrossMarginMonitorRecord(record);
+  await writeJson(grossMarginMonitorRecordJsonPath(normalized.id), normalized);
+  return normalized;
+}
+
+export async function resolveGrossMarginMonitorRecord(recordId: string) {
+  await ensureLibrary();
+  const id = normalizeGrossMarginMonitorRecordId(recordId);
+  const record = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
+  if (!record) {
+    throw new Error(`找不到维护监控记录：${id}`);
+  }
+  return normalizeGrossMarginMonitorRecord(record);
+}
+
+export async function deleteGrossMarginMonitorRecord(recordId: string) {
+  await ensureLibrary();
+  const id = normalizeGrossMarginMonitorRecordId(recordId);
+  const target = grossMarginMonitorRecordJsonPath(id);
+  if (await exists(target)) {
+    await fs.rm(target, { force: true });
+  }
+  return { deleted: id };
 }
 
 export async function saveGrossMarginPriceTable(input: {
@@ -1066,6 +1189,22 @@ export async function resolveDraft(draftId: string) {
   const result = accountDraft || projectDraft;
   if (!result) throw new Error(`找不到草稿：${normalizedDraftId}`);
   return result;
+}
+
+export async function updateDraftTitle(draftId: string, title: string) {
+  const normalizedDraftId = normalizeDraftId(draftId);
+  const normalizedTitle = normalizeDraftTitle(title);
+
+  return withDraftAssetsLock(normalizedDraftId, async () => {
+    const resolved = await resolveDraft(normalizedDraftId);
+    const nextDraft: Draft = {
+      ...resolved.draft,
+      title: normalizedTitle,
+      updatedAt: nowIso()
+    };
+    await writeJson(resolved.file, nextDraft);
+    return nextDraft;
+  });
 }
 
 export async function updateDraftAssets(draftId: string, assets: DraftAssets | ((current: DraftAssets) => DraftAssets)) {
@@ -1776,6 +1915,123 @@ function normalizeGrossMarginAccounts(accounts?: GrossMarginAccountPrice[] | nul
     if (a.platform !== b.platform) return a.platform.localeCompare(b.platform);
     return a.name.localeCompare(b.name, "zh-CN");
   });
+}
+
+function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): GrossMarginMonitorRecord {
+  const platform = record.platform === "bilibili" ? "bilibili" : "douyin";
+  const targetStats = normalizeGrossMarginTargetStats(record.targetStats, platform);
+  const currentStats = normalizeGrossMarginCurrentStats(record.currentStats);
+  const metrics = buildGrossMarginMonitorMetrics(platform, targetStats, currentStats);
+  const maxDifferencePercent = metrics.reduce((max, metric) => Math.max(max, metric.differencePercent), 0);
+  const status = normalizeGrossMarginMonitorStatus(record.status);
+
+  return {
+    id: normalizeGrossMarginMonitorRecordId(record.id || `${platform}-${shortHash(record.videoUrl || record.videoKey || nowIso())}`),
+    platform,
+    accountName: record.accountName?.trim() || "",
+    videoUrl: record.videoUrl?.trim() || "",
+    videoKey: record.videoKey?.trim() || record.videoUrl?.trim() || "",
+    title: record.title?.trim() || undefined,
+    publishedAt: record.publishedAt?.trim() || undefined,
+    sourceText: record.sourceText || "",
+    targetStats,
+    currentStats: Object.keys(currentStats).length ? currentStats : undefined,
+    metrics,
+    maxDifferencePercent,
+    highRisk: metrics.some((metric) => metric.highRisk),
+    status,
+    warnings: uniqueStrings(record.warnings || []),
+    lastRefreshedAt: record.lastRefreshedAt || undefined,
+    createdAt: record.createdAt || nowIso(),
+    updatedAt: record.updatedAt || record.createdAt || nowIso()
+  };
+}
+
+function normalizeGrossMarginMonitorStatus(status?: GrossMarginMonitorStatus) {
+  if (status === "completed" || status === "failed" || status === "pending") return status;
+  return "pending";
+}
+
+function normalizeGrossMarginTargetStats(
+  stats: Partial<Record<GrossMarginServiceKind, number>> | undefined,
+  platform: GrossMarginPriceTable["platform"]
+) {
+  const allowedServices =
+    platform === "bilibili"
+      ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink"] as const)
+      : (["like", "comment", "favorite", "share"] as const);
+  const normalized: Partial<Record<GrossMarginServiceKind, number>> = {};
+
+  for (const service of allowedServices) {
+    const value = normalizeGrossMarginMetricValue(stats?.[service]);
+    if (value <= 0) continue;
+    if (service === "blueLink" && value <= 0) continue;
+    normalized[service] = value;
+  }
+
+  return normalized;
+}
+
+function normalizeGrossMarginCurrentStats(stats: Partial<Record<GrossMarginServiceKind, number>> | undefined) {
+  const normalized: Partial<Record<GrossMarginServiceKind, number>> = {};
+  for (const service of grossMarginServices) {
+    if (!(service in (stats || {}))) continue;
+    normalized[service] = normalizeGrossMarginMetricValue(stats?.[service]);
+  }
+  return normalized;
+}
+
+function normalizeGrossMarginMetricValue(value: number | undefined) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(Number(value)));
+}
+
+function buildGrossMarginMonitorMetrics(
+  platform: GrossMarginPriceTable["platform"],
+  targetStats: Partial<Record<GrossMarginServiceKind, number>>,
+  currentStats?: Partial<Record<GrossMarginServiceKind, number>>
+): GrossMarginMonitorMetric[] {
+  const services =
+    platform === "bilibili"
+      ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink"] as const)
+      : (["like", "comment", "favorite", "share"] as const);
+
+  return services
+    .map((service) => {
+      const target = targetStats[service] || 0;
+      if (target <= 0) return null;
+      const hasCurrent = Boolean(currentStats && service in currentStats);
+      const current = hasCurrent ? currentStats?.[service] || 0 : undefined;
+      const difference = hasCurrent ? Math.max(0, target - (current ?? 0)) : 0;
+      const differencePercent = hasCurrent && target > 0 ? difference / target : 0;
+      return {
+        service,
+        label: formatGrossMarginMonitorServiceLabel(service, platform),
+        target,
+        current,
+        difference,
+        differencePercent,
+        highRisk: hasCurrent && differencePercent >= 0.7,
+        manualOnly: service === "blueLink"
+      } satisfies GrossMarginMonitorMetric;
+    })
+    .filter(Boolean) as GrossMarginMonitorMetric[];
+}
+
+function formatGrossMarginMonitorServiceLabel(service: GrossMarginServiceKind, platform: GrossMarginPriceTable["platform"]) {
+  if (service === "play") return "播放量";
+  if (service === "like") return "点赞";
+  if (service === "coin") return "投币";
+  if (service === "favorite") return "收藏";
+  if (service === "comment") return "评论";
+  if (service === "share") return platform === "douyin" ? "转发" : "分享";
+  if (service === "danmaku") return "弹幕";
+  if (service === "blueLink") return "蓝链点击";
+  return "抖加";
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function getDefaultGrossMarginPriceOptions(

@@ -13,9 +13,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
-import { useTasks } from "@/components/TaskProvider";
+import { useScopedTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { getDrafts } from "@/lib/client";
+import { deleteDrafts, getDrafts, renameDraft } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import type { Draft } from "@/lib/types";
@@ -32,7 +32,10 @@ function WriterPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { library, loading, refresh } = useLibrary();
-  const { activeJobs, recentJobs, startTask } = useTasks();
+  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+    href: "/writer",
+    kinds: ["write-copy"]
+  });
   const { notify } = useFeedback();
   const [targetType, setTargetType] = useState<"account" | "project">("account");
   const [accountId, setAccountId] = useState("");
@@ -83,6 +86,7 @@ function WriterPageContent() {
 
   const {
     canGenerate,
+    clearDraftResult,
     copyLast,
     generateProgress,
     generateStage,
@@ -194,6 +198,79 @@ function WriterPageContent() {
     [loadDraftResult, router]
   );
 
+  const handleDeleteHistoryDraft = useCallback(
+    async (draft: Draft) => {
+      const remainingDrafts = historyDrafts.filter((item) => item.id !== draft.id);
+
+      try {
+        await deleteDrafts([draft.id]);
+        setFullDrafts((current) => (current || []).filter((item) => item.id !== draft.id));
+
+        if (draft.id === lastDraftId) {
+          const replacement = remainingDrafts[0] || null;
+          if (replacement) {
+            handleSelectHistoryDraft(replacement);
+          } else {
+            loadedDraftParamRef.current = "";
+            clearDraftResult();
+            setPrompt("");
+            setSourceText("");
+            const params = new URLSearchParams({
+              targetType,
+              mode
+            });
+            if (targetType === "project") {
+              const nextProjectId = selectedProject?.id || projectId;
+              if (nextProjectId) params.set("projectId", nextProjectId);
+            } else {
+              const nextAccountId = selectedAccount?.id || accountId;
+              if (nextAccountId) params.set("accountId", nextAccountId);
+            }
+            router.replace(`/writer?${params.toString()}`, { scroll: false });
+          }
+        }
+
+        notify({ tone: "success", message: "草稿已删除。" });
+        void refresh().catch(() => undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "删除草稿失败";
+        notify({ tone: "error", message });
+        throw error;
+      }
+    },
+    [
+      accountId,
+      clearDraftResult,
+      handleSelectHistoryDraft,
+      historyDrafts,
+      lastDraftId,
+      mode,
+      notify,
+      projectId,
+      refresh,
+      router,
+      selectedAccount?.id,
+      selectedProject?.id,
+      targetType
+    ]
+  );
+
+  const handleRenameHistoryDraft = useCallback(
+    async (draft: Draft, title: string) => {
+      try {
+        const updatedDraft = await renameDraft({ draftId: draft.id, title });
+        setFullDrafts((current) => mergeDraftLists(current || [], [updatedDraft]));
+        notify({ tone: "success", message: "草稿名称已更新。" });
+        void refresh().catch(() => undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "更新草稿名称失败";
+        notify({ tone: "error", message });
+        throw error;
+      }
+    },
+    [notify, refresh]
+  );
+
   if (!loading && !library?.accounts.length && !library?.projects.length) {
     return (
       <div className="page writer-page">
@@ -223,7 +300,7 @@ function WriterPageContent() {
             </span>
             <span>对话写作</span>
           </h1>
-          <p className="subtle">选择引用风格，填写主题或原文，生成后会自动保存到历史记录，也可发布飞书或继续生成评论。</p>
+          <p className="subtle">选择引用风格，填写主题或原文。结果会先实时显示，任务完成后自动保存到历史记录，也可继续发布飞书或生成评论。</p>
         </div>
         <div className="stat-row">
           <span className="stat-pill">{library?.accounts.length || 0} 个账号</span>
@@ -391,6 +468,9 @@ function WriterPageContent() {
                   <div className="progress-track" aria-hidden="true">
                     <div className="progress-fill" style={{ width: `${generateProgress}%` }} />
                   </div>
+                  <p className="subtle" style={{ margin: "8px 0 0" }}>
+                    当前展示的是实时输出，只有任务完成后才会进入历史记录。
+                  </p>
                 </div>
               ) : null}
               <div className={`result-box ${lastContent ? "" : "empty"}`}>
@@ -418,6 +498,8 @@ function WriterPageContent() {
         <WriterHistoryPanel
           drafts={historyDrafts}
           loading={historyLoading}
+          onDeleteDraft={handleDeleteHistoryDraft}
+          onRenameDraft={handleRenameHistoryDraft}
           selectedDraftId={lastDraftId}
           onSelectDraft={handleSelectHistoryDraft}
         />

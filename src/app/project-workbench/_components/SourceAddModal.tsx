@@ -62,7 +62,7 @@ export function SourceAddModal({
               disabled={locked}
               value={linkInput}
               onChange={(event) => onLinkInputChange(event.target.value)}
-              placeholder="每行一个 B站 / 抖音链接"
+              placeholder="每行一个 B站 / 抖音链接，也可以直接粘贴分享文案"
             />
           </label>
 

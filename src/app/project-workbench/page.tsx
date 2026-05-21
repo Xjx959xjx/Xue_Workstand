@@ -7,7 +7,7 @@ import { ArrowRight, CheckCircle2, CircleDashed, FileText, FolderKanban, PenLine
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
-import { useTasks } from "@/components/TaskProvider";
+import { useScopedTasks } from "@/components/TaskProvider";
 import { deleteCopySources, getCopySources, refreshCopySources, saveProjectStyle, transcribeCopySource, upsertProject } from "@/lib/client";
 import { cachedGetProjectDetail, invalidateProjectDetail } from "@/lib/detail-cache";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
@@ -32,7 +32,10 @@ type WorkbenchSnapshot = {
 
 export default function ProjectWorkbenchPage() {
   const { library, loading, error, refresh } = useLibrary();
-  const { activeJobs, recentJobs, startTask } = useTasks();
+  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+    href: "/project-workbench",
+    kinds: ["project-style"]
+  });
   const { notify } = useFeedback();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [projectName, setProjectName] = useState("");

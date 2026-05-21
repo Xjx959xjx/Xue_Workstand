@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createJob, listJobSummaries } from "@/lib/jobs";
-import { extractFirstSourceUrl } from "@/lib/source-extraction";
+import { createUrlPreprocessor } from "@/lib/link-input";
 import { platforms } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const urlSchema = z.preprocess(
-  (value) => (typeof value === "string" ? extractFirstSourceUrl(value) || value.trim() : value),
+  createUrlPreprocessor(),
   z.string().url("链接格式不正确，请粘贴完整的 http(s) 地址。")
 );
 

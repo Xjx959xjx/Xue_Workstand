@@ -2,6 +2,7 @@
 
 import { memo, type RefObject } from "react";
 import { Plus } from "lucide-react";
+import { normalizeLinkInput } from "@/lib/link-input";
 import type { Platform } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
 
@@ -76,7 +77,15 @@ export const LibraryAccountModal = memo(function LibraryAccountModal({
             id="new-account-uid-or-url"
             name="uidOrUrl"
             value={newAccountUidOrUrl}
+            onBlur={() => onNewAccountUidOrUrlChange(normalizeLinkInput(newAccountUidOrUrl, { kind: "account" }))}
             onChange={(event) => onNewAccountUidOrUrlChange(event.target.value)}
+            onPaste={(event) => {
+              const nextValue = normalizeLinkInput(event.clipboardData.getData("text"), { kind: "account" });
+              if (nextValue) {
+                event.preventDefault();
+                onNewAccountUidOrUrlChange(nextValue);
+              }
+            }}
             placeholder="可留空用 opencli 搜索；也可直接填写 UID / sec_uid / 主页链接…"
           />
         </div>

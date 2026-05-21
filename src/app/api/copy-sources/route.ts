@@ -10,13 +10,14 @@ import {
 } from "@/lib/storage";
 import { resolveLinkSourceMedia, transcribeLinkSource } from "@/lib/transcription";
 import { analyzeCopySourceMaterial } from "@/lib/material-analysis";
+import { createUrlPreprocessor } from "@/lib/link-input";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const transcribeSchema = z.object({
   action: z.literal("transcribe").optional(),
-  url: z.string().url(),
+  url: z.preprocess(createUrlPreprocessor({ kind: "video" }), z.string().url()),
   titleHint: z.string().optional(),
   analyzeVideo: z.boolean().optional()
 });

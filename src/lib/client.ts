@@ -12,7 +12,9 @@ import {
   GrossMarginDifferenceQueryInput,
   GrossMarginDifferenceQueryResult,
   GrossMarginLibrary,
+  GrossMarginMonitorRecord,
   GrossMarginPriceTable,
+  GrossMarginServiceKind,
   JobListItem,
   JobRecord,
   JobStartInput,
@@ -236,6 +238,47 @@ export function queryGrossMarginDifference(input: GrossMarginDifferenceQueryInpu
   return requestJson<GrossMarginDifferenceQueryResult>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "queryDifference", ...input })
+  });
+}
+
+export function saveGrossMarginMonitorRecord(input: {
+  platform: GrossMarginPriceTable["platform"];
+  accountName: string;
+  videoUrl: string;
+  sourceText: string;
+  targetStats: Partial<Record<GrossMarginServiceKind, number>>;
+}) {
+  return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "saveMonitorRecord", ...input })
+  });
+}
+
+export function refreshGrossMarginMonitorRecord(recordId: string) {
+  return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "refreshMonitorRecord", recordId })
+  });
+}
+
+export function refreshGrossMarginMonitorRecords() {
+  return requestJson<{ records: GrossMarginMonitorRecord[]; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "refreshMonitorRecords" })
+  });
+}
+
+export function updateGrossMarginMonitorPlayTarget(recordId: string, target: number) {
+  return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "updateMonitorPlayTarget", recordId, target })
+  });
+}
+
+export function deleteGrossMarginMonitorRecord(recordId: string) {
+  return requestJson<{ deleted: string; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "deleteMonitorRecord", recordId })
   });
 }
 
@@ -666,6 +709,16 @@ export function saveDraft(input: DraftInput) {
   });
 }
 
+export function renameDraft(input: { draftId: string; title: string }) {
+  return requestJson<Draft>("/api/drafts", {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  }).then((draft) => {
+    rememberDrafts([draft]);
+    return draft;
+  });
+}
+
 export function getDrafts() {
   if (draftsCache) return Promise.resolve(draftsCache);
   if (draftsRequest) return draftsRequest;
@@ -699,6 +752,13 @@ export function deleteDrafts(draftIds: string[]) {
       };
     }
     return result;
+  });
+}
+
+export function deleteEngagementRecords(recordIds: string[]) {
+  return requestJson<{ deleted: string[] }>("/api/engagement", {
+    method: "DELETE",
+    body: JSON.stringify({ recordIds })
   });
 }
 

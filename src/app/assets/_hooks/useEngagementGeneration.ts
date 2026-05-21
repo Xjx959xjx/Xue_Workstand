@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { hasSourceInput, type BusyState } from "../_components/asset-view-utils";
-import type { Draft, EngagementRecord, EngagementSourceType, JobRecord, JobStartInput } from "@/lib/types";
+import { extractFirstLinkFromInput, normalizeLinkInput } from "@/lib/link-input";
+import type { EngagementRecord, JobRecord, JobStartInput } from "@/lib/types";
+import type { BusyState } from "../_components/asset-view-utils";
 
 type UseEngagementGenerationInput = {
   activeJobs: JobRecord[];
@@ -11,12 +12,8 @@ type UseEngagementGenerationInput = {
   includeComments: boolean;
   includeDanmaku: boolean;
   recentJobs: JobRecord[];
-  selectedDraft: Draft | null;
-  sourceType: EngagementSourceType;
+  sourceInput: string;
   startTask: (input: JobStartInput) => Promise<JobRecord>;
-  textInput: string;
-  textTitle: string;
-  urlInput: string;
   busy: BusyState;
   setBusy: Dispatch<SetStateAction<BusyState>>;
   setNotice: Dispatch<SetStateAction<string>>;
@@ -30,27 +27,23 @@ export function useEngagementGeneration({
   includeComments,
   includeDanmaku,
   recentJobs,
-  selectedDraft,
   setBusy,
   setNotice,
-  sourceType,
-  startTask,
-  textInput,
-  textTitle,
-  urlInput
+  sourceInput,
+  startTask
 }: UseEngagementGenerationInput) {
   const [resultRecord, setResultRecord] = useState<EngagementRecord | null>(null);
   const [activeEngagementJobId, setActiveEngagementJobId] = useState("");
   const [handledEngagementJobIds, setHandledEngagementJobIds] = useState<string[]>([]);
-  const activeTitle = resultRecord?.title || selectedDraft?.title || "评论生成";
+  const trimmedSource = sourceInput.trim();
+  const activeTitle = resultRecord?.title || trimmedSource.slice(0, 32) || "评论生成";
 
   const engagementJob = useMemo(
     () => findTaskJob([...activeJobs, ...recentJobs], activeEngagementJobId, "engagement"),
     [activeEngagementJobId, activeJobs, recentJobs]
   );
   const isGenerating = Boolean(engagementJob && (engagementJob.status === "queued" || engagementJob.status === "running"));
-  const canGenerate =
-    !busy && !isGenerating && (includeComments || includeDanmaku) && hasSourceInput(sourceType, selectedDraft, textInput, urlInput);
+  const canGenerate = !busy && !isGenerating && (includeComments || includeDanmaku) && Boolean(trimmedSource);
 
   useEffect(() => {
     if (!engagementJob) return;
@@ -83,59 +76,60 @@ export function useEngagementGeneration({
       return;
     }
 
+    const rawSource = trimmedSource;
+    if (!rawSource) {
+      setNotice("请先输入链接或文案。");
+      return;
+    }
+
+    const normalizedUrl = normalizeLinkInput(rawSource, { kind: "video" });
+    const extractedUrl = extractFirstLinkFromInput(rawSource, { kind: "video" });
+    const strippedSource = rawSource.replace(/[)\]}>，。！？、；;,.!?）】\]]+$/g, "").trim();
+    const strippedNoScheme = strippedSource.replace(/^https?:\/\//i, "");
+    const normalizedNoScheme = normalizedUrl.replace(/^https?:\/\//i, "");
+    const isUrl = Boolean(extractedUrl) && strippedNoScheme === normalizedNoScheme;
+    const input = isUrl
+      ? {
+          sourceType: "url" as const,
+          url: normalizedUrl,
+          includeComments,
+          commentCount,
+          includeDanmaku,
+          danmakuCount
+        }
+      : {
+          sourceType: "text" as const,
+          text: rawSource,
+          includeComments,
+          commentCount,
+          includeDanmaku,
+          danmakuCount
+        };
+
     setBusy("generate");
     setNotice("");
     try {
-      const options = {
-        includeComments,
-        commentCount,
-        includeDanmaku,
-        danmakuCount
-      };
-      const input =
-        sourceType === "draft"
-          ? {
-              sourceType,
-              draftId: selectedDraft?.id || "",
-              ...options
-            }
-          : sourceType === "text"
-            ? {
-                sourceType,
-                title: textTitle,
-                text: textInput,
-                ...options
-              }
-            : {
-                sourceType,
-                url: urlInput,
-                ...options
-              };
       const job = await startTask({
         kind: "engagement",
         title: "生成评论素材",
-        inputSummary: activeTitle,
+        inputSummary: isUrl ? normalizedUrl : rawSource.slice(0, 48),
         href: "/assets",
         input
       });
       setActiveEngagementJobId(job.id);
     } catch (err) {
+      setBusy("");
       setNotice(err instanceof Error ? err.message : "生成评论失败，请检查输入和模型配置。");
     }
   }, [
-    activeTitle,
     commentCount,
     danmakuCount,
     includeComments,
     includeDanmaku,
-    selectedDraft?.id,
     setBusy,
     setNotice,
-    sourceType,
     startTask,
-    textInput,
-    textTitle,
-    urlInput
+    trimmedSource
   ]);
 
   return {
@@ -156,5 +150,9 @@ function buildSuccessMessage(record: EngagementRecord) {
 }
 
 function findTaskJob(jobs: JobRecord[], jobId: string, kind: JobRecord["kind"]) {
-  return jobs.find((job) => job.id === jobId && job.kind === kind) || jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) || null;
+  return (
+    jobs.find((job) => job.id === jobId && job.kind === kind) ||
+    jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) ||
+    null
+  );
 }

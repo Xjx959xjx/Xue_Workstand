@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateEngagement } from "@/lib/engagement";
-import { extractFirstSourceUrl } from "@/lib/source-extraction";
+import { createUrlPreprocessor } from "@/lib/link-input";
+import { deleteEngagementRecords } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const urlSchema = z.preprocess(
-  (value) => (typeof value === "string" ? extractFirstSourceUrl(value) || value.trim() : value),
+  createUrlPreprocessor({ kind: "video" }),
   z.string().url("链接格式不正确，请粘贴完整的 http(s) 地址。")
 );
 
@@ -36,6 +37,9 @@ const schema = z.discriminatedUnion("sourceType", [
     ...optionsSchema
   })
 ]);
+const deleteSchema = z.object({
+  recordIds: z.array(z.string().min(1)).min(1)
+});
 
 export async function POST(request: Request) {
   try {
@@ -44,6 +48,18 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { error: formatEngagementError(error) },
+      { status: 400 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const input = deleteSchema.parse(await request.json());
+    return NextResponse.json(await deleteEngagementRecords(input.recordIds));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "删除互动素材失败" },
       { status: 400 }
     );
   }

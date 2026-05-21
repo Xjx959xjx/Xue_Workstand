@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { ClipboardEvent, KeyboardEvent } from "react";
 import { Copy, Search, X } from "lucide-react";
 import { isBackdropEvent } from "@/components/dialog-events";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { queryGrossMarginDifference } from "@/lib/client";
+import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey, normalizeVideoUrlInput } from "@/lib/video-links";
 import type { GrossMarginDifferenceQueryResult, GrossMarginPriceTable, GrossMarginServiceKind } from "@/lib/types";
 
 type PlatformKey = GrossMarginPriceTable["platform"];
@@ -36,6 +37,15 @@ export function GrossMarginDifferenceModal({
   const [detectedPlatform, setDetectedPlatform] = useState<PlatformKey>(platform);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<GrossMarginDifferenceQueryResult | null>(null);
+  const templateUrl = useMemo(() => extractTemplateUrl(template), [template]);
+  const normalizedTemplateUrl = useMemo(() => normalizeVideoUrlInput(templateUrl), [templateUrl]);
+  const normalizedVideoUrl = useMemo(() => normalizeVideoUrlInput(videoUrl), [videoUrl]);
+  const effectiveUrl = normalizedTemplateUrl || normalizedVideoUrl;
+  const linkMismatch = Boolean(
+    normalizedTemplateUrl &&
+      normalizedVideoUrl &&
+      getVideoComparableKey(normalizedTemplateUrl) !== getVideoComparableKey(normalizedVideoUrl)
+  );
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -49,15 +59,15 @@ export function GrossMarginDifferenceModal({
     () => serviceLabels.filter((item) => item.platforms.includes(detectedPlatform)),
     [detectedPlatform]
   );
-  const canSubmit = Boolean(template.trim()) && Boolean(videoUrl.trim() || extractTemplateUrl(template));
+  const canSubmit = Boolean(template.trim()) && Boolean(effectiveUrl) && !linkMismatch;
 
   function handleTemplateChange(value: string) {
     setTemplate(value);
     setResult(null);
 
     const extractedUrl = extractTemplateUrl(value);
-    if (extractedUrl && !videoUrl.trim()) {
-      setVideoUrl(extractedUrl);
+    if (extractedUrl) {
+      setVideoUrl(normalizeVideoUrlInput(extractedUrl));
     }
 
     const nextPlatform = detectPlatform(extractedUrl || videoUrl, value);
@@ -65,20 +75,31 @@ export function GrossMarginDifferenceModal({
   }
 
   function handleVideoUrlChange(value: string) {
-    setVideoUrl(value);
+    const nextUrl = normalizeVideoUrlInput(value);
+    setVideoUrl(nextUrl);
     setResult(null);
-    const nextPlatform = detectPlatform(value, template);
+    const nextPlatform = detectPlatform(nextUrl, template);
     if (nextPlatform) setDetectedPlatform(nextPlatform);
   }
 
+  function handleVideoUrlPaste(event: ClipboardEvent<HTMLInputElement>) {
+    const extractedUrl = extractVideoUrl(event.clipboardData.getData("text"));
+    if (!extractedUrl) return;
+    event.preventDefault();
+    handleVideoUrlChange(extractedUrl);
+  }
+
   async function handleSubmit() {
-    const effectiveUrl = videoUrl.trim() || extractTemplateUrl(template);
     if (!template.trim()) {
       notify({ tone: "error", message: "请先粘贴维护模板" });
       return;
     }
     if (!effectiveUrl) {
       notify({ tone: "error", message: "没有从模板里识别到视频链接，请补充链接" });
+      return;
+    }
+    if (linkMismatch) {
+      notify({ tone: "error", message: "模板里的视频链接和下方视频链接不一致，请先确认要查询哪一条。" });
       return;
     }
 
@@ -143,8 +164,9 @@ export function GrossMarginDifferenceModal({
 
         <div className="gross-difference-status">
           <span>{detectedPlatform === "bilibili" ? "B站" : "抖音"}</span>
-          <strong>{videoUrl.trim() ? "已识别链接" : "等待模板"}</strong>
+          <strong>{effectiveUrl ? "已识别链接" : "等待模板"}</strong>
           {detectedPlatform === "douyin" ? <small>不抓播放量</small> : null}
+          {linkMismatch ? <small className="warning">模板链接和输入框链接不一致</small> : null}
           {busy ? <em>抓取中...</em> : null}
         </div>
 
@@ -165,9 +187,14 @@ export function GrossMarginDifferenceModal({
               <input
                 type="url"
                 value={videoUrl}
+                onBlur={() => handleVideoUrlChange(videoUrl)}
                 onChange={(event) => handleVideoUrlChange(event.target.value)}
+                onPaste={handleVideoUrlPaste}
                 placeholder="会从模板自动提取，也可以手动补充"
               />
+              {linkMismatch ? (
+                <small className="field-hint warning">模板里是 {normalizedTemplateUrl}，请清空或改成同一个视频链接后再查。</small>
+              ) : null}
             </label>
 
             <details className="gross-difference-manual">
@@ -236,15 +263,15 @@ export function GrossMarginDifferenceModal({
 }
 
 function detectPlatform(url: string, template: string): PlatformKey | null {
-  if (/BV[0-9A-Za-z]+|bilibili\.com/i.test(url)) return "bilibili";
-  if (/douyin\.com\/video\/\d+|aweme/i.test(url)) return "douyin";
+  const platform = detectVideoPlatform(url);
+  if (platform) return platform;
   if (template.includes("【B站】") || /投币|弹幕|蓝链点击/.test(template)) return "bilibili";
   if (template.includes("【抖音】") || /合作码|抖音ID|抖加|转发/.test(template)) return "douyin";
   return null;
 }
 
 function extractTemplateUrl(template: string) {
-  return (template.match(/https?:\/\/[^\s，。；;）)]+/i)?.[0] || "").replace(/[，。；;,.)）]+$/g, "");
+  return extractVideoUrl(template);
 }
 
 function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {

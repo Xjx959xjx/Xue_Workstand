@@ -5,6 +5,7 @@ import type { KeyboardEvent } from "react";
 import { Check, ClipboardPaste, X } from "lucide-react";
 import { isBackdropEvent } from "@/components/dialog-events";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { detectVideoPlatform, extractVideoUrl } from "@/lib/video-links";
 import type { GrossMarginPriceTable, GrossMarginServiceKind } from "@/lib/types";
 
 type PlatformKey = GrossMarginPriceTable["platform"];
@@ -165,8 +166,8 @@ function parseImportTemplate(template: string, fallbackPlatform: PlatformKey): G
     .map((line) => line.trim())
     .filter(Boolean);
   const accountName = extractLineValue(lines, "账号");
-  const videoUrl = extractTemplateUrl(template) || extractLineValue(lines, "视频链接");
-  const platform = detectPlatform(template, videoUrl, fallbackPlatform);
+  const videoUrl = extractVideoUrl(template) || extractLineValue(lines, "视频链接");
+  const platform = detectVideoPlatform(videoUrl || template) || detectPlatform(template, videoUrl, fallbackPlatform);
   const metrics: GrossMarginImportedMetric[] = [];
 
   for (const line of lines) {
@@ -196,10 +197,6 @@ function parseImportTemplate(template: string, fallbackPlatform: PlatformKey): G
 function extractLineValue(lines: string[], label: string) {
   const pattern = new RegExp(`^${label}\\s*[：:]\\s*(.+)$`);
   return lines.find((line) => pattern.test(line))?.replace(pattern, "$1").trim() || "";
-}
-
-function extractTemplateUrl(template: string) {
-  return (template.match(/https?:\/\/[^\s，。；;）)]+/i)?.[0] || "").replace(/[，。；;,.)）]+$/g, "");
 }
 
 function detectPlatform(template: string, url: string, fallbackPlatform: PlatformKey): PlatformKey {

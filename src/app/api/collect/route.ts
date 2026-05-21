@@ -1,19 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  collectVideos,
-  getDouyinAwemeId,
-  getDouyinVideoDetailMap,
-  hydrateBilibiliVideoStats,
-  resolveAccountUid
-} from "@/lib/opencli";
+import { collectVideos, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
 import { collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
+import { normalizeLinkInput } from "@/lib/link-input";
 import { nowIso } from "@/lib/utils";
 
 export const runtime = "nodejs";
-const DATE_FILTER_CANDIDATE_LIMIT = 50;
-const DOUYIN_CANDIDATE_LIMIT = 500;
+const BILIBILI_CANDIDATE_LIMIT = 50;
+const DOUYIN_CANDIDATE_LIMIT = 120;
+const MIN_LOCAL_SORT_CANDIDATE_LIMIT = 20;
 const MAX_DATE_FILTER_PAGES = 8;
 const collectOrderSchemaValues = [...collectOrders, "like", "click", "stow"] as const;
 const bilibiliCollectOrders = ["views", "likes", "favorites", "comments", "pubdate"] as const;
@@ -33,15 +29,16 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await request.json());
+    const uidOrUrl = input.uidOrUrl ? normalizeLinkInput(input.uidOrUrl, { kind: "account" }) : "";
     const order = normalizeCollectOrder(input.order);
     validateCollectOrder(input.platform, order);
-    const existing = !input.uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
-    const uid = existing?.uid || (await resolveAccountUid(input.platform, input.name, input.uidOrUrl));
+    const existing = !uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
+    const uid = existing?.uid || (await resolveAccountUid(input.platform, input.name, uidOrUrl));
     const account = await upsertAccount({
       platform: input.platform,
       name: input.name,
       uid,
-      sourceUrl: input.uidOrUrl || input.name
+      sourceUrl: uidOrUrl || input.name
     });
 
     const collectPlan = makeCollectPlan(input.platform, input.limit, order, input.fromDate, input.toDate);
@@ -69,21 +66,16 @@ export async function POST(request: Request) {
       platform: input.platform,
       name: input.name,
       uid,
-      sourceUrl: input.uidOrUrl || input.name,
+      sourceUrl: uidOrUrl || input.name,
       lastCollectedAt: nowIso()
     });
 
     const dateFilter = buildDateFilterResult(result.videos, input.fromDate, input.toDate);
-    let filteredVideos = await selectVideosForSave({
+    const filteredVideos = selectVideosForSave({
       videos: dateFilter.filteredVideos,
-      platform: input.platform,
       limit: input.limit,
-      order,
-      hydrateFinalDetails: collectPlan.hydrateFinalDetails
+      order
     });
-    if (input.platform === "douyin") {
-      filteredVideos = await enrichDouyinVideos(updatedAccount, filteredVideos);
-    }
     const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), order);
 
     return NextResponse.json({
@@ -100,30 +92,6 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-}
-
-async function enrichDouyinVideos(account: Awaited<ReturnType<typeof upsertAccount>>, videos: Video[]) {
-  const needsDetail = videos.filter(
-    (video) => video.stats.comments <= 0 || !Array.isArray(video.topComments) || video.topComments.length === 0
-  );
-  if (!needsDetail.length) return videos;
-
-  const detailMap = await getDouyinVideoDetailMap(account, needsDetail, { commentLimit: 10 }).catch(() => new Map());
-  if (!detailMap.size) return videos;
-
-  return videos.map((video) => {
-    const detailKey = getDouyinAwemeId(video) || video.id;
-    const detail = detailMap.get(detailKey);
-    if (!detail) return video;
-    return {
-      ...video,
-      stats: {
-        ...video.stats,
-        comments: detail.commentCount ?? video.stats.comments
-      },
-      topComments: detail.topComments.length ? detail.topComments : video.topComments
-    };
-  });
 }
 
 function normalizeCollectOrder(order: LegacyCollectOrder): CollectOrder {
@@ -151,20 +119,20 @@ function makeCollectPlan(
   order: CollectOrder;
   pageByPubdate: boolean;
   hydrateDetails: boolean;
-  hydrateFinalDetails: boolean;
 } {
   const hasDateFilter = Boolean(fromDate || toDate);
-  const canUseLightweightDateCandidates = platform === "bilibili" && hasDateFilter && order === "pubdate";
-  const candidateLimit =
-    platform === "douyin" ? DOUYIN_CANDIDATE_LIMIT : DATE_FILTER_CANDIDATE_LIMIT;
   const needsLocalMetricSort = order === "likes" || order === "comments";
   return {
-    limit: hasDateFilter || needsLocalMetricSort ? candidateLimit : limit,
+    limit: needsLocalMetricSort ? localSortCandidateLimit(platform, limit) : limit,
     order: hasDateFilter ? "pubdate" : getCollectionOrder(order),
-    pageByPubdate: hasDateFilter,
-    hydrateDetails: !canUseLightweightDateCandidates,
-    hydrateFinalDetails: canUseLightweightDateCandidates
+    pageByPubdate: platform === "bilibili" && hasDateFilter,
+    hydrateDetails: false
   };
+}
+
+function localSortCandidateLimit(platform: Platform, limit: number) {
+  const cap = platform === "douyin" ? DOUYIN_CANDIDATE_LIMIT : BILIBILI_CANDIDATE_LIMIT;
+  return Math.min(cap, Math.max(limit, limit * 2, MIN_LOCAL_SORT_CANDIDATE_LIMIT));
 }
 
 function getCollectionOrder(order: CollectOrder): CollectOrder {
@@ -189,7 +157,7 @@ async function collectDateWindowCandidates(input: {
     const nextPage = await collectVideos({
       platform: "bilibili",
       account: input.account,
-      limit: DATE_FILTER_CANDIDATE_LIMIT,
+      limit: BILIBILI_CANDIDATE_LIMIT,
       order: "pubdate",
       page,
       hydrateDetails: input.hydrateDetails
@@ -201,16 +169,12 @@ async function collectDateWindowCandidates(input: {
   return dedupeVideos(videos);
 }
 
-async function selectVideosForSave(input: {
+function selectVideosForSave(input: {
   videos: Video[];
-  platform: Platform;
   limit: number;
   order: CollectOrder;
-  hydrateFinalDetails: boolean;
 }) {
-  const selected = sortVideos(input.videos, input.order).slice(0, input.limit);
-  if (!input.hydrateFinalDetails || input.platform !== "bilibili") return selected;
-  return Promise.all(selected.map((video) => hydrateBilibiliVideoStats(video)));
+  return sortVideos(input.videos, input.order).slice(0, input.limit);
 }
 
 function shouldStopPaging(videos: Video[], from: Date | null, to: Date | null) {
