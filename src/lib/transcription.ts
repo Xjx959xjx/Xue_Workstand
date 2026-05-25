@@ -9,7 +9,8 @@ import {
   checkDouyinVideoAvailability,
   getBilibiliSubtitle,
   parseOpenCliJsonish,
-  refreshDouyinVideoDownloadUrl
+  refreshDouyinVideoDownloadUrl,
+  resolveOpenCliCommand
 } from "./opencli";
 import { getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
@@ -18,6 +19,14 @@ import { extractBvid } from "./utils";
 
 const execFileAsync = promisify(execFile);
 type Timing = { stage: string; ms: number };
+
+function openCliExecArgs(args: string[]) {
+  const runtime = resolveOpenCliCommand();
+  return {
+    command: runtime.command,
+    args: [...runtime.argsPrefix, ...args]
+  };
+}
 
 export type LinkTranscriptionResult = {
   url: string;
@@ -635,19 +644,22 @@ async function resolveBilibiliLinkMedia(url: string) {
   const workspace = `bilibili-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
 
   try {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "open", [url], {
+    const openArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "open", [url], {
       window: "background"
-    }), {
+    }));
+    await execFileAsync(openArgs.command, openArgs.args, {
       maxBuffer: 1024 * 1024 * 8,
       timeout: 30_000
     });
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]), {
+    const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]));
+    await execFileAsync(waitArgs.command, waitArgs.args, {
       maxBuffer: 1024 * 1024,
       timeout: 12_000
     }).catch(() => undefined);
+    const evalArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "eval", [BILIBILI_LINK_MEDIA_EXTRACT_JS]));
     const { stdout } = await execFileAsync(
-      process.env.OPENCLI_BIN || "opencli",
-      buildOpenCliBrowserArgs(workspace, "eval", [BILIBILI_LINK_MEDIA_EXTRACT_JS]),
+      evalArgs.command,
+      evalArgs.args,
       {
       maxBuffer: 1024 * 1024 * 20,
       timeout: 30_000
@@ -662,7 +674,8 @@ async function resolveBilibiliLinkMedia(url: string) {
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "close"), {
+    const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
+    await execFileAsync(closeArgs.command, closeArgs.args, {
       maxBuffer: 1024 * 1024,
       timeout: 5_000
     }).catch(() => undefined);
@@ -673,19 +686,22 @@ async function resolveDouyinLinkMedia(url: string) {
   const workspace = `douyin-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
 
   try {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "open", [url], {
+    const openArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "open", [url], {
       window: "background"
-    }), {
+    }));
+    await execFileAsync(openArgs.command, openArgs.args, {
       maxBuffer: 1024 * 1024 * 8,
       timeout: 30_000
     });
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
+    const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]));
+    await execFileAsync(waitArgs.command, waitArgs.args, {
       maxBuffer: 1024 * 1024,
       timeout: 10_000
     }).catch(() => undefined);
+    const evalArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]));
     const { stdout } = await execFileAsync(
-      process.env.OPENCLI_BIN || "opencli",
-      buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]),
+      evalArgs.command,
+      evalArgs.args,
       {
       maxBuffer: 1024 * 1024 * 20,
       timeout: 30_000
@@ -700,7 +716,8 @@ async function resolveDouyinLinkMedia(url: string) {
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
-    await execFileAsync(process.env.OPENCLI_BIN || "opencli", buildOpenCliBrowserArgs(workspace, "close"), {
+    const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
+    await execFileAsync(closeArgs.command, closeArgs.args, {
       maxBuffer: 1024 * 1024,
       timeout: 5_000
     }).catch(() => undefined);

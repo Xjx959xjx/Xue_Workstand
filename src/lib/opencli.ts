@@ -67,23 +67,70 @@ type DouyinVideoStatsSnapshot = {
   favoriteCount: number;
   shareCount: number;
   publishedAt?: string;
+  authorName?: string;
+  authorSecUid?: string;
 };
 
 function opencliBin() {
   return process.env.OPENCLI_BIN || "opencli";
 }
 
+export function resolveOpenCliCommand() {
+  const configured = opencliBin().trim() || "opencli";
+  const scriptPath = process.env.OPENCLI_SCRIPT?.trim() || "";
+  const nodeBin = process.env.OPENCLI_NODE_BIN?.trim() || process.execPath;
+
+  if (scriptPath) {
+    return {
+      command: nodeBin,
+      argsPrefix: [scriptPath]
+    };
+  }
+
+  return {
+    command: configured,
+    argsPrefix: []
+  };
+}
+
 async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
-  const { stdout, stderr } = await execFileAsync(opencliBin(), args, {
-    maxBuffer: 1024 * 1024 * 20,
-    timeout: options.timeout
-  });
+  let stdout: string;
+  let stderr: string;
+  const runtime = resolveOpenCliCommand();
+
+  try {
+    const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
+      maxBuffer: 1024 * 1024 * 20,
+      timeout: options.timeout
+    });
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    throw wrapOpenCliError(error);
+  }
 
   if (stderr && stderr.toLowerCase().includes("error")) {
     throw new Error(stderr.trim());
   }
 
   return stdout.trim();
+}
+
+function wrapOpenCliError(error: unknown) {
+  if (isMissingExecutableError(error)) {
+    return new Error("未检测到 opencli。数据维护 / 数据监控页面可以继续使用，但实时刷新 B站/抖音数据前请先运行 install-deps.cmd 安装 opencli。");
+  }
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error("opencli 执行失败");
+}
+
+function isMissingExecutableError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  const message = "message" in error ? String((error as { message?: unknown }).message || "") : "";
+  return code === "ENOENT" || /not found|enoent/i.test(message);
 }
 
 export function buildOpenCliBrowserArgs(
@@ -1013,10 +1060,12 @@ export async function getDouyinVideoStatsByUrl(url: string) {
       platform: "douyin" as const,
       title: detail.title,
       url: resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl,
-      publishedAt: detail.publishedAt,
-      stats: {
-        like: detail.likeCount,
-        comment: detail.commentCount,
+    publishedAt: detail.publishedAt,
+    authorName: detail.authorName,
+    authorSecUid: detail.authorSecUid,
+    stats: {
+      like: detail.likeCount,
+      comment: detail.commentCount,
         favorite: detail.favoriteCount,
         share: detail.shareCount
       }
@@ -1078,20 +1127,25 @@ export async function getDouyinVideoStatsFromAccount(input: {
   account: Account;
   url: string;
   limit?: number;
+  videos?: Video[];
 }) {
   const awemeId = extractDouyinAwemeId(input.url);
   if (!awemeId) {
     throw new Error("没有从链接里解析到抖音视频 ID，请粘贴完整视频链接。");
   }
 
-  const result = await collectVideos({
-    platform: "douyin",
-    account: input.account,
-    limit: input.limit || 500
-  });
-  const matched = result.videos.find((video) => getDouyinAwemeId(video) === awemeId);
+  const videos =
+    input.videos ||
+    (
+      await collectVideos({
+        platform: "douyin",
+        account: input.account,
+        limit: input.limit || 500
+      })
+    ).videos;
+  const matched = videos.find((video) => getDouyinAwemeId(video) === awemeId);
   if (!matched) {
-    throw new Error(`账号「${input.account.name}」最近 ${result.videos.length} 条视频里没有找到这条视频。`);
+    throw new Error(`账号「${input.account.name}」最近 ${videos.length} 条视频里没有找到这条视频。`);
   }
 
   return {
@@ -1197,8 +1251,20 @@ function extractDouyinStatsSnapshotFromNetworkDetail(detail: unknown, awemeId: s
     commentCount: toNumber(statistics.comment_count),
     favoriteCount: toNumber(statistics.collect_count),
     shareCount: toNumber(statistics.share_count),
-    publishedAt: normalizeTimestamp(awemeDetail.create_time || awemeDetail.createTime)
+    publishedAt: normalizeTimestamp(awemeDetail.create_time || awemeDetail.createTime),
+    authorName: extractDouyinAuthorName(awemeDetail),
+    authorSecUid: extractDouyinAuthorSecUid(awemeDetail)
   };
+}
+
+function extractDouyinAuthorName(awemeDetail: Record<string, unknown>) {
+  const author = awemeDetail.author && typeof awemeDetail.author === "object" ? (awemeDetail.author as Record<string, unknown>) : {};
+  return stringField(author.nickname) || stringField(author.name) || stringField(author.unique_id);
+}
+
+function extractDouyinAuthorSecUid(awemeDetail: Record<string, unknown>) {
+  const author = awemeDetail.author && typeof awemeDetail.author === "object" ? (awemeDetail.author as Record<string, unknown>) : {};
+  return stringField(author.sec_uid) || stringField(author.secUid) || stringField(author.sec_user_id);
 }
 
 function parseOpenCliNetworkBody(detail: unknown): unknown {
@@ -1412,7 +1478,9 @@ function buildDouyinStatsExtractJs(awemeId: string) {
     commentCount: Number(statistics.comment_count || 0),
     favoriteCount: Number(statistics.collect_count || 0),
     shareCount: Number(statistics.share_count || 0),
-    publishedAt: awemeDetail.create_time || awemeDetail.createTime || ""
+    publishedAt: awemeDetail.create_time || awemeDetail.createTime || "",
+    authorName: (awemeDetail.author && (awemeDetail.author.nickname || awemeDetail.author.name || awemeDetail.author.unique_id)) || "",
+    authorSecUid: (awemeDetail.author && (awemeDetail.author.sec_uid || awemeDetail.author.secUid || awemeDetail.author.sec_user_id)) || ""
   };
 })()
 `;

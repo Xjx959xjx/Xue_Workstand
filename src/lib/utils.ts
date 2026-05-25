@@ -181,6 +181,15 @@ export function extractDouyinAwemeId(input?: string) {
   const pathMatch = trimmed.match(/\/video\/(\d{10,})/);
   if (pathMatch?.[1]) return pathMatch[1];
 
+  const shareMatch = trimmed.match(/\/aweme\/share\/video\/(\d{10,})/);
+  if (shareMatch?.[1]) return shareMatch[1];
+
+  const queryMatch = trimmed.match(/[?&](?:aweme_id|modal_id|item_id)=(\d{10,})/i);
+  if (queryMatch?.[1]) return queryMatch[1];
+
+  const genericMatch = trimmed.match(/(?:aweme_id|awemeId|modal_id|item_id)["'=:\s/]+(\d{10,})/i);
+  if (genericMatch?.[1]) return genericMatch[1];
+
   return "";
 }
 

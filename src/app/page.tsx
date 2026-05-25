@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
+import { isGrossMarginAppMode } from "@/lib/app-mode";
 
 export default function HomePage() {
-  redirect("/library");
+  redirect(isGrossMarginAppMode() ? "/gross-margin" : "/library");
 }

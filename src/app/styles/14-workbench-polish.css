@@ -1284,7 +1284,7 @@ body,
 }
 
 .gross-margin-workspace {
-  grid-template-columns: minmax(240px, 260px) minmax(0, 1fr) minmax(238px, 260px);
+  grid-template-columns: minmax(250px, 272px) minmax(0, 1fr) minmax(286px, 300px);
   min-height: calc(100vh - 96px);
 }
 
@@ -1303,15 +1303,15 @@ body,
 }
 
 .gross-result-panel {
-  padding: 10px 12px;
+  padding: 14px 16px;
 }
 
 .gross-result-panel strong {
-  font-size: 22px;
+  font-size: 26px;
 }
 
 .gross-result-grid {
-  gap: 6px;
+  gap: 10px;
 }
 
 .gross-result-tools {

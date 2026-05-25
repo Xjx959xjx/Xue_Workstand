@@ -334,7 +334,7 @@ function MonitorCard({
 
       <div className="gross-monitor-risk-line">
         <span
-          className={`gross-monitor-risk-dial ${overallGapTone}`}
+          className={`gross-monitor-risk-dial ${overallGapTone} ${record.platform}`}
           style={{ "--risk-fill": `${overallGap.percent * 100}%` } as CSSProperties}
         >
           <strong>{formatOverallGap(overallGap, record.status)}</strong>

@@ -23,6 +23,14 @@ npm run dev:stop
 
 后台日志写入 `.dev-server/next-dev.log`，该目录不会提交到 git。
 
+如果要把“数据维护”和“数据监控”单独交付给 Windows 用户，使用专用发行模式：
+
+```bash
+npm run package:release -- --preset gross-margin-win
+```
+
+这个专用包不是单文件 `exe`，而是 Windows 便携包：解压后双击 `start.cmd`，浏览器默认打开 `/gross-margin`，并且只保留“数据维护”和“数据监控”两页；其他工作台页面在专用模式下会被自动拦回毛利模块。专用包现在也会内置 `opencli`，目标 Windows 机器不需要再单独安装它。
+
 开发服务器运行时不要同时执行 `npm run build`，Next.js 会复用 `.next` 目录，可能让开发页的 CSS/JS 静态资源短暂 404。若页面看起来像样式丢失，执行：
 
 ```bash
@@ -66,11 +74,19 @@ npm run dev
 npm run package:release
 ```
 
+如果要生成“数据维护 / 数据监控”Windows 专用便携包：
+
+```bash
+WINDOWS_NODE_DIR=/path/to/windows-node npm run package:release -- --preset gross-margin-win
+```
+
 脚本会在临时目录安装依赖并构建 Next.js standalone 产物，输出到 `dist/`：
 
 - `account-style-library-*.tar.gz`：macOS / Linux 交付压缩包。
 - `account-style-library-*.zip`：Windows 优先使用这个压缩包。
 - 同名目录：本机可直接测试的解压目录。
+
+`--preset gross-margin-win` 只生成 Windows `.zip` 和对应目录，不再生成 macOS / Linux `.tar.gz`。打包前需要通过 `WINDOWS_NODE_DIR` 提供一个包含 `node.exe` 的 Windows Node 运行时目录，脚本会把它内置到运行包里。
 
 默认不会把本机 `style-library` 打进包里，避免误发账号素材、转写稿、草稿和监控记录。对方首次启动后会在运行包内创建空的 `style-library`。如果确实要带当前本地数据一起交付，显式执行：
 
@@ -78,10 +94,12 @@ npm run package:release
 npm run package:release -- --include-library
 ```
 
+`--preset gross-margin-win` 固定只复制 `style-library/gross-margin`，不会把整个 `style-library` 打进包里，避免误发其他账号库、草稿和写作素材。当前会优先从你 V1 文案工作台的 `style-library/gross-margin` 复制毛利账号库数据。
+
 对方解压后：
 
 - macOS 双击 `install-deps.command` 检查/安装 Node.js、opencli、ffmpeg，再双击 `start.command`。
 - 终端运行 `./install-deps.sh`、`./start.sh`、`./stop.sh`。
-- Windows 先完整解压 `.zip`，再运行 `install-deps.cmd`、`start.cmd`、`stop.cmd`；不要在压缩包预览窗口里直接双击。
+- Windows 先完整解压 `.zip`，再运行 `install-deps.cmd`、`start.cmd`、`stop.cmd`；不要在压缩包预览窗口里直接双击。`gross-margin-win` 专用包会优先使用包内 `node.exe`，目标机不需要先全局安装 Node。
 
-数据维护 / 数据监控模块不需要大模型；刷新平台数据依赖 `opencli`，无字幕视频转写才需要 `ffmpeg` 和火山转写配置。
+数据维护 / 数据监控模块不需要大模型；专用包已内置 `opencli` 以支持刷新平台数据，无字幕视频转写才需要 `ffmpeg` 和火山转写配置。

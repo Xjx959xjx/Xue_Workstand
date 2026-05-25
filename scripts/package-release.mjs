@@ -5,19 +5,24 @@ import process from "process";
 import { spawn } from "child_process";
 
 const root = process.cwd();
-const args = new Set(process.argv.slice(2));
+const rawArgs = process.argv.slice(2);
+const args = new Set(rawArgs);
+const preset = readOption("--preset") || "portable";
 const includeLibrary = args.has("--include-library");
 const skipInstall = args.has("--skip-install");
 const skipArchive = args.has("--skip-archive");
+const keepWork = args.has("--keep-work");
 const packageJson = JSON.parse(await fs.promises.readFile(path.join(root, "package.json"), "utf8"));
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "-");
-const releaseName = `${packageJson.name || "account-style-library"}-${packageJson.version || "0.0.0"}-portable-${stamp}`;
-const keepWork = args.has("--keep-work");
+const releaseSuffix = preset === "gross-margin-win" ? "gross-margin-win" : "portable";
+const releaseName = `${packageJson.name || "account-style-library"}-${packageJson.version || "0.0.0"}-${releaseSuffix}-${stamp}`;
 const workRoot = path.join(os.tmpdir(), `${packageJson.name || "account-style-library"}-package-work-${process.pid}`);
 const stagingRoot = path.join(workRoot, "source");
 const releaseRoot = path.join(root, "dist", releaseName);
 const tgzArchivePath = `${releaseRoot}.tar.gz`;
 const zipArchivePath = `${releaseRoot}.zip`;
+const presetConfig = getPresetConfig(preset);
+const bundledOpenCliVersion = "1.8.0";
 
 try {
   await main();
@@ -43,7 +48,12 @@ async function main() {
   console.log("构建 Next.js standalone 产物...");
   await run("npm", ["run", "build"], {
     cwd: stagingRoot,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" }
+    env: {
+      ...process.env,
+      NEXT_TELEMETRY_DISABLED: "1",
+      APP_MODE: presetConfig.appMode,
+      APP_START_PATH: presetConfig.startPath
+    }
   });
 
   console.log("组装可交付运行包...");
@@ -51,11 +61,13 @@ async function main() {
 
   if (!skipArchive) {
     console.log("压缩运行包...");
-    await run("tar", ["-czf", tgzArchivePath, "-C", path.dirname(releaseRoot), path.basename(releaseRoot)], { cwd: root });
+    if (presetConfig.archiveTarGz) {
+      await run("tar", ["-czf", tgzArchivePath, "-C", path.dirname(releaseRoot), path.basename(releaseRoot)], { cwd: root });
+    }
     if (await commandExists("zip")) {
       await run("zip", ["-qry", zipArchivePath, path.basename(releaseRoot)], { cwd: path.dirname(releaseRoot) });
-    } else {
-      console.log("未检测到 zip 命令，已跳过 Windows 友好的 .zip 压缩包。");
+    } else if (presetConfig.archiveZip) {
+      console.log("未检测到 zip 命令，已跳过 .zip 压缩包。");
     }
   }
 
@@ -63,21 +75,64 @@ async function main() {
   console.log("打包完成：");
   console.log(`  目录：${releaseRoot}`);
   if (!skipArchive) {
-    console.log(`  macOS/Linux 压缩包：${tgzArchivePath}`);
-    if (await exists(zipArchivePath)) console.log(`  Windows 压缩包：${zipArchivePath}`);
+    if (presetConfig.archiveTarGz && await exists(tgzArchivePath)) {
+      console.log(`  macOS/Linux 压缩包：${tgzArchivePath}`);
+    }
+    if (await exists(zipArchivePath)) {
+      console.log(`  Windows 压缩包：${zipArchivePath}`);
+    }
   }
   console.log("");
-  console.log("交付给别人时，发压缩包即可；Windows 优先发 .zip，解压后运行 start.cmd 或 start.bat。");
+  console.log(presetConfig.finishHint);
   if (keepWork) console.log(`临时构建目录保留在：${workRoot}`);
-  if (!includeLibrary) {
+  if (!includeLibrary && preset !== "gross-margin-win") {
     console.log("注意：本次未包含 style-library 数据。若确实要带当前本地数据，重新执行：npm run package:release -- --include-library");
   }
+}
+
+function getPresetConfig(value) {
+  if (value === "gross-margin-win") {
+    return {
+      preset: value,
+      appMode: "gross-margin",
+      startPath: "/gross-margin",
+      includeLibraryMode: "gross-margin-only",
+      archiveTarGz: false,
+      archiveZip: true,
+      includeMacLaunchers: false,
+      finishHint: "交付给别人时，发 Windows .zip 即可；解压后双击 start.cmd。",
+      readmeTitle: "数据维护/监控 Windows 便携包",
+      brandName: "数据维护监控"
+    };
+  }
+
+  return {
+    preset: "portable",
+    appMode: "workspace",
+    startPath: "/gross-margin",
+    includeLibraryMode: includeLibrary ? "all" : "empty",
+    archiveTarGz: true,
+    archiveZip: true,
+    includeMacLaunchers: true,
+    finishHint: "交付给别人时，发压缩包即可；Windows 优先发 .zip，解压后运行 start.cmd 或 start.bat。",
+    readmeTitle: "账号风格库本地运行包",
+    brandName: "账号风格库"
+  };
+}
+
+function readOption(flag) {
+  const direct = rawArgs.find((arg) => arg.startsWith(`${flag}=`));
+  if (direct) return direct.slice(flag.length + 1);
+  const index = rawArgs.indexOf(flag);
+  if (index >= 0) return rawArgs[index + 1] || "";
+  return "";
 }
 
 async function copyProjectSources() {
   const entries = [
     "src",
     "public",
+    "middleware.ts",
     "package.json",
     "package-lock.json",
     "next.config.mjs",
@@ -95,7 +150,7 @@ async function copyProjectSources() {
 async function createRuntimePackage() {
   const standaloneRoot = path.join(stagingRoot, ".next", "standalone");
   if (!(await exists(path.join(standaloneRoot, "server.js")))) {
-    throw new Error("未找到 .next/standalone/server.js，请确认 next.config.mjs 已设置 output: \"standalone\"。");
+    throw new Error('未找到 .next/standalone/server.js，请确认 next.config.mjs 已设置 output: "standalone"。');
   }
 
   await fs.promises.cp(standaloneRoot, releaseRoot, { recursive: true });
@@ -106,12 +161,9 @@ async function createRuntimePackage() {
     await fs.promises.cp(path.join(stagingRoot, "public"), path.join(releaseRoot, "public"), { recursive: true });
   }
 
-  if (includeLibrary && await exists(path.join(root, "style-library"))) {
-    await fs.promises.cp(path.join(root, "style-library"), path.join(releaseRoot, "style-library"), { recursive: true });
-  } else {
-    await fs.promises.mkdir(path.join(releaseRoot, "style-library"), { recursive: true });
-    await fs.promises.writeFile(path.join(releaseRoot, "style-library", ".keep"), "", "utf8");
-  }
+  await copyReleaseLibrary();
+  await bundleWindowsNode();
+  await bundleOpenCli();
 
   await fs.promises.mkdir(path.join(releaseRoot, "tools"), { recursive: true });
   await fs.promises.writeFile(path.join(releaseRoot, "tools", "runtime.mjs"), runtimeScript(), "utf8");
@@ -123,11 +175,129 @@ async function createRuntimePackage() {
   for (const [fileName, content] of Object.entries(launcherFiles())) {
     const target = path.join(releaseRoot, fileName);
     await fs.promises.writeFile(target, isWindowsLauncher(fileName) ? toCrLf(content) : content, "utf8");
-    if (!fileName.endsWith(".bat")) await fs.promises.chmod(target, 0o755);
+    if (!fileName.endsWith(".bat") && !fileName.endsWith(".cmd")) await fs.promises.chmod(target, 0o755);
   }
 }
 
+async function copyReleaseLibrary() {
+  const targetLibraryRoot = path.join(releaseRoot, "style-library");
+  await fs.promises.mkdir(targetLibraryRoot, { recursive: true });
+
+  if (presetConfig.includeLibraryMode === "all" && await exists(path.join(root, "style-library"))) {
+    await fs.promises.cp(path.join(root, "style-library"), targetLibraryRoot, { recursive: true });
+    return;
+  }
+
+  if (presetConfig.includeLibraryMode === "gross-margin-only") {
+    const sourceGrossMargin = await resolveGrossMarginLibrarySource();
+    if (await exists(sourceGrossMargin)) {
+      await fs.promises.cp(sourceGrossMargin, path.join(targetLibraryRoot, "gross-margin"), { recursive: true });
+    } else {
+      await fs.promises.mkdir(path.join(targetLibraryRoot, "gross-margin"), { recursive: true });
+    }
+    await fs.promises.writeFile(path.join(targetLibraryRoot, ".keep"), "", "utf8");
+    return;
+  }
+
+  await fs.promises.writeFile(path.join(targetLibraryRoot, ".keep"), "", "utf8");
+}
+
+async function resolveGrossMarginLibrarySource() {
+  const candidates = [
+    process.env.GROSS_MARGIN_LIBRARY_SOURCE || "",
+    path.join(root, "style-library", "gross-margin"),
+    "/Users/xjx/Documents/New project 3/style-library/gross-margin",
+    "/Users/xjx/.codex/worktrees/6402/New project 3/style-library/gross-margin"
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
+
+  return path.join(root, "style-library", "gross-margin");
+}
+
+async function bundleWindowsNode() {
+  if (preset !== "gross-margin-win") return;
+
+  const bundledNode = process.env.WINDOWS_NODE_DIR || "";
+  const detectedNode = bundledNode && await exists(path.join(bundledNode, "node.exe"))
+    ? bundledNode
+    : await findWindowsNodeBundle();
+
+  if (!detectedNode) {
+    throw new Error(
+      "gross-margin-win 打包需要可用的 Windows Node 运行时。请先设置 WINDOWS_NODE_DIR，指向包含 node.exe 的 Windows Node 目录。"
+    );
+  }
+
+  const target = path.join(releaseRoot, "runtime", "node");
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.cp(detectedNode, target, { recursive: true });
+}
+
+async function findWindowsNodeBundle() {
+  const candidates = [
+    process.env.WINDOWS_NODE_DIR || "",
+    path.join(root, ".vendor", "node-win-x64"),
+    path.join(root, ".vendor", "node-win-arm64"),
+    path.join(root, "vendor", "node-win-x64"),
+    path.join(root, "vendor", "node-win-arm64")
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (await exists(path.join(candidate, "node.exe"))) return candidate;
+  }
+
+  for (const baseDir of [path.join(root, ".vendor"), path.join(root, "vendor")]) {
+    if (!(await exists(baseDir))) continue;
+    const entries = await fs.promises.readdir(baseDir, { withFileTypes: true });
+    const matched = entries
+      .filter((entry) => entry.isDirectory() && /win-(x64|arm64)/i.test(entry.name))
+      .map((entry) => path.join(baseDir, entry.name));
+    for (const candidate of matched) {
+      if (await exists(path.join(candidate, "node.exe"))) return candidate;
+    }
+  }
+
+  return "";
+}
+
+async function bundleOpenCli() {
+  if (preset !== "gross-margin-win") return;
+
+  const packageRoot = await installBundledOpenCli();
+  const targetRoot = path.join(releaseRoot, "runtime", "node_modules");
+  await fs.promises.mkdir(path.dirname(targetRoot), { recursive: true });
+  await fs.promises.cp(packageRoot, targetRoot, { recursive: true });
+}
+
+async function installBundledOpenCli() {
+  const installRoot = path.join(workRoot, "bundled-opencli");
+  await fs.promises.rm(installRoot, { recursive: true, force: true });
+  await fs.promises.mkdir(installRoot, { recursive: true });
+  await run("npm", ["install", `@jackwener/opencli@${bundledOpenCliVersion}`], { cwd: installRoot });
+  return path.join(installRoot, "node_modules");
+}
+
 function launcherFiles() {
+  const files = {
+    "start.bat": windowsRuntimeLauncher("start", "启动", "--open"),
+    "start.cmd": windowsRuntimeLauncher("start", "启动", "--open"),
+    "stop.bat": windowsRuntimeLauncher("stop", "停止"),
+    "stop.cmd": windowsRuntimeLauncher("stop", "停止"),
+    "status.bat": windowsRuntimeLauncher("status", "状态"),
+    "status.cmd": windowsRuntimeLauncher("status", "状态"),
+    "create-desktop-shortcut.bat": windowsDesktopShortcutLauncher(),
+    "create-desktop-shortcut.cmd": windowsDesktopShortcutLauncher(),
+    "install-deps.bat": windowsInstallDepsLauncher(),
+    "install-deps.cmd": windowsInstallDepsLauncher()
+  };
+
+  if (!presetConfig.includeMacLaunchers) {
+    return files;
+  }
+
   return {
     "start.sh": `#!/usr/bin/env bash
 set -euo pipefail
@@ -224,14 +394,7 @@ echo
 read -n 1 -s -r -p "按任意键关闭这个窗口..."
 echo
 `,
-    "start.bat": windowsRuntimeLauncher("start", "启动", "--open"),
-    "start.cmd": windowsRuntimeLauncher("start", "启动", "--open"),
-    "stop.bat": windowsRuntimeLauncher("stop", "停止"),
-    "stop.cmd": windowsRuntimeLauncher("stop", "停止"),
-    "status.bat": windowsRuntimeLauncher("status", "状态"),
-    "status.cmd": windowsRuntimeLauncher("status", "状态"),
-    "install-deps.bat": windowsInstallDepsLauncher(),
-    "install-deps.cmd": windowsInstallDepsLauncher()
+    ...files
   };
 }
 
@@ -239,7 +402,7 @@ function windowsRuntimeLauncher(command, label, extraArgs = "") {
   return `@echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-title 账号风格库 - ${label}
+title ${presetConfig.brandName} - ${label}
 
 cd /d "%~dp0"
 if errorlevel 1 (
@@ -249,23 +412,31 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set "BUNDLED_NODE=%~dp0runtime\\node\\node.exe"
+set "NODE_BIN=node"
+if exist "%BUNDLED_NODE%" set "NODE_BIN=%BUNDLED_NODE%"
+
 echo 当前目录：%CD%
 echo.
 
-where node >nul 2>nul
-if errorlevel 1 (
-  echo 未检测到 Node.js。
-  echo 请先运行 install-deps.cmd，或安装 Node.js 20+：https://nodejs.org/
-  echo 如果你刚刚安装过 Node.js，请关闭这个窗口后重新双击本脚本。
-  pause
-  exit /b 1
+if not exist "%NODE_BIN%" (
+  where node >nul 2>nul
+  if errorlevel 1 (
+    echo 未检测到可用的 Node.js。
+    echo gross-margin-win 便携包应内置 node.exe；如果文件缺失，请重新解压或重新打包。
+    pause
+    exit /b 1
+  )
+) else (
+  echo 使用内置 Node：
+  echo %NODE_BIN%
 )
 
 echo Node 版本：
-node -v
+"%NODE_BIN%" -v
 echo.
 
-node "%~dp0tools\\runtime.mjs" ${command}${extraArgs ? ` ${extraArgs}` : ""}
+"%NODE_BIN%" "%~dp0tools\\runtime.mjs" ${command}${extraArgs ? ` ${extraArgs}` : ""}
 set EXIT_CODE=%ERRORLEVEL%
 echo.
 
@@ -274,7 +445,7 @@ if not "%EXIT_CODE%"=="0" (
   echo 如果这里没有明确错误，请查看 .runtime\\server.log。
 ) else (
   echo ${label}命令执行完成。
-  if "${command}"=="start" echo 如果浏览器没有自动打开，请访问：http://localhost:3000/gross-margin
+  if "${command}"=="start" echo 如果浏览器没有自动打开，请访问：http://localhost:3000${presetConfig.startPath}
 )
 
 pause
@@ -286,7 +457,7 @@ function windowsInstallDepsLauncher() {
   return `@echo off
 setlocal EnableExtensions
 chcp 65001 >nul
-title 账号风格库 - 安装依赖
+title ${presetConfig.brandName} - 安装依赖
 
 cd /d "%~dp0"
 if errorlevel 1 (
@@ -299,25 +470,34 @@ if errorlevel 1 (
 echo 当前目录：%CD%
 echo.
 
-where node >nul 2>nul
-if errorlevel 1 (
-  where winget >nul 2>nul
+set "BUNDLED_NODE=%~dp0runtime\\node\\node.exe"
+set "NODE_BIN=node"
+if exist "%BUNDLED_NODE%" set "NODE_BIN=%BUNDLED_NODE%"
+
+if exist "%NODE_BIN%" (
+  echo 使用内置 Node：
+  echo %NODE_BIN%
+) else (
+  where node >nul 2>nul
   if errorlevel 1 (
-    echo 未检测到 Node.js，也没有检测到 winget。
-    echo 请手动安装 Node.js 20+：https://nodejs.org/
+    where winget >nul 2>nul
+    if errorlevel 1 (
+      echo 未检测到 Node.js，也没有检测到 winget。
+      echo 请手动安装 Node.js 20+：https://nodejs.org/
+      pause
+      exit /b 1
+    )
+    echo 安装 Node.js LTS...
+    winget install OpenJS.NodeJS.LTS
+    echo.
+    echo 如果 Node.js 刚安装完成，请关闭本窗口后重新运行 install-deps.cmd。
     pause
-    exit /b 1
+    exit /b 0
   )
-  echo 安装 Node.js LTS...
-  winget install OpenJS.NodeJS.LTS
-  echo.
-  echo 如果 Node.js 刚安装完成，请关闭本窗口后重新运行 install-deps.cmd。
-  pause
-  exit /b 0
 )
 
 echo Node 版本：
-node -v
+"%NODE_BIN%" -v
 echo.
 
 where npm >nul 2>nul
@@ -340,7 +520,7 @@ where ffmpeg >nul 2>nul
 if errorlevel 1 (
   where winget >nul 2>nul
   if errorlevel 1 (
-    echo 未检测到 ffmpeg。需要视频转写时请手动安装：https://ffmpeg.org/download.html
+    echo 未检测到 ffmpeg。只有需要无字幕视频转写时才需要它，可稍后手动安装：https://ffmpeg.org/download.html
   ) else (
     echo 安装 ffmpeg...
     winget install Gyan.FFmpeg
@@ -351,6 +531,63 @@ if errorlevel 1 (
 
 echo.
 echo 依赖检查完成。现在可以运行 start.cmd。
+pause
+`;
+}
+
+function windowsDesktopShortcutLauncher() {
+  return `@echo off
+setlocal EnableExtensions
+chcp 65001 >nul
+title ${presetConfig.brandName} - 创建桌面快捷方式
+
+cd /d "%~dp0"
+if errorlevel 1 (
+  echo 无法进入运行目录："%~dp0"
+  echo 请先把压缩包完整解压到一个普通文件夹，再运行本脚本。
+  pause
+  exit /b 1
+)
+
+set "SHORTCUT_NAME=${presetConfig.brandName}.lnk"
+set "DESKTOP_DIR=%USERPROFILE%\\Desktop"
+set "SHORTCUT_PATH=%DESKTOP_DIR%\\%SHORTCUT_NAME%"
+set "TARGET_PATH=%~dp0start.cmd"
+set "ICON_PATH=%~dp0runtime\\node\\node.exe"
+
+if not exist "%DESKTOP_DIR%" (
+  echo 没找到桌面目录：%DESKTOP_DIR%
+  pause
+  exit /b 1
+)
+
+if not exist "%TARGET_PATH%" (
+  echo 没找到启动脚本：%TARGET_PATH%
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$WshShell = New-Object -ComObject WScript.Shell; ^
+   $Shortcut = $WshShell.CreateShortcut('%SHORTCUT_PATH%'); ^
+   $Shortcut.TargetPath = '%TARGET_PATH%'; ^
+   $Shortcut.WorkingDirectory = '%~dp0'; ^
+   $Shortcut.WindowStyle = 1; ^
+   if (Test-Path '%ICON_PATH%') { $Shortcut.IconLocation = '%ICON_PATH%,0'; } ^
+   $Shortcut.Description = '${presetConfig.brandName}'; ^
+   $Shortcut.Save()"
+
+if errorlevel 1 (
+  echo 创建桌面快捷方式失败。请确认 Windows PowerShell 可用。
+  pause
+  exit /b 1
+)
+
+echo.
+echo 已创建桌面快捷方式：
+echo %SHORTCUT_PATH%
+echo.
+echo 以后可以直接双击桌面上的“${presetConfig.brandName}”启动。
 pause
 `;
 }
@@ -381,11 +618,19 @@ async function main() {
     NODE_ENV: "production",
     PORT: process.env.PORT || fileEnv.PORT || "3000",
     HOSTNAME: process.env.HOSTNAME || fileEnv.HOSTNAME || "127.0.0.1",
+    APP_MODE: process.env.APP_MODE || fileEnv.APP_MODE || "${presetConfig.appMode}",
+    APP_START_PATH: process.env.APP_START_PATH || fileEnv.APP_START_PATH || "${presetConfig.startPath}",
+    OPENCLI_BIN: process.env.OPENCLI_BIN || fileEnv.OPENCLI_BIN || bundledOpenCliCommand(),
+    OPENCLI_NODE_BIN: process.env.OPENCLI_NODE_BIN || fileEnv.OPENCLI_NODE_BIN || bundledOpenCliNode(),
+    OPENCLI_SCRIPT: process.env.OPENCLI_SCRIPT || fileEnv.OPENCLI_SCRIPT || bundledOpenCliScript(),
     STYLE_LIBRARY_DIR: process.env.STYLE_LIBRARY_DIR || fileEnv.STYLE_LIBRARY_DIR || "./style-library"
   };
 
   await fs.promises.mkdir(stateDir, { recursive: true });
   await fs.promises.mkdir(path.resolve(root, env.STYLE_LIBRARY_DIR), { recursive: true });
+  if (env.APP_MODE === "gross-margin") {
+    await fs.promises.mkdir(path.resolve(root, env.STYLE_LIBRARY_DIR, "gross-margin"), { recursive: true });
+  }
 
   if (command === "start") return start(env);
   if (command === "stop") return stop();
@@ -402,7 +647,7 @@ async function main() {
 async function start(env) {
   const current = readPid();
   const port = Number(env.PORT || 3000);
-  const url = buildUrl(port, env.APP_START_PATH || "/gross-margin");
+  const url = buildUrl(port, env.APP_START_PATH || "${presetConfig.startPath}");
 
   if (current && isRunning(current)) {
     console.log(\`服务已在运行：pid=\${current}\`);
@@ -471,10 +716,11 @@ async function status(env) {
     pidRunning: pid ? isRunning(pid) : false,
     port,
     reachable: await canConnect(port),
-    url: buildUrl(port, env.APP_START_PATH || "/gross-margin"),
+    url: buildUrl(port, env.APP_START_PATH || "${presetConfig.startPath}"),
+    appMode: env.APP_MODE || "workspace",
     styleLibrary: path.resolve(root, env.STYLE_LIBRARY_DIR || "./style-library"),
     logFile,
-    opencli: resolveExecutable(env.OPENCLI_BIN || "opencli") || null,
+    opencli: env.OPENCLI_SCRIPT ? \`\${env.OPENCLI_NODE_BIN || process.execPath} \${env.OPENCLI_SCRIPT}\` : resolveExecutable(env.OPENCLI_BIN || "opencli") || null,
     ffmpeg: resolveExecutable(env.FFMPEG_BIN || "ffmpeg") || null
   };
   console.log(JSON.stringify(info, null, 2));
@@ -591,10 +837,18 @@ function openBrowser(url) {
 }
 
 function printToolWarnings(env) {
-  const opencli = resolveExecutable(env.OPENCLI_BIN || "opencli");
+  const opencli = env.OPENCLI_SCRIPT ? resolveOpenCliScript(env) : resolveExecutable(env.OPENCLI_BIN || "opencli");
   const ffmpeg = resolveExecutable(env.FFMPEG_BIN || "ffmpeg");
-  if (!opencli) console.log("提示：未检测到 opencli，采集和监控刷新不可用。可运行 install-deps 脚本安装。");
-  if (!ffmpeg) console.log("提示：未检测到 ffmpeg，无字幕视频转写不可用。可运行 install-deps 脚本安装。");
+  if (!opencli) console.log("提示：未检测到 opencli，页面仍可使用，但 B站/抖音实时刷新不可用。可运行 install-deps 脚本安装。");
+  if (!ffmpeg) console.log("提示：未检测到 ffmpeg。只有需要无字幕视频转写时才需要它，可运行 install-deps 脚本安装。");
+}
+
+function resolveOpenCliScript(env) {
+  const nodeBin = env.OPENCLI_NODE_BIN || process.execPath;
+  const script = env.OPENCLI_SCRIPT || "";
+  const nodeResolved = resolveExecutable(nodeBin);
+  const scriptResolved = script ? path.resolve(root, script) : "";
+  return nodeResolved && scriptResolved && fs.existsSync(scriptResolved) ? scriptResolved : "";
 }
 
 function resolveExecutable(command) {
@@ -617,7 +871,7 @@ function resolveExecutable(command) {
 }
 
 function releaseEnvExample() {
-  return `${minimalEnv()}
+  const common = `${minimalEnv()}
 
 # 可选：火山引擎录音文件识别 2.0，用于无字幕视频转写。
 VOLCENGINE_ASR_API_KEY=
@@ -630,7 +884,22 @@ VOLCENGINE_ASR_MAX_POLL_ATTEMPTS=120
 VOLCENGINE_ASR_REQUEST_TIMEOUT_MS=30000
 VOLCENGINE_ASR_RETRY_COUNT=2
 DOUYIN_TRANSCRIBE_CONCURRENCY=3
+`;
 
+  if (preset === "gross-margin-win") {
+    return `${common}
+# 数据维护 / 数据监控本地运行不需要大模型。
+# 只有其他写作、风格卡、评论生成能力才需要下面这些变量。
+# CHAT_API_KEY=
+# CHAT_BASE_URL=https://api.openai.com/v1
+# CHAT_MODEL=
+# CHAT_WIRE_API=auto
+# CHAT_REASONING_EFFORT=none
+# CHAT_PROXY_URL=
+`;
+  }
+
+  return `${common}
 # 可选：文案、风格卡、评论生成等大模型能力。
 # 数据维护监控不需要大模型；不填 API Key 也可以使用本地数据维护功能。
 # CHAT_API_KEY=
@@ -657,15 +926,63 @@ FEISHU_FOLDER_TOKEN=
 
 function minimalEnv() {
   return `PORT=3000
-APP_START_PATH=/gross-margin
-OPENCLI_BIN=opencli
+APP_MODE=${presetConfig.appMode}
+APP_START_PATH=${presetConfig.startPath}
+OPENCLI_BIN=${preset === "gross-margin-win" ? "./runtime/node/node.exe" : "opencli"}
+OPENCLI_NODE_BIN=${preset === "gross-margin-win" ? "./runtime/node/node.exe" : ""}
+OPENCLI_SCRIPT=${preset === "gross-margin-win" ? "./runtime/node_modules/@jackwener/opencli/dist/src/main.js" : ""}
 FFMPEG_BIN=ffmpeg
 STYLE_LIBRARY_DIR=./style-library
 `;
 }
 
 function releaseReadme() {
-  return `# 账号风格库本地运行包
+  if (preset === "gross-margin-win") {
+    return `# ${presetConfig.readmeTitle}
+
+这是面向 Windows 的数据维护 / 数据监控专用便携包。它不是单文件 exe，而是解压后双击启动的本地网页工具。
+
+## 最短使用路径
+
+1. 完整解压 .zip，不要在压缩包预览窗口里直接双击。
+2. 双击 \`start.cmd\`。
+3. 浏览器会自动打开 \`http://localhost:3000/gross-margin\`。
+
+如果想让对方以后直接双击桌面图标启动，再额外运行一次 \`create-desktop-shortcut.cmd\`。
+
+## 这包里已经带了什么
+
+- 已构建好的本地网页程序
+- Windows 内置 Node 运行时
+- 已内置可直接使用的 \`opencli\`
+- 数据维护 / 数据监控专用启动脚本
+- 默认会带上毛利账号库数据；当前优先复制 V1 文案工作台里的 \`style-library/gross-margin\`
+
+## 还需要你自己准备什么
+
+- 实时刷新 B站 / 抖音数据所需的 \`opencli\` 已随包内置
+- 只有无字幕视频转写时才需要 \`ffmpeg\`
+- 不需要配置任何大模型 API Key，就能使用数据维护 / 数据监控
+
+## 常用脚本
+
+- \`start.cmd\`：启动并打开浏览器
+- \`stop.cmd\`：停止后台服务
+- \`status.cmd\`：查看运行状态
+- \`create-desktop-shortcut.cmd\`：在桌面创建一个可直接启动的快捷方式
+- \`install-deps.cmd\`：安装 / 检查 \`ffmpeg\`
+
+## 常见问题
+
+- 页面能打开，但刷新失败：先查看 \`.runtime\\server.log\`；这版已内置 \`opencli\`，通常不需要再单独安装。
+- 想让别人以后直接点桌面图标：先运行 \`create-desktop-shortcut.cmd\`。
+- 浏览器没自动打开：手动访问 \`http://localhost:3000/gross-margin\`。
+- 端口冲突：编辑 \`.env\`，把 \`PORT=3000\` 改成其他端口。
+- 日志排查：查看 \`.runtime\\server.log\`。
+`;
+  }
+
+  return `# ${presetConfig.readmeTitle}
 
 这是已经构建好的本地网页工具包，解压后可以直接在本机启动。
 
@@ -715,6 +1032,7 @@ function versionText() {
   return [
     `name=${packageJson.name || ""}`,
     `version=${packageJson.version || ""}`,
+    `preset=${preset}`,
     `builtAt=${new Date().toISOString()}`,
     `platform=${process.platform}`,
     `arch=${process.arch}`,

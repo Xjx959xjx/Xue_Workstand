@@ -1,25 +1,25 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getBilibiliVideoStatsByUrl, getDouyinVideoStatsByUrl, getDouyinVideoStatsFromAccount, resolveAccountUid } from "@/lib/opencli";
+import {
+  getBilibiliVideoStatsByUrl,
+  getDouyinVideoStatsByUrl,
+} from "@/lib/opencli";
 import {
   deleteGrossMarginMonitorRecord,
-  findAccountByName,
   getGrossMarginLibrary,
   getGrossMarginMonitorRecords,
   resolveGrossMarginMonitorRecord,
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
-  upsertAccount,
   upsertGrossMarginMonitorRecord
 } from "@/lib/storage";
 import type {
-  GrossMarginAccountPrice,
   GrossMarginDifferenceQueryResult,
   GrossMarginMonitorRecord,
   GrossMarginPriceTable,
   GrossMarginServiceKind
 } from "@/lib/types";
-import { extractBvid, extractDouyinAwemeId, extractDouyinSecUid, toNumber } from "@/lib/utils";
+import { extractBvid, extractDouyinAwemeId, toNumber } from "@/lib/utils";
 import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey, normalizeVideoUrlInput } from "@/lib/video-links";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +29,15 @@ const platformSchema = z.enum(["douyin", "bilibili"]);
 const serviceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
 const amountSchema = z.coerce.number().finite().min(0, "金额不能小于 0").max(100_000_000, "金额过大，请检查输入");
 const minimumQuantitySchema = z.coerce.number().finite().gt(0, "起量必须大于 0").max(100_000_000, "起量过大，请检查输入");
+const DOUYIN_VIDEO_STATS_CACHE_TTL_MS = 3 * 60 * 1000;
+
+const douyinSingleVideoStatsCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    promise: ReturnType<typeof getDouyinVideoStatsByUrl>;
+  }
+>();
 
 const mutationSchema = z.discriminatedUnion("action", [
   z.object({
@@ -152,7 +161,15 @@ function formatGrossMarginError(error: unknown) {
     return error.issues[0]?.message || "毛利单价表参数不完整或格式不正确。";
   }
 
+  if (isMissingOpenCliError(error)) {
+    return "未检测到 opencli。数据维护 / 数据监控页面可以继续使用，但刷新 B站/抖音数据前请先运行 install-deps.cmd 安装 opencli。";
+  }
+
   return error instanceof Error ? error.message : "保存毛利单价表失败";
+}
+
+function isMissingOpenCliError(error: unknown) {
+  return error instanceof Error && /opencli/i.test(error.message) && /未检测到|not found|enoent/i.test(error.message);
 }
 
 type DifferencePlatform = GrossMarginPriceTable["platform"];
@@ -160,15 +177,13 @@ type DifferencePlatform = GrossMarginPriceTable["platform"];
 async function queryGrossMarginDifference(input: z.infer<typeof mutationSchema> & { action: "queryDifference" }) {
   const parsed = parseMaintenanceTemplate(input.template);
   const resolvedVideo = resolveVideoUrl(input.videoUrl || "", input.template);
-  const url = resolvedVideo.url;
+  const url = await normalizeDifferenceVideoUrl(resolvedVideo.url);
   const platform = resolveDifferencePlatform(url, parsed.platform, input.platformHint);
-  const library = platform === "douyin" ? await getGrossMarginLibrary() : null;
   const fetched =
     platform === "bilibili"
       ? await getBilibiliVideoStatsByUrl(url)
       : await getDouyinDifferenceStats({
           accountName: parsed.accountName,
-          accounts: library?.accounts || [],
           url
         });
   const currentStats = {
@@ -194,7 +209,7 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
     ...(input.targetStats || {})
   };
   const resolvedVideo = resolveVideoUrl(input.videoUrl, input.sourceText);
-  const videoUrl = normalizeVideoUrlInput(resolvedVideo.url);
+  const videoUrl = await normalizeDifferenceVideoUrl(resolvedVideo.url);
   const platform = resolveDifferencePlatform(videoUrl, parsed.platform, input.platform);
   const videoKey = getVideoComparableKey(videoUrl);
   return upsertGrossMarginMonitorRecord({
@@ -209,15 +224,19 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
 
 async function refreshMonitorRecord(recordId: string) {
   const record = await resolveGrossMarginMonitorRecord(recordId);
-  const warnings: string[] = [];
+  return refreshMonitorRecordSnapshot(record);
+}
 
+async function refreshMonitorRecordSnapshot(
+  record: GrossMarginMonitorRecord
+) {
+  const warnings: string[] = [];
   try {
     const fetched =
       record.platform === "bilibili"
         ? await getBilibiliVideoStatsByUrl(record.videoUrl)
         : await getDouyinDifferenceStats({
             accountName: record.accountName,
-            accounts: (await getGrossMarginLibrary()).accounts,
             url: record.videoUrl
           });
     if ("warning" in fetched && fetched.warning) warnings.push(fetched.warning);
@@ -253,7 +272,7 @@ async function refreshMonitorRecords() {
   const records = await getGrossMarginMonitorRecords();
   const refreshed: GrossMarginMonitorRecord[] = [];
   for (const record of records) {
-    refreshed.push(await refreshMonitorRecord(record.id));
+    refreshed.push(await refreshMonitorRecordSnapshot(record));
   }
   return refreshed;
 }
@@ -343,7 +362,7 @@ function parseMaintenanceTemplate(template: string) {
   }
 
   return {
-    accountName: extractLineValue(lines, "账号"),
+    accountName: extractLineValue(lines, ["账号", "账号名", "账号名称", "账号昵称", "达人", "达人名称", "博主"]),
     platform: (normalized.includes("【抖音】") ? "douyin" : normalized.includes("【B站】") ? "bilibili" : undefined) as
       | DifferencePlatform
       | undefined,
@@ -353,33 +372,9 @@ function parseMaintenanceTemplate(template: string) {
 
 async function getDouyinDifferenceStats(input: {
   accountName: string;
-  accounts: GrossMarginAccountPrice[];
   url: string;
 }) {
-  const libraryAccount = input.accountName ? await findAccountByName("douyin", input.accountName) : null;
-  const matchedAccount = findGrossMarginAccount(input.accounts.filter((account) => account.platform === "douyin"), input.accountName);
-  const warnings: string[] = [];
-
-  if (libraryAccount) {
-    try {
-      return await getDouyinVideoStatsFromAccount({ account: libraryAccount, url: input.url });
-    } catch (error) {
-      warnings.push(error instanceof Error ? error.message : `用账号库账号「${libraryAccount.name}」采集抖音当前数据失败。`);
-    }
-  }
-
-  if (matchedAccount) {
-    try {
-      const account = await resolveDouyinGrossMarginAccount(matchedAccount);
-      return await getDouyinVideoStatsFromAccount({ account, url: input.url });
-    } catch (error) {
-      warnings.push(error instanceof Error ? error.message : "用账号库采集抖音当前数据失败。");
-    }
-  } else if (input.accountName) {
-    warnings.push(`毛利账号库里没有匹配到「${input.accountName}」，已改用单条视频页兜底。`);
-  }
-
-  const fallback = await getDouyinVideoStatsByUrl(input.url).catch((error) => ({
+  const fallback = await getCachedDouyinVideoStatsByUrl(input.url).catch((error) => ({
     platform: "douyin" as const,
     title: "",
     url: input.url,
@@ -390,43 +385,40 @@ async function getDouyinDifferenceStats(input: {
 
   return {
     ...fallback,
-    warning: [...warnings, "warning" in fallback && fallback.warning ? fallback.warning : ""].filter(Boolean).join("；")
+    warning: "warning" in fallback && fallback.warning ? fallback.warning : ""
   };
 }
 
-async function resolveDouyinGrossMarginAccount(account: GrossMarginAccountPrice) {
-  const existing = await findAccountByName("douyin", account.name);
-  if (existing) return existing;
+function getCachedDouyinVideoStatsByUrl(url: string) {
+  const cacheKey = extractDouyinAwemeId(url) || normalizeVideoUrlInput(url);
+  const now = Date.now();
+  const existing = douyinSingleVideoStatsCache.get(cacheKey);
+  if (existing && existing.expiresAt > now) return existing.promise;
 
-  const uid = account.homepage && /\/user\/|sec_uid=/.test(account.homepage)
-    ? extractDouyinSecUid(account.homepage)
-    : await resolveAccountUid("douyin", account.name);
-
-  return upsertAccount({
-    platform: "douyin",
-    name: account.name,
-    uid,
-    sourceUrl: account.homepage || account.douyinId || account.name
+  const pending = getDouyinVideoStatsByUrl(url).catch((error) => {
+    const current = douyinSingleVideoStatsCache.get(cacheKey);
+    if (current?.promise === pending) douyinSingleVideoStatsCache.delete(cacheKey);
+    throw error;
   });
+  douyinSingleVideoStatsCache.set(cacheKey, {
+    expiresAt: now + DOUYIN_VIDEO_STATS_CACHE_TTL_MS,
+    promise: pending
+  });
+  return pending;
 }
 
-function findGrossMarginAccount(accounts: GrossMarginAccountPrice[], rawName: string) {
-  const name = normalizeAccountName(rawName);
-  if (!name) return null;
-  return (
-    accounts.find((account) => normalizeAccountName(account.name) === name) ||
-    accounts.find((account) => normalizeAccountName(account.name).includes(name) || name.includes(normalizeAccountName(account.name))) ||
-    null
-  );
+function extractLineValue(lines: string[], labels: string | string[]) {
+  const labelList = Array.isArray(labels) ? labels : [labels];
+  for (const label of labelList) {
+    const pattern = new RegExp(`^${escapeRegExp(label)}\\s*[：:]\\s*(.+)$`, "i");
+    const matched = lines.find((line) => pattern.test(line));
+    if (matched) return matched.replace(pattern, "$1").trim();
+  }
+  return "";
 }
 
-function normalizeAccountName(value: string) {
-  return value.trim().replace(/\s+/g, "").toLowerCase();
-}
-
-function extractLineValue(lines: string[], label: string) {
-  const pattern = new RegExp(`^${label}\\s*[：:]\\s*(.+)$`);
-  return lines.find((line) => pattern.test(line))?.replace(pattern, "$1").trim() || "";
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function resolveDifferencePlatform(url: string, templatePlatform?: DifferencePlatform, platformHint?: DifferencePlatform) {
@@ -449,6 +441,25 @@ function resolveVideoUrl(explicitUrl: string, template: string) {
   if (urlMatch) return { url: urlMatch, warnings };
   if (direct) return { url: direct, warnings };
   throw new Error("没有从模板里识别到视频链接，请补充链接后再查询。");
+}
+
+async function normalizeDifferenceVideoUrl(url: string) {
+  const trimmed = normalizeVideoUrlInput(url);
+  if (!trimmed || !/v\.douyin\.com/i.test(trimmed)) return trimmed;
+
+  try {
+    const response = await fetch(trimmed, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 style-library",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    });
+    return normalizeVideoUrlInput(response.url || trimmed);
+  } catch {
+    return trimmed;
+  }
 }
 
 function extractTemplateUrl(template: string) {

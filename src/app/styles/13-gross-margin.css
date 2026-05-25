@@ -1,6 +1,6 @@
 /* Gross margin calculator */
 .gross-margin-workspace {
-  grid-template-columns: 320px minmax(560px, 1fr) 312px;
+  grid-template-columns: 296px minmax(540px, 1fr) 272px;
 }
 
 .gross-price-pane .pane-body,
@@ -10,14 +10,16 @@
 
 .gross-result-pane {
   min-height: 0;
+  max-width: 300px;
+  justify-self: start;
 }
 
 .gross-result-pane .pane-body {
   min-height: 0;
   grid-template-rows: auto auto auto auto auto;
-  gap: 8px;
+  gap: 12px;
   overflow: auto;
-  padding-right: 2px;
+  padding: 14px;
 }
 
 .gross-platform-tabs button {
@@ -396,13 +398,13 @@
 .gross-result-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  gap: 10px;
 }
 
 .gross-result-panel {
   display: grid;
-  gap: 2px;
-  padding: 10px 11px;
+  gap: 4px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--surface-raised);
@@ -461,7 +463,7 @@
 
 .gross-result-tools {
   display: grid;
-  gap: 8px;
+  gap: 12px;
 }
 
 .gross-review-preview {
@@ -477,8 +479,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 38px;
-  padding: 8px 10px;
+  min-height: 48px;
+  padding: 12px 14px;
   color: var(--muted-strong);
   background: transparent;
   cursor: pointer;
@@ -529,7 +531,7 @@
   min-height: 0;
   margin: 0;
   overflow: auto;
-  padding: 10px;
+  padding: 14px;
   color: var(--text-strong);
   font-family: inherit;
   font-size: 12px;
@@ -541,20 +543,20 @@
 
 .gross-action-panel {
   display: grid;
-  gap: 8px;
+  gap: 12px;
 }
 
 .gross-action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .gross-action-grid .btn {
   width: 100%;
   min-width: 0;
-  min-height: 34px;
-  padding: 0 10px;
+  min-height: 40px;
+  padding: 0 12px;
   font-size: 13px;
 }
 
@@ -1067,6 +1069,7 @@
 
 .gross-monitor-risk-dial {
   --risk-fill: 0%;
+  --risk-accent: color-mix(in oklch, var(--amber) 92%, var(--text-strong));
   position: relative;
   display: grid;
   place-items: center;
@@ -1075,25 +1078,29 @@
   border-radius: 50%;
   background:
     radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
-    conic-gradient(color-mix(in oklch, var(--amber) 82%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
+    conic-gradient(var(--risk-accent) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
 }
 
-.gross-monitor-risk-dial.danger {
-  background:
-    radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
-    conic-gradient(color-mix(in oklch, var(--rose) 72%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
+.gross-monitor-risk-dial.bilibili,
+.gross-monitor-risk-dial.bilibili.danger,
+.gross-monitor-risk-dial.bilibili.warning,
+.gross-monitor-risk-dial.bilibili.calm {
+  --risk-accent: color-mix(in oklch, var(--rose) 86%, var(--text-strong));
 }
 
-.gross-monitor-risk-dial.warning {
-  background:
-    radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
-    conic-gradient(color-mix(in oklch, var(--amber) 88%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
+.gross-monitor-risk-dial.douyin,
+.gross-monitor-risk-dial.douyin.danger,
+.gross-monitor-risk-dial.douyin.warning,
+.gross-monitor-risk-dial.douyin.calm {
+  --risk-accent: color-mix(in oklch, var(--blue) 88%, var(--text-strong));
 }
 
+.gross-monitor-risk-dial.danger,
+.gross-monitor-risk-dial.warning,
 .gross-monitor-risk-dial.calm {
   background:
     radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
-    conic-gradient(color-mix(in oklch, var(--accent) 70%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
+    conic-gradient(var(--risk-accent) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
 }
 
 .gross-monitor-risk-dial strong,
@@ -1104,7 +1111,7 @@
 
 .gross-monitor-risk-dial strong {
   transform: translateY(-5px);
-  color: var(--text-strong);
+  color: var(--risk-accent);
   font-size: 13px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
@@ -1118,15 +1125,15 @@
 }
 
 .gross-monitor-risk-dial.danger strong {
-  color: color-mix(in oklch, var(--rose) 86%, var(--text-strong));
+  color: var(--risk-accent);
 }
 
 .gross-monitor-risk-dial.warning strong {
-  color: color-mix(in oklch, var(--amber) 92%, var(--text-strong));
+  color: var(--risk-accent);
 }
 
 .gross-monitor-risk-dial.calm strong {
-  color: color-mix(in oklch, var(--accent-strong) 78%, var(--text-strong));
+  color: var(--risk-accent);
 }
 
 .gross-monitor-risk-meta {
@@ -1392,6 +1399,7 @@
 
   .gross-result-pane {
     grid-column: 1 / -1;
+    max-width: none;
   }
 
   .gross-result-pane .pane-body {

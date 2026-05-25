@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Activity, Calculator, FileText, FolderKanban, MessageSquarePlus, PenLine, Sparkles } from "lucide-react";
 import { TaskCenter } from "./TaskCenter";
+import type { AppMode } from "@/lib/app-mode";
 
 type NavItem = {
   href: string;
@@ -20,22 +21,27 @@ const navItems: NavItem[] = [
   { href: "/gross-margin/monitor", label: "数据监控", icon: Activity }
 ];
 
-export function AppNav() {
+const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
+
+export function AppNav({ appMode }: { appMode: AppMode }) {
   const pathname = usePathname();
+  const grossMarginMode = appMode === "gross-margin";
+  const visibleNavItems = grossMarginMode ? grossMarginNavItems : navItems;
+  const brandHref = grossMarginMode ? "/gross-margin" : "/library";
 
   return (
     <aside className="sidebar">
-      <Link href="/library" className="brand">
+      <Link href={brandHref} className="brand">
         <span className="brand-mark" aria-hidden="true">
           <Sparkles size={18} strokeWidth={2.1} />
         </span>
         <span>
-          <strong>风格库</strong>
-          <small>本地</small>
+          <strong>{grossMarginMode ? "数据维护监控" : "风格库"}</strong>
+          <small>{grossMarginMode ? "Windows 便携版" : "本地"}</small>
         </span>
       </Link>
       <nav className="nav-list" aria-label="主导航">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           const Icon = item.icon;
           return (
@@ -50,7 +56,7 @@ export function AppNav() {
           );
         })}
       </nav>
-      <TaskCenter />
+      {grossMarginMode ? null : <TaskCenter />}
     </aside>
   );
 }

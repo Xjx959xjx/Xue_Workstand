@@ -1,6 +1,7 @@
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { extractLinksFromInput } from "./link-input";
+import { resolveOpenCliCommand } from "./opencli";
 import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
@@ -19,9 +20,10 @@ export type FeishuFetchedDocument = {
 };
 
 function feishuConfig(): FeishuConfig {
+  const runtime = resolveOpenCliCommand();
   return {
     folderToken: process.env.FEISHU_FOLDER_TOKEN || "",
-    opencliBin: process.env.OPENCLI_BIN || "opencli",
+    opencliBin: runtime.command,
     identity: process.env.FEISHU_OPENCLI_AS || "user"
   };
 }
@@ -40,7 +42,8 @@ export function getFeishuRuntimeConfig() {
 export async function checkFeishuRuntime() {
   const config = feishuConfig();
   try {
-    const { stdout, stderr } = await execFileAsync(config.opencliBin, ["lark-cli", "doctor", "--offline"], {
+    const runtime = resolveOpenCliCommand();
+    const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, "lark-cli", "doctor", "--offline"], {
       maxBuffer: 1024 * 1024,
       timeout: 10000
     });
@@ -95,8 +98,9 @@ async function publishWithOpenCli(config: FeishuConfig, input: { title: string; 
     config.identity
   ];
   if (config.folderToken) args.push("--folder-token", config.folderToken);
+  const runtime = resolveOpenCliCommand();
 
-  const { stdout, stderr } = await spawnWithInput(config.opencliBin, args, input.content, {
+  const { stdout, stderr } = await spawnWithInput(config.opencliBin, [...runtime.argsPrefix, ...args], input.content, {
     maxBuffer: 1024 * 1024 * 20,
     timeout: 120000
   });
@@ -136,9 +140,10 @@ async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<F
     "--as",
     config.identity
   ];
+  const runtime = resolveOpenCliCommand();
 
   try {
-    const { stdout, stderr } = await execFileAsync(config.opencliBin, args, {
+    const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, ...args], {
       maxBuffer: 1024 * 1024 * 20,
       timeout: 60000
     });

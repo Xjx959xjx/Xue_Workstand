@@ -165,7 +165,7 @@ function parseImportTemplate(template: string, fallbackPlatform: PlatformKey): G
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const accountName = extractLineValue(lines, "账号");
+  const accountName = extractLineValue(lines, ["账号", "账号名", "账号名称", "账号昵称", "达人", "达人名称", "博主"]);
   const videoUrl = extractVideoUrl(template) || extractLineValue(lines, "视频链接");
   const platform = detectVideoPlatform(videoUrl || template) || detectPlatform(template, videoUrl, fallbackPlatform);
   const metrics: GrossMarginImportedMetric[] = [];
@@ -194,9 +194,14 @@ function parseImportTemplate(template: string, fallbackPlatform: PlatformKey): G
   };
 }
 
-function extractLineValue(lines: string[], label: string) {
-  const pattern = new RegExp(`^${label}\\s*[：:]\\s*(.+)$`);
-  return lines.find((line) => pattern.test(line))?.replace(pattern, "$1").trim() || "";
+function extractLineValue(lines: string[], labels: string | string[]) {
+  const labelList = Array.isArray(labels) ? labels : [labels];
+  for (const label of labelList) {
+    const pattern = new RegExp(`^${escapeRegExp(label)}\\s*[：:]\\s*(.+)$`, "i");
+    const matched = lines.find((line) => pattern.test(line));
+    if (matched) return matched.replace(pattern, "$1").trim();
+  }
+  return "";
 }
 
 function detectPlatform(template: string, url: string, fallbackPlatform: PlatformKey): PlatformKey {
@@ -211,6 +216,10 @@ function detectPlatform(template: string, url: string, fallbackPlatform: Platfor
 
 function cleanMetricValue(value: string) {
   return value.replace(/[，。；;,]?\s*$/g, "").trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {

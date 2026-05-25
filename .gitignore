@@ -9,6 +9,7 @@ tsconfig.tsbuildinfo
 .env
 .env*.local
 style-library
+.vendor
 *.log
 .dev-server
 .playwright-cli

@@ -5,13 +5,15 @@ import { libraryRoot } from "@/lib/storage";
 import { getChatRuntimeConfig } from "@/lib/ai";
 import { getImageRuntimeConfig } from "@/lib/cover";
 import { checkFeishuRuntime } from "@/lib/feishu";
+import { resolveOpenCliCommand } from "@/lib/opencli";
 
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
 
 export async function GET() {
-  const opencli = process.env.OPENCLI_BIN || "opencli";
+  const runtime = resolveOpenCliCommand();
+  const opencli = runtime.command;
   const chat = getChatRuntimeConfig();
   const image = getImageRuntimeConfig();
   const feishu = await checkFeishuRuntime();
@@ -19,7 +21,7 @@ export async function GET() {
   let opencliVersion = "";
 
   try {
-    const { stdout } = await execFileAsync(opencli, ["--version"], { timeout: 5000 });
+    const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], { timeout: 5000 });
     opencliOk = true;
     opencliVersion = stdout.trim();
   } catch {

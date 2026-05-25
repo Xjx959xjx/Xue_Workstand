@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { AppProviders } from "@/components/AppProviders";
+import { AppModeGuard } from "@/components/AppModeGuard";
 import { AppNav } from "@/components/AppNav";
+import { getAppMode } from "@/lib/app-mode";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,6 +14,8 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const appMode = getAppMode();
+
   return (
     <html lang="zh-CN">
       <body>
@@ -19,8 +23,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           跳到主要内容
         </a>
         <AppProviders>
+          <AppModeGuard appMode={appMode} />
           <div className="app-shell">
-            <AppNav />
+            <AppNav appMode={appMode} />
             <main className="main-content" id="main-content">
               {children}
             </main>
