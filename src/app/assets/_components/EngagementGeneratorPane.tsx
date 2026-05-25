@@ -4,6 +4,8 @@ import { Send } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
 
+const COMMENT_COUNT_PRESETS = [100, 150, 200];
+
 type EngagementGeneratorPaneProps = {
   busy: BusyState;
   canGenerate: boolean;
@@ -84,6 +86,19 @@ export function EngagementGeneratorPane({
                 onChange={(event) => onDanmakuCountChange(Number(event.target.value))}
               />
             </label>
+          </div>
+          <div className="engagement-count-presets" aria-label="评论快捷条数">
+            {COMMENT_COUNT_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                className={`btn ghost engagement-count-preset ${commentCount === preset ? "active" : ""}`}
+                disabled={!includeComments}
+                type="button"
+                onClick={() => onCommentCountChange(preset)}
+              >
+                {preset} 条评论
+              </button>
+            ))}
           </div>
         </section>
 

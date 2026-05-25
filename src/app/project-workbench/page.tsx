@@ -240,6 +240,10 @@ export default function ProjectWorkbenchPage() {
     }
     if (activeStyleJob.status === "failed") {
       setMessage(activeStyleJob.error || "项目风格卡生成失败。");
+      return;
+    }
+    if (activeStyleJob.status === "cancelled") {
+      setMessage("已停止项目风格卡生成。");
     }
   }, [activeStyleJob, handledJobIds, refresh]);
 
@@ -507,17 +511,21 @@ export default function ProjectWorkbenchPage() {
   return (
     <div className="page project-workbench-page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              🗂️
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">项目策划台</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <FolderKanban size={20} strokeWidth={2.1} />
             </span>
-            <span>项目工作台</span>
-          </h1>
-          <p className="subtle">把案例素材和参考账号沉淀成项目风格卡。</p>
+            <div className="page-title-copy">
+              <h1>项目工作台</h1>
+              <p className="subtle">素材、账号、项目风格。</p>
+            </div>
+          </div>
         </div>
-        <div className="button-row">
-          <button className="btn" disabled={loading} onClick={() => void handleRefresh()} type="button">
+        <div className="page-header-meta">
+          {selectedProjectMeta ? <span className="stat-pill">{isDirty ? "有未保存修改" : "项目已同步"}</span> : null}
+          <button className="btn ghost" disabled={loading} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             {loading ? "读取中" : "刷新"}
           </button>

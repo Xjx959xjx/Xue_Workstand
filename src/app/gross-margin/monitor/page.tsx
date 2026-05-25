@@ -134,6 +134,10 @@ export default function GrossMarginMonitorPage() {
   return (
     <div className="page gross-margin-page gross-monitor-page">
       <div className="gross-monitor-topbar">
+        <div className="page-header-meta">
+          <span className="stat-pill">{records.length} 条记录</span>
+          <span className="stat-pill">{sortedRecords.filter((record) => record.status === "failed").length} 条异常</span>
+        </div>
         <div className="button-row">
           <Link className="btn" href="/gross-margin">
             <ArrowLeft aria-hidden="true" size={15} />
@@ -203,6 +207,11 @@ function MonitorCard({
   const title = record.title || record.videoUrl;
   const metrics = getDisplayMetrics(record);
   const overallGap = getOverallGap(record);
+  const overallGapTone = getOverallGapTone(overallGap.percent, record.status);
+  const changedMetricCount = metrics.filter((metric) => {
+    const delta = getMetricRefreshDelta(record, metric.service);
+    return delta !== null && delta !== 0;
+  }).length;
   const visibleWarnings = record.warnings.filter((warning) => !isBlueLinkFetchWarning(warning));
   const [editingPlay, setEditingPlay] = useState(false);
   const playMetric = metrics.find((metric) => metric.service === "play");
@@ -229,7 +238,7 @@ function MonitorCard({
   }
 
   return (
-    <article className={`gross-monitor-card ${record.highRisk ? "high-risk" : ""}`}>
+    <article className={`gross-monitor-card ${overallGapTone === "danger" ? "high-risk" : overallGapTone === "warning" ? "mid-risk" : ""}`}>
       <div className="gross-monitor-card-main">
         <div className="gross-monitor-card-title">
           <span className="gross-monitor-card-copy">
@@ -246,18 +255,23 @@ function MonitorCard({
 
       <div className="gross-monitor-risk-line">
         <span
-          className={`gross-monitor-risk-dial ${record.highRisk ? "danger" : ""}`}
+          className={`gross-monitor-risk-dial ${overallGapTone}`}
           style={{ "--risk-fill": `${overallGap.percent * 100}%` } as CSSProperties}
         >
           <strong>{formatOverallGap(overallGap, record.status)}</strong>
           <small>整体差额</small>
         </span>
-        <span className="gross-monitor-risk-meta">
+          <span className="gross-monitor-risk-meta">
           <span>
             {renderStatusIcon(record.status)}
             {formatStatus(record.status)}
             <CalendarClock aria-hidden="true" size={12} />
             {formatDateTime(record.lastRefreshedAt || record.updatedAt)}
+            {record.status === "completed" ? (
+              <em className={`gross-monitor-refresh-summary ${changedMetricCount ? "changed" : "stable"}`}>
+                {changedMetricCount ? `${changedMetricCount} 项变化` : "本次无变化"}
+              </em>
+            ) : null}
           </span>
           <span className="gross-monitor-card-actions">
             {record.videoUrl ? (
@@ -287,63 +301,76 @@ function MonitorCard({
       </div>
 
       <div className="gross-monitor-metric-list" aria-label={formatTargetSummary(record)}>
-        {metrics.map((metric) => (
-          <span
-            aria-label={`${metric.label}，目标 ${formatMetric(metric.target, record.platform)}，当前 ${formatMetricCurrentValue(metric, record.platform)}，差额比例 ${formatMetricPercent(metric)}`}
-            className={`gross-monitor-metric-cell ${metric.highRisk ? "danger" : ""}`}
-            key={metric.service}
-            title={`${metric.label} | 目标 ${formatMetric(metric.target, record.platform)} | 当前 ${formatMetricCurrentValue(metric, record.platform)} | ${formatMetricPercent(metric)}`}
-          >
-            <span className="gross-monitor-metric-cell-head">
-              {renderMetricIcon(metric.service)}
-              <strong>{metric.label}</strong>
-              <b className={metric.highRisk ? "risk-text" : ""}>{formatMetricPercent(metric)}</b>
-            </span>
-            <span className="gross-monitor-metric-bar" aria-hidden="true">
-              <span style={{ width: `${getMetricProgress(metric)}%` }} />
-            </span>
-            <span className="gross-monitor-metric-cell-values">
-              {metric.service === "play" && record.platform === "bilibili" ? (
-                <em
-                  className={`gross-monitor-play-edit ${editingPlay ? "editing" : ""}`}
-                  onDoubleClick={() => setEditingPlay(true)}
-                  title="双击修改播放量目标"
-                >
-                  {editingPlay ? (
-                    <input
-                      autoFocus
-                      className="gross-monitor-play-input"
-                      disabled={busy === `play-target-${record.id}`}
-                      onBlur={() => {
-                        void submitPlayTarget().catch(() => undefined);
-                      }}
-                      onChange={(event) => setPlayDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void submitPlayTarget().catch(() => undefined);
-                        }
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          setPlayDraft(formatEditablePlayTarget(metric.target, record.platform));
-                          setEditingPlay(false);
-                        }
-                      }}
-                      type="text"
-                      value={playDraft}
-                    />
+        {metrics.map((metric) => {
+          const refreshDelta = getMetricRefreshDelta(record, metric.service);
+          const deltaTone = refreshDelta === null ? "" : refreshDelta > 0 ? "positive" : refreshDelta < 0 ? "negative" : "neutral";
+          const deltaLabel = refreshDelta === null ? "" : `，本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}`;
+
+          return (
+            <span
+              aria-label={`${metric.label}，目标 ${formatMetric(metric.target, record.platform)}，当前 ${formatMetricCurrentValue(metric, record.platform)}，差额比例 ${formatMetricPercent(metric)}${deltaLabel}`}
+              className={`gross-monitor-metric-cell ${metric.highRisk ? "danger" : ""}`}
+              key={metric.service}
+              title={`${metric.label} | 目标 ${formatMetric(metric.target, record.platform)} | 当前 ${formatMetricCurrentValue(metric, record.platform)} | ${formatMetricPercent(metric)}${refreshDelta === null ? "" : ` | 本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}`}`}
+            >
+              <span className="gross-monitor-metric-cell-head">
+                {renderMetricIcon(metric.service)}
+                <strong>{metric.label}</strong>
+                <b className={metric.highRisk ? "risk-text" : ""}>{formatMetricPercent(metric)}</b>
+              </span>
+              <span className="gross-monitor-metric-bar" aria-hidden="true">
+                <span style={{ width: `${getMetricProgress(metric)}%` }} />
+              </span>
+              <span className="gross-monitor-metric-cell-values">
+                <span className="gross-monitor-metric-cell-value-main">
+                  {metric.service === "play" && record.platform === "bilibili" ? (
+                    <em
+                      className={`gross-monitor-play-edit ${editingPlay ? "editing" : ""}`}
+                      onDoubleClick={() => setEditingPlay(true)}
+                      title="双击修改播放量目标"
+                    >
+                      {editingPlay ? (
+                        <input
+                          autoFocus
+                          className="gross-monitor-play-input"
+                          disabled={busy === `play-target-${record.id}`}
+                          onBlur={() => {
+                            void submitPlayTarget().catch(() => undefined);
+                          }}
+                          onChange={(event) => setPlayDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              void submitPlayTarget().catch(() => undefined);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              setPlayDraft(formatEditablePlayTarget(metric.target, record.platform));
+                              setEditingPlay(false);
+                            }
+                          }}
+                          type="text"
+                          value={playDraft}
+                        />
+                      ) : (
+                        <>
+                          {formatMetricCurrentValue(metric, record.platform)} / {formatMetric(metric.target, record.platform)}
+                        </>
+                      )}
+                    </em>
                   ) : (
-                    <>
-                      {formatMetricCurrentValue(metric, record.platform)} / {formatMetric(metric.target, record.platform)}
-                    </>
+                    <em>{formatMetricCurrentValue(metric, record.platform)} / {formatMetric(metric.target, record.platform)}</em>
                   )}
-                </em>
-              ) : (
-                <em>{formatMetricCurrentValue(metric, record.platform)} / {formatMetric(metric.target, record.platform)}</em>
-              )}
+                </span>
+                {refreshDelta !== null ? (
+                  <span className={`gross-monitor-metric-delta ${deltaTone}`}>
+                    {formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}
+                  </span>
+                ) : null}
+              </span>
             </span>
-          </span>
-        ))}
+          );
+        })}
         {!record.metrics.length ? <span className="gross-monitor-more-metrics muted">无可监控目标</span> : null}
       </div>
 
@@ -391,6 +418,14 @@ function getOverallGap(record: GrossMarginMonitorRecord) {
   };
 }
 
+function getOverallGapTone(percent: number, status: GrossMarginMonitorRecord["status"]) {
+  if (status === "pending") return "neutral";
+  if (percent >= 0.75) return "danger";
+  if (percent >= 0.45) return "warning";
+  if (percent > 0) return "calm";
+  return "neutral";
+}
+
 function formatPlatform(platform: GrossMarginMonitorRecord["platform"]) {
   return platform === "bilibili" ? "B站" : "抖音";
 }
@@ -423,6 +458,13 @@ function getMetricProgress(metric: GrossMarginMonitorMetric) {
   return Math.min(100, Math.max(0, (metric.current / metric.target) * 100));
 }
 
+function getMetricRefreshDelta(record: GrossMarginMonitorRecord, service: GrossMarginMonitorMetric["service"]) {
+  const current = record.currentStats?.[service];
+  if (typeof current !== "number") return null;
+  const previous = record.previousStats?.[service];
+  return current - (typeof previous === "number" ? previous : 0);
+}
+
 function renderStatusIcon(status: GrossMarginMonitorRecord["status"]) {
   if (status === "completed") return <CheckCircle2 aria-hidden="true" size={13} />;
   if (status === "failed") return <XCircle aria-hidden="true" size={13} />;
@@ -451,6 +493,13 @@ function formatDifferenceMetric(value: number, service: GrossMarginMonitorMetric
     return `${stripZeros((value / 10000).toFixed(2))}${platform === "bilibili" ? "W" : "万"}`;
   }
   return String(Math.round(value));
+}
+
+function formatMetricRefreshDelta(value: number, service: GrossMarginMonitorMetric["service"], platform: GrossMarginMonitorRecord["platform"]) {
+  if (value === 0) return "0";
+  const sign = value > 0 ? "+" : "-";
+  const absolute = Math.abs(value);
+  return `${sign}${formatDifferenceMetric(absolute, service, platform)}`;
 }
 
 function formatPercent(value: number) {

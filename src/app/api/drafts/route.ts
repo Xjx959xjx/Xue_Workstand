@@ -14,6 +14,7 @@ const accountDraftSchema = z.object({
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().min(1),
   input: z.string().optional(),
+  supportDocLinks: z.string().optional(),
   content: z.string().min(1),
   assets: z.any().optional(),
   styleRef: z.object({
@@ -32,6 +33,7 @@ const projectDraftSchema = z.object({
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().min(1),
   input: z.string().optional(),
+  supportDocLinks: z.string().optional(),
   content: z.string().min(1),
   assets: z.any().optional(),
   styleRef: z.object({

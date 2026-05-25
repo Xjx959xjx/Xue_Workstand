@@ -1,5 +1,7 @@
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
+import { extractLinksFromInput } from "./link-input";
+import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
 
@@ -7,6 +9,13 @@ type FeishuConfig = {
   folderToken: string;
   opencliBin: string;
   identity: string;
+};
+
+export type FeishuFetchedDocument = {
+  url: string;
+  title?: string;
+  content?: string;
+  error?: string;
 };
 
 function feishuConfig(): FeishuConfig {
@@ -57,6 +66,22 @@ export async function publishFeishuDocument(input: { title: string; content: str
   return publishWithOpenCli(feishuConfig(), input);
 }
 
+export async function fetchFeishuSupportDocuments(input: string) {
+  const urls = uniqueFeishuDocUrls(input).slice(0, 4);
+  if (!urls.length) return [];
+
+  const config = feishuConfig();
+  const documents: FeishuFetchedDocument[] = [];
+  for (const url of urls) {
+    documents.push(await fetchFeishuDocument(config, url));
+  }
+  return documents;
+}
+
+export function hasFeishuDocLink(input?: string) {
+  return uniqueFeishuDocUrls(input || "").length > 0;
+}
+
 async function publishWithOpenCli(config: FeishuConfig, input: { title: string; content: string }) {
   const args = [
     "lark-cli",
@@ -91,6 +116,52 @@ async function publishWithOpenCli(config: FeishuConfig, input: { title: string; 
     documentId,
     url: url || `https://www.feishu.cn/docx/${documentId}`
   };
+}
+
+async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<FeishuFetchedDocument> {
+  const args = [
+    "lark-cli",
+    "docs",
+    "+fetch",
+    "--api-version",
+    "v2",
+    "--doc",
+    url,
+    "--doc-format",
+    "markdown",
+    "--detail",
+    "simple",
+    "--format",
+    "json",
+    "--as",
+    config.identity
+  ];
+
+  try {
+    const { stdout, stderr } = await execFileAsync(config.opencliBin, args, {
+      maxBuffer: 1024 * 1024 * 20,
+      timeout: 60000
+    });
+    const payload = parseJsonish(stdout.trim());
+    const document = extractFetchedDocument(payload);
+    if (!document.content.trim()) {
+      return {
+        url,
+        title: document.title,
+        error: stderr.trim() || "lark-cli 没有返回可用正文"
+      };
+    }
+    return {
+      url,
+      title: document.title,
+      content: clampText(document.content.trim(), 5000)
+    };
+  } catch (error) {
+    return {
+      url,
+      error: summarizeFeishuFetchError(error)
+    };
+  }
 }
 
 function spawnWithInput(command: string, args: string[], input: string, options: { maxBuffer: number; timeout: number }) {
@@ -145,6 +216,47 @@ function spawnWithInput(command: string, args: string[], input: string, options:
   });
 }
 
+function uniqueFeishuDocUrls(input: string) {
+  const urls = extractLinksFromInput(input)
+    .map((link) => link.url)
+    .filter(isFeishuDocUrl);
+  return [...new Set(urls)];
+}
+
+function isFeishuDocUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (!/(^|\.)feishu\.cn$|(^|\.)larksuite\.com$|(^|\.)feishu-boe\.cn$/i.test(host)) return false;
+    return /\/(?:docx|docs|doc|wiki)\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function extractFetchedDocument(payload: unknown) {
+  const root = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const data = root.data && typeof root.data === "object" ? (root.data as Record<string, unknown>) : root;
+  const document = data.document && typeof data.document === "object" ? (data.document as Record<string, unknown>) : data;
+  return {
+    title: stringValue(document.title || document.name || data.title || root.title),
+    content: stringValue(document.content || data.content || root.content)
+  };
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function summarizeFeishuFetchError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/timeout|ETIMEDOUT|timed out/i.test(message)) return "lark-cli 读取超时";
+  if (/permission|forbidden|403|unauthorized|401|无权限|权限/i.test(message)) return "当前 lark-cli 身份没有文档权限";
+  if (/not found|404|不存在/i.test(message)) return "文档不存在或链接无效";
+  if (/not found: opencli|ENOENT/i.test(message)) return "没有找到 opencli，请检查 OPENCLI_BIN";
+  return message || "lark-cli 读取失败";
+}
+
 function parseJsonish(output: string): unknown {
   if (!output) return {};
   try {
@@ -155,6 +267,14 @@ function parseJsonish(output: string): unknown {
     const candidates = [firstBrace, firstBracket].filter((index) => index >= 0);
     const start = Math.min(...candidates);
     if (Number.isFinite(start)) {
+      const jsonText = extractBalancedJson(output.slice(start));
+      if (jsonText) {
+        try {
+          return JSON.parse(jsonText);
+        } catch {
+          return {};
+        }
+      }
       try {
         return JSON.parse(output.slice(start));
       } catch {
@@ -163,4 +283,37 @@ function parseJsonish(output: string): unknown {
     }
     return {};
   }
+}
+
+function extractBalancedJson(input: string) {
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0) return input.slice(0, index + 1);
+    }
+  }
+  return "";
 }

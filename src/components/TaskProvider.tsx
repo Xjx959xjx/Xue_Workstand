@@ -2,10 +2,9 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import type { FeedbackInput } from "./FeedbackProvider";
 import { useFeedback } from "./FeedbackProvider";
-import { getJob, getJobs, startJob } from "@/lib/client";
+import { cancelJob, getJob, getJobs, startJob } from "@/lib/client";
 import { formatJobErrorMessage } from "@/lib/job-messages";
 import type { JobKind, JobListItem, JobRecord, JobStartInput } from "@/lib/types";
 import { useLibrary } from "./LibraryProvider";
@@ -18,14 +17,13 @@ type TaskContextValue = {
   error: string;
   refreshJobs: () => Promise<void>;
   startTask: (input: JobStartInput) => Promise<JobRecord>;
+  cancelTask: (jobId: string) => Promise<JobRecord>;
 };
 
 const TaskContext = createContext<TaskContextValue | null>(null);
 const NOTIFIED_STORAGE_KEY = "style-workbench-notified-jobs";
-const ACTIVE_POLL_INTERVAL_MS = 3000;
-const IDLE_POLL_INTERVAL_MS = 30000;
-const HIDDEN_POLL_INTERVAL_MS = 60000;
 const TASKS_CHANGED_EVENT = "style-workbench:tasks-changed";
+const ACTIVE_JOB_POLL_INTERVAL_MS = 1500;
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -34,7 +32,6 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [pageVisible, setPageVisible] = useState(true);
   const firstLoadRef = useRef(true);
   const fullJobCacheRef = useRef<Map<string, JobRecord>>(new Map());
   const initialFailureShownRef = useRef(false);
@@ -47,11 +44,6 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     notifiedRef.current = readNotifiedJobIds();
   }, []);
-
-  useEffect(() => {
-    pathnameRef.current = pathname;
-    setJobs((current) => mergeJobSummaries(current, fullJobCacheRef.current, pathname));
-  }, [pathname]);
 
   const refreshJobs = useCallback(async () => {
     if (refreshPromiseRef.current) {
@@ -104,8 +96,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   }, [notify, refresh]);
 
   useEffect(() => {
-    refreshJobs();
-  }, [refreshJobs]);
+    pathnameRef.current = pathname;
+    setJobs((current) => mergeJobSummaries(current, fullJobCacheRef.current, pathname));
+    void refreshJobs();
+  }, [pathname, refreshJobs]);
 
   useEffect(() => {
     const onTasksChanged = () => {
@@ -115,36 +109,52 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
   }, [refreshJobs]);
 
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshJobs();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshJobs();
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refreshJobs]);
+
   const activeJobs = useMemo(
     () => jobs.filter((job) => job.status === "queued" || job.status === "running"),
     [jobs]
   );
+  const hasActiveJobs = activeJobs.length > 0;
 
+  // Active jobs continue running in the server process, so keep polling until they settle.
   useEffect(() => {
-    const onVisibilityChange = () => setPageVisible(!document.hidden);
-    onVisibilityChange();
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
+    if (!hasActiveJobs) return;
 
-  useEffect(() => {
-    let cancelled = false;
-    let timeout = 0;
+    let stopped = false;
+    let timeoutId: number | undefined;
 
-    const schedule = () => {
-      const delay = pageVisible ? (activeJobs.length ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS) : HIDDEN_POLL_INTERVAL_MS;
-      timeout = window.setTimeout(async () => {
+    const poll = async () => {
+      try {
         await refreshJobs();
-        if (!cancelled) schedule();
-      }, delay);
+      } finally {
+        if (stopped) return;
+        timeoutId = window.setTimeout(() => {
+          void poll();
+        }, ACTIVE_JOB_POLL_INTERVAL_MS);
+      }
     };
 
-    schedule();
+    void poll();
     return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
+      stopped = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     };
-  }, [activeJobs.length, pageVisible, refreshJobs]);
+  }, [hasActiveJobs, refreshJobs]);
 
   const startTask = useCallback(
     async (input: JobStartInput) => {
@@ -156,6 +166,13 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     [refreshJobs]
   );
 
+  const cancelTask = useCallback(async (jobId: string) => {
+    const result = await cancelJob(jobId);
+    emitTasksChanged();
+    await refreshJobs();
+    return result.job;
+  }, [refreshJobs]);
+
   const value = useMemo(
     () => ({
       jobs,
@@ -164,9 +181,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
       loading,
       error,
       refreshJobs,
-      startTask
+      startTask,
+      cancelTask
     }),
-    [activeJobs, error, jobs, loading, refreshJobs, startTask]
+    [activeJobs, cancelTask, error, jobs, loading, refreshJobs, startTask]
   );
 
   return (
@@ -182,6 +200,10 @@ export function useTasks() {
   return context;
 }
 
+export function useOptionalTasks() {
+  return useContext(TaskContext);
+}
+
 type UseScopedTasksOptions = {
   href?: string;
   kinds?: JobKind[];
@@ -189,107 +211,32 @@ type UseScopedTasksOptions = {
 };
 
 export function useScopedTasks(options: UseScopedTasksOptions = {}) {
+  const context = useContext(TaskContext);
   const kindKey = options.kinds?.join("|") || "";
   const kindSet = useMemo(() => (kindKey ? new Set(kindKey.split("|") as JobKind[]) : null), [kindKey]);
-  const [jobs, setJobs] = useState<JobRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [pageVisible, setPageVisible] = useState(true);
-  const refreshPromiseRef = useRef<Promise<void> | null>(null);
-  const pendingRefreshRef = useRef(false);
   const includeRecent = options.includeRecent ?? true;
-  const recentLimit = includeRecent ? 12 : Number.POSITIVE_INFINITY;
-
-  const refreshJobs = useCallback(async () => {
-    if (refreshPromiseRef.current) {
-      pendingRefreshRef.current = true;
-      return refreshPromiseRef.current;
-    }
-
-    const run = async (): Promise<void> => {
-      try {
-        const summaries = (await getJobs()).jobs.filter((job) => isJobInScope(job, options.href, kindSet));
-        const limitedSummaries = includeRecent ? summaries.slice(0, recentLimit) : summaries.filter((job) => isActiveJob(job));
-        const hydrated = await Promise.all(limitedSummaries.map((job) => hydrateScopedJob(job)));
-        setJobs(hydrated);
-        setError("");
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "读取任务状态失败");
-      } finally {
-        setLoading(false);
-      }
-
-      if (pendingRefreshRef.current) {
-        pendingRefreshRef.current = false;
-        return run();
-      }
-    };
-
-    refreshPromiseRef.current = run().finally(() => {
-      refreshPromiseRef.current = null;
-    });
-    return refreshPromiseRef.current;
-  }, [includeRecent, kindSet, options.href, recentLimit]);
-
-  useEffect(() => {
-    refreshJobs();
-  }, [refreshJobs]);
-
-  useEffect(() => {
-    const onVisibilityChange = () => setPageVisible(!document.hidden);
-    onVisibilityChange();
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
-
-  const activeJobs = useMemo(() => jobs.filter((job) => isActiveJob(job)), [jobs]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timeout = 0;
-
-    const schedule = () => {
-      const delay = pageVisible ? (activeJobs.length ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS) : HIDDEN_POLL_INTERVAL_MS;
-      timeout = window.setTimeout(async () => {
-        await refreshJobs();
-        if (!cancelled) schedule();
-      }, delay);
-    };
-
-    schedule();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timeout);
-    };
-  }, [activeJobs.length, pageVisible, refreshJobs]);
-
-  useEffect(() => {
-    const onTasksChanged = () => {
-      void refreshJobs();
-    };
-    window.addEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
-    return () => window.removeEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
-  }, [refreshJobs]);
-
-  const startTask = useCallback(async (input: JobStartInput) => {
-    const result = await startJob(input);
-    emitTasksChanged();
-    await refreshJobs();
-    return result.job;
-  }, [refreshJobs]);
-
-  return useMemo(
-    () => ({
-      jobs,
-      activeJobs,
-      recentJobs: jobs.slice(0, 12),
-      loading,
-      error,
-      refreshJobs,
-      startTask
-    }),
-    [activeJobs, error, jobs, loading, refreshJobs, startTask]
+  const scopedJobs = useMemo(
+    () => (context?.jobs ?? []).filter((job) => isJobInScope(job, options.href, kindSet)),
+    [context?.jobs, kindSet, options.href]
   );
+
+  const scopedContext = useMemo(() => {
+    if (!context) return null;
+    const activeJobs = scopedJobs.filter((job) => isActiveJob(job));
+    return {
+      jobs: scopedJobs,
+      activeJobs,
+      recentJobs: includeRecent ? scopedJobs.slice(0, 12) : activeJobs,
+      loading: context.loading,
+      error: context.error,
+      refreshJobs: context.refreshJobs,
+      startTask: context.startTask,
+      cancelTask: context.cancelTask
+    };
+  }, [context, includeRecent, scopedJobs]);
+
+  if (!scopedContext) throw new Error("useScopedTasks must be used inside TaskProvider");
+  return scopedContext;
 }
 
 function handleJobNotifications(
@@ -330,7 +277,7 @@ function handleJobNotifications(
 }
 
 function isTerminalJob(job: JobRecord) {
-  return job.status === "completed" || job.status === "failed";
+  return job.status === "completed" || job.status === "failed" || job.status === "cancelled" || job.status === "interrupted";
 }
 
 function isActiveJob(job: JobRecord | JobListItem) {
@@ -350,7 +297,7 @@ async function hydrateTrackedJobs(
   pathname: string
 ) {
   const jobIds = jobs
-    .filter((job, index) => shouldHydrateJob(job, index, isFirstLoad, previousStatus, pathname))
+    .filter((job, index) => shouldHydrateJob(job, index, isFirstLoad, previousStatus, cache, pathname))
     .map((job) => job.id);
   if (!jobIds.length) return;
 
@@ -374,15 +321,21 @@ function shouldHydrateJob(
   index: number,
   isFirstLoad: boolean,
   previousStatus: Map<string, JobRecord["status"]>,
+  cache: Map<string, JobRecord>,
   pathname: string
 ) {
   const relevantToCurrentPage = isJobRelevantToPath(job, pathname);
-  if (isActiveJob(job)) return relevantToCurrentPage && Boolean(job.hasPartialText || job.hasResult);
+  const needsFullJob = Boolean(job.hasResult || job.hasPartialText);
+  if (isActiveJob(job)) return relevantToCurrentPage && needsFullJob;
   if (!isTerminalJob(job)) return false;
-  if (isFirstLoad) return relevantToCurrentPage && index < 3 && (job.hasResult || job.hasPartialText) && isRecentJob(job);
+  if (!relevantToCurrentPage || !needsFullJob) return false;
+  const cachedJob = cache.get(job.id);
+  if (cachedJob && (!job.hasResult || typeof cachedJob.result !== "undefined")) return false;
+  if (isFirstLoad) return index < 3 && isRecentJob(job);
 
   const previous = previousStatus.get(job.id);
-  return relevantToCurrentPage && Boolean(previous && previous !== job.status && (job.hasResult || job.hasPartialText));
+  if (previous && previous !== job.status) return true;
+  return index < 6 && isRecentJob(job);
 }
 
 function isJobRelevantToPath(job: JobListItem, pathname: string) {
@@ -402,15 +355,6 @@ function isJobInScope(job: JobListItem, href: string | undefined, kinds: Set<Job
   if (kinds && !kinds.has(job.kind)) return false;
   if (href && !isJobRelevantToHref(job, href)) return false;
   return true;
-}
-
-async function hydrateScopedJob(job: JobListItem): Promise<JobRecord> {
-  if (!job.hasPartialText && !job.hasResult) return job;
-  try {
-    return (await getJob(job.id)).job;
-  } catch {
-    return job;
-  }
 }
 
 function defaultJobHref(kind: JobRecord["kind"]) {
@@ -437,6 +381,7 @@ function pruneFullJobCache(cache: Map<string, JobRecord>, jobs: JobListItem[]) {
 }
 
 function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
+  if (job.status === "cancelled") return;
   const failed = job.status === "failed";
   notify({
     tone: failed ? "error" : "success",
@@ -466,12 +411,6 @@ function readNotifiedJobIds() {
 function persistNotifiedJobIds(ids: Set<string>) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(NOTIFIED_STORAGE_KEY, JSON.stringify([...ids].slice(-80)));
-}
-
-export function TaskStatusIcon({ status }: { status: JobRecord["status"] }) {
-  if (status === "running" || status === "queued") return <Loader2 aria-hidden="true" size={14} />;
-  if (status === "completed") return <CheckCircle2 aria-hidden="true" size={14} />;
-  return <XCircle aria-hidden="true" size={14} />;
 }
 
 function emitTasksChanged() {

@@ -275,6 +275,13 @@ export function updateGrossMarginMonitorPlayTarget(recordId: string, target: num
   });
 }
 
+export function updateGrossMarginMonitorPlayCurrent(recordId: string, current: number) {
+  return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "updateMonitorPlayCurrent", recordId, current })
+  });
+}
+
 export function deleteGrossMarginMonitorRecord(recordId: string) {
   return requestJson<{ deleted: string; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
@@ -309,6 +316,13 @@ export function startJob(input: JobStartInput) {
   return requestJson<{ job: JobRecord; jobId: string }>("/api/jobs", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export function cancelJob(jobId: string) {
+  return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action: "cancel" })
   });
 }
 
@@ -634,6 +648,7 @@ export function writeCopy(input: {
   mode: Draft["mode"];
   prompt?: string;
   sourceText?: string;
+  supportDocLinks?: string;
   save?: boolean;
   useWebResearch?: boolean;
 }) {
@@ -652,6 +667,7 @@ export async function streamWriteCopy(
     mode: Draft["mode"];
     prompt?: string;
     sourceText?: string;
+    supportDocLinks?: string;
     save?: boolean;
     useWebResearch?: boolean;
   },

@@ -25,6 +25,7 @@ const writeCopySchema = z.object({
     mode: z.enum(["topic", "rewrite"]),
     prompt: z.string().optional().default(""),
     sourceText: z.string().optional(),
+    supportDocLinks: z.string().optional(),
     save: z.boolean().optional(),
     useWebResearch: z.boolean().optional()
   })
@@ -85,9 +86,9 @@ const batchTranscribeSchema = z.object({
 
 const engagementOptionsSchema = {
   includeComments: z.boolean().optional().default(true),
-  commentCount: z.number().int().min(1).max(200).optional().default(50),
+  commentCount: z.number().int().min(1).max(200).optional().default(100),
   includeDanmaku: z.boolean().optional().default(false),
-  danmakuCount: z.number().int().min(1).max(300).optional().default(100)
+  danmakuCount: z.number().int().min(1).max(300).optional().default(50)
 };
 
 const engagementSchema = z.object({

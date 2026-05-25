@@ -1,6 +1,6 @@
 /* Gross margin calculator */
 .gross-margin-workspace {
-  grid-template-columns: 330px minmax(560px, 1fr) 360px;
+  grid-template-columns: 320px minmax(560px, 1fr) 312px;
 }
 
 .gross-price-pane .pane-body,
@@ -8,9 +8,16 @@
   gap: 10px;
 }
 
+.gross-result-pane {
+  min-height: 0;
+}
+
 .gross-result-pane .pane-body {
-  grid-template-rows: auto auto auto auto;
-  overflow: hidden;
+  min-height: 0;
+  grid-template-rows: auto auto auto auto auto;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .gross-platform-tabs button {
@@ -389,15 +396,15 @@
 .gross-result-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .gross-result-panel {
   display: grid;
   gap: 2px;
-  padding: 12px;
+  padding: 10px 11px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--surface-raised);
 }
 
@@ -410,7 +417,7 @@
 
 .gross-result-panel strong {
   color: var(--text-strong);
-  font-size: 30px;
+  font-size: 26px;
   font-variant-numeric: tabular-nums;
   font-weight: 750;
   line-height: 1.05;
@@ -450,6 +457,110 @@
 
 .gross-result-panel.negative strong {
   color: var(--rose);
+}
+
+.gross-result-tools {
+  display: grid;
+  gap: 8px;
+}
+
+.gross-review-preview {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--surface-soft) 88%, white);
+}
+
+.gross-review-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  color: var(--muted-strong);
+  background: transparent;
+  cursor: pointer;
+  list-style: none;
+}
+
+.gross-review-preview-head::-webkit-details-marker {
+  display: none;
+}
+
+.gross-review-preview-head span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gross-review-preview-head small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.gross-review-preview-head strong {
+  flex: 0 0 auto;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.gross-review-preview[open] .gross-review-preview-head {
+  border-bottom: 1px solid var(--line-subtle);
+  background: color-mix(in oklch, var(--surface-raised) 95%, white);
+}
+
+.gross-review-preview[open] .gross-review-preview-head strong {
+  color: var(--muted-strong);
+}
+
+.gross-review-preview-body {
+  min-height: 0;
+}
+
+.gross-review-preview pre {
+  max-height: 180px;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: color-mix(in oklch, var(--panel) 94%, white);
+}
+
+.gross-action-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.gross-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.gross-action-grid .btn {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.gross-action-grid .gross-export-primary {
+  grid-column: 1 / -1;
+  min-height: 38px;
 }
 
 .gross-import-modal {
@@ -757,20 +868,28 @@
   padding-top: 0;
 }
 
+.gross-monitor-page {
+  gap: 12px;
+  padding-top: 0;
+}
+
 .gross-monitor-topbar {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 3;
+  position: static;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 0;
+}
+
+.gross-monitor-topbar .page-header-meta {
+  justify-content: flex-start;
 }
 
 .gross-monitor-topbar .button-row {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
@@ -796,17 +915,22 @@
   align-content: start;
   gap: 8px;
   width: 306px;
-  min-height: 360px;
+  min-height: 0;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in oklch, var(--accent) 12%, var(--line));
   border-radius: var(--radius-lg);
-  background: var(--panel);
+  background: color-mix(in oklch, var(--panel-raised) 96%, white);
   box-shadow: var(--shadow-sm);
 }
 
 .gross-monitor-card.high-risk {
-  border-color: color-mix(in oklch, var(--rose) 28%, var(--line));
-  background: color-mix(in oklch, var(--rose-soft) 24%, var(--panel));
+  border-color: color-mix(in oklch, var(--rose) 22%, var(--line));
+  background: color-mix(in oklch, var(--panel-raised) 94%, var(--rose-soft));
+}
+
+.gross-monitor-card.mid-risk {
+  border-color: color-mix(in oklch, var(--amber) 26%, var(--line));
+  background: color-mix(in oklch, var(--panel-raised) 95%, var(--amber-soft));
 }
 
 .gross-monitor-card-main {
@@ -880,14 +1004,26 @@
   height: 58px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at center, var(--panel) 58%, transparent 59%),
-    conic-gradient(var(--amber) var(--risk-fill), var(--line-subtle) 0);
+    radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
+    conic-gradient(color-mix(in oklch, var(--amber) 82%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
 }
 
 .gross-monitor-risk-dial.danger {
   background:
-    radial-gradient(circle at center, var(--panel) 58%, transparent 59%),
-    conic-gradient(color-mix(in oklch, var(--rose) 88%, var(--text-strong)) var(--risk-fill), var(--line-subtle) 0);
+    radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
+    conic-gradient(color-mix(in oklch, var(--rose) 72%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
+}
+
+.gross-monitor-risk-dial.warning {
+  background:
+    radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
+    conic-gradient(color-mix(in oklch, var(--amber) 88%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
+}
+
+.gross-monitor-risk-dial.calm {
+  background:
+    radial-gradient(circle at center, color-mix(in oklch, var(--panel-raised) 98%, white) 58%, transparent 59%),
+    conic-gradient(color-mix(in oklch, var(--accent) 70%, white) var(--risk-fill), color-mix(in oklch, var(--line-subtle) 92%, white) 0);
 }
 
 .gross-monitor-risk-dial strong,
@@ -915,6 +1051,14 @@
   color: color-mix(in oklch, var(--rose) 86%, var(--text-strong));
 }
 
+.gross-monitor-risk-dial.warning strong {
+  color: color-mix(in oklch, var(--amber) 92%, var(--text-strong));
+}
+
+.gross-monitor-risk-dial.calm strong {
+  color: color-mix(in oklch, var(--accent-strong) 78%, var(--text-strong));
+}
+
 .gross-monitor-risk-meta {
   display: grid;
   gap: 7px;
@@ -926,9 +1070,33 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  color: var(--muted);
+  color: var(--muted-strong);
   font-size: 11px;
   font-weight: 700;
+}
+
+.gross-monitor-refresh-summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in oklch, var(--surface-soft) 90%, white);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.gross-monitor-refresh-summary.changed {
+  border-color: color-mix(in oklch, var(--accent) 18%, var(--line));
+  color: var(--accent-strong);
+  background: color-mix(in oklch, var(--accent-soft) 46%, white);
+}
+
+.gross-monitor-refresh-summary.stable {
+  color: var(--muted-strong);
 }
 
 .gross-monitor-card-actions {
@@ -957,26 +1125,30 @@
 
 .gross-monitor-metric-cell {
   display: grid;
-  grid-template-columns: minmax(92px, 0.9fr) minmax(72px, 0.7fr) minmax(110px, 1.1fr);
+  grid-template-columns: minmax(86px, 0.9fr) minmax(62px, 0.7fr) minmax(96px, 112px);
+  grid-template-areas:
+    "head bar values";
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 5px 6px;
+  min-height: 28px;
+  padding: 4px 6px;
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-md);
   color: var(--muted);
-  background: var(--surface-raised);
+  background: color-mix(in oklch, var(--surface-raised) 98%, white);
   font-size: 11px;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
 }
 
 .gross-monitor-metric-cell.danger {
-  border-color: color-mix(in oklch, var(--rose) 32%, var(--line));
-  background: color-mix(in oklch, var(--rose-soft) 44%, var(--panel));
+  border-color: color-mix(in oklch, var(--rose) 24%, var(--line));
+  background: color-mix(in oklch, var(--surface-raised) 94%, var(--rose-soft));
 }
 
 .gross-monitor-metric-cell-head {
+  grid-area: head;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -997,8 +1169,10 @@
 }
 
 .gross-monitor-metric-bar {
+  grid-area: bar;
   overflow: hidden;
   height: 7px;
+  min-width: 0;
   border-radius: 999px;
   background: var(--line-subtle);
 }
@@ -1007,32 +1181,69 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: color-mix(in oklch, var(--accent) 78%, white);
 }
 
 .gross-monitor-metric-cell.danger .gross-monitor-metric-bar span {
-  background: color-mix(in oklch, var(--rose) 82%, var(--text-strong));
+  background: color-mix(in oklch, var(--rose) 66%, white);
 }
 
-.gross-monitor-metric-cell-values,
-.gross-monitor-metric-cell em {
-  display: block;
-  gap: 0;
+.gross-monitor-metric-cell-values {
+  grid-area: values;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
   color: var(--muted);
+}
+
+.gross-monitor-metric-cell-value-main {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .gross-monitor-metric-cell-values em {
   overflow: hidden;
   min-width: 0;
+  max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-style: normal;
+  color: var(--amber);
+  font-weight: 700;
 }
 
 .gross-monitor-metric-cell em {
-  color: var(--amber);
   font-style: normal;
+}
+
+.gross-monitor-metric-delta {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
   font-weight: 700;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gross-monitor-metric-delta.positive {
+  color: color-mix(in oklch, var(--accent-strong) 82%, var(--text-strong));
+}
+
+.gross-monitor-metric-delta.negative {
+  color: color-mix(in oklch, var(--rose) 82%, var(--text-strong));
+}
+
+.gross-monitor-metric-delta.neutral {
+  color: var(--muted);
 }
 
 .gross-monitor-play-edit {
@@ -1192,14 +1403,8 @@
     grid-template-columns: 1fr;
   }
 
-  .gross-monitor-topbar {
-    position: static;
-    margin-bottom: 0;
-  }
-
   .gross-monitor-topbar .button-row {
-    width: 100%;
-    align-items: stretch;
+    justify-content: flex-start;
   }
 
   .gross-monitor-card-grid {

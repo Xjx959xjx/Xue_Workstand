@@ -700,7 +700,6 @@ export async function getGrossMarginMonitorRecords() {
 
   return records
     .map(normalizeGrossMarginMonitorRecord)
-    .filter((record) => record.platform === "bilibili")
     .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
 }
 
@@ -730,6 +729,7 @@ export async function upsertGrossMarginMonitorRecord(input: {
     sourceText: input.sourceText,
     targetStats: normalizeGrossMarginTargetStats(input.targetStats, platform),
     currentStats: existing?.currentStats,
+    previousStats: existing?.previousStats,
     metrics: [],
     maxDifferencePercent: 0,
     highRisk: false,
@@ -1921,6 +1921,7 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
   const platform = record.platform === "bilibili" ? "bilibili" : "douyin";
   const targetStats = normalizeGrossMarginTargetStats(record.targetStats, platform);
   const currentStats = normalizeGrossMarginCurrentStats(record.currentStats);
+  const previousStats = normalizeGrossMarginCurrentStats(record.previousStats);
   const metrics = buildGrossMarginMonitorMetrics(platform, targetStats, currentStats);
   const maxDifferencePercent = metrics.reduce((max, metric) => Math.max(max, metric.differencePercent), 0);
   const status = normalizeGrossMarginMonitorStatus(record.status);
@@ -1936,6 +1937,7 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     sourceText: record.sourceText || "",
     targetStats,
     currentStats: Object.keys(currentStats).length ? currentStats : undefined,
+    previousStats: Object.keys(previousStats).length ? previousStats : undefined,
     metrics,
     maxDifferencePercent,
     highRisk: metrics.some((metric) => metric.highRisk),
@@ -1959,7 +1961,7 @@ function normalizeGrossMarginTargetStats(
   const allowedServices =
     platform === "bilibili"
       ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink"] as const)
-      : (["like", "comment", "favorite", "share"] as const);
+      : (["play", "like", "comment", "favorite", "share"] as const);
   const normalized: Partial<Record<GrossMarginServiceKind, number>> = {};
 
   for (const service of allowedServices) {
@@ -1994,7 +1996,7 @@ function buildGrossMarginMonitorMetrics(
   const services =
     platform === "bilibili"
       ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink"] as const)
-      : (["like", "comment", "favorite", "share"] as const);
+      : (["play", "like", "comment", "favorite", "share"] as const);
 
   return services
     .map((service) => {
@@ -2012,7 +2014,7 @@ function buildGrossMarginMonitorMetrics(
         difference,
         differencePercent,
         highRisk: hasCurrent && differencePercent >= 0.7,
-        manualOnly: service === "blueLink"
+        manualOnly: service === "blueLink" || (platform === "douyin" && service === "play")
       } satisfies GrossMarginMonitorMetric;
     })
     .filter(Boolean) as GrossMarginMonitorMetric[];

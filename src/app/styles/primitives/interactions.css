@@ -190,12 +190,6 @@
   }
 }
 
-@keyframes task-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes task-toast-enter {
   from {
     opacity: 0;

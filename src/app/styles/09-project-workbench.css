@@ -1,6 +1,6 @@
 /* Project workbench */
 .project-workbench-page {
-  gap: 11px;
+  gap: 14px;
 }
 
 .project-workbench-shell,
@@ -18,13 +18,14 @@
 .project-workbench-flow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: color-mix(in oklch, var(--panel-raised) 88%, var(--surface-soft));
-  box-shadow: var(--shadow-sm);
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 14%, var(--line));
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 54%, var(--panel-raised)) 0%, var(--panel) 100%);
+  box-shadow: var(--shadow);
 }
 
 .project-flow-steps {
@@ -40,23 +41,23 @@
   gap: 7px;
   align-items: center;
   min-width: 0;
-  min-height: 42px;
-  padding: 7px 8px;
-  border: 1px solid var(--line-subtle);
-  border-radius: var(--radius-md);
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--line-subtle) 84%, white);
+  border-radius: 14px;
   color: var(--muted-strong);
-  background: var(--panel);
+  background: color-mix(in oklch, var(--panel-raised) 92%, white);
 }
 
 .project-flow-step.done {
   border-color: color-mix(in oklch, var(--green) 28%, var(--line));
-  background: color-mix(in oklch, var(--green-soft) 58%, var(--panel));
+  background: color-mix(in oklch, var(--green-soft) 58%, var(--panel-raised));
 }
 
 .project-flow-step.active,
 .project-flow-step.pending {
   border-color: color-mix(in oklch, var(--accent) 26%, var(--line));
-  background: color-mix(in oklch, var(--accent-tint) 62%, var(--panel));
+  background: color-mix(in oklch, var(--accent-tint) 68%, var(--panel-raised));
 }
 
 .project-flow-icon {
@@ -127,9 +128,10 @@
 
 .project-workbench-section {
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
+  border: 1px solid color-mix(in oklch, var(--accent) 12%, var(--line));
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 94%, white) 0%, var(--panel) 100%);
   box-shadow: var(--shadow-sm);
 }
 
@@ -147,9 +149,9 @@
 
 .project-context-panel {
   align-content: start;
-  padding: 10px;
+  padding: 12px;
   background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 82%, var(--accent-tint)), var(--panel) 150px),
+    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 58%, var(--panel-raised)), var(--panel) 150px),
     var(--panel);
 }
 
@@ -160,7 +162,7 @@
   align-items: center;
   padding: 10px;
   border: 1px solid color-mix(in oklch, var(--line-strong) 76%, var(--line));
-  border-radius: calc(var(--radius-lg) - 1px);
+  border-radius: 14px;
   background: var(--panel-raised);
   box-shadow: inset 0 1px 0 color-mix(in oklch, var(--panel-raised) 82%, transparent);
 }
@@ -485,20 +487,20 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  padding: 12px;
-  border: 1px solid var(--line-subtle);
-  border-radius: var(--radius-md);
-  background: color-mix(in oklch, var(--panel-raised) 80%, var(--surface-soft));
+  padding: 14px;
+  border: 1px solid color-mix(in oklch, var(--accent) 10%, var(--line-subtle));
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--panel-raised) 84%, var(--surface-soft));
 }
 
 .style-editor-panel {
   display: flex;
   min-height: 0;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
+  gap: 12px;
+  padding: 12px;
   background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 88%, var(--blue-soft)), var(--panel) 155px),
+    linear-gradient(180deg, color-mix(in oklch, var(--blue-soft) 40%, var(--panel-raised)), var(--panel) 155px),
     var(--panel);
 }
 
@@ -611,8 +613,8 @@
   flex: 1 1 auto;
   min-height: min(580px, calc(100vh - 328px));
   overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in oklch, var(--accent) 14%, var(--line-strong));
+  border-radius: 16px;
   background: var(--panel-raised);
   box-shadow: inset 0 1px 0 color-mix(in oklch, var(--panel-raised) 82%, transparent);
 }

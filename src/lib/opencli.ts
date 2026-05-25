@@ -1635,7 +1635,8 @@ export async function hydrateBilibiliVideoStats(video: Video) {
 }
 
 export async function getBilibiliVideoStatsByUrl(url: string) {
-  const bvid = extractBvid(url);
+  const resolvedUrl = await resolveBilibiliVideoUrl(url);
+  const bvid = extractBvid(resolvedUrl);
   if (!bvid) {
     throw new Error("没有从链接里解析到 B 站 BV 号，请粘贴完整视频链接。");
   }
@@ -1666,6 +1667,29 @@ export async function getBilibiliVideoStatsByUrl(url: string) {
       danmaku: firstNumber(metadata.danmaku)
     }
   };
+}
+
+async function resolveBilibiliVideoUrl(url: string) {
+  const directBvid = extractBvid(url);
+  if (directBvid) return url;
+  if (!/b23\.tv/i.test(url)) return url;
+
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 style-library",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    });
+    const resolvedUrl = response.url || url;
+    if (extractBvid(resolvedUrl)) return resolvedUrl;
+
+    const text = await response.text().catch(() => "");
+    return extractBvid(text) ? text : resolvedUrl;
+  } catch {
+    return url;
+  }
 }
 
 async function normalizeBilibiliVideo(

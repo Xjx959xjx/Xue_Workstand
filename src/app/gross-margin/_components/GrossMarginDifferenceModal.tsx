@@ -12,7 +12,7 @@ import type { GrossMarginDifferenceQueryResult, GrossMarginPriceTable, GrossMarg
 type PlatformKey = GrossMarginPriceTable["platform"];
 
 const serviceLabels: Array<{ service: GrossMarginServiceKind; label: string; platforms: PlatformKey[] }> = [
-  { service: "play", label: "播放量", platforms: ["bilibili"] },
+  { service: "play", label: "播放量", platforms: ["bilibili", "douyin"] },
   { service: "like", label: "点赞", platforms: ["bilibili", "douyin"] },
   { service: "coin", label: "投币", platforms: ["bilibili"] },
   { service: "favorite", label: "收藏", platforms: ["bilibili", "douyin"] },

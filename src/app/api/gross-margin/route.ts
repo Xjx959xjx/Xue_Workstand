@@ -20,7 +20,7 @@ import type {
   GrossMarginServiceKind
 } from "@/lib/types";
 import { extractBvid, extractDouyinAwemeId, extractDouyinSecUid, toNumber } from "@/lib/utils";
-import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey } from "@/lib/video-links";
+import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey, normalizeVideoUrlInput } from "@/lib/video-links";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -86,6 +86,11 @@ const mutationSchema = z.discriminatedUnion("action", [
     target: z.coerce.number().finite().gt(0, "播放量目标必须大于 0").max(100_000_000, "播放量目标过大，请检查输入")
   }),
   z.object({
+    action: z.literal("updateMonitorPlayCurrent"),
+    recordId: z.string().trim().min(1, "缺少监控记录 ID"),
+    current: z.coerce.number().finite().min(0, "当前播放量不能小于 0").max(100_000_000, "当前播放量过大，请检查输入")
+  }),
+  z.object({
     action: z.literal("deleteMonitorRecord"),
     recordId: z.string().trim().min(1, "缺少监控记录 ID")
   })
@@ -122,6 +127,10 @@ export async function POST(request: Request) {
     }
     if (input.action === "updateMonitorPlayTarget") {
       const record = await updateMonitorPlayTarget(input.recordId, input.target);
+      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+    }
+    if (input.action === "updateMonitorPlayCurrent") {
+      const record = await updateMonitorPlayCurrent(input.recordId, input.current);
       return NextResponse.json({ record, library: await getGrossMarginLibrary() });
     }
     if (input.action === "deleteMonitorRecord") {
@@ -184,11 +193,9 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
     ...parsed.stats,
     ...(input.targetStats || {})
   };
-  const videoUrl = resolveVideoUrl(input.videoUrl, input.sourceText).url;
+  const resolvedVideo = resolveVideoUrl(input.videoUrl, input.sourceText);
+  const videoUrl = normalizeVideoUrlInput(resolvedVideo.url);
   const platform = resolveDifferencePlatform(videoUrl, parsed.platform, input.platform);
-  if (platform !== "bilibili") {
-    throw new Error("监控板目前只记录 B 站维护目标。");
-  }
   const videoKey = getVideoComparableKey(videoUrl);
   return upsertGrossMarginMonitorRecord({
     platform,
@@ -214,12 +221,18 @@ async function refreshMonitorRecord(recordId: string) {
             url: record.videoUrl
           });
     if ("warning" in fetched && fetched.warning) warnings.push(fetched.warning);
+    const fetchedStats = normalizeFetchedStatsForMonitor(record.platform, fetched.stats);
+    const currentStats =
+      record.platform === "douyin" && typeof record.currentStats?.play === "number"
+        ? { ...fetchedStats, play: record.currentStats.play }
+        : fetchedStats;
     return saveGrossMarginMonitorRecord({
       ...record,
       title: fetched.title || record.title,
       videoUrl: fetched.url || record.videoUrl,
       publishedAt: fetched.publishedAt || record.publishedAt,
-      currentStats: normalizeFetchedStatsForMonitor(record.platform, fetched.stats),
+      previousStats: record.currentStats,
+      currentStats,
       status: "completed",
       warnings,
       lastRefreshedAt: new Date().toISOString(),
@@ -248,13 +261,28 @@ async function refreshMonitorRecords() {
 async function updateMonitorPlayTarget(recordId: string, target: number) {
   const record = await resolveGrossMarginMonitorRecord(recordId);
   if (record.platform !== "bilibili") {
-    throw new Error("只有 B 站监控支持修改播放量目标。");
+    throw new Error("抖音播放量抓不到，请在监控卡片里填写当前播放量。");
   }
   return saveGrossMarginMonitorRecord({
     ...record,
     targetStats: {
       ...record.targetStats,
       play: Math.round(target)
+    },
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function updateMonitorPlayCurrent(recordId: string, current: number) {
+  const record = await resolveGrossMarginMonitorRecord(recordId);
+  if (record.platform !== "douyin") {
+    throw new Error("只有抖音监控需要手动填写当前播放量。");
+  }
+  return saveGrossMarginMonitorRecord({
+    ...record,
+    currentStats: {
+      ...(record.currentStats || {}),
+      play: Math.round(current)
     },
     updatedAt: new Date().toISOString()
   });
@@ -275,12 +303,16 @@ function normalizeFetchedStatsForMonitor(
       danmaku: stats.danmaku
     };
   }
-  return {
+  const normalized: Partial<Record<GrossMarginServiceKind, number>> = {
     like: stats.like,
     comment: stats.comment,
     favorite: stats.favorite,
     share: stats.share
   };
+  if (typeof stats.play === "number" && Number.isFinite(stats.play)) {
+    normalized.play = stats.play;
+  }
+  return normalized;
 }
 
 function parseMaintenanceTemplate(template: string) {
@@ -445,6 +477,7 @@ function buildDifferenceResult(input: {
           { service: "blueLink", label: "蓝链点击" }
         ]
       : [
+          { service: "play", label: "播放量" },
           { service: "like", label: "点赞" },
           { service: "comment", label: "评论" },
           { service: "favorite", label: "收藏" },
@@ -463,6 +496,10 @@ function buildDifferenceResult(input: {
       }
 
       const hasCurrent = typeof current === "number" && !Number.isNaN(current);
+      if (input.platform === "douyin" && service === "play" && !hasCurrent) {
+        warnings.push("抖音播放量抓不到，请手动补充当前播放量后再生成播放差额。");
+        return "";
+      }
       if (!hasCurrent && service !== "blueLink") {
         warnings.push(`${label} 没有抓到当前数据，暂时按 0 处理。`);
       }
@@ -474,10 +511,6 @@ function buildDifferenceResult(input: {
       return `${label}：${formatDifferenceValue(service, difference, input.platform)}`;
     })
     .filter(Boolean);
-
-  if (input.platform === "douyin" && ("play" in input.templateStats || "play" in input.currentStats)) {
-    warnings.push("抖音播放量不参与自动差额，已跳过。");
-  }
 
   return {
     platform: input.platform,

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { MessageSquarePlus, RefreshCw } from "lucide-react";
 import { AssetsFeishuModal } from "./_components/AssetsFeishuModal";
 import { EngagementGeneratorPane } from "./_components/EngagementGeneratorPane";
 import { EngagementHistoryPane } from "./_components/EngagementHistoryPane";
@@ -31,8 +31,8 @@ function AssetsPageContent() {
   const [sourceInput, setSourceInput] = useState("");
   const [includeComments, setIncludeComments] = useState(true);
   const [includeDanmaku, setIncludeDanmaku] = useState(false);
-  const [commentCount, setCommentCount] = useState(50);
-  const [danmakuCount, setDanmakuCount] = useState(100);
+  const [commentCount, setCommentCount] = useState(100);
+  const [danmakuCount, setDanmakuCount] = useState(50);
   const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
 
@@ -97,18 +97,21 @@ function AssetsPageContent() {
   return (
     <div className="page assets-page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              💬
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">互动素材</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <MessageSquarePlus size={20} strokeWidth={2.1} />
             </span>
-            <span>评论生成</span>
-          </h1>
-          <p className="subtle">输入链接会先转写，输入文案会直接生成；评论默认开启，弹幕按需勾选。</p>
+            <div className="page-title-copy">
+              <h1>评论生成</h1>
+              <p className="subtle">链接转写，文案直接生成。</p>
+            </div>
+          </div>
         </div>
-        <div className="button-row">
+        <div className="page-header-meta">
           <span className="stat-pill">{records.length} 条记录</span>
-          <button className="btn" onClick={() => void handleRefresh()} type="button">
+          <button className="btn ghost" onClick={() => void handleRefresh()} type="button">
             <RefreshCw size={16} />
             刷新
           </button>
@@ -120,7 +123,7 @@ function AssetsPageContent() {
           <div className="engagement-refbar">
             <div>
               <h2>生成器</h2>
-              <p className="pane-subtitle">一个输入框，链接转写后生成，文案直接生成。</p>
+              <p className="pane-subtitle">链接或文案。</p>
             </div>
           </div>
           <div className="engagement-content-grid">
@@ -166,14 +169,17 @@ function AssetsFallback() {
   return (
     <div className="page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              💬
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">互动素材</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <MessageSquarePlus size={20} strokeWidth={2.1} />
             </span>
-            <span>评论生成</span>
-          </h1>
-          <p className="subtle">正在读取生成记录。</p>
+            <div className="page-title-copy">
+              <h1>评论生成</h1>
+              <p className="subtle">正在读取生成记录。</p>
+            </div>
+          </div>
         </div>
       </header>
     </div>

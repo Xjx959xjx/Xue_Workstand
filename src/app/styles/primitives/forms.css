@@ -1,18 +1,18 @@
 .field {
   display: grid;
-  gap: 5px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
 .field label {
   color: var(--muted-strong);
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-weight: 600;
 }
 
 .field > span {
   color: var(--muted-strong);
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-weight: 600;
 }
 
@@ -27,14 +27,19 @@
 .modal-editor textarea,
 .pane-search input {
   width: 100%;
-  min-height: 34px;
-  padding: 7px 9px;
-  border: 1px solid var(--line-strong);
+  min-height: var(--field-height);
+  padding: 9px 11px;
+  border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
   border-radius: var(--radius-md);
   color: var(--text);
-  background: var(--panel);
+  background: color-mix(in oklch, var(--panel-raised) 92%, white);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
   outline: 2px solid transparent;
   outline-offset: 2px;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .field textarea,
@@ -56,6 +61,7 @@
 .modal-editor textarea:focus,
 .pane-search input:focus {
   border-color: var(--accent);
+  background: var(--panel-raised);
   box-shadow: 0 0 0 3px var(--focus);
 }
 

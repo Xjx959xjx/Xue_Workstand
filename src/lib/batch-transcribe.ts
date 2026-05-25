@@ -35,6 +35,7 @@ export type BatchTranscribeHooks = {
   onVideoResult?: (payload: BatchTranscribeVideoEvent) => void;
   onStyleStart?: () => void;
   onFinalize?: () => void;
+  signal?: AbortSignal;
 };
 
 type BatchVideoResult = BatchTranscribeResult["results"][number];
@@ -44,6 +45,7 @@ export async function runBatchTranscribe(
   input: BatchTranscribeInput,
   hooks: BatchTranscribeHooks = {}
 ): Promise<BatchTranscribeResult> {
+  throwIfAborted(hooks.signal);
   hooks.onPrepare?.();
   const totalStartedAt = Date.now();
 
@@ -64,6 +66,7 @@ export async function runBatchTranscribe(
 
   pushTiming(result, "prepare", totalStartedAt);
   await processVideos(input, hooks, result, account, candidates);
+  throwIfAborted(hooks.signal);
 
   const candidateOrder = new Map(candidates.map((video, index) => [video.id, index]));
   result.results.sort((a, b) => (candidateOrder.get(a.videoId) ?? 0) - (candidateOrder.get(b.videoId) ?? 0));
@@ -71,6 +74,7 @@ export async function runBatchTranscribe(
   pushTiming(result, "transcribe-phase-total", totalStartedAt);
 
   if (input.updateStyle) {
+    throwIfAborted(hooks.signal);
     hooks.onStyleStart?.();
     try {
       const styleResult = await generateStyleProfile(input.platform, input.accountId);
@@ -86,6 +90,7 @@ export async function runBatchTranscribe(
   }
 
   result.account = await getAccountSummary(account);
+  throwIfAborted(hooks.signal);
   pushTiming(result, "total", totalStartedAt);
   hooks.onFinalize?.();
   return result;
@@ -98,6 +103,7 @@ async function processVideos(
   account: Account,
   candidates: Video[]
 ) {
+  throwIfAborted(hooks.signal);
   const concurrency = input.platform === "douyin" ? resolveDouyinBatchConcurrency() : 1;
   let douyinMediaUrls = new Map<string, string>();
   if (input.platform === "douyin") {
@@ -109,6 +115,7 @@ async function processVideos(
 
   async function worker() {
     while (nextIndex < candidates.length) {
+      throwIfAborted(hooks.signal);
       const index = nextIndex;
       nextIndex += 1;
       const video = candidates[index];
@@ -151,6 +158,7 @@ async function processVideo(
   douyinMediaUrl?: string
 ) {
   hooks.onVideoStart?.({ index, total, video });
+  throwIfAborted(hooks.signal);
 
   if (videoHasTranscript(video)) {
     result.skipped += 1;
@@ -166,6 +174,7 @@ async function processVideo(
 
   try {
     const startedAt = Date.now();
+    throwIfAborted(hooks.signal);
     const transcribed = await transcribeVideo({
       platform: input.platform,
       accountId: input.accountId,
@@ -196,6 +205,12 @@ async function processVideo(
     });
     appendVideoResult(result, event);
     hooks.onVideoResult?.(event);
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error("任务已停止");
   }
 }
 

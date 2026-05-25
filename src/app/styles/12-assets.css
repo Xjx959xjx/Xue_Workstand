@@ -6,7 +6,7 @@
 .engagement-workbench {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 12px;
+  gap: 16px;
 }
 
 .engagement-main,
@@ -22,11 +22,12 @@
 
 .engagement-refbar {
   display: flex;
-  min-height: 63px;
+  min-height: 72px;
   align-items: center;
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-soft);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-subtle);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--amber-soft) 38%, var(--surface-soft)) 0%, color-mix(in oklch, var(--panel-raised) 92%, white) 100%);
 }
 
 .engagement-refbar h2 {
@@ -54,22 +55,26 @@
 }
 
 .engagement-generator-pane {
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--line-subtle);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--amber-soft) 18%, transparent) 0%, transparent 32%),
+    transparent;
 }
 
 .engagement-generator-pane .pane-body {
-  gap: 12px;
-  padding: 12px;
+  gap: 14px;
+  padding: 16px;
 }
 
 .source-tabs {
   display: flex;
   width: 100%;
-  min-height: 34px;
+  min-height: 38px;
   overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
+  border-radius: 12px;
   background: var(--control-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
 }
 
 .source-tabs button {
@@ -150,15 +155,15 @@
   grid-template-columns: auto minmax(0, 1fr) 76px;
   align-items: center;
   gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
+  padding: 10px;
+  border: 1px solid color-mix(in oklch, var(--amber) 12%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--panel-raised) 92%, white);
 }
 
 .engagement-option.active {
   border-color: var(--selected-border);
-  background: var(--surface-selected);
+  background: color-mix(in oklch, var(--amber-soft) 52%, var(--surface-selected));
 }
 
 .engagement-option input[type="checkbox"] {
@@ -203,6 +208,27 @@
 
 .engagement-submit {
   justify-self: start;
+}
+
+.engagement-count-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.engagement-count-preset {
+  min-height: 30px;
+  padding-inline: 10px;
+}
+
+.engagement-count-preset.active {
+  border-color: var(--selected-border);
+  color: var(--text-strong);
+  background: color-mix(in oklch, var(--amber-soft) 52%, var(--surface-selected));
+}
+
+.engagement-count-preset:disabled {
+  opacity: 0.58;
 }
 
 .engagement-results-pane {
@@ -253,10 +279,10 @@
   max-height: 260px;
   overflow: auto;
   gap: 6px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-soft);
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--amber) 12%, var(--line));
+  border-radius: 16px;
+  background: color-mix(in oklch, var(--surface-soft) 86%, var(--panel));
 }
 
 .asset-text-list.empty {
@@ -266,10 +292,10 @@
 }
 
 .asset-text-list p {
-  padding: 7px 8px;
-  border: 1px solid var(--line-subtle);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.72);
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklch, var(--line-subtle) 84%, white);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--panel-raised) 94%, white);
   color: var(--text);
   font-size: 12px;
   line-height: 1.65;

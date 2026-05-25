@@ -14,9 +14,9 @@ const urlSchema = z.preprocess(
 
 const optionsSchema = {
   includeComments: z.boolean().optional().default(true),
-  commentCount: z.number().int().min(1).max(200).optional().default(50),
+  commentCount: z.number().int().min(1).max(200).optional().default(100),
   includeDanmaku: z.boolean().optional().default(false),
-  danmakuCount: z.number().int().min(1).max(300).optional().default(100)
+  danmakuCount: z.number().int().min(1).max(300).optional().default(50)
 };
 
 const schema = z.discriminatedUnion("sourceType", [

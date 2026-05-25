@@ -88,6 +88,11 @@ export function useLibraryTaskEffects({
       setStyleStage("生成失败");
       setStyleProgress(100);
       setMessage(accountStyleJob.error || "自动总结失败");
+      return;
+    }
+    if (accountStyleJob.status === "cancelled") {
+      setStyleStage("已停止");
+      setMessage("已停止账号风格卡生成。");
     }
   }, [accountStyleJob, setAccountDetail, setMessage, setStyleDraft]);
 
@@ -119,6 +124,11 @@ export function useLibraryTaskEffects({
       setTranscribeStage("转写失败");
       setTranscribeProgress(100);
       setMessage(formatJobErrorMessage(transcribeJob.error || "转写失败"));
+      return;
+    }
+    if (transcribeJob.status === "cancelled") {
+      setTranscribeStage("已停止");
+      setMessage("已停止当前转写任务。");
     }
   }, [reloadSelectedAccountDetail, selectedVideo, setMessage, setTranscript, setTranscriptVideoId, transcribeJob]);
 
@@ -151,6 +161,11 @@ export function useLibraryTaskEffects({
       setTranscribeStage("批量任务失败");
       setTranscribeProgress(100);
       setMessage(batchJob.error || "批量转写失败");
+      return;
+    }
+    if (batchJob.status === "cancelled") {
+      setTranscribeStage("已停止");
+      setMessage("已停止批量任务。");
     }
   }, [batchJob, reloadSelectedAccountDetail, setAccountDetail, setMessage, setStyleDraft]);
 

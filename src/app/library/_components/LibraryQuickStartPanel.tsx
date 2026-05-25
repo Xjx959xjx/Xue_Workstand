@@ -101,6 +101,11 @@ export function LibraryQuickStartPanel({
               onTimeRangeChange={onTimeRangeChange}
             />
           </div>
+          <div className="library-quick-meta" aria-label="账号库摘要">
+            <span className="stat-pill">{stats.accountCount} 个账号</span>
+            <span className="stat-pill">{stats.videoCount} 条视频</span>
+            <span className="stat-pill">{stats.transcriptCount} 份转写</span>
+          </div>
           <div className="library-quick-actions">
             <button className="btn primary library-collect-submit" disabled={!canSubmit} onClick={onCollect} type="button">
               <Play aria-hidden="true" size={16} />
@@ -108,7 +113,7 @@ export function LibraryQuickStartPanel({
             </button>
             <button
               aria-label="检查运行环境"
-              className="btn icon-btn icon-only library-environment-trigger"
+              className="btn ghost icon-btn icon-only library-environment-trigger"
               disabled={busy === "collect"}
               onClick={openEnvironmentModal}
               title="检查运行环境"

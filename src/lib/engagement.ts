@@ -42,6 +42,10 @@ export type GenerateEngagementInput = EngagementOptions & (
   | { sourceType: "url"; url: string }
 );
 
+export type GenerateEngagementOptions = {
+  signal?: AbortSignal;
+};
+
 type SourceContext = {
   platform: Platform;
   accountId: string;
@@ -50,22 +54,38 @@ type SourceContext = {
 };
 
 const COMMENT_GENERATION_BATCH_SIZE = 25;
+const COMMENT_PROMPT_VARIANTS = [
+  "这批偏向第一反应式短评，多给共鸣、代入、随手接话的感觉。",
+  "这批偏向带一点惊讶和轻调侃，但别阴阳怪气，像刷到时顺手冒出的吐槽。",
+  "这批偏向提问、追问、补充观点，让评论区像有人继续接话。",
+  "这批偏向经验对照和个人感受，像把自己的经历往里套一下。",
+  "这批偏向轻度反转、意外点和细节观察，不要写成总结。",
+  "这批偏向实用判断和真实取舍，像在评论区说自己会不会这么做。",
+  "这批偏向短促、有记忆点的口语表达，保留一点情绪起伏。",
+  "这批偏向围观感和讨论感，像在跟其他观众一起看热闹。"
+] as const;
+const COMMENT_MODEL_CONCURRENCY = clampCount(Number.parseInt(process.env.ENGAGEMENT_MODEL_CONCURRENCY || "", 10), 1, 4, 4);
+const COMMENT_GENERATION_MAX_ROUNDS = 3;
 const ENABLE_MODEL_COMMENT_GENERATION =
   getChatRuntimeConfig().configured && process.env.ENGAGEMENT_MODEL_COMMENTS !== "0";
 
-export async function generateEngagement(input: GenerateEngagementInput) {
+export async function generateEngagement(input: GenerateEngagementInput, runOptions: GenerateEngagementOptions = {}) {
+  throwIfAborted(runOptions.signal);
   const options = normalizeEngagementOptions(input);
   if (!options.includeComments && !options.includeDanmaku) {
     throw new Error("请至少选择评论或弹幕。");
   }
 
   const prepared = await prepareEngagementSource(input, options);
-  const comments = options.includeComments
-    ? await generateComments(prepared.content, prepared.contexts, options.commentCount, prepared.platform)
-    : null;
-  const danmaku = options.includeDanmaku
-    ? await generateDanmaku(prepared.content, prepared.contexts, options.danmakuCount)
-    : null;
+  throwIfAborted(runOptions.signal);
+  const commentsPromise = options.includeComments
+    ? generateComments(prepared.content, prepared.contexts, options.commentCount, prepared.platform, runOptions.signal)
+    : Promise.resolve(null);
+  const danmakuPromise = options.includeDanmaku
+    ? generateDanmaku(prepared.content, prepared.contexts, options.danmakuCount, runOptions.signal)
+    : Promise.resolve(null);
+  const [comments, danmaku] = await Promise.all([commentsPromise, danmakuPromise]);
+  throwIfAborted(runOptions.signal);
 
   let draft: Draft | undefined;
   if (prepared.draft) {
@@ -247,9 +267,9 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
 function normalizeEngagementOptions(input: EngagementOptions): EngagementRecord["options"] {
   return {
     includeComments: input.includeComments ?? true,
-    commentCount: clampCount(input.commentCount ?? 50, 1, 200, 50),
+    commentCount: clampCount(input.commentCount ?? 100, 1, 200, 100),
     includeDanmaku: input.includeDanmaku ?? false,
-    danmakuCount: clampCount(input.danmakuCount ?? 100, 1, 300, 100)
+    danmakuCount: clampCount(input.danmakuCount ?? 50, 1, 300, 50)
   };
 }
 
@@ -338,47 +358,92 @@ async function fetchBilibiliDanmaku(video: Awaited<ReturnType<typeof getAccountS
     .slice(0, 120);
 }
 
-async function generateComments(source: EngagementContent, contexts: SourceContext[], count: number, platform: Platform | "unknown") {
+async function generateComments(
+  source: EngagementContent,
+  contexts: SourceContext[],
+  count: number,
+  platform: Platform | "unknown",
+  signal?: AbortSignal
+) {
   if (!ENABLE_MODEL_COMMENT_GENERATION) {
     throw new Error("当前未启用评论模型，已关闭本地兜底。请先配置对话模型后再生成评论。");
   }
-  const batches = buildCommentGenerationBatches(count);
   const parsed: string[] = [];
-  const batchResults = [];
+  const batchResults: {
+    index: number;
+    requestedCount: number;
+    parsedCount: number;
+    model: string;
+    fallback: boolean;
+    fallbackReason?: string;
+  }[] = [];
   let usedModel = "model";
+  let nextBatchIndex = 0;
+  let round = 0;
 
-  for (const batch of batches) {
-    const result = await chatComplete(
-      [
-        {
-          role: "system",
-          content:
-            "你是中文短视频评论区里的普通观众，不是策划，也不是文案。请只基于给定文案生成真实、口语化、像手滑顺手发出去的评论。不要参考原视频评论，不要生成用户名，不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 数组，每项为字符串。"
-        },
-        {
-          role: "user",
-          content: `文案标题：${source.title}\n文案内容：\n${clampText(source.content, 4000)}\n\n请生成 ${batch.count} 条观众评论。这是第 ${batch.index + 1}/${batches.length} 批，只输出本批 JSON 数组。要求：\n1. 每条像真实网友在刷短视频时随手发的短评。\n2. 语气自然，口语化，别像总结、复盘、客服、营销。\n3. 短中长混合，但大多数保持一行能看完。\n4. 要有轻微惊讶、共鸣、调侃、提问、补充观点、轻度吐槽这几类变化。\n5. 不要机械重复标题里的词，不要每条都以“这”开头。\n6. 避免“这条”“这次信息量”“画面感”“莫名合理”“热梗现场”这类明显模板味表达。\n\n已生成评论，后续不要重复：\n${parsed.slice(-80).join("\n") || "暂无"}`
-        }
-      ],
-      "medium"
-    );
-    if (result.fallback || !result.text.trim()) {
-      throw new Error(result.fallbackReason || "模型没有返回可用评论，请重试或更换模型。");
+  while (cleanCommentSamples(parsed).length < count && round < COMMENT_GENERATION_MAX_ROUNDS) {
+    throwIfAborted(signal);
+    const missingCount = Math.max(count - cleanCommentSamples(parsed).length, 0);
+    const batches = buildCommentGenerationBatches(missingCount, nextBatchIndex);
+
+    for (let start = 0; start < batches.length; start += COMMENT_MODEL_CONCURRENCY) {
+      throwIfAborted(signal);
+      const wave = batches.slice(start, start + COMMENT_MODEL_CONCURRENCY);
+      const recentComments = parsed.slice(-120);
+      const waveResults = await Promise.all(
+        wave.map(async (batch, waveIndex) => {
+          throwIfAborted(signal);
+          const result = await chatComplete(
+            [
+              {
+                role: "system",
+                content:
+                  "你是中文短视频评论区里的普通观众，不是策划，也不是文案。请只基于给定文案生成真实、口语化、像手滑顺手发出去的评论。不要参考原视频评论，不要生成用户名，不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 数组，每项为字符串。"
+              },
+              {
+                role: "user",
+                content: buildCommentBatchPrompt({
+                  source,
+                  batchIndex: batch.index,
+                  batchOrder: start + waveIndex + 1,
+                  totalBatches: batches.length,
+                  batchCount: batch.count,
+                  existingComments: recentComments
+                })
+              }
+            ],
+            "low"
+          );
+          throwIfAborted(signal);
+          if (result.fallback || !result.text.trim()) {
+            throw new Error(result.fallbackReason || "模型没有返回可用评论，请重试或更换模型。");
+          }
+          const batchParsed = parseStringArray(result.text);
+          if (!batchParsed.length) {
+            throw new Error("模型返回了内容，但没有解析到可用评论，请重试或更换模型。");
+          }
+          return { batch, batchParsed, result };
+        })
+      );
+
+      waveResults
+        .sort((left, right) => left.batch.index - right.batch.index)
+        .forEach(({ batch, batchParsed, result }) => {
+          parsed.push(...batchParsed);
+          usedModel = result.model || usedModel;
+          batchResults.push({
+            index: batch.index,
+            requestedCount: batch.count,
+            parsedCount: batchParsed.length,
+            model: result.model,
+            fallback: false
+          });
+        });
     }
-    const batchParsed = parseStringArray(result.text);
-    if (!batchParsed.length) {
-      throw new Error("模型返回了内容，但没有解析到可用评论，请重试或更换模型。");
-    }
-    parsed.push(...batchParsed);
-    usedModel = result.model || usedModel;
-    batchResults.push({
-      index: batch.index,
-      requestedCount: batch.count,
-      parsedCount: batchParsed.length,
-      model: result.model,
-      fallback: false
-    });
-    if (parsed.length >= count && !needsMoreUniqueComments(parsed, count)) break;
+
+    nextBatchIndex += batches.length;
+    round += 1;
+    if (!needsMoreUniqueComments(parsed, count)) break;
   }
 
   const texts = cleanCommentSamples(parsed);
@@ -406,22 +471,54 @@ async function generateComments(source: EngagementContent, contexts: SourceConte
   };
 }
 
-function buildCommentGenerationBatches(count: number) {
+function buildCommentGenerationBatches(count: number, startIndex = 0) {
   const batches: { index: number; count: number }[] = [];
   let remaining = count;
   while (remaining > 0) {
     const nextCount = Math.min(COMMENT_GENERATION_BATCH_SIZE, remaining);
-    batches.push({ index: batches.length, count: nextCount });
+    batches.push({ index: startIndex + batches.length, count: nextCount });
     remaining -= nextCount;
   }
   return batches;
+}
+
+function buildCommentBatchPrompt(input: {
+  source: EngagementContent;
+  batchIndex: number;
+  batchOrder: number;
+  totalBatches: number;
+  batchCount: number;
+  existingComments: string[];
+}) {
+  const variant = COMMENT_PROMPT_VARIANTS[input.batchIndex % COMMENT_PROMPT_VARIANTS.length];
+  return `文案标题：${input.source.title}
+文案内容：
+${clampText(input.source.content, 3000)}
+
+请生成 ${input.batchCount} 条观众评论。这是当前一轮的第 ${input.batchOrder}/${input.totalBatches} 批，只输出本批 JSON 数组。
+
+本批偏向：
+${variant}
+
+要求：
+1. 每条像真实网友在刷短视频时随手发的短评。
+2. 语气自然，口语化，别像总结、复盘、客服、营销。
+3. 短中长混合，但大多数保持一行能看完。
+4. 要有轻微惊讶、共鸣、调侃、提问、补充观点、轻度吐槽这几类变化。
+5. 不要机械重复标题里的词，不要每条都以“这”开头。
+6. 避免“这条”“这次信息量”“画面感”“莫名合理”“热梗现场”这类明显模板味表达。
+7. 和其他批次拉开一点表达角度，不要像同一个人连续刷屏。
+
+已生成评论，后续不要重复：
+${input.existingComments.join("\n") || "暂无"}`;
 }
 
 function needsMoreUniqueComments(values: string[], count: number) {
   return cleanCommentSamples(values).length < count;
 }
 
-async function generateDanmaku(source: EngagementContent, contexts: SourceContext[], count: number) {
+async function generateDanmaku(source: EngagementContent, contexts: SourceContext[], count: number, signal?: AbortSignal) {
+  throwIfAborted(signal);
   const samples = contexts
     .map((context) => `账号：${context.accountName}\n弹幕样本：\n${context.danmaku.slice(0, 70).join("\n") || "暂无弹幕样本"}`)
     .join("\n\n---\n\n") || "暂无弹幕样本，请按正文节奏生成自然短弹幕。";
@@ -434,11 +531,12 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
       },
       {
         role: "user",
-        content: `文案：\n${clampText(source.content, 4200)}\n\n参考弹幕：\n${samples}\n\n请生成 ${count} 条弹幕，按正文节奏自然分布。`
+        content: `文案：\n${clampText(source.content, 3000)}\n\n参考弹幕：\n${samples}\n\n请生成 ${count} 条弹幕，按正文节奏自然分布。`
       }
     ],
-    "medium"
+    "low"
   );
+  throwIfAborted(signal);
   const parsed = parseDanmakuArray(result.text);
   if (!parsed.length) {
     throw new Error(result.fallbackReason || "模型返回了内容，但没有解析到可用弹幕，请重试或更换模型。");
@@ -456,6 +554,12 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
       text: item.text.trim()
     }))
   };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error("任务已停止");
+  }
 }
 
 function cleanCommentSamples(values: string[]) {

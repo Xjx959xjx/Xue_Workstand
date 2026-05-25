@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { FileText, RefreshCw } from "lucide-react";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
 import { LibraryDetailPane } from "./_components/LibraryDetailPane";
@@ -337,13 +337,16 @@ export default function LibraryPage() {
     return (
       <div className="page library-page">
         <header className="page-header">
-          <div>
-            <h1 className="title-with-emoji">
-              <span aria-hidden="true" className="title-emoji">
-                📚
+          <div className="page-title-group">
+            <span className="page-title-eyebrow">账号资产</span>
+            <div className="page-title-row">
+              <span className="page-title-mark" aria-hidden="true">
+                <FileText size={20} strokeWidth={2.1} />
               </span>
-              <span>账号风格库</span>
-            </h1>
+              <div className="page-title-copy">
+                <h1>账号风格库</h1>
+              </div>
+            </div>
           </div>
         </header>
         <LibraryQuickStartPanel
@@ -377,17 +380,22 @@ export default function LibraryPage() {
   return (
     <div className="page library-page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              📚
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">内容资料库</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <FileText size={20} strokeWidth={2.1} />
             </span>
-            <span>账号风格库</span>
-          </h1>
-          <p className="subtle">维护账号素材、转写稿和风格卡。</p>
+            <div className="page-title-copy">
+              <h1>账号风格库</h1>
+              <p className="subtle">采集、转写、风格沉淀。</p>
+            </div>
+          </div>
         </div>
-        <div className="button-row">
-          <button className="btn" onClick={() => void refresh()} type="button">
+        <div className="page-header-meta">
+          <span className="stat-pill">{accounts.length} 个账号</span>
+          <span className="stat-pill">{stats.transcriptCount} 份转写</span>
+          <button className="btn ghost" onClick={() => void refresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             刷新
           </button>

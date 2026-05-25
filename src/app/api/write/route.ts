@@ -13,6 +13,7 @@ const schema = z.object({
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
+  supportDocLinks: z.string().optional(),
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional()
 }).superRefine((input, ctx) => {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { completePreparedWriteCopy, prepareWriteCopyContext, streamResponseTextWithFallback } from "@/lib/ai";
+import { hasFeishuDocLink } from "@/lib/feishu";
 import { createNdjsonStream } from "@/lib/streaming";
 import { platforms } from "@/lib/types";
 
@@ -14,6 +15,7 @@ const schema = z.object({
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
+  supportDocLinks: z.string().optional(),
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional()
 }).superRefine((input, ctx) => {
@@ -44,6 +46,9 @@ export async function POST(request: Request) {
       emit({ type: "stage", stage: "prepare", message: "正在读取风格卡和代表样本", progress: 10 });
       if (input.mode === "rewrite" && /https?:\/\//i.test(input.sourceText || "")) {
         emit({ type: "stage", stage: "transcribe-links", message: "正在转写链接里的视频文稿", progress: 18 });
+      }
+      if (hasFeishuDocLink(input.supportDocLinks)) {
+        emit({ type: "stage", stage: "fetch-support-docs", message: "正在读取商单支持文档", progress: 24 });
       }
       const prepared = await prepareWriteCopyContext(input);
 

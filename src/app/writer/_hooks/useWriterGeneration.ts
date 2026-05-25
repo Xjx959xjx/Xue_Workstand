@@ -24,8 +24,10 @@ type UseWriterGenerationInput = {
   mode: Draft["mode"];
   normalizedPrompt: string;
   normalizedSourceText: string;
+  supportDocLinks: string;
   recentJobs: JobRecord[];
   onDraftSaved?: (draft: Draft) => void;
+  cancelTask: (jobId: string) => Promise<JobRecord>;
   refresh: () => Promise<void>;
   routerPush: (href: string) => void;
   selectedAccount: AccountListItem | null;
@@ -45,8 +47,10 @@ export function useWriterGeneration({
   mode,
   normalizedPrompt,
   normalizedSourceText,
+  supportDocLinks,
   recentJobs,
   onDraftSaved,
+  cancelTask,
   refresh,
   routerPush,
   selectedAccount,
@@ -73,6 +77,7 @@ export function useWriterGeneration({
   }, [activeJobs, activeWriteJobId, recentJobs]);
   const isGenerating = Boolean(activeWriteJob && (activeWriteJob.status === "queued" || activeWriteJob.status === "running"));
   const canGenerate = Boolean(hasTaskInput && !busy && !isGenerating && (targetType === "project" ? selectedProject : selectedAccount));
+  const canStopGenerate = Boolean(activeWriteJobId && isGenerating);
 
   useEffect(() => {
     if (!activeWriteJob) return;
@@ -86,12 +91,19 @@ export function useWriterGeneration({
       return;
     }
 
+    const result = activeWriteJob.result as WriteResult | undefined;
+    const isWaitingForHydratedResult = activeWriteJob.status === "completed" && !result && Boolean((activeWriteJob as { hasResult?: boolean }).hasResult);
+    if (isWaitingForHydratedResult) {
+      setGenerateStage("正在同步生成结果");
+      setGenerateProgress(100);
+      return;
+    }
+
     if (handledWriteJobsRef.current.has(activeWriteJob.id)) return;
     handledWriteJobsRef.current.add(activeWriteJob.id);
     setBusy("");
 
     if (activeWriteJob.status === "completed") {
-      const result = activeWriteJob.result as WriteResult | undefined;
       if (result) {
         setLastContent(result.content);
         setLastResearch(result.research || "");
@@ -117,6 +129,13 @@ export function useWriterGeneration({
       setNotice(activeWriteJob.error || "生成失败，请检查模型配置、代理或输入内容后重试。");
       setGenerateStage("生成失败");
       setGenerateProgress(100);
+      return;
+    }
+
+    if (activeWriteJob.status === "cancelled") {
+      setNotice("已停止本次生成，历史记录不会新增未完成内容。");
+      setGenerateStage("已停止");
+      setGenerateProgress(Math.max(0, activeWriteJob.progress || 0));
     }
   }, [activeWriteJob, onDraftSaved, refresh, setBusy, setNotice, useWebResearch]);
 
@@ -143,6 +162,7 @@ export function useWriterGeneration({
           mode,
           prompt: normalizedPrompt,
           sourceText: normalizedSourceText,
+          supportDocLinks: supportDocLinks.trim() || undefined,
           save: true,
           useWebResearch
         }
@@ -160,6 +180,7 @@ export function useWriterGeneration({
     mode,
     normalizedPrompt,
     normalizedSourceText,
+    supportDocLinks,
     selectedAccount,
     selectedProject,
     setBusy,
@@ -168,6 +189,16 @@ export function useWriterGeneration({
     targetType,
     useWebResearch
   ]);
+
+  const handleStopGenerate = useCallback(async () => {
+    if (!activeWriteJobId) return;
+    try {
+      await cancelTask(activeWriteJobId);
+      setNotice("正在停止生成任务…");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "停止生成失败，请稍后重试。");
+    }
+  }, [activeWriteJobId, cancelTask, setNotice]);
 
   const handleOpenAssets = useCallback(async () => {
     if (!lastContent || !lastDraftBase) return;
@@ -230,12 +261,14 @@ export function useWriterGeneration({
 
   return {
     canGenerate,
+    canStopGenerate,
     clearDraftResult,
     copyLast,
     generateProgress,
     generateStage,
     handleGenerate,
     handleOpenAssets,
+    handleStopGenerate,
     lastContent,
     lastDraftBase,
     lastDraftId,
@@ -254,6 +287,7 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
       mode: draft.mode,
       prompt: draft.prompt,
       input: draft.input,
+      supportDocLinks: draft.supportDocLinks,
       styleRef: draft.styleRef
     };
   }
@@ -266,6 +300,7 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
     mode: draft.mode,
     prompt: draft.prompt,
     input: draft.input,
+    supportDocLinks: draft.supportDocLinks,
     styleRef: draft.styleRef
   };
 }

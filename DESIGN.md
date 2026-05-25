@@ -1,68 +1,203 @@
----
-name: Account Style Library Workbench
-description: Desktop-first local content operations workbench for style collection, transcription, and copy generation.
-colors:
-  bg: "oklch(0.945 0.016 236)"
-  bg-elevated: "oklch(0.982 0.009 236)"
-  panel: "oklch(0.994 0.004 236)"
-  panel-soft: "oklch(0.966 0.011 236)"
-  text: "oklch(0.245 0.031 246)"
-  muted: "oklch(0.505 0.034 246)"
-  line: "oklch(0.875 0.018 236)"
-  accent: "oklch(0.69 0.118 183)"
-  blue: "oklch(0.55 0.145 256)"
-  amber: "oklch(0.61 0.13 72)"
-  rose: "oklch(0.54 0.155 8)"
-typography:
-  ui:
-    fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Segoe UI, Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif"
-    fontSize: "13px"
-    fontWeight: 400
-    lineHeight: 1.5
-rounded:
-  sm: "4px"
-  md: "6px"
-  lg: "8px"
-spacing:
-  xs: "6px"
-  sm: "8px"
-  md: "12px"
-  lg: "16px"
-components:
-  button-primary:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.md}"
-    padding: "0 10px"
-  panel:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.lg}"
-    padding: "14px"
----
+# 账号风格库轻量设计系统
 
-## Overview
+## 1. 产品定位
 
-The interface is a desktop-first local workbench. It should feel efficient, precise, and alive enough to reveal state without distracting from collection, transcription, editing, and writing tasks.
+本项目是桌面优先的本地内容运营工作台，用于采集、转写、整理账号风格，并生成可编辑文案。界面气质应接近专业编辑控制台，而不是营销型 SaaS 官网。
 
-## Colors
+核心原则：
 
-Use restrained tinted neutrals with teal as the primary action and selection accent. Blue is informational, amber is pending or configuration-needed, rose is destructive or failed, and green is completed. Color should clarify workflow state rather than decorate inactive surfaces.
+- 信息密度要高，但不要制造视觉噪音。
+- 颜色只用于说明层级、状态和风险，不做无意义装饰。
+- 本地素材和转写稿是长期资产，删除、批量操作和失败恢复必须清楚。
+- 新页面优先复用 token 和 primitives，避免散落一次性样式。
+- 动效保持短、轻、可解释，只服务状态变化。
 
-## Typography
+## 2. 颜色系统
 
-Use the system UI stack throughout. Keep type compact, with clear weight contrast between page titles, section headers, labels, and metadata. Body and metadata can stay dense; long generated text should use more relaxed line height.
+整体使用冷调浅色中性色作为底盘，蓝色承担主操作、选中和聚焦语义。绿色、琥珀色、玫红色分别用于完成、等待和失败/危险。
 
-## Elevation
+| 角色 | Token | 值 | 用法 |
+| --- | --- | --- | --- |
+| 应用背景 | `--bg` | `oklch(0.958 0.006 236)` | 页面主背景 |
+| 外壳背景 | `--chrome` | `oklch(0.972 0.006 236)` | 导航、应用框架 |
+| 默认面板 | `--panel` | `oklch(0.992 0.003 236)` | 卡片、窗格、表单底色 |
+| 抬升面板 | `--panel-raised` | `oklch(0.996 0.003 236)` | 弹窗、强调容器 |
+| 柔和面板 | `--panel-soft` | `oklch(0.968 0.006 236)` | 内嵌区块、弱分组 |
+| 强文本 | `--text-strong` | `oklch(0.18 0.036 248)` | 标题、关键数值、激活标签 |
+| 正文 | `--text` | `oklch(0.245 0.031 246)` | 主要 UI 文本 |
+| 弱文本 | `--muted` | `oklch(0.505 0.034 246)` | 描述、时间、辅助信息 |
+| 默认描边 | `--line` | `oklch(0.865 0.012 236)` | 卡片和区块边框 |
+| 强描边 | `--line-strong` | `oklch(0.735 0.02 236)` | 输入框、关键控件 |
+| 强调色 | `--accent` | `oklch(0.64 0.082 252)` | 聚焦、选中、主强调 |
+| 强调文本 | `--accent-strong` | `oklch(0.49 0.092 252)` | 链接和强调控件文字 |
+| 强调底色 | `--accent-tint` | `oklch(0.974 0.015 252)` | 选中行、高亮面板 |
+| 信息 | `--blue` / `--blue-soft` | 现有 token | 链接、信息提示、主按钮 |
+| 成功 | `--green` / `--green-soft` | 现有 token | 已完成、可用、已同步 |
+| 等待 | `--amber` / `--amber-soft` | 现有 token | 排队、处理中、待处理 |
+| 危险 | `--rose` / `--rose-soft` | 现有 token | 失败、删除、不可逆操作 |
 
-Surfaces use low, layered elevation: subtle borders, tinted panel backgrounds, and small shadows. Strong shadows are reserved for modals and lifted hover states. Avoid glass effects as the default.
+规则：
 
-## Components
+- 组件内不要直接写 raw hex。若需要新颜色，先在 `src/app/styles/00-tokens.css` 增加语义 token。
+- 结构性容器优先使用中性色面板，只有选中、激活、状态和提示使用带色底。
+- 成功和失败不能只靠颜色表达，必须配合文字或图标。
+- 正文与背景对比度保持 WCAG AA，避免浅灰字叠浅灰底。
 
-Buttons, segmented controls, list rows, panes, status pills, progress bars, dialogs, and empty states share the same radius and interaction language. Desktop states must cover default, hover, focus, active, disabled, loading, selected, success, warning, and error.
+## 3. 字体系统
 
-## Do's and Don'ts
+项目是中文优先、编辑密集型工具，字体使用清晰稳定的系统 UI 栈，不引入装饰型品牌字体。
 
-Do keep desktop information dense, preserve local asset safety, show progress for long operations, and make fallback behavior editable rather than alarming.
+| 角色 | Token | 大小 | 字重 | 行高 | 用法 |
+| --- | --- | --- | --- | --- | --- |
+| 页面标题 | `--text-page-title` | `24px` | `700` | `1.18` | 页面主标题 |
+| 区块标题 | `--text-section-title` | `15px` | `600` | `1.25` | 面板和窗格标题 |
+| 卡片标题 | `--text-card-title` | `13px` | `600` | `1.35` | 列表项、卡片标题 |
+| 正文 | `--text-body` | `13px` | `400` | `1.5` | 默认 UI 文案 |
+| 元信息 | `--text-meta` | `12px` | `500-600` | `1.45-1.65` | 标签、说明、辅助文本 |
+| 标记文本 | `--text-caption` | `11px` | `500-600` | `1.35` | 状态、紧凑元信息 |
+| 长文编辑 | 页面局部 | `14px` | `400` | `1.72` | 草稿、转写稿、生成结果 |
 
-Don't introduce a marketing hero, large decorative animations, dark neon theming, nested cards, or side-stripe active states. Motion should be 150-250ms and tied to state changes.
+字体 token：
+
+- `--font-ui`: `"PingFang SC", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Microsoft YaHei", "Noto Sans SC", sans-serif`
+- `--font-mono`: `"SF Mono", "Cascadia Code", Consolas, monospace`
+
+规则：
+
+- 工作台默认维持 `13px` 的紧凑密度。
+- 草稿、转写稿、生成结果需要更大的行高，降低长文阅读疲劳。
+- 层级优先通过字重、字号和间距建立，不要靠不断增加颜色。
+- 统计数字、价格、计时和状态标记使用 tabular nums。
+
+## 4. 间距与布局
+
+间距系统基于紧凑的 4px 网格。
+
+| Token | 值 | 用法 |
+| --- | --- | --- |
+| `--space-1` | `4px` | 紧贴的行内间距 |
+| `--space-2` | `8px` | 按钮组、小型分组 |
+| `--space-3` | `12px` | 默认网格间距 |
+| `--space-4` | `16px` | 区块间距 |
+| `--space-5` | `20px` | 标题栏操作区间距 |
+| `--space-6` | `24px` | 页面边距 |
+| `--space-8` | `32px` | 大型区块分隔 |
+
+布局规则：
+
+- 页面最大宽度使用 `min(100%, 1440px)`。
+- 桌面工作台页面继续使用 `--workspace-page-height` 和 `--workspace-default-height` 控制高度。
+- 默认面板内边距使用 `--card-pad-md`，当前值为 `14px`。
+- 默认 grid gap 使用 `--space-3`，密集行内控件使用 `--space-2`。
+- 移动端不能出现横向滚动，主要操作必须可触达。
+
+## 5. 按钮
+
+所有按钮以 `.btn` 为基础 primitive。
+
+| 变体 | Class | 用法 |
+| --- | --- | --- |
+| 次级按钮 | `.btn` | 默认操作、取消、刷新、打开 |
+| 主按钮 | `.btn.primary` | 当前区域最重要的操作 |
+| 危险按钮 | `.btn.danger` | 删除、移除、不可逆操作 |
+| 紧凑按钮 | `.btn.compact` | 表格、列表、卡片内的小操作 |
+| 图标按钮 | `.btn.icon-btn` / `.btn.icon-only` | 图标操作，必须有可访问名称 |
+
+按钮规则：
+
+- 一个决策区域只保留一个主按钮，不要把所有操作都做成蓝色。
+- 桌面默认控件高度为 `32px`，紧凑控件为 `30px`。
+- 纯图标按钮必须有 `aria-label`。
+- 禁用态必须使用语义化 disabled 或 `aria-disabled`，并复用共享禁用样式。
+- 加载按钮使用 `aria-busy="true"`，避免重复提交。
+- 聚焦态必须保留 `--focus-ring-shadow`，不要移除 focus ring。
+
+## 6. 卡片与面板
+
+卡片用于承载工作内容，不用于装饰。
+
+| Primitive | Class | 用法 |
+| --- | --- | --- |
+| 默认面板 | `.panel` | 通用容器 |
+| 面板内容 | `.panel-inner` | 标准内边距和间距 |
+| 空状态 | `.empty-state-panel` | 缺内容时的说明和下一步 |
+| 紧凑卡片 | `.compact-card` | 次级摘要信息 |
+| 风格摘要 | `.style-summary-card` | 账号或项目风格摘要 |
+| 弹窗面板 | `.modal-panel` | 聚焦编辑和确认流程 |
+
+面板规则：
+
+- 面板圆角使用 `--radius-lg`，当前值为 `8px`。
+- 控件圆角使用 `--radius-md`，当前值为 `6px`。
+- 默认靠边框和轻阴影建立层级，强阴影只给弹窗和 toast。
+- 选中态用边框和底色表达，不使用重阴影。
+- 避免无意义嵌套卡片。若必须嵌套，每一层都要有明确任务。
+- 空状态要说明缺什么，并提供安全的下一步。
+
+## 7. 状态样式
+
+状态样式统一用于转写、任务、环境检查、发布、监控记录等流程。
+
+| 语义 | Class | Token | 用法 |
+| --- | --- | --- | --- |
+| 中性 | `.status-pill` | `--status-neutral-*` | 普通元信息 |
+| 完成 | `.status-pill.done`, `.status-pill.completed` | `--status-success-*` | 已完成、可用、已同步 |
+| 等待 | `.status-pill.pending`, `.status-pill.not_started`, `.status-pill.transcribing` | `--status-warning-*` | 排队、等待、处理中 |
+| 失败 | `.status-pill.failed` | `--status-danger-*` | 失败、阻塞、危险 |
+
+状态规则：
+
+- 状态文案保持短中文短语，例如 `已转写`、`待转写`、`转写中`、`失败`。
+- 活跃工作状态应设置 `aria-busy`。
+- 长任务需要同时给状态标记和进度/恢复提示。
+- 警告和失败文案要告诉用户下一步能做什么。
+
+## 8. 动效与交互
+
+动效用于解释状态变化，不能让工作台显得浮夸。
+
+| Token | 值 | 用法 |
+| --- | --- | --- |
+| `--motion-fast` | `140ms` | hover、颜色变化 |
+| `--motion-base` | `180ms` | 常规状态切换 |
+| `--motion-slow` | `220ms` | toast、弹窗进入 |
+| `--ease-out` | `cubic-bezier(0.22, 1, 0.36, 1)` | 进入和抬升动效 |
+
+交互规则：
+
+- 只动画化 color、border、shadow、opacity 和 transform。
+- 不动画化 width、height、top、left。
+- 必须尊重 `prefers-reduced-motion`。
+- hover 只能作为增强，关键操作必须支持键盘和触摸。
+
+## 9. 可访问性检查
+
+- 纯图标按钮必须有 `aria-label`。
+- 不要移除 focus ring。
+- 表单字段必须有可见 label，错误信息靠近字段。
+- Toast 根据严重程度使用 `role="status"` 或 `role="alert"`。
+- 状态和错误不能只靠颜色表达。
+- 键盘 Tab 顺序应与视觉顺序一致。
+- 移动端常用控件尽量保持 44px 以上可点区域。
+
+## 10. 实现地图
+
+| 关注点 | 文件 |
+| --- | --- |
+| 全局 token | `src/app/styles/00-tokens.css` |
+| 基础字体和 focus | `src/app/styles/01-base.css` |
+| 应用外壳和导航 | `src/app/styles/02-shell.css` |
+| 面板和通用布局 | `src/app/styles/03-primitives.css` |
+| 按钮 | `src/app/styles/primitives/buttons.css` |
+| 表单 | `src/app/styles/primitives/forms.css` |
+| 状态、notice、toast | `src/app/styles/primitives/feedback.css` |
+| 动效和 reduced-motion | `src/app/styles/primitives/interactions.css` |
+
+## 11. 禁止事项
+
+- 不要把工作台页面做成营销首页。
+- 没有产品原因时，不要改成霓虹、玻璃拟态或暗黑优先。
+- 不要用 emoji 做结构性图标，继续使用 `lucide-react`。
+- 不要在页面 CSS 里临时写一套按钮、卡片颜色。
+- 危险操作不要做得像主操作。
+- 失败状态不要静默隐藏，必须给恢复路径。

@@ -1,24 +1,27 @@
 /* Library workspace */
 .library-quick-start {
   position: relative;
-  border-color: var(--line);
-  background: var(--panel);
+  border-color: color-mix(in oklch, var(--accent) 16%, var(--line));
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 42%, var(--panel-raised)) 0%, var(--panel) 100%);
 }
 
 .library-quick-form {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
   align-items: end;
-  padding: 9px;
+  padding: 12px;
 }
 
 .library-quick-fields {
   display: grid;
   flex: 0 1 auto;
   grid-template-columns: 112px minmax(220px, 340px) 76px 116px 116px;
-  gap: 8px;
+  gap: 10px;
   align-items: end;
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .library-quick-fields .library-platform-segmented {
@@ -35,6 +38,15 @@
   font-weight: 500;
 }
 
+.library-quick-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
 .library-quick-actions {
   display: flex;
   flex-wrap: nowrap;
@@ -43,27 +55,24 @@
   align-items: end;
   justify-content: space-between;
   justify-self: stretch;
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .library-quick-actions .library-collect-submit {
   min-width: 132px;
-  min-height: 36px;
-  padding: 0 16px;
-  border-color: color-mix(in oklch, var(--accent) 36%, var(--line));
-  color: var(--accent-strong);
+  min-height: 42px;
+  padding: 0 18px;
+  border-color: color-mix(in oklch, var(--accent) 54%, var(--line));
+  color: var(--control-primary-text);
   background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 54%, var(--panel)) 0%, color-mix(in oklch, var(--accent-soft) 68%, var(--panel)) 100%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in oklch, var(--panel) 74%, transparent),
-    0 8px 18px color-mix(in oklch, var(--accent) 11%, transparent);
+    linear-gradient(135deg, color-mix(in oklch, var(--accent-strong) 94%, white) 0%, color-mix(in oklch, var(--blue) 88%, var(--accent-strong)) 100%);
+  box-shadow: 0 18px 28px rgba(41, 116, 189, 0.22);
   font-size: 13px;
 }
 
 .library-quick-actions .library-collect-submit:hover {
-  border-color: color-mix(in oklch, var(--accent) 52%, var(--line));
-  color: var(--accent-strong);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 36%, var(--panel)) 0%, color-mix(in oklch, var(--accent-soft) 54%, var(--panel)) 100%);
+  border-color: color-mix(in oklch, var(--accent-strong) 86%, var(--line));
 }
 
 .library-quick-actions .library-collect-submit:disabled {
@@ -74,17 +83,15 @@
 }
 
 .library-quick-actions .library-environment-trigger {
-  min-height: 36px;
-  width: 36px;
-  border-color: color-mix(in oklch, var(--blue) 18%, var(--line));
-  color: var(--blue);
-  background: color-mix(in oklch, var(--blue-soft) 74%, var(--panel));
+  min-height: 42px;
+  width: 42px;
+  color: var(--accent-strong);
+  background: color-mix(in oklch, var(--accent-soft) 32%, transparent);
 }
 
 .library-quick-actions .library-environment-trigger:hover {
-  border-color: color-mix(in oklch, var(--blue) 32%, var(--line));
-  color: var(--blue);
-  background: color-mix(in oklch, var(--blue-soft) 58%, var(--panel));
+  color: var(--text-strong);
+  background: color-mix(in oklch, var(--accent-soft) 52%, var(--panel-raised));
 }
 
 .environment-modal {
@@ -108,11 +115,11 @@
 .library-quick-metric {
   display: grid;
   min-width: 0;
-  gap: 1px;
-  padding: 7px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: color-mix(in oklch, var(--panel) 82%, var(--surface-soft));
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 12%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--panel-raised) 88%, white);
 }
 
 .library-quick-metric strong {
@@ -178,6 +185,7 @@
 
 .library-workspace.three-pane {
   grid-template-columns: 228px minmax(0, 1fr) 286px;
+  border-color: color-mix(in oklch, var(--accent) 12%, var(--line));
 }
 
 .library-workspace .pane-header h2 {
@@ -222,7 +230,8 @@
 
 .account-list-button.active {
   background:
-    linear-gradient(135deg, color-mix(in oklch, var(--accent-tint) 88%, var(--panel)) 0%, var(--panel) 100%);
+    linear-gradient(135deg, color-mix(in oklch, var(--accent-tint) 88%, var(--panel-raised)) 0%, var(--panel) 100%);
+  box-shadow: var(--selected-row-shadow);
 }
 
 .video-pane-header {
@@ -331,7 +340,7 @@
   padding: 7px 9px;
   border-bottom: 1px solid var(--line);
   color: var(--muted-strong);
-  background: color-mix(in oklch, var(--blue-soft) 54%, var(--surface-soft));
+  background: color-mix(in oklch, var(--accent-soft) 54%, var(--surface-soft));
   text-align: left;
   font-size: 11px;
   font-weight: 600;
@@ -346,7 +355,7 @@
 .video-table tbody tr:hover,
 .video-table tbody tr.active,
 .video-table tbody tr.checked {
-  background: linear-gradient(90deg, color-mix(in oklch, var(--accent-tint) 78%, var(--panel)) 0%, var(--panel) 58%);
+  background: linear-gradient(90deg, color-mix(in oklch, var(--accent-tint) 78%, var(--panel-raised)) 0%, var(--panel) 58%);
   box-shadow: var(--selected-table-inset);
 }
 
@@ -467,12 +476,12 @@
 
 .selected-video-section {
   border-color: color-mix(in oklch, var(--accent) 22%, var(--line));
-  background: color-mix(in oklch, var(--accent-tint) 58%, var(--panel));
+  background: linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 64%, var(--panel-raised)) 0%, var(--panel) 100%);
 }
 
 .automation-section {
   border-color: color-mix(in oklch, var(--blue) 14%, var(--line));
-  background: color-mix(in oklch, var(--blue-soft) 24%, var(--panel));
+  background: linear-gradient(180deg, color-mix(in oklch, var(--blue-soft) 38%, var(--panel-raised)) 0%, var(--panel) 100%);
 }
 
 .detail-module-heading {
@@ -552,6 +561,13 @@
     grid-template-columns: 1fr;
   }
 
+  .library-quick-fields,
+  .library-quick-meta,
+  .library-quick-actions {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
   .library-quick-fields {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -559,6 +575,10 @@
   .library-platform-field,
   .library-account-name-field {
     grid-column: span 3;
+  }
+
+  .library-quick-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -591,6 +611,14 @@
   .library-quick-actions,
   .detail-action-grid {
     flex: 1 1 100%;
+  }
+
+  .library-quick-form {
+    gap: 14px;
+  }
+
+  .library-quick-actions {
+    flex-wrap: wrap;
   }
 
   .detail-action-grid {

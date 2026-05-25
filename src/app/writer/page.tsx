@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Copy, Eye, FileUp, Globe2, MessageSquarePlus, RotateCcw, Send } from "lucide-react";
+import { Copy, Eye, FileUp, Globe2, MessageSquarePlus, PenLine, RotateCcw, Send } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -32,7 +32,7 @@ function WriterPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { library, loading, refresh } = useLibrary();
-  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+  const { activeJobs, cancelTask, recentJobs, startTask } = useScopedTasks({
     href: "/writer",
     kinds: ["write-copy"]
   });
@@ -43,6 +43,7 @@ function WriterPageContent() {
   const [mode, setMode] = useState<Draft["mode"]>("topic");
   const [prompt, setPrompt] = useState("");
   const [sourceText, setSourceText] = useState("");
+  const [supportDocLinks, setSupportDocLinks] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
@@ -100,11 +101,13 @@ function WriterPageContent() {
   } = useWriterGeneration({
     activeJobs,
     activeTitle,
+    cancelTask,
     busy,
     hasTaskInput,
     mode,
     normalizedPrompt,
     normalizedSourceText,
+    supportDocLinks,
     recentJobs,
     onDraftSaved: handleDraftSaved,
     refresh,
@@ -174,6 +177,7 @@ function WriterPageContent() {
       setMode(sourceDraft.mode);
       setPrompt(sourceDraft.prompt);
       setSourceText(sourceDraft.input || "");
+      setSupportDocLinks(sourceDraft.supportDocLinks || "");
       loadDraftResult(sourceDraft);
       return;
     }
@@ -192,6 +196,7 @@ function WriterPageContent() {
       setMode(draft.mode);
       setPrompt(draft.prompt);
       setSourceText(draft.input || "");
+      setSupportDocLinks(draft.supportDocLinks || "");
       loadDraftResult(draft);
       router.replace(buildWriterDraftHref(draft), { scroll: false });
     },
@@ -215,6 +220,7 @@ function WriterPageContent() {
             clearDraftResult();
             setPrompt("");
             setSourceText("");
+            setSupportDocLinks("");
             const params = new URLSearchParams({
               targetType,
               mode
@@ -275,14 +281,17 @@ function WriterPageContent() {
     return (
       <div className="page writer-page">
         <header className="page-header">
-          <div>
-            <h1 className="title-with-emoji">
-              <span aria-hidden="true" className="title-emoji">
-                ✍️
+          <div className="page-title-group">
+            <span className="page-title-eyebrow">创作台</span>
+            <div className="page-title-row">
+              <span className="page-title-mark" aria-hidden="true">
+                <PenLine size={20} strokeWidth={2.1} />
               </span>
-              <span>对话写作</span>
-            </h1>
-            <p className="subtle">需要至少一个账号或项目风格作为引用。</p>
+              <div className="page-title-copy">
+                <h1>对话写作</h1>
+                <p className="subtle">需要至少一个账号或项目风格作为引用。</p>
+              </div>
+            </div>
           </div>
         </header>
         <EmptyState title="还没有可参考的风格" body="先采集一个账号，或在账号库里创建项目风格卡，再来这里生成文案。" action={{ href: "/library", label: "去采集账号" }} />
@@ -293,16 +302,19 @@ function WriterPageContent() {
   return (
     <div className="page writer-page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              ✍️
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">写作</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <PenLine size={20} strokeWidth={2.1} />
             </span>
-            <span>对话写作</span>
-          </h1>
-          <p className="subtle">选择引用风格，填写主题或原文。结果会先实时显示，任务完成后自动保存到历史记录，也可继续发布飞书或生成评论。</p>
+            <div className="page-title-copy">
+              <h1>对话写作</h1>
+              <p className="subtle">选风格，写需求，生成。</p>
+            </div>
+          </div>
         </div>
-        <div className="stat-row">
+        <div className="page-header-meta">
           <span className="stat-pill">{library?.accounts.length || 0} 个账号</span>
           <span className="stat-pill">{library?.projects.length || 0} 个项目</span>
         </div>
@@ -358,16 +370,16 @@ function WriterPageContent() {
               </select>
             )}
 
-            <button className="btn writer-style-trigger" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
+            <button className="btn ghost writer-style-trigger" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
               <Eye aria-hidden="true" size={16} />
-              查看风格卡
+              风格卡
             </button>
           </div>
 
           <div className="writer-content-grid">
             <div className="writer-task">
               <div className="section-title-row">
-                <h2>写作需求</h2>
+                <h2>需求</h2>
                 <div aria-label="选择写作模式" className="segmented" role="group">
                   <button aria-pressed={mode === "topic"} className={mode === "topic" ? "active" : ""} onClick={() => setMode("topic")} type="button">
                     主题
@@ -409,6 +421,19 @@ function WriterPageContent() {
                 </>
               ) : null}
 
+              <label className="support-doc-field">
+                <span>支持文档</span>
+                <textarea
+                  aria-label="商单支持文档链接"
+                  autoComplete="off"
+                  className="writer-textarea support-doc"
+                  name="supportDocLinks"
+                  placeholder="粘贴飞书文档、腾讯文档或品牌资料链接；多条可换行…"
+                  value={supportDocLinks}
+                  onChange={(event) => setSupportDocLinks(event.target.value)}
+                />
+              </label>
+
               <div className="writer-actionbar">
                 <button
                   className={`btn icon-toggle ${useWebResearch ? "active" : ""}`}
@@ -418,7 +443,7 @@ function WriterPageContent() {
                   title="联网检索"
                 >
                   <Globe2 aria-hidden="true" size={16} />
-                  {useWebResearch ? "联网检索开" : "联网检索关"}
+                  {useWebResearch ? "联网开" : "联网关"}
                 </button>
                 <button
                   className="btn primary"
@@ -428,14 +453,14 @@ function WriterPageContent() {
                   type="button"
                 >
                   <Send aria-hidden="true" size={16} />
-                  {busy === "generate" ? "正在生成" : "生成文案"}
+                  {busy === "generate" ? "生成中" : "生成"}
                 </button>
               </div>
             </div>
 
             <div className="writer-result">
               <div className="section-title-row">
-                <h2>生成结果</h2>
+                <h2>结果</h2>
                 {lastContent ? (
                   <div className="button-row">
                     <button className="btn" onClick={copyLast} type="button">
@@ -444,11 +469,11 @@ function WriterPageContent() {
                     </button>
                     <button className="btn" disabled={busy === "feishu"} onClick={handlePublishFeishu} type="button">
                       <FileUp aria-hidden="true" size={16} />
-                      {busy === "feishu" ? "发布中…" : "飞书文档"}
+                      {busy === "feishu" ? "发布中…" : "飞书"}
                     </button>
                     <button className="btn" disabled={!lastDraftBase || busy === "assets"} onClick={handleOpenAssets} type="button">
                       <MessageSquarePlus size={16} />
-                      {busy === "assets" ? "正在准备" : "生成评论"}
+                      {busy === "assets" ? "准备中" : "评论"}
                     </button>
                     <button className="btn" disabled={!canGenerate} onClick={handleGenerate} type="button">
                       <RotateCcw aria-hidden="true" size={16} />
@@ -456,32 +481,29 @@ function WriterPageContent() {
                     </button>
                   </div>
                 ) : (
-                  <span className="status-pill pending" data-busy={busy === "generate" ? "true" : undefined}>{busy === "generate" ? "正在生成" : "等待输入"}</span>
+                  <span className="status-pill pending" data-busy={busy === "generate" ? "true" : undefined}>{busy === "generate" ? "生成中" : "待输入"}</span>
                 )}
               </div>
               {busy === "generate" ? (
                 <div className="project-progress" role="status" aria-live="polite" style={{ marginBottom: 16 }}>
                   <div className="project-progress-copy">
-                    <span>{generateStage || "正在生成文案"}</span>
+                    <span>{generateStage || "正在生成"}</span>
                     <strong>{generateProgress}%</strong>
                   </div>
                   <div className="progress-track" aria-hidden="true">
                     <div className="progress-fill" style={{ width: `${generateProgress}%` }} />
                   </div>
-                  <p className="subtle" style={{ margin: "8px 0 0" }}>
-                    当前展示的是实时输出，只有任务完成后才会进入历史记录。
-                  </p>
                 </div>
               ) : null}
               <div className={`result-box ${lastContent ? "" : "empty"}`}>
-                {busy === "generate" && !lastContent ? "正在等待首段内容，通常几秒内会开始输出。" : lastContent || "生成后会在这里显示成稿。"}
+                {busy === "generate" && !lastContent ? "等待内容。" : lastContent || "结果在这里。"}
               </div>
               {lastResearch ? (
                 <details className="style-reference" style={{ marginTop: 16 }}>
                   <summary>
                     <span className="style-reference-heading">
                       <span className="style-reference-title">联网资料</span>
-                      <small>本次生成使用的研究摘要</small>
+                      <small>研究摘要</small>
                     </span>
                   </summary>
                   <div>
@@ -548,14 +570,17 @@ function WriterFallback() {
   return (
     <div className="page writer-page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              ✍️
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">创作台</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <PenLine size={20} strokeWidth={2.1} />
             </span>
-            <span>对话写作</span>
-          </h1>
-          <p className="subtle">正在读取写作台引用和历史记录。</p>
+            <div className="page-title-copy">
+              <h1>对话写作</h1>
+              <p className="subtle">正在读取写作台引用和历史记录。</p>
+            </div>
+          </div>
         </div>
       </header>
       <section className="panel">

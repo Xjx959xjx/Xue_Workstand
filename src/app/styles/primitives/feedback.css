@@ -1,16 +1,16 @@
 .stat-pill,
 .status-pill {
   display: inline-flex;
-  min-height: 22px;
+  min-height: var(--status-pill-height);
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--muted-strong);
-  background: var(--panel);
-  font-size: 11px;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--status-neutral-border);
+  border-radius: 999px;
+  color: var(--status-neutral-text);
+  background: color-mix(in oklch, var(--status-neutral-bg) 92%, white);
+  font-size: var(--text-caption);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
   white-space: nowrap;
@@ -18,33 +18,33 @@
 
 .status-pill.done,
 .status-pill.completed {
-  border-color: color-mix(in oklch, var(--green) 28%, transparent);
-  color: var(--green);
-  background: var(--green-soft);
+  border-color: var(--status-success-border);
+  color: var(--status-success-text);
+  background: var(--status-success-bg);
 }
 
 .status-pill.pending,
 .status-pill.not_started,
 .status-pill.transcribing {
-  border-color: rgba(161, 92, 7, 0.28);
-  color: var(--amber);
-  background: var(--amber-soft);
+  border-color: var(--status-warning-border);
+  color: var(--status-warning-text);
+  background: var(--status-warning-bg);
 }
 
 .status-pill.failed {
-  border-color: rgba(180, 35, 90, 0.28);
-  color: var(--rose);
-  background: var(--rose-soft);
+  border-color: var(--status-danger-border);
+  color: var(--status-danger-text);
+  background: var(--status-danger-bg);
 }
 
 .notice,
 .error {
   position: relative;
   overflow: hidden;
-  padding: 10px 12px;
+  padding: var(--card-pad-sm) var(--space-3);
   border: 1px solid;
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--text-meta);
   font-weight: 500;
 }
 
@@ -68,12 +68,12 @@
 
 .toast-stack {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
+  right: var(--card-pad-lg);
+  bottom: var(--card-pad-lg);
   z-index: 90;
   display: grid;
   width: min(420px, calc(100vw - 28px));
-  gap: 8px;
+  gap: var(--space-2);
   pointer-events: none;
 }
 
@@ -84,10 +84,10 @@
   position: relative;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) 24px;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: start;
   overflow: hidden;
-  padding: 10px 10px 12px;
+  padding: var(--card-pad-sm) var(--card-pad-sm) var(--space-3);
   border: 1px solid var(--toast-state-border);
   border-radius: var(--radius-lg);
   color: var(--text);
@@ -133,7 +133,7 @@
 
 .workbench-toast-copy strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--text-meta);
   font-weight: 700;
 }
 

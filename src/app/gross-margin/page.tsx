@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { ClipboardEvent } from "react";
-import Link from "next/link";
-import { Activity, Calculator, Copy, RefreshCw, Save, Search, Upload } from "lucide-react";
+import { Calculator, Copy, RefreshCw, Save, Search, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { getGrossMarginLibrary, saveGrossMarginMonitorRecord, saveGrossMarginPriceTable } from "@/lib/client";
-import { detectVideoPlatform, extractVideoUrl, normalizeVideoUrlInput } from "@/lib/video-links";
+import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/video-links";
 import { GrossMarginDifferenceModal } from "./_components/GrossMarginDifferenceModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
 import type {
@@ -170,13 +168,6 @@ export default function GrossMarginPage() {
     }
   }
 
-  function handleVideoUrlPaste(event: ClipboardEvent<HTMLInputElement>) {
-    const extractedUrl = extractVideoUrl(event.clipboardData.getData("text"));
-    if (!extractedUrl) return;
-    event.preventDefault();
-    handleVideoUrlChange(extractedUrl);
-  }
-
   function updateOriginalPrice(value: string) {
     setOriginalPrice(value);
     if (discountRate.trim()) {
@@ -238,10 +229,6 @@ export default function GrossMarginPage() {
     }
     try {
       await navigator.clipboard.writeText(reviewDraft);
-      if (platform !== "bilibili") {
-        notify({ tone: "success", message: "审核文案已复制" });
-        return;
-      }
       const result = await saveGrossMarginMonitorRecord({
         platform,
         accountName: matchedAccount?.name || accountName,
@@ -305,19 +292,22 @@ export default function GrossMarginPage() {
   return (
     <div className="page gross-margin-page">
       <header className="page-header">
-        <div>
-          <h1 className="title-with-emoji">
-            <span aria-hidden="true" className="title-emoji">
-              🧮
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">维护配置台</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <Calculator size={20} strokeWidth={2.1} />
             </span>
-            <span>数据维护</span>
-          </h1>
-          <p className="subtle">左边改报价，中间填本次数量，右边自动算维护成本和毛利率。</p>
+            <div className="page-title-copy">
+              <h1>数据维护</h1>
+              <p className="subtle">单价、数量、毛利。</p>
+            </div>
+          </div>
         </div>
-        <div className="button-row">
+        <div className="page-header-meta">
           <span className="stat-pill">2 个平台</span>
           <span className="stat-pill">{configuredPriceCount} 个单价已填</span>
-          <button className="btn" disabled={busy === "refresh"} onClick={() => void handleRefresh()} type="button">
+          <button className="btn ghost" disabled={busy === "refresh"} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             {busy === "refresh" ? "刷新中" : "刷新"}
           </button>
@@ -329,7 +319,7 @@ export default function GrossMarginPage() {
           <div className="pane-header">
             <div>
               <h2>平台单价表</h2>
-              <p className="pane-subtitle">这里只改默认单价</p>
+              <p className="pane-subtitle">默认单价</p>
             </div>
           </div>
           <div className="pane-body">
@@ -391,7 +381,7 @@ export default function GrossMarginPage() {
           <div className="pane-header">
             <div>
               <h2>{formatPlatform(platform)}本次维护</h2>
-              <p className="pane-subtitle">折前价格、折后价格和每项数量都填在这里</p>
+              <p className="pane-subtitle">价格与数量</p>
             </div>
           </div>
           <div className="pane-body">
@@ -403,10 +393,11 @@ export default function GrossMarginPage() {
                     autoComplete="off"
                     id="gross-account-name"
                     list="gross-account-options"
+                    name="accountName"
                     type="text"
                     value={accountName}
                     onChange={(event) => handleAccountNameChange(event.target.value)}
-                    placeholder="输入账号名自动带价格"
+                    placeholder="输入账号名自动带价格…"
                   />
                   <datalist id="gross-account-options">
                     {platformAccounts.map((account) => (
@@ -426,12 +417,12 @@ export default function GrossMarginPage() {
                   <input
                     autoComplete="off"
                     id="gross-video-url"
+                    name="videoUrl"
                     type="url"
                     value={videoUrl}
                     onBlur={() => handleVideoUrlChange(videoUrl)}
                     onChange={(event) => handleVideoUrlChange(event.target.value)}
-                    onPaste={handleVideoUrlPaste}
-                    placeholder="粘贴视频链接，导出时会带上"
+                    placeholder="粘贴视频链接，导出时会带上…"
                   />
                 </div>
               </div>
@@ -439,26 +430,30 @@ export default function GrossMarginPage() {
                 <div className="field">
                   <label htmlFor="gross-original-price">折前价格</label>
                   <input
+                    autoComplete="off"
                     id="gross-original-price"
                     inputMode="decimal"
                     min={0}
+                    name="originalPrice"
                     type="number"
                     value={originalPrice}
                     onChange={(event) => updateOriginalPrice(event.target.value)}
-                    placeholder="原档位价格"
+                    placeholder="原档位价格…"
                   />
                 </div>
                 <div className="field">
                   <label htmlFor="gross-discount-rate">折扣率</label>
                   <span className="gross-rate-input">
                     <input
+                      autoComplete="off"
                       id="gross-discount-rate"
                       inputMode="decimal"
                       min={0}
+                      name="discountRate"
                       type="number"
                       value={discountRate}
                       onChange={(event) => handleDiscountRateChange(event.target.value)}
-                      placeholder="可不填"
+                      placeholder="可不填…"
                     />
                     <small>%</small>
                   </span>
@@ -466,13 +461,15 @@ export default function GrossMarginPage() {
                 <div className="field">
                   <label htmlFor="gross-discount-price">折后价格</label>
                   <input
+                    autoComplete="off"
                     id="gross-discount-price"
                     inputMode="decimal"
                     min={0}
+                    name="discountPrice"
                     type="number"
                     value={discountPrice}
                     onChange={(event) => setDiscountPrice(event.target.value)}
-                    placeholder="实际报价"
+                    placeholder="实际报价…"
                   />
                 </div>
               </div>
@@ -509,6 +506,7 @@ export default function GrossMarginPage() {
                         <td>
                           <select
                             aria-label={`${config.label}类型`}
+                            name={`${config.service}Option`}
                             value={selectedOption?.id || ""}
                             onChange={(event) =>
                               setSelectedOptions((current) => ({
@@ -529,8 +527,10 @@ export default function GrossMarginPage() {
                             <span className={`gross-quantity-input${minimumWarning ? " gross-input-warning" : ""}`}>
                               <input
                                 aria-label={`${config.label}数量`}
+                                autoComplete="off"
                                 inputMode="decimal"
                                 min={0}
+                                name={`${config.service}Quantity`}
                                 type="number"
                                 value={quantityInputs[config.service]}
                                 onChange={(event) =>
@@ -560,7 +560,7 @@ export default function GrossMarginPage() {
           <div className="pane-header">
             <div>
               <h2>结果</h2>
-              <p className="pane-subtitle">毛利率 = （折后价格 - 维护成本） / 折前价格</p>
+              <p className="pane-subtitle">实时汇总与导出</p>
             </div>
           </div>
           <div className="pane-body">
@@ -583,43 +583,50 @@ export default function GrossMarginPage() {
               <MetricItem label="维护成本占折前" value={formatPercent(calculation.originalPrice ? calculation.maintenanceCost / calculation.originalPrice : 0)} />
             </div>
 
-            <label className={`gross-export-option${splitDeliveryEnabled ? " active" : ""}`}>
-              <input
-                checked={splitDeliveryEnabled}
-                onChange={(event) => setSplitDeliveryEnabled(event.target.checked)}
-                type="checkbox"
-              />
-              <span>
-                <strong>分两轮投放</strong>
-                <small>第一轮 60%，第二轮 40%，导出时会追加首轮维护目标</small>
-              </span>
-            </label>
+            <div className="gross-result-tools">
+              <details className="gross-review-preview" aria-label="审核文案预览">
+                <summary className="gross-review-preview-head">
+                  <span>
+                    审核文案
+                    <small>{reviewDraft.split("\n").filter(Boolean).length} 行，默认收起</small>
+                  </span>
+                  <strong>查看</strong>
+                </summary>
+                <div className="gross-review-preview-body">
+                  <pre>{reviewDraft}</pre>
+                </div>
+              </details>
 
-            <div className="button-row gross-export-row">
-              <button aria-label="导入维护模板" className="btn" onClick={() => setImportModalOpen(true)} type="button">
-                <Upload aria-hidden="true" size={15} />
-                导入
-              </button>
+              <label className={`gross-export-option${splitDeliveryEnabled ? " active" : ""}`}>
+                <input
+                  checked={splitDeliveryEnabled}
+                  name="splitDeliveryEnabled"
+                  onChange={(event) => setSplitDeliveryEnabled(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <strong>分两轮投放</strong>
+                  <small>首轮 60%，次轮 40%，导出时自动补首轮目标</small>
+                </span>
+              </label>
             </div>
 
-            <div className="button-row gross-export-row">
-              <button aria-label="导出审核文案" className="btn primary" onClick={() => void handleExportReview()} type="button">
-                <Copy aria-hidden="true" size={15} />
-                导出
-              </button>
+            <div className="gross-action-panel">
+              <div className="gross-action-grid">
+                <button className="btn" onClick={() => setImportModalOpen(true)} type="button">
+                  <Upload aria-hidden="true" size={15} />
+                  导入模板
+                </button>
+                <button className="btn" onClick={() => setDifferenceModalOpen(true)} type="button">
+                  <Search aria-hidden="true" size={15} />
+                  查询差额
+                </button>
+                <button className="btn primary gross-export-primary" onClick={() => void handleExportReview()} type="button">
+                  <Copy aria-hidden="true" size={15} />
+                  导出并监控
+                </button>
+              </div>
             </div>
-
-            <div className="button-row gross-export-row secondary">
-              <Link className="btn" href="/gross-margin/monitor">
-                <Activity aria-hidden="true" size={15} />
-                打开监控板
-              </Link>
-              <button className="btn" onClick={() => setDifferenceModalOpen(true)} type="button">
-                <Search aria-hidden="true" size={15} />
-                查询差额
-              </button>
-            </div>
-
           </div>
         </aside>
       </section>
@@ -655,8 +662,10 @@ function PriceGroup({
           <h3>{config.label}</h3>
           <span className="gross-price-input">
             <input
+              autoComplete="off"
               inputMode="decimal"
               min={0}
+              name={`${item.id}Price`}
               type="number"
               value={priceInputs[item.id] ?? String(item.unitPrice)}
               onChange={(event) => onPriceChange(item.id, event.target.value)}
@@ -680,8 +689,10 @@ function PriceGroup({
             <span>{item.name}</span>
             <span className="gross-price-input">
               <input
+                autoComplete="off"
                 inputMode="decimal"
                 min={0}
+                name={`${item.id}Price`}
                 type="number"
                 value={priceInputs[item.id] ?? String(item.unitPrice)}
                 onChange={(event) => onPriceChange(item.id, event.target.value)}

@@ -155,6 +155,7 @@ type DraftBase = {
   mode: "topic" | "rewrite";
   prompt: string;
   input?: string;
+  supportDocLinks?: string;
   content: string;
   assets?: DraftAssets;
   createdAt: string;
@@ -405,6 +406,7 @@ export type GrossMarginMonitorRecord = {
   sourceText: string;
   targetStats: Partial<Record<GrossMarginServiceKind, number>>;
   currentStats?: Partial<Record<GrossMarginServiceKind, number>>;
+  previousStats?: Partial<Record<GrossMarginServiceKind, number>>;
   metrics: GrossMarginMonitorMetric[];
   maxDifferencePercent: number;
   highRisk: boolean;
@@ -555,7 +557,7 @@ export const jobKinds = [
 
 export type JobKind = (typeof jobKinds)[number];
 
-export type JobStatus = "queued" | "running" | "completed" | "failed" | "interrupted";
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "interrupted" | "cancelled";
 
 export type JobResultRef = {
   id?: string;
@@ -601,6 +603,7 @@ export type JobStartInput =
         mode: Draft["mode"];
         prompt: string;
         sourceText?: string;
+        supportDocLinks?: string;
         save?: boolean;
         useWebResearch?: boolean;
       };

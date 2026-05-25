@@ -9,6 +9,7 @@
     "dev:stop": "node scripts/dev-server.mjs stop",
     "dev:restart": "node scripts/dev-server.mjs restart",
     "build": "next build",
+    "package:release": "node scripts/package-release.mjs",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

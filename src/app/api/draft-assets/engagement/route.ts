@@ -6,8 +6,8 @@ export const runtime = "nodejs";
 
 const schema = z.object({
   draftId: z.string().min(1),
-  commentCount: z.number().int().min(1).max(200).default(50),
-  danmakuCount: z.number().int().min(1).max(300).default(100)
+  commentCount: z.number().int().min(1).max(200).default(100),
+  danmakuCount: z.number().int().min(1).max(300).default(50)
 });
 
 export async function POST(request: Request) {
