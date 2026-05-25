@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties, type WheelEvent } from "react";
-import Link from "next/link";
 import {
   AlertTriangle,
-  ArrowLeft,
   CalendarClock,
   CheckCircle2,
   Copy,
@@ -39,18 +37,44 @@ export default function GrossMarginMonitorPage() {
   const [library, setLibrary] = useState<GrossMarginLibrary | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
+  const [accountFilter, setAccountFilter] = useState("");
+  const [platformFilter, setPlatformFilter] = useState<"all" | GrossMarginMonitorRecord["platform"]>("all");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
 
   const records = useMemo(() => library?.monitorRecords || [], [library]);
+  const filteredRecords = useMemo(() => {
+    const keyword = accountFilter.trim().toLowerCase();
+    const fromTime = getDayBoundaryTime(dateFromFilter, "start");
+    const toTime = getDayBoundaryTime(dateToFilter, "end");
+
+    return records.filter((record) => {
+      if (platformFilter !== "all" && record.platform !== platformFilter) return false;
+      if (keyword) {
+        const haystack = `${record.accountName || ""} ${record.title || ""}`.toLowerCase();
+        if (!haystack.includes(keyword)) return false;
+      }
+
+      if (fromTime !== null || toTime !== null) {
+        const publishedTime = getSortTime(record.publishedAt);
+        if (!Number.isFinite(publishedTime)) return false;
+        if (fromTime !== null && publishedTime < fromTime) return false;
+        if (toTime !== null && publishedTime > toTime) return false;
+      }
+
+      return true;
+    });
+  }, [accountFilter, dateFromFilter, dateToFilter, platformFilter, records]);
   const sortedRecords = useMemo(
     () =>
-      [...records].sort((left, right) => {
-        const rightGap = getOverallGap(right).percent;
-        const leftGap = getOverallGap(left).percent;
-        if (rightGap !== leftGap) return rightGap - leftGap;
-        return +new Date(right.updatedAt) - +new Date(left.updatedAt);
+      [...filteredRecords].sort((left, right) => {
+        const publishedTimeDiff = getSortTime(right.publishedAt) - getSortTime(left.publishedAt);
+        if (publishedTimeDiff !== 0) return publishedTimeDiff;
+        return getSortTime(right.updatedAt) - getSortTime(left.updatedAt);
       }),
-    [records]
+    [filteredRecords]
   );
+  const hasActiveFilters = Boolean(accountFilter.trim() || platformFilter !== "all" || dateFromFilter || dateToFilter);
 
   useEffect(() => {
     let ignore = false;
@@ -135,18 +159,72 @@ export default function GrossMarginMonitorPage() {
     <div className="page gross-margin-page gross-monitor-page">
       <div className="gross-monitor-topbar">
         <div className="page-header-meta">
-          <span className="stat-pill">{records.length} 条记录</span>
+          <span className="stat-pill">{hasActiveFilters ? `${sortedRecords.length} / ${records.length} 条记录` : `${records.length} 条记录`}</span>
           <span className="stat-pill">{sortedRecords.filter((record) => record.status === "failed").length} 条异常</span>
         </div>
-        <div className="button-row">
-          <Link className="btn" href="/gross-margin">
-            <ArrowLeft aria-hidden="true" size={15} />
-            返回数据维护
-          </Link>
-          <button className="btn primary" disabled={busy === "refresh-all" || !records.length} onClick={() => void handleRefreshAll()} type="button">
-            <RefreshCw aria-hidden="true" size={15} />
-            {busy === "refresh-all" ? "刷新中" : "刷新全部"}
-          </button>
+        <div className="gross-monitor-toolbar">
+          <div className="gross-monitor-inline-filters" role="group" aria-label="监控筛选">
+            <input
+              aria-label="按账号或标题筛选"
+              autoComplete="off"
+              className="gross-monitor-inline-input"
+              id="gross-monitor-account-filter"
+              onChange={(event) => setAccountFilter(event.target.value)}
+              placeholder="账号 / 标题"
+              type="text"
+              value={accountFilter}
+            />
+            <select
+              aria-label="按平台筛选"
+              className="gross-monitor-inline-select"
+              id="gross-monitor-platform-filter"
+              onChange={(event) => setPlatformFilter(event.target.value as "all" | GrossMarginMonitorRecord["platform"])}
+              value={platformFilter}
+            >
+              <option value="all">全部平台</option>
+              <option value="bilibili">B站</option>
+              <option value="douyin">抖音</option>
+            </select>
+            <input
+              aria-label="开始日期"
+              className="gross-monitor-inline-date"
+              id="gross-monitor-date-from"
+              onChange={(event) => setDateFromFilter(event.target.value)}
+              type="date"
+              value={dateFromFilter}
+            />
+            <span className="gross-monitor-inline-date-separator" aria-hidden="true">
+              至
+            </span>
+            <input
+              aria-label="结束日期"
+              className="gross-monitor-inline-date"
+              id="gross-monitor-date-to"
+              onChange={(event) => setDateToFilter(event.target.value)}
+              type="date"
+              value={dateToFilter}
+            />
+            {hasActiveFilters ? (
+              <button
+                className="btn subtle compact"
+                onClick={() => {
+                  setAccountFilter("");
+                  setPlatformFilter("all");
+                  setDateFromFilter("");
+                  setDateToFilter("");
+                }}
+                type="button"
+              >
+                清空
+              </button>
+            ) : null}
+          </div>
+          <div className="button-row">
+            <button className="btn primary" disabled={busy === "refresh-all" || !records.length} onClick={() => void handleRefreshAll()} type="button">
+              <RefreshCw aria-hidden="true" size={15} />
+              {busy === "refresh-all" ? "刷新中" : "刷新全部"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -170,12 +248,13 @@ export default function GrossMarginMonitorPage() {
               />
             ))}
           </div>
+        ) : hasActiveFilters ? (
+          <div className="gross-monitor-empty">
+            <p>没有符合当前筛选条件的监控记录，请调整账号、平台或日期范围。</p>
+          </div>
         ) : (
           <div className="gross-monitor-empty">
-            <p>还没有监控记录。先回到数据维护页导出审核文案，系统会自动保存维护目标。</p>
-            <Link className="btn primary" href="/gross-margin">
-              返回数据维护
-            </Link>
+            <p>还没有监控记录。先在数据维护里导出审核文案，系统会自动保存维护目标。</p>
           </div>
         )}
       </section>
@@ -549,4 +628,22 @@ function formatMonthDay(value?: string) {
     month: "2-digit",
     day: "2-digit"
   });
+}
+
+function getSortTime(value?: string) {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const time = +new Date(value);
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+}
+
+function getDayBoundaryTime(value: string, mode: "start" | "end") {
+  if (!value) return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  return mode === "start"
+    ? new Date(year, month, day, 0, 0, 0, 0).getTime()
+    : new Date(year, month, day, 23, 59, 59, 999).getTime();
 }
