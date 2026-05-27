@@ -12,6 +12,7 @@ const includeLibrary = args.has("--include-library");
 const skipInstall = args.has("--skip-install");
 const skipArchive = args.has("--skip-archive");
 const skipZip = args.has("--skip-zip");
+const skipInstallerCompile = args.has("--skip-installer-compile");
 const keepWork = args.has("--keep-work");
 const packageJson = JSON.parse(await fs.promises.readFile(path.join(root, "package.json"), "utf8"));
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "-");
@@ -79,8 +80,14 @@ async function main() {
   }
 
   if (presetConfig.installerExe && !skipArchive) {
-    console.log("生成 Windows 安装包...");
-    await createWindowsInstaller();
+    console.log("生成 Windows 安装脚本...");
+    await writeWindowsInstallerScript();
+    if (skipInstallerCompile) {
+      console.log(`已按参数跳过安装包编译。Inno Setup 脚本：${installerScriptPath}`);
+    } else {
+      console.log("生成 Windows 安装包...");
+      await compileWindowsInstaller();
+    }
   }
 
   console.log("");
@@ -140,7 +147,7 @@ function getPresetConfig(value) {
       readmeTitle: "数据维护/监控 Windows 安装包",
       brandName: "数据维护监控",
       installerExe: true,
-      appId: "{{2B8F195E-84B1-4D8A-9C44-CA9A9E2AA723}}",
+      appId: "{{2B8F195E-84B1-4D8A-9C44-CA9A9E2AA723}",
       appPublisher: "XJX",
       installerBaseName: `${releaseName}-setup`,
       installedAppDirName: "DataMaintenanceMonitor",
@@ -327,11 +334,18 @@ async function installBundledOpenCli() {
   return path.join(installRoot, "node_modules");
 }
 
-async function createWindowsInstaller() {
+async function writeWindowsInstallerScript() {
   if (!presetConfig.installerExe) return;
 
   await fs.promises.mkdir(path.dirname(installerScriptPath), { recursive: true });
   await fs.promises.writeFile(installerScriptPath, windowsInstallerScript(), "utf8");
+}
+
+async function compileWindowsInstaller() {
+  if (!presetConfig.installerExe) return;
+  if (!(await exists(installerScriptPath))) {
+    throw new Error(`未找到 Inno Setup 脚本：${installerScriptPath}`);
+  }
 
   const iscc = await resolveInnoSetupCompiler();
   if (!iscc) {
@@ -866,7 +880,7 @@ function escapeInnoString(value) {
 }
 
 function escapeInnoPascalString(value) {
-  return String(value).replace(/'/g, "''").replace(/\\/g, "\\\\");
+  return String(value).replace(/'/g, "''");
 }
 
 function runtimeScript() {
