@@ -9,8 +9,9 @@ import { formatSourceType } from "./asset-view-utils";
 type EngagementHistoryPaneProps = {
   records: EngagementRecord[];
   resultRecord: EngagementRecord | null;
-  onSelectRecord: (record: EngagementRecord) => void;
   onDeleteRecord: (record: EngagementRecord) => Promise<void>;
+  onExportRecord: (record: EngagementRecord) => void;
+  onSelectRecord: (record: EngagementRecord) => void;
 };
 
 type RecordContextMenu = {
@@ -22,8 +23,9 @@ type RecordContextMenu = {
 export function EngagementHistoryPane({
   records,
   resultRecord,
-  onSelectRecord,
-  onDeleteRecord
+  onDeleteRecord,
+  onExportRecord,
+  onSelectRecord
 }: EngagementHistoryPaneProps) {
   const [contextMenu, setContextMenu] = useState<RecordContextMenu | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<EngagementRecord | null>(null);
@@ -56,7 +58,7 @@ export function EngagementHistoryPane({
   const contextMenuStyle = useMemo(() => {
     if (!contextMenu) return undefined;
     const menuWidth = 172;
-    const menuHeight = 52;
+    const menuHeight = 96;
     const viewportWidth = typeof window === "undefined" ? contextMenu.x + menuWidth : window.innerWidth;
     const viewportHeight = typeof window === "undefined" ? contextMenu.y + menuHeight : window.innerHeight;
     return {
@@ -130,6 +132,16 @@ export function EngagementHistoryPane({
           role="menu"
           style={contextMenuStyle}
         >
+          <button
+            className="history-context-menu-item"
+            onClick={() => {
+              onExportRecord(contextMenu.record);
+              setContextMenu(null);
+            }}
+            type="button"
+          >
+            导出 Word
+          </button>
           <button
             className="history-context-menu-item danger"
             onClick={() => {

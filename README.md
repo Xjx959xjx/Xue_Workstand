@@ -80,10 +80,23 @@ npm run package:release
 WINDOWS_NODE_DIR=/path/to/windows-node npm run package:release -- --preset gross-margin-win
 ```
 
+如果要生成给普通 Windows 用户双击安装的 `.exe` 安装包，优先使用 GitHub Actions 里的
+`Build Gross Margin Windows Installer` 工作流。它会在 Windows runner 上安装 Inno Setup，
+并执行：
+
+```bash
+npm run package:release -- --preset gross-margin-win-installer
+```
+
+安装包会把程序装到用户目录下，并创建桌面/开始菜单快捷方式；运行数据保存在用户
+`AppData`，升级安装不会覆盖已有维护和监控数据。本机 macOS 仍可继续生成 `.zip`
+便携包用于排查，但不建议在 macOS 上直接生成 `.exe`。
+
 脚本会在临时目录安装依赖并构建 Next.js standalone 产物，输出到 `dist/`：
 
 - `account-style-library-*.tar.gz`：macOS / Linux 交付压缩包。
 - `account-style-library-*.zip`：Windows 优先使用这个压缩包。
+- `account-style-library-*-setup.exe`：Windows 安装包，优先交付给什么都没装的用户。
 - 同名目录：本机可直接测试的解压目录。
 
 `--preset gross-margin-win` 只生成 Windows `.zip` 和对应目录，不再生成 macOS / Linux `.tar.gz`。打包前需要通过 `WINDOWS_NODE_DIR` 提供一个包含 `node.exe` 的 Windows Node 运行时目录，脚本会把它内置到运行包里。

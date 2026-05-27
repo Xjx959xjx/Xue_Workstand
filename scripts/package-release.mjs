@@ -14,13 +14,15 @@ const skipArchive = args.has("--skip-archive");
 const keepWork = args.has("--keep-work");
 const packageJson = JSON.parse(await fs.promises.readFile(path.join(root, "package.json"), "utf8"));
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "-");
-const releaseSuffix = preset === "gross-margin-win" ? "gross-margin-win" : "portable";
+const releaseSuffix = isGrossMarginWindowsPreset(preset) ? preset : "portable";
 const releaseName = `${packageJson.name || "account-style-library"}-${packageJson.version || "0.0.0"}-${releaseSuffix}-${stamp}`;
 const workRoot = path.join(os.tmpdir(), `${packageJson.name || "account-style-library"}-package-work-${process.pid}`);
 const stagingRoot = path.join(workRoot, "source");
 const releaseRoot = path.join(root, "dist", releaseName);
 const tgzArchivePath = `${releaseRoot}.tar.gz`;
 const zipArchivePath = `${releaseRoot}.zip`;
+const installerScriptPath = path.join(root, "dist", `${releaseName}.iss`);
+const installerOutputPath = path.join(root, "dist", `${releaseName}-setup.exe`);
 const presetConfig = getPresetConfig(preset);
 const bundledOpenCliVersion = "1.8.0";
 
@@ -36,6 +38,8 @@ async function main() {
   await fs.promises.rm(releaseRoot, { recursive: true, force: true });
   await fs.promises.rm(tgzArchivePath, { force: true });
   await fs.promises.rm(zipArchivePath, { force: true });
+  await fs.promises.rm(installerScriptPath, { force: true });
+  await fs.promises.rm(installerOutputPath, { force: true });
   await fs.promises.mkdir(stagingRoot, { recursive: true });
 
   await copyProjectSources();
@@ -71,6 +75,11 @@ async function main() {
     }
   }
 
+  if (presetConfig.installerExe && !skipArchive) {
+    console.log("生成 Windows 安装包...");
+    await createWindowsInstaller();
+  }
+
   console.log("");
   console.log("打包完成：");
   console.log(`  目录：${releaseRoot}`);
@@ -81,13 +90,20 @@ async function main() {
     if (await exists(zipArchivePath)) {
       console.log(`  Windows 压缩包：${zipArchivePath}`);
     }
+    if (await exists(installerOutputPath)) {
+      console.log(`  Windows 安装包：${installerOutputPath}`);
+    }
   }
   console.log("");
   console.log(presetConfig.finishHint);
   if (keepWork) console.log(`临时构建目录保留在：${workRoot}`);
-  if (!includeLibrary && preset !== "gross-margin-win") {
+  if (!includeLibrary && !isGrossMarginWindowsPreset(preset)) {
     console.log("注意：本次未包含 style-library 数据。若确实要带当前本地数据，重新执行：npm run package:release -- --include-library");
   }
+}
+
+function isGrossMarginWindowsPreset(value = preset) {
+  return value === "gross-margin-win" || value === "gross-margin-win-installer";
 }
 
 function getPresetConfig(value) {
@@ -102,7 +118,30 @@ function getPresetConfig(value) {
       includeMacLaunchers: false,
       finishHint: "交付给别人时，发 Windows .zip 即可；解压后双击 start.cmd。",
       readmeTitle: "数据维护/监控 Windows 便携包",
-      brandName: "数据维护监控"
+      brandName: "数据维护监控",
+      installerExe: false,
+      userDataDir: ""
+    };
+  }
+
+  if (value === "gross-margin-win-installer") {
+    return {
+      preset: value,
+      appMode: "gross-margin",
+      startPath: "/gross-margin",
+      includeLibraryMode: "gross-margin-only",
+      archiveTarGz: false,
+      archiveZip: true,
+      includeMacLaunchers: false,
+      finishHint: "交付给别人时，优先发 Windows 安装包 .exe；也会保留 .zip 便携包用于排查。",
+      readmeTitle: "数据维护/监控 Windows 安装包",
+      brandName: "数据维护监控",
+      installerExe: true,
+      appId: "{{2B8F195E-84B1-4D8A-9C44-CA9A9E2AA723}}",
+      appPublisher: "XJX",
+      installerBaseName: `${releaseName}-setup`,
+      installedAppDirName: "DataMaintenanceMonitor",
+      userDataDir: "{userappdata}\\DataMaintenanceMonitor"
     };
   }
 
@@ -116,7 +155,9 @@ function getPresetConfig(value) {
     includeMacLaunchers: true,
     finishHint: "交付给别人时，发压缩包即可；Windows 优先发 .zip，解压后运行 start.cmd 或 start.bat。",
     readmeTitle: "账号风格库本地运行包",
-    brandName: "账号风格库"
+    brandName: "账号风格库",
+    installerExe: false,
+    userDataDir: ""
   };
 }
 
@@ -163,6 +204,7 @@ async function createRuntimePackage() {
 
   await copyReleaseLibrary();
   await bundleWindowsNode();
+  await patchWindowsRuntimeNativePackages();
   await bundleOpenCli();
 
   await fs.promises.mkdir(path.join(releaseRoot, "tools"), { recursive: true });
@@ -177,6 +219,8 @@ async function createRuntimePackage() {
     await fs.promises.writeFile(target, isWindowsLauncher(fileName) ? toCrLf(content) : content, "utf8");
     if (!fileName.endsWith(".bat") && !fileName.endsWith(".cmd")) await fs.promises.chmod(target, 0o755);
   }
+
+  await verifyGrossMarginWindowsPackage();
 }
 
 async function copyReleaseLibrary() {
@@ -218,7 +262,7 @@ async function resolveGrossMarginLibrarySource() {
 }
 
 async function bundleWindowsNode() {
-  if (preset !== "gross-margin-win") return;
+  if (!isGrossMarginWindowsPreset()) return;
 
   const bundledNode = process.env.WINDOWS_NODE_DIR || "";
   const detectedNode = bundledNode && await exists(path.join(bundledNode, "node.exe"))
@@ -227,7 +271,7 @@ async function bundleWindowsNode() {
 
   if (!detectedNode) {
     throw new Error(
-      "gross-margin-win 打包需要可用的 Windows Node 运行时。请先设置 WINDOWS_NODE_DIR，指向包含 node.exe 的 Windows Node 目录。"
+      `${preset} 打包需要可用的 Windows Node 运行时。请先设置 WINDOWS_NODE_DIR，指向包含 node.exe 的 Windows Node 目录。`
     );
   }
 
@@ -264,7 +308,7 @@ async function findWindowsNodeBundle() {
 }
 
 async function bundleOpenCli() {
-  if (preset !== "gross-margin-win") return;
+  if (!isGrossMarginWindowsPreset()) return;
 
   const packageRoot = await installBundledOpenCli();
   const targetRoot = path.join(releaseRoot, "runtime", "node_modules");
@@ -278,6 +322,143 @@ async function installBundledOpenCli() {
   await fs.promises.mkdir(installRoot, { recursive: true });
   await run("npm", ["install", `@jackwener/opencli@${bundledOpenCliVersion}`], { cwd: installRoot });
   return path.join(installRoot, "node_modules");
+}
+
+async function createWindowsInstaller() {
+  if (!presetConfig.installerExe) return;
+
+  await fs.promises.mkdir(path.dirname(installerScriptPath), { recursive: true });
+  await fs.promises.writeFile(installerScriptPath, windowsInstallerScript(), "utf8");
+
+  const iscc = await resolveInnoSetupCompiler();
+  if (!iscc) {
+    throw new Error(
+      `未检测到 Inno Setup 编译器 ISCC。请在 Windows 环境安装 Inno Setup，或使用 GitHub Actions 构建安装包。\n已生成脚本：${installerScriptPath}`
+    );
+  }
+
+  await run(iscc, [installerScriptPath], { cwd: root });
+}
+
+async function resolveInnoSetupCompiler() {
+  const configured = process.env.INNO_SETUP_COMPILER || process.env.ISCC || "";
+  if (configured && await exists(configured)) return configured;
+
+  const candidates = [
+    "iscc",
+    "ISCC.exe",
+    "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe",
+    "C:\\Program Files\\Inno Setup 6\\ISCC.exe"
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate.includes("\\") || candidate.includes("/")) {
+      if (await exists(candidate)) return candidate;
+      continue;
+    }
+    if (await executableOnPath(candidate)) return candidate;
+  }
+
+  return "";
+}
+
+function executableOnPath(command) {
+  return new Promise((resolve) => {
+    const probe = process.platform === "win32" ? "where" : "command";
+    const args = process.platform === "win32" ? [command] : ["-v", command];
+    const child = spawn(probe, args, {
+      cwd: root,
+      stdio: "ignore",
+      shell: process.platform !== "win32"
+    });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
+async function patchWindowsRuntimeNativePackages() {
+  if (!isGrossMarginWindowsPreset()) return;
+
+  const nodeModulesRoot = path.join(releaseRoot, "node_modules");
+  const installRoot = path.join(workRoot, "windows-native-runtime");
+  await fs.promises.rm(installRoot, { recursive: true, force: true });
+  await fs.promises.mkdir(installRoot, { recursive: true });
+
+  const sharpPackageJson = path.join(nodeModulesRoot, "sharp", "package.json");
+  if (await exists(sharpPackageJson)) {
+    const sharpPackage = JSON.parse(await fs.promises.readFile(sharpPackageJson, "utf8"));
+    const sharpVersion = sharpPackage.version;
+    const libvipsVersion = sharpPackage.optionalDependencies?.["@img/sharp-libvips-win32-x64"];
+    if (sharpVersion) {
+      const packages = [`@img/sharp-win32-x64@${sharpVersion}`];
+      if (libvipsVersion) packages.push(`@img/sharp-libvips-win32-x64@${libvipsVersion}`);
+      await run("npm", [
+        "install",
+        "--force",
+        "--ignore-scripts",
+        ...packages
+      ], { cwd: installRoot });
+      await copyScopedPackage(
+        path.join(installRoot, "node_modules", "@img", "sharp-win32-x64"),
+        path.join(nodeModulesRoot, "@img", "sharp-win32-x64")
+      );
+      if (libvipsVersion) {
+        await copyScopedPackage(
+          path.join(installRoot, "node_modules", "@img", "sharp-libvips-win32-x64"),
+          path.join(nodeModulesRoot, "@img", "sharp-libvips-win32-x64")
+        );
+      }
+    }
+  }
+
+  await removePlatformNativePackages(path.join(nodeModulesRoot, "@img"), [
+    /^sharp-darwin-/,
+    /^sharp-linux/,
+    /^sharp-libvips-darwin-/,
+    /^sharp-libvips-linux/
+  ]);
+}
+
+async function copyScopedPackage(source, target) {
+  if (!(await exists(source))) return;
+  await fs.promises.rm(target, { recursive: true, force: true });
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.cp(source, target, { recursive: true });
+}
+
+async function removePlatformNativePackages(scopeRoot, patterns) {
+  if (!(await exists(scopeRoot))) return;
+  const entries = await fs.promises.readdir(scopeRoot, { withFileTypes: true });
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && patterns.some((pattern) => pattern.test(entry.name)))
+      .map((entry) => fs.promises.rm(path.join(scopeRoot, entry.name), { recursive: true, force: true }))
+  );
+}
+
+async function verifyGrossMarginWindowsPackage() {
+  if (!isGrossMarginWindowsPreset()) return;
+
+  const requiredPaths = [
+    ["内置 Node", path.join(releaseRoot, "runtime", "node", "node.exe")],
+    ["opencli 脚本", path.join(releaseRoot, "runtime", "node_modules", "@jackwener", "opencli", "dist", "src", "main.js")],
+    ["启动脚本", path.join(releaseRoot, "start.cmd")],
+    ["毛利数据目录", path.join(releaseRoot, "style-library", "gross-margin")]
+  ];
+
+  const missing = [];
+  for (const [label, target] of requiredPaths) {
+    if (!(await exists(target))) missing.push(`${label}：${target}`);
+  }
+
+  const sharpRoot = path.join(releaseRoot, "node_modules", "@img");
+  if (await exists(path.join(releaseRoot, "node_modules", "sharp")) && !(await exists(path.join(sharpRoot, "sharp-win32-x64")))) {
+    missing.push(`Windows sharp 原生依赖：${path.join(sharpRoot, "sharp-win32-x64")}`);
+  }
+
+  if (missing.length) {
+    throw new Error(`${preset} 包缺少必要文件：\n${missing.join("\n")}`);
+  }
 }
 
 function launcherFiles() {
@@ -592,6 +773,99 @@ pause
 `;
 }
 
+function windowsInstallerScript() {
+  const sourceDir = escapeInnoPath(releaseRoot);
+  const outputDir = escapeInnoPath(path.dirname(installerOutputPath));
+  const setupBaseName = path.basename(installerOutputPath, ".exe");
+  const appVersion = packageJson.version || "0.0.0";
+  const brandName = presetConfig.brandName;
+  const dataDir = presetConfig.userDataDir || "{userappdata}\\DataMaintenanceMonitor";
+  const dataStyleLibrary = `${dataDir}\\style-library`;
+  const dataGrossMargin = `${dataStyleLibrary}\\gross-margin`;
+
+  return `#define MyAppName "${escapeInnoString(brandName)}"
+#define MyAppVersion "${escapeInnoString(appVersion)}"
+#define MyAppPublisher "${escapeInnoString(presetConfig.appPublisher || "XJX")}"
+#define MyAppExeName "start.cmd"
+
+[Setup]
+AppId=${presetConfig.appId}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+DefaultDirName={localappdata}\\Programs\\${escapeInnoString(presetConfig.installedAppDirName || "DataMaintenanceMonitor")}
+DefaultGroupName={#MyAppName}
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+OutputDir=${outputDir}
+OutputBaseFilename=${escapeInnoString(setupBaseName)}
+Compression=lzma2
+SolidCompression=yes
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
+PrivilegesRequired=lowest
+WizardStyle=modern
+UninstallDisplayIcon={app}\\runtime\\node\\node.exe
+
+[Files]
+Source: "${sourceDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".runtime\\*,style-library\\gross-margin\\*"
+Source: "${sourceDir}\\style-library\\gross-margin\\*"; DestDir: "${dataGrossMargin}"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
+
+[Dirs]
+Name: "${dataStyleLibrary}"
+Name: "${dataGrossMargin}"
+
+[Icons]
+Name: "{autoprograms}\\{#MyAppName}"; Filename: "{app}\\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\\runtime\\node\\node.exe"
+Name: "{autodesktop}\\{#MyAppName}"; Filename: "{app}\\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\\runtime\\node\\node.exe"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项："; Flags: checkedonce
+
+[Run]
+Filename: "{app}\\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  EnvPath: String;
+  EnvText: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    EnvPath := ExpandConstant('{app}\\.env');
+    EnvText :=
+      'PORT=3000' + #13#10 +
+      'APP_MODE=${presetConfig.appMode}' + #13#10 +
+      'APP_START_PATH=${presetConfig.startPath}' + #13#10 +
+      'OPENCLI_BIN=./runtime/node/node.exe' + #13#10 +
+      'OPENCLI_NODE_BIN=./runtime/node/node.exe' + #13#10 +
+      'OPENCLI_SCRIPT=./runtime/node_modules/@jackwener/opencli/dist/src/main.js' + #13#10 +
+      'FFMPEG_BIN=ffmpeg' + #13#10 +
+      'STYLE_LIBRARY_DIR=' + ExpandConstant('${escapeInnoPascalString(dataStyleLibrary)}') + #13#10;
+    SaveStringToFile(EnvPath, EnvText, False);
+  end;
+end;
+`;
+}
+
+function escapeInnoPath(value) {
+  return value.replace(/\//g, "\\");
+}
+
+function escapeInnoString(value) {
+  return String(value).replace(/"/g, '""');
+}
+
+function escapeInnoPascalString(value) {
+  return String(value).replace(/'/g, "''").replace(/\\/g, "\\\\");
+}
+
 function runtimeScript() {
   return `import fs from "fs";
 import net from "net";
@@ -886,7 +1160,7 @@ VOLCENGINE_ASR_RETRY_COUNT=2
 DOUYIN_TRANSCRIBE_CONCURRENCY=3
 `;
 
-  if (preset === "gross-margin-win") {
+  if (isGrossMarginWindowsPreset()) {
     return `${common}
 # 数据维护 / 数据监控本地运行不需要大模型。
 # 只有其他写作、风格卡、评论生成能力才需要下面这些变量。
@@ -928,16 +1202,16 @@ function minimalEnv() {
   return `PORT=3000
 APP_MODE=${presetConfig.appMode}
 APP_START_PATH=${presetConfig.startPath}
-OPENCLI_BIN=${preset === "gross-margin-win" ? "./runtime/node/node.exe" : "opencli"}
-OPENCLI_NODE_BIN=${preset === "gross-margin-win" ? "./runtime/node/node.exe" : ""}
-OPENCLI_SCRIPT=${preset === "gross-margin-win" ? "./runtime/node_modules/@jackwener/opencli/dist/src/main.js" : ""}
+OPENCLI_BIN=${isGrossMarginWindowsPreset() ? "./runtime/node/node.exe" : "opencli"}
+OPENCLI_NODE_BIN=${isGrossMarginWindowsPreset() ? "./runtime/node/node.exe" : ""}
+OPENCLI_SCRIPT=${isGrossMarginWindowsPreset() ? "./runtime/node_modules/@jackwener/opencli/dist/src/main.js" : ""}
 FFMPEG_BIN=ffmpeg
 STYLE_LIBRARY_DIR=./style-library
 `;
 }
 
 function releaseReadme() {
-  if (preset === "gross-margin-win") {
+  if (isGrossMarginWindowsPreset()) {
     return `# ${presetConfig.readmeTitle}
 
 这是面向 Windows 的数据维护 / 数据监控专用便携包。它不是单文件 exe，而是解压后双击启动的本地网页工具。

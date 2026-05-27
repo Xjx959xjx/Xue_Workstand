@@ -23,10 +23,11 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
+    confirmButtonRef.current?.focus();
     return () => {
       previouslyFocused?.focus();
     };
@@ -43,7 +44,7 @@ export function ConfirmDialog({
         aria-labelledby="confirm-dialog-title"
         aria-modal="true"
         className="modal-panel confirm-panel"
-        onKeyDown={(event) => handleDialogKeyDown(event, onCancel)}
+        onKeyDown={(event) => handleDialogKeyDown(event, busy, onCancel, onConfirm)}
         ref={panelRef}
         role="dialog"
         tabIndex={-1}
@@ -61,7 +62,7 @@ export function ConfirmDialog({
           <button className="btn" disabled={busy} onClick={onCancel} type="button">
             {cancelLabel}
           </button>
-          <button className="btn danger" disabled={busy} onClick={onConfirm} type="button">
+          <button className="btn danger" disabled={busy} onClick={onConfirm} ref={confirmButtonRef} type="button">
             {busy ? "删除中…" : confirmLabel}
           </button>
         </div>
@@ -70,11 +71,20 @@ export function ConfirmDialog({
   );
 }
 
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onClose: () => void, onConfirm: () => void) {
   if (event.key === "Escape") {
     event.preventDefault();
     onClose();
     return;
+  }
+
+  if (event.key === "Enter" && !busy) {
+    const target = event.target;
+    if (!(target instanceof HTMLButtonElement) || target.type !== "button") {
+      event.preventDefault();
+      onConfirm();
+      return;
+    }
   }
 
   if (event.key !== "Tab") return;

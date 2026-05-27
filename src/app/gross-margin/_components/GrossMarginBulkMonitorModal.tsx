@@ -1,0 +1,229 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
+import { Check, ClipboardPaste, X } from "lucide-react";
+import { isBackdropEvent } from "@/components/dialog-events";
+import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
+
+export function GrossMarginBulkMonitorModal({
+  busy,
+  onClose,
+  onSubmit
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (input: { template: string; createProject: boolean; projectName: string }) => Promise<void>;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [template, setTemplate] = useState("");
+  const parsed = useMemo(() => parseGrossMarginBulkMonitorTemplate(template), [template]);
+  const defaultProjectName = useMemo(() => makeDefaultProjectName(parsed.items.length), [parsed.items.length]);
+  const [projectName, setProjectName] = useState(defaultProjectName);
+  const [projectNameTouched, setProjectNameTouched] = useState(false);
+  const [createProject, setCreateProject] = useState(true);
+  const [createProjectTouched, setCreateProjectTouched] = useState(false);
+  const canCreateProject = parsed.items.length > 1;
+  const canSubmit = parsed.items.length > 0 && !busy;
+
+  useEffect(() => {
+    if (!projectNameTouched) setProjectName(defaultProjectName);
+  }, [defaultProjectName, projectNameTouched]);
+
+  useEffect(() => {
+    if (!canCreateProject) {
+      setCreateProject(false);
+      setCreateProjectTouched(false);
+      return;
+    }
+    if (!createProjectTouched) setCreateProject(true);
+  }, [canCreateProject, createProjectTouched]);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, []);
+
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={(event) => {
+        if (isBackdropEvent(event) && !busy) onClose();
+      }}
+    >
+      <div
+        aria-labelledby="gross-bulk-monitor-modal-title"
+        aria-modal="true"
+        className="modal-panel gross-bulk-monitor-modal"
+        onKeyDown={(event) => handleDialogKeyDown(event, onClose, busy)}
+        ref={panelRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header className="gross-bulk-monitor-header">
+          <div>
+            <h2 id="gross-bulk-monitor-modal-title">一键监控</h2>
+            <p className="subtle">粘贴多条维护模板，自动识别视频链接和目标数据。</p>
+          </div>
+          <button aria-label="关闭一键监控弹窗" className="btn icon-btn icon-only" disabled={busy} onClick={onClose} type="button">
+            <X aria-hidden="true" size={16} />
+          </button>
+        </header>
+
+        <div className="gross-bulk-monitor-layout">
+          <label className="field gross-bulk-monitor-input">
+            <span>模板内容</span>
+            <textarea
+              autoFocus
+              rows={14}
+              value={template}
+              onChange={(event) => setTemplate(event.target.value)}
+              placeholder="粘贴多条账号昵称、视频链接、普通千川、HKJ 点赞、自定义评论、收藏、转发模板"
+            />
+          </label>
+
+          <aside className="gross-bulk-monitor-preview" aria-label="识别预览">
+            <div className="gross-bulk-monitor-preview-head">
+              <strong>{parsed.items.length} 条</strong>
+              <span>{canCreateProject ? "可创建项目" : "单条监控"}</span>
+            </div>
+
+            {canCreateProject ? (
+              <div className="gross-bulk-project-box">
+                <label className={`gross-export-option${createProject ? " active" : ""}`}>
+                  <input
+                    checked={createProject}
+                    disabled={busy}
+                    name="grossBulkCreateProject"
+                    onChange={(event) => {
+                      setCreateProjectTouched(true);
+                      setCreateProject(event.target.checked);
+                    }}
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>添加成项目</strong>
+                    <small>会出现在监控台的项目筛选里</small>
+                  </span>
+                </label>
+                <input
+                  aria-label="项目名"
+                  disabled={!createProject || busy}
+                  value={projectName}
+                  onChange={(event) => {
+                    setProjectNameTouched(true);
+                    setProjectName(event.target.value);
+                  }}
+                  placeholder="填写项目名"
+                />
+              </div>
+            ) : null}
+
+            <div className="gross-bulk-monitor-list">
+              {parsed.items.length ? (
+                parsed.items.map((item) => (
+                  <div className="gross-bulk-monitor-item" key={`${item.accountName}-${item.videoUrl}`}>
+                    <strong>{item.accountName}</strong>
+                    <span>{formatTargets(item.targetStats)}</span>
+                  </div>
+                ))
+              ) : (
+                <p>粘贴后会显示识别到的账号和目标。</p>
+              )}
+            </div>
+
+            {[...parsed.warnings, ...parsed.items.flatMap((item) => item.warnings)].length ? (
+              <div className="gross-bulk-monitor-warnings">
+                {[...parsed.warnings, ...parsed.items.flatMap((item) => item.warnings)].map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
+            ) : null}
+          </aside>
+        </div>
+
+        <footer className="button-row gross-bulk-monitor-actions">
+          <button className="btn" disabled={busy} onClick={onClose} type="button">
+            取消
+          </button>
+          <button
+            className="btn primary"
+            disabled={!canSubmit}
+            onClick={() => onSubmit({ template, createProject: canCreateProject && createProject, projectName })}
+            type="button"
+          >
+            {canSubmit ? <Check aria-hidden="true" size={15} /> : <ClipboardPaste aria-hidden="true" size={15} />}
+            {busy ? "添加中" : canCreateProject && createProject ? "添加为项目" : "添加监控"}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function makeDefaultProjectName(count: number) {
+  if (count <= 1) return "";
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${month}${day} 批量监控 ${count} 条`;
+}
+
+function formatTargets(targetStats: Record<string, number>) {
+  const labels: Record<string, string> = {
+    play: "播放",
+    like: "点赞",
+    comment: "评论",
+    favorite: "收藏",
+    share: "转发"
+  };
+  return (
+    Object.entries(targetStats)
+      .map(([service, value]) => `${labels[service] || service} ${formatMetric(value)}`)
+      .join("，") || "未识别目标"
+  );
+}
+
+function formatMetric(value: number) {
+  if (value >= 10000) return `${Number((value / 10000).toFixed(2)).toLocaleString("zh-CN")}万`;
+  return value.toLocaleString("zh-CN");
+}
+
+function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void, busy: boolean) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if (!busy) onClose();
+    return;
+  }
+
+  if (event.key !== "Tab") return;
+
+  const focusable = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  );
+
+  if (!focusable.length) {
+    event.preventDefault();
+    event.currentTarget.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (document.activeElement === event.currentTarget) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}

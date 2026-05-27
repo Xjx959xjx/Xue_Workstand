@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { ExternalLink, FileText, RefreshCw, Sparkles } from "lucide-react";
+import { Download, ExternalLink, FileText, RefreshCw, Sparkles } from "lucide-react";
 import type { AccountDetail, VideoListItem } from "@/lib/types";
 
 type LibraryDetailPaneProps = {
@@ -18,6 +18,7 @@ type LibraryDetailPaneProps = {
   transcriptPreview: string;
   transcribeProgress: number;
   transcribeStage: string;
+  onExportTranscripts: () => void;
   onGenerateBatchStyle: () => void;
   onOpenStyleModal: () => void;
   onOpenTranscriptModal: () => void;
@@ -38,6 +39,7 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
   transcriptPreview,
   transcribeProgress,
   transcribeStage,
+  onExportTranscripts,
   onGenerateBatchStyle,
   onOpenStyleModal,
   onOpenTranscriptModal,
@@ -120,6 +122,15 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
             <button className="btn" disabled={!selectedAccount || styleLoading} onClick={onOpenStyleModal} type="button">
               <FileText aria-hidden="true" size={16} />
               {styleLoading ? "读取中…" : "查看风格卡"}
+            </button>
+            <button
+              className="btn"
+              disabled={!selectedAccount || !selectedAccount.transcriptCount || busy === "export-transcripts"}
+              onClick={onExportTranscripts}
+              type="button"
+            >
+              <Download aria-hidden="true" size={16} />
+              {busy === "export-transcripts" ? "导出中…" : "导出转写稿"}
             </button>
           </div>
           {busy === "batch-style" ? (

@@ -16,6 +16,7 @@
     "check:library": "node scripts/check-library-consistency.mjs"
   },
   "dependencies": {
+    "docx": "^9.7.0",
     "lucide-react": "^0.468.0",
     "next": "^15.0.0",
     "react": "^19.0.0",

@@ -819,12 +819,12 @@ body,
 }
 
 .writer-history-panel {
-  background: color-mix(in oklch, var(--panel) 72%, transparent);
+  background: color-mix(in oklch, var(--panel) 88%, transparent);
 }
 
 .writer-history-header {
-  min-height: 56px;
-  padding: 12px;
+  min-height: 70px;
+  padding: 16px 12px 12px;
   background: color-mix(in oklch, var(--panel) 82%, transparent);
 }
 
@@ -834,7 +834,7 @@ body,
 }
 
 .writer-history-body {
-  padding: 10px;
+  padding: 8px;
 }
 
 .writer-history-panel .status-summary {
@@ -842,23 +842,22 @@ body,
 }
 
 .writer-history-list {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel-raised);
-}
-
-.writer-history-list .list-button {
-  min-height: 64px;
-  padding: 10px 12px;
+  overflow: visible;
   border: 0;
-  border-bottom: 1px solid var(--line-subtle);
   border-radius: 0;
   background: transparent;
 }
 
+.writer-history-list .list-button {
+  min-height: 56px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  background: var(--panel-raised);
+}
+
 .writer-history-list .list-button:last-child {
-  border-bottom: 0;
+  border-bottom: 1px solid var(--line-subtle);
 }
 
 .writer-history-list .list-button:hover {
@@ -867,7 +866,7 @@ body,
 
 .writer-history-list .list-button.active {
   background: var(--surface-selected);
-  box-shadow: inset 3px 0 0 var(--accent-strong);
+  box-shadow: inset 2px 0 0 var(--accent-strong);
 }
 
 @media (max-width: 780px) {
@@ -1136,7 +1135,7 @@ body,
 
 .writer-workbench,
 .engagement-workbench {
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 23vw, 360px);
   gap: 10px;
 }
 

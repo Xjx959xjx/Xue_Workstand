@@ -678,12 +678,14 @@ export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
       return normalizeGrossMarginPriceTable(platform, table);
     })
   );
+  const monitorRecords = await getGrossMarginMonitorRecords();
 
   return {
     root: grossMarginPath(),
     tables,
     accounts: normalizeGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath())),
-    monitorRecords: await getGrossMarginMonitorRecords()
+    monitorRecords,
+    monitorProjects: buildGrossMarginMonitorProjects(monitorRecords)
   };
 }
 
@@ -706,6 +708,8 @@ export async function getGrossMarginMonitorRecords() {
 export async function upsertGrossMarginMonitorRecord(input: {
   platform: GrossMarginPriceTable["platform"];
   accountName: string;
+  projectId?: string;
+  projectName?: string;
   videoUrl: string;
   videoKey: string;
   sourceText: string;
@@ -722,6 +726,8 @@ export async function upsertGrossMarginMonitorRecord(input: {
     id,
     platform,
     accountName: input.accountName.trim(),
+    projectId: input.projectId?.trim() || existing?.projectId,
+    projectName: input.projectName?.trim() || existing?.projectName,
     videoUrl: input.videoUrl.trim(),
     videoKey,
     title: existing?.title,
@@ -1930,6 +1936,8 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     id: normalizeGrossMarginMonitorRecordId(record.id || `${platform}-${shortHash(record.videoUrl || record.videoKey || nowIso())}`),
     platform,
     accountName: record.accountName?.trim() || "",
+    projectId: record.projectId?.trim() || undefined,
+    projectName: record.projectName?.trim() || undefined,
     videoUrl: record.videoUrl?.trim() || "",
     videoKey: record.videoKey?.trim() || record.videoUrl?.trim() || "",
     title: record.title?.trim() || undefined,
@@ -1947,6 +1955,31 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     createdAt: record.createdAt || nowIso(),
     updatedAt: record.updatedAt || record.createdAt || nowIso()
   };
+}
+
+function buildGrossMarginMonitorProjects(records: GrossMarginMonitorRecord[]) {
+  const projects = new Map<string, { id: string; name: string; count: number; updatedAt: string }>();
+
+  for (const record of records) {
+    const id = record.projectId?.trim();
+    if (!id) continue;
+    const current = projects.get(id);
+    const updatedAt = record.updatedAt || record.createdAt || nowIso();
+    if (!current) {
+      projects.set(id, {
+        id,
+        name: record.projectName?.trim() || "未命名项目",
+        count: 1,
+        updatedAt
+      });
+      continue;
+    }
+    current.count += 1;
+    if (+new Date(updatedAt) > +new Date(current.updatedAt)) current.updatedAt = updatedAt;
+    if (record.projectName?.trim()) current.name = record.projectName.trim();
+  }
+
+  return [...projects.values()].sort((left, right) => +new Date(right.updatedAt) - +new Date(left.updatedAt));
 }
 
 function normalizeGrossMarginMonitorStatus(status?: GrossMarginMonitorStatus) {

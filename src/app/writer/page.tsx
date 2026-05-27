@@ -261,6 +261,66 @@ function WriterPageContent() {
     ]
   );
 
+  const handleDeleteHistoryDrafts = useCallback(
+    async (draftsToDelete: Draft[]) => {
+      const draftIds = draftsToDelete.map((draft) => draft.id);
+      const deletedIds = new Set(draftIds);
+      const remainingDrafts = historyDrafts.filter((item) => !deletedIds.has(item.id));
+
+      try {
+        await deleteDrafts(draftIds);
+        setFullDrafts((current) => (current || []).filter((item) => !deletedIds.has(item.id)));
+
+        if (lastDraftId && deletedIds.has(lastDraftId)) {
+          const replacement = remainingDrafts[0] || null;
+          if (replacement) {
+            handleSelectHistoryDraft(replacement);
+          } else {
+            loadedDraftParamRef.current = "";
+            clearDraftResult();
+            setPrompt("");
+            setSourceText("");
+            setSupportDocLinks("");
+            const params = new URLSearchParams({
+              targetType,
+              mode
+            });
+            if (targetType === "project") {
+              const nextProjectId = selectedProject?.id || projectId;
+              if (nextProjectId) params.set("projectId", nextProjectId);
+            } else {
+              const nextAccountId = selectedAccount?.id || accountId;
+              if (nextAccountId) params.set("accountId", nextAccountId);
+            }
+            router.replace(`/writer?${params.toString()}`, { scroll: false });
+          }
+        }
+
+        notify({ tone: "success", message: `已删除 ${draftIds.length} 条草稿。` });
+        void refresh().catch(() => undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "批量删除草稿失败";
+        notify({ tone: "error", message });
+        throw error;
+      }
+    },
+    [
+      accountId,
+      clearDraftResult,
+      handleSelectHistoryDraft,
+      historyDrafts,
+      lastDraftId,
+      mode,
+      notify,
+      projectId,
+      refresh,
+      router,
+      selectedAccount?.id,
+      selectedProject?.id,
+      targetType
+    ]
+  );
+
   const handleRenameHistoryDraft = useCallback(
     async (draft: Draft, title: string) => {
       try {
@@ -521,6 +581,7 @@ function WriterPageContent() {
           drafts={historyDrafts}
           loading={historyLoading}
           onDeleteDraft={handleDeleteHistoryDraft}
+          onDeleteDrafts={handleDeleteHistoryDrafts}
           onRenameDraft={handleRenameHistoryDraft}
           selectedDraftId={lastDraftId}
           onSelectDraft={handleSelectHistoryDraft}

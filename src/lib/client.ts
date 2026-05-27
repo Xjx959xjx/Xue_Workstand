@@ -9,8 +9,6 @@ import {
   DraftCoverReference,
   DraftInput,
   EngagementRecord,
-  GrossMarginDifferenceQueryInput,
-  GrossMarginDifferenceQueryResult,
   GrossMarginLibrary,
   GrossMarginMonitorRecord,
   GrossMarginPriceTable,
@@ -215,6 +213,31 @@ function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: s
   return +new Date(right.createdAt) - +new Date(left.createdAt);
 }
 
+function fileNameFromContentDisposition(header: string | null) {
+  if (!header) return "";
+  const encoded = header.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+
+  return header.match(/filename="?([^";]+)"?/i)?.[1] || "";
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function getLibrary() {
   return requestJson<LibraryState>("/api/library");
 }
@@ -234,13 +257,6 @@ export function saveGrossMarginPriceTable(input: Pick<GrossMarginPriceTable, "pl
   });
 }
 
-export function queryGrossMarginDifference(input: GrossMarginDifferenceQueryInput) {
-  return requestJson<GrossMarginDifferenceQueryResult>("/api/gross-margin", {
-    method: "POST",
-    body: JSON.stringify({ action: "queryDifference", ...input })
-  });
-}
-
 export function saveGrossMarginMonitorRecord(input: {
   platform: GrossMarginPriceTable["platform"];
   accountName: string;
@@ -254,6 +270,22 @@ export function saveGrossMarginMonitorRecord(input: {
   });
 }
 
+export function bulkSaveGrossMarginMonitorRecords(input: {
+  template: string;
+  createProject?: boolean;
+  projectName?: string;
+}) {
+  return requestJson<{
+    records: GrossMarginMonitorRecord[];
+    library: GrossMarginLibrary;
+    project: { id: string; name: string } | null;
+    parsed: unknown;
+  }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "bulkSaveMonitorRecords", ...input })
+  });
+}
+
 export function refreshGrossMarginMonitorRecord(recordId: string) {
   return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
@@ -261,10 +293,10 @@ export function refreshGrossMarginMonitorRecord(recordId: string) {
   });
 }
 
-export function refreshGrossMarginMonitorRecords() {
+export function refreshGrossMarginMonitorRecords(recordIds?: string[]) {
   return requestJson<{ records: GrossMarginMonitorRecord[]; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
-    body: JSON.stringify({ action: "refreshMonitorRecords" })
+    body: JSON.stringify({ action: "refreshMonitorRecords", recordIds })
   });
 }
 
@@ -296,6 +328,29 @@ export function getAccountDetail(input: { platform: Platform; accountId: string;
   });
   if (input.includeStyle) params.set("includeStyle", "1");
   return requestJson<AccountDetail>(`/api/accounts?${params.toString()}`);
+}
+
+export async function exportAccountTranscripts(input: { platform: Platform; accountId: string }) {
+  const params = new URLSearchParams(input);
+  const response = await fetch(`/api/accounts/transcripts-export?${params.toString()}`, {
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  if (!response.ok) {
+    const fallbackResponse = response.clone();
+    const data = await response.json().catch(async () => {
+      const text = await fallbackResponse.text().catch(() => "");
+      return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+    });
+    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
+  }
+
+  const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition")) || "账号转写稿.docx";
+  const transcriptCount = Number(response.headers.get("x-transcript-count") || 0);
+  downloadBlob(await response.blob(), fileName);
+  return { fileName, transcriptCount };
 }
 
 export function getProjectDetail(projectId: string, options: { includeStyle?: boolean } = {}) {
@@ -776,6 +831,28 @@ export function deleteEngagementRecords(recordIds: string[]) {
     method: "DELETE",
     body: JSON.stringify({ recordIds })
   });
+}
+
+export async function exportEngagementRecord(recordId: string) {
+  const params = new URLSearchParams({ recordId });
+  const response = await fetch(`/api/engagement/export?${params.toString()}`, {
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  if (!response.ok) {
+    const fallbackResponse = response.clone();
+    const data = await response.json().catch(async () => {
+      const text = await fallbackResponse.text().catch(() => "");
+      return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+    });
+    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
+  }
+
+  const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition")) || "评论池.docx";
+  downloadBlob(await response.blob(), fileName);
+  return { fileName };
 }
 
 export function generateDraftEngagement(input: {

@@ -235,6 +235,11 @@
   gap: 12px;
 }
 
+.engagement-export-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .engagement-diagnostics {
   display: flex;
   flex-wrap: wrap;

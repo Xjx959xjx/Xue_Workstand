@@ -23,7 +23,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
-import { collectAccount, getHealth } from "@/lib/client";
+import { collectAccount, exportAccountTranscripts, getHealth } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import type { CollectOrder, Platform } from "@/lib/types";
 
@@ -333,6 +333,23 @@ export default function LibraryPage() {
     setBusy
   ]);
 
+  const handleExportTranscripts = useCallback(async () => {
+    if (!selectedAccount) return;
+    setBusy("export-transcripts");
+    setMessage("");
+    try {
+      const result = await exportAccountTranscripts({
+        platform: selectedAccount.platform,
+        accountId: selectedAccount.id
+      });
+      setMessage(`已导出 ${result.transcriptCount} 份转写稿：${result.fileName}`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "导出转写稿失败");
+    } finally {
+      setBusy("");
+    }
+  }, [selectedAccount, setBusy]);
+
   if (!loading && !library?.accounts.length) {
     return (
       <div className="page library-page">
@@ -478,6 +495,7 @@ export default function LibraryPage() {
           transcriptPreview={transcriptPreview}
           transcribeProgress={transcribeProgress}
           transcribeStage={transcribeStage}
+          onExportTranscripts={handleExportTranscripts}
           onGenerateBatchStyle={generateBatchStyle}
           onOpenStyleModal={openStyleModal}
           onOpenTranscriptModal={openTranscriptModal}

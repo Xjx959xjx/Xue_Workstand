@@ -13,7 +13,7 @@ import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { deleteEngagementRecords } from "@/lib/client";
+import { deleteEngagementRecords, exportEngagementRecord } from "@/lib/client";
 import type { EngagementRecord } from "@/lib/types";
 
 export default function AssetsPage() {
@@ -89,6 +89,19 @@ function AssetsPageContent() {
     }
   }
 
+  async function handleExportRecord(record: EngagementRecord) {
+    setBusy("export-word");
+    setNotice("");
+    try {
+      const result = await exportEngagementRecord(record.id);
+      setNotice(`已导出 Word 文档：${result.fileName}`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "导出评论池失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function copyText(text: string, message: string) {
     await navigator.clipboard.writeText(text);
     setNotice(message);
@@ -148,6 +161,7 @@ function AssetsPageContent() {
               includeDanmaku={includeDanmaku}
               resultRecord={resultRecord}
               onCopyText={copyText}
+              onExportWord={(record) => void handleExportRecord(record)}
               onPublishAssetText={handlePublishAssetText}
             />
           </div>
@@ -156,6 +170,7 @@ function AssetsPageContent() {
           records={records}
           resultRecord={resultRecord}
           onDeleteRecord={handleDeleteRecord}
+          onExportRecord={(record) => void handleExportRecord(record)}
           onSelectRecord={setResultRecord}
         />
       </section>

@@ -22,12 +22,14 @@ import {
   Video,
   XCircle
 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useFeedback } from "@/components/FeedbackProvider";
 import {
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
   refreshGrossMarginMonitorRecord,
   refreshGrossMarginMonitorRecords,
+  updateGrossMarginMonitorPlayCurrent,
   updateGrossMarginMonitorPlayTarget
 } from "@/lib/client";
 import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRecord } from "@/lib/types";
@@ -39,8 +41,10 @@ export default function GrossMarginMonitorPage() {
   const [busy, setBusy] = useState("");
   const [accountFilter, setAccountFilter] = useState("");
   const [platformFilter, setPlatformFilter] = useState<"all" | GrossMarginMonitorRecord["platform"]>("all");
+  const [projectFilter, setProjectFilter] = useState("all");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<GrossMarginMonitorRecord | null>(null);
 
   const records = useMemo(() => library?.monitorRecords || [], [library]);
   const filteredRecords = useMemo(() => {
@@ -50,8 +54,9 @@ export default function GrossMarginMonitorPage() {
 
     return records.filter((record) => {
       if (platformFilter !== "all" && record.platform !== platformFilter) return false;
+      if (projectFilter !== "all" && record.projectId !== projectFilter) return false;
       if (keyword) {
-        const haystack = `${record.accountName || ""} ${record.title || ""}`.toLowerCase();
+        const haystack = `${record.accountName || ""} ${record.title || ""} ${record.videoUrl || ""} ${record.videoKey || ""}`.toLowerCase();
         if (!haystack.includes(keyword)) return false;
       }
 
@@ -64,7 +69,7 @@ export default function GrossMarginMonitorPage() {
 
       return true;
     });
-  }, [accountFilter, dateFromFilter, dateToFilter, platformFilter, records]);
+  }, [accountFilter, dateFromFilter, dateToFilter, platformFilter, projectFilter, records]);
   const sortedRecords = useMemo(
     () =>
       [...filteredRecords].sort((left, right) => {
@@ -74,7 +79,8 @@ export default function GrossMarginMonitorPage() {
       }),
     [filteredRecords]
   );
-  const hasActiveFilters = Boolean(accountFilter.trim() || platformFilter !== "all" || dateFromFilter || dateToFilter);
+  const monitorProjects = useMemo(() => library?.monitorProjects || [], [library]);
+  const hasActiveFilters = Boolean(accountFilter.trim() || platformFilter !== "all" || projectFilter !== "all" || dateFromFilter || dateToFilter);
 
   useEffect(() => {
     let ignore = false;
@@ -94,9 +100,14 @@ export default function GrossMarginMonitorPage() {
   }, [notify]);
 
   async function handleRefreshAll() {
+    const targetRecordIds = sortedRecords.map((record) => record.id);
+    if (!targetRecordIds.length) {
+      notify({ tone: "warning", message: "当前筛选下没有可刷新的监控记录" });
+      return;
+    }
     setBusy("refresh-all");
     try {
-      const result = await refreshGrossMarginMonitorRecords();
+      const result = await refreshGrossMarginMonitorRecords(targetRecordIds);
       setLibrary(result.library);
       notify({ tone: "success", message: `已刷新 ${result.records.length} 条监控记录` });
     } catch (error) {
@@ -124,6 +135,7 @@ export default function GrossMarginMonitorPage() {
     try {
       const result = await deleteGrossMarginMonitorRecord(recordId);
       setLibrary(result.library);
+      setDeleteTarget((current) => (current?.id === recordId ? null : current));
       notify({ tone: "success", message: "监控记录已删除" });
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "删除监控记录失败" });
@@ -137,9 +149,23 @@ export default function GrossMarginMonitorPage() {
     try {
       const result = await updateGrossMarginMonitorPlayTarget(recordId, target);
       setLibrary(result.library);
-      notify({ tone: "success", message: "播放量目标已更新" });
+      notify({ tone: "success", message: "播放目标已更新" });
     } catch (error) {
-      notify({ tone: "error", message: error instanceof Error ? error.message : "更新播放量目标失败" });
+      notify({ tone: "error", message: error instanceof Error ? error.message : "更新播放目标失败" });
+      throw error;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleUpdatePlayCurrent(recordId: string, current: number) {
+    setBusy(`play-current-${recordId}`);
+    try {
+      const result = await updateGrossMarginMonitorPlayCurrent(recordId, current);
+      setLibrary(result.library);
+      notify({ tone: "success", message: "当前播放量已更新" });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "更新当前播放量失败" });
       throw error;
     } finally {
       setBusy("");
@@ -165,12 +191,12 @@ export default function GrossMarginMonitorPage() {
         <div className="gross-monitor-toolbar">
           <div className="gross-monitor-inline-filters" role="group" aria-label="监控筛选">
             <input
-              aria-label="按账号或标题筛选"
+              aria-label="按账号、标题或链接筛选"
               autoComplete="off"
               className="gross-monitor-inline-input"
               id="gross-monitor-account-filter"
               onChange={(event) => setAccountFilter(event.target.value)}
-              placeholder="账号 / 标题"
+              placeholder="账号 / 标题 / 链接"
               type="text"
               value={accountFilter}
             />
@@ -184,6 +210,20 @@ export default function GrossMarginMonitorPage() {
               <option value="all">全部平台</option>
               <option value="bilibili">B站</option>
               <option value="douyin">抖音</option>
+            </select>
+            <select
+              aria-label="按项目筛选"
+              className="gross-monitor-inline-select gross-monitor-project-select"
+              id="gross-monitor-project-filter"
+              onChange={(event) => setProjectFilter(event.target.value)}
+              value={projectFilter}
+            >
+              <option value="all">全部项目</option>
+              {monitorProjects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}（{project.count}）
+                </option>
+              ))}
             </select>
             <input
               aria-label="开始日期"
@@ -210,6 +250,7 @@ export default function GrossMarginMonitorPage() {
                 onClick={() => {
                   setAccountFilter("");
                   setPlatformFilter("all");
+                  setProjectFilter("all");
                   setDateFromFilter("");
                   setDateToFilter("");
                 }}
@@ -220,9 +261,9 @@ export default function GrossMarginMonitorPage() {
             ) : null}
           </div>
           <div className="button-row">
-            <button className="btn primary" disabled={busy === "refresh-all" || !records.length} onClick={() => void handleRefreshAll()} type="button">
+            <button className="btn primary" disabled={busy === "refresh-all" || !sortedRecords.length} onClick={() => void handleRefreshAll()} type="button">
               <RefreshCw aria-hidden="true" size={15} />
-              {busy === "refresh-all" ? "刷新中" : "刷新全部"}
+              {busy === "refresh-all" ? "刷新中" : hasActiveFilters ? "刷新当前" : "刷新全部"}
             </button>
           </div>
         </div>
@@ -241,23 +282,36 @@ export default function GrossMarginMonitorPage() {
                 busy={busy}
                 key={record.id}
                 record={record}
-                onDelete={handleDelete}
+                onDelete={setDeleteTarget}
                 onCopy={handleCopyDifference}
                 onRefresh={handleRefreshOne}
+                onUpdatePlayCurrent={handleUpdatePlayCurrent}
                 onUpdatePlayTarget={handleUpdatePlayTarget}
               />
             ))}
           </div>
         ) : hasActiveFilters ? (
           <div className="gross-monitor-empty">
-            <p>没有符合当前筛选条件的监控记录，请调整账号、平台或日期范围。</p>
+            <p>没有符合当前筛选条件的监控记录，请调整账号、链接、平台、项目或日期范围。</p>
           </div>
         ) : (
           <div className="gross-monitor-empty">
-            <p>还没有监控记录。先在数据维护里导出审核文案，系统会自动保存维护目标。</p>
+            <p>还没有监控记录。先在数据维护里导出文案，系统会自动保存维护目标。</p>
           </div>
         )}
       </section>
+      {deleteTarget ? (
+        <ConfirmDialog
+          body={`会删除监控记录“${deleteTarget.title || deleteTarget.videoUrl}”，删除后无法恢复。`}
+          busy={busy === `delete-${deleteTarget.id}`}
+          confirmLabel="删除记录"
+          title="确认删除监控记录？"
+          onCancel={() => {
+            if (busy !== `delete-${deleteTarget.id}`) setDeleteTarget(null);
+          }}
+          onConfirm={() => void handleDelete(deleteTarget.id)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -274,13 +328,15 @@ function MonitorCard({
   onDelete,
   onCopy,
   onRefresh,
+  onUpdatePlayCurrent,
   onUpdatePlayTarget
 }: {
   busy: string;
   record: GrossMarginMonitorRecord;
-  onDelete: (recordId: string) => Promise<void>;
+  onDelete: (record: GrossMarginMonitorRecord) => void;
   onCopy: (record: GrossMarginMonitorRecord) => Promise<void>;
   onRefresh: (recordId: string) => Promise<void>;
+  onUpdatePlayCurrent: (recordId: string, current: number) => Promise<void>;
   onUpdatePlayTarget: (recordId: string, target: number) => Promise<void>;
 }) {
   const title = record.title || record.videoUrl;
@@ -294,25 +350,48 @@ function MonitorCard({
   const visibleWarnings = record.warnings.filter((warning) => !isBlueLinkFetchWarning(warning));
   const [editingPlay, setEditingPlay] = useState(false);
   const playMetric = metrics.find((metric) => metric.service === "play");
-  const [playDraft, setPlayDraft] = useState(playMetric ? formatEditablePlayTarget(playMetric.target, record.platform) : "");
+  const canEditPlayCurrent = record.platform === "douyin";
+  const [playTargetDraft, setPlayTargetDraft] = useState(playMetric ? formatEditableMetricValue(playMetric.target, record.platform) : "");
+  const [playCurrentDraft, setPlayCurrentDraft] = useState(
+    playMetric && typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
+  );
 
   useEffect(() => {
     if (!editingPlay && playMetric) {
-      setPlayDraft(formatEditablePlayTarget(playMetric.target, record.platform));
+      setPlayTargetDraft(formatEditableMetricValue(playMetric.target, record.platform));
+      setPlayCurrentDraft(
+        typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
+      );
     }
   }, [editingPlay, playMetric, record.platform]);
 
-  async function submitPlayTarget() {
+  async function submitPlayEdit() {
     if (!playMetric) return;
-    const parsed = parseMetricInput(playDraft);
-    if (!parsed || parsed <= 0) {
-      throw new Error("请输入有效的播放量目标");
+    const nextTarget = parseMetricInput(playTargetDraft);
+    if (!nextTarget || nextTarget <= 0) {
+      throw new Error("请输入有效的播放目标");
     }
-    if (parsed === playMetric.target) {
+
+    const nextCurrent =
+      canEditPlayCurrent && playCurrentDraft.trim()
+        ? parseMetricInput(playCurrentDraft)
+        : typeof playMetric.current === "number"
+          ? playMetric.current
+          : null;
+    if (canEditPlayCurrent && (nextCurrent === null || nextCurrent < 0)) {
+      throw new Error("请输入有效的当前播放量");
+    }
+
+    if (nextTarget !== playMetric.target) {
+      await onUpdatePlayTarget(record.id, nextTarget);
+    }
+    if (canEditPlayCurrent && nextCurrent !== null && nextCurrent !== playMetric.current) {
+      await onUpdatePlayCurrent(record.id, nextCurrent);
+    }
+    if (nextTarget === playMetric.target && (!canEditPlayCurrent || nextCurrent === playMetric.current)) {
       setEditingPlay(false);
       return;
     }
-    await onUpdatePlayTarget(record.id, parsed);
     setEditingPlay(false);
   }
 
@@ -338,9 +417,9 @@ function MonitorCard({
           style={{ "--risk-fill": `${overallGap.percent * 100}%` } as CSSProperties}
         >
           <strong>{formatOverallGap(overallGap, record.status)}</strong>
-          <small>整体差额</small>
+          <small>整体缺口</small>
         </span>
-          <span className="gross-monitor-risk-meta">
+        <span className="gross-monitor-risk-meta">
           <span>
             {renderStatusIcon(record.status)}
             {formatStatus(record.status)}
@@ -358,9 +437,9 @@ function MonitorCard({
                 <Link2 aria-hidden="true" size={14} />
               </a>
             ) : null}
-            <button className="btn compact" onClick={() => void onCopy(record)} type="button">
+            <button aria-label="复制差额文案" className="btn compact" onClick={() => void onCopy(record)} type="button">
               <Copy aria-hidden="true" size={14} />
-              复制
+              差额
             </button>
             <button className="btn compact" disabled={busy === `refresh-${record.id}`} onClick={() => void onRefresh(record.id)} type="button">
               <RefreshCw aria-hidden="true" size={14} />
@@ -370,7 +449,7 @@ function MonitorCard({
               aria-label="删除监控记录"
               className="btn danger icon-btn icon-only"
               disabled={busy === `delete-${record.id}`}
-              onClick={() => void onDelete(record.id)}
+              onClick={() => onDelete(record)}
               type="button"
             >
               <Trash2 aria-hidden="true" size={14} />
@@ -387,14 +466,14 @@ function MonitorCard({
 
           return (
             <span
-              aria-label={`${metric.label}，目标 ${formatMetric(metric.target, record.platform)}，当前 ${formatMetricCurrentValue(metric, record.platform)}，差额比例 ${formatMetricPercent(metric)}${deltaLabel}`}
+              aria-label={`${getMetricLabel(metric)}，目标 ${formatMetric(metric.target, record.platform)}，当前 ${formatMetricCurrentValue(metric, record.platform)}，缺口比例 ${formatMetricPercent(metric)}${deltaLabel}`}
               className={`gross-monitor-metric-cell ${metric.highRisk ? "danger" : ""}`}
               key={metric.service}
-              title={`${metric.label} | 目标 ${formatMetric(metric.target, record.platform)} | 当前 ${formatMetricCurrentValue(metric, record.platform)} | ${formatMetricPercent(metric)}${refreshDelta === null ? "" : ` | 本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}`}`}
+              title={`${getMetricLabel(metric)} | 目标 ${formatMetric(metric.target, record.platform)} | 当前 ${formatMetricCurrentValue(metric, record.platform)} | ${formatMetricPercent(metric)}${refreshDelta === null ? "" : ` | 本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}`}`}
             >
               <span className="gross-monitor-metric-cell-head">
                 {renderMetricIcon(metric.service)}
-                <strong>{metric.label}</strong>
+                <strong>{getMetricLabel(metric)}</strong>
                 <b className={metric.highRisk ? "risk-text" : ""}>{formatMetricPercent(metric)}</b>
               </span>
               <span className="gross-monitor-metric-bar" aria-hidden="true">
@@ -402,35 +481,73 @@ function MonitorCard({
               </span>
               <span className="gross-monitor-metric-cell-values">
                 <span className="gross-monitor-metric-cell-value-main">
-                  {metric.service === "play" && record.platform === "bilibili" ? (
+                  {metric.service === "play" ? (
                     <em
                       className={`gross-monitor-play-edit ${editingPlay ? "editing" : ""}`}
                       onDoubleClick={() => setEditingPlay(true)}
-                      title="双击修改播放量目标"
+                      title="双击修改播放目标"
                     >
                       {editingPlay ? (
-                        <input
-                          autoFocus
-                          className="gross-monitor-play-input"
-                          disabled={busy === `play-target-${record.id}`}
-                          onBlur={() => {
-                            void submitPlayTarget().catch(() => undefined);
-                          }}
-                          onChange={(event) => setPlayDraft(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              void submitPlayTarget().catch(() => undefined);
-                            }
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              setPlayDraft(formatEditablePlayTarget(metric.target, record.platform));
-                              setEditingPlay(false);
-                            }
-                          }}
-                          type="text"
-                          value={playDraft}
-                        />
+                        <span className="gross-monitor-play-edit-fields">
+                          {canEditPlayCurrent ? (
+                            <input
+                              aria-label="当前播放量"
+                              autoFocus
+                              className="gross-monitor-play-input"
+                              disabled={busy === `play-current-${record.id}` || busy === `play-target-${record.id}`}
+                              onBlur={(event) => {
+                                if (event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) return;
+                                void submitPlayEdit().catch(() => undefined);
+                              }}
+                              onChange={(event) => setPlayCurrentDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  void submitPlayEdit().catch(() => undefined);
+                                }
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  setPlayTargetDraft(formatEditableMetricValue(metric.target, record.platform));
+                                  setPlayCurrentDraft(
+                                    typeof metric.current === "number" ? formatEditableMetricValue(metric.current, record.platform) : ""
+                                  );
+                                  setEditingPlay(false);
+                                }
+                              }}
+                              placeholder="当前"
+                              type="text"
+                              value={playCurrentDraft}
+                            />
+                          ) : null}
+                          <input
+                            aria-label="播放目标"
+                            autoFocus={!canEditPlayCurrent}
+                            className="gross-monitor-play-input"
+                            disabled={busy === `play-current-${record.id}` || busy === `play-target-${record.id}`}
+                            onBlur={(event) => {
+                              if (event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) return;
+                              void submitPlayEdit().catch(() => undefined);
+                            }}
+                            onChange={(event) => setPlayTargetDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void submitPlayEdit().catch(() => undefined);
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                setPlayTargetDraft(formatEditableMetricValue(metric.target, record.platform));
+                                setPlayCurrentDraft(
+                                  typeof metric.current === "number" ? formatEditableMetricValue(metric.current, record.platform) : ""
+                                );
+                                setEditingPlay(false);
+                              }
+                            }}
+                            placeholder="目标"
+                            type="text"
+                            value={playTargetDraft}
+                          />
+                        </span>
                       ) : (
                         <>
                           {formatMetricCurrentValue(metric, record.platform)} / {formatMetric(metric.target, record.platform)}
@@ -465,12 +582,15 @@ function MonitorCard({
 }
 
 function formatTargetSummary(record: GrossMarginMonitorRecord) {
-  return record.metrics.slice(0, 4).map((metric) => `${metric.label}${formatMetric(metric.target, record.platform)}`).join("，") || "无可监控目标";
+  return record.metrics
+    .slice(0, 4)
+    .map((metric) => `${getMetricLabel(metric)}${formatMetric(metric.target, record.platform)}`)
+    .join("，") || "无可监控目标";
 }
 
 function buildMonitorDifferenceText(record: GrossMarginMonitorRecord) {
   const lines = getDisplayMetrics(record)
-    .map((metric) => `${metric.label}：${formatDifferenceMetric(metric.difference, metric.service, record.platform)}`)
+    .map((metric) => `${getMetricLabel(metric)}：${formatGapMetric(metric.difference, metric.service, record.platform)}`)
     .filter(Boolean);
 
   return ["@罗月琴 目前差额：", "", ...lines].join("\n");
@@ -478,6 +598,11 @@ function buildMonitorDifferenceText(record: GrossMarginMonitorRecord) {
 
 function isBlueLinkFetchWarning(warning: string) {
   return warning.includes("蓝链点击目前没有稳定公开抓取来源");
+}
+
+function getMetricLabel(metric: GrossMarginMonitorMetric) {
+  if (metric.service === "play") return "播放";
+  return metric.label;
 }
 
 function getDisplayMetrics(record: GrossMarginMonitorRecord) {
@@ -567,7 +692,7 @@ function formatMetric(value: number, platform: GrossMarginMonitorRecord["platfor
   return String(Math.round(value));
 }
 
-function formatDifferenceMetric(value: number, service: GrossMarginMonitorMetric["service"], platform: GrossMarginMonitorRecord["platform"]) {
+function formatGapMetric(value: number, service: GrossMarginMonitorMetric["service"], platform: GrossMarginMonitorRecord["platform"]) {
   if (service === "play" && value >= 10000) {
     return `${stripZeros((value / 10000).toFixed(2))}${platform === "bilibili" ? "W" : "万"}`;
   }
@@ -578,14 +703,14 @@ function formatMetricRefreshDelta(value: number, service: GrossMarginMonitorMetr
   if (value === 0) return "0";
   const sign = value > 0 ? "+" : "-";
   const absolute = Math.abs(value);
-  return `${sign}${formatDifferenceMetric(absolute, service, platform)}`;
+  return `${sign}${formatGapMetric(absolute, service, platform)}`;
 }
 
 function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatEditablePlayTarget(value: number, platform: GrossMarginMonitorRecord["platform"]) {
+function formatEditableMetricValue(value: number, platform: GrossMarginMonitorRecord["platform"]) {
   if (value >= 10000) {
     return `${stripZeros((value / 10000).toFixed(2))}${platform === "bilibili" ? "W" : "万"}`;
   }

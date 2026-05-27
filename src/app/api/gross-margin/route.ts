@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   getBilibiliVideoStatsByUrl,
+  getDouyinVideoStatsBatchByUrl,
   getDouyinVideoStatsByUrl,
 } from "@/lib/opencli";
+import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
 import {
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
@@ -14,12 +16,11 @@ import {
   upsertGrossMarginMonitorRecord
 } from "@/lib/storage";
 import type {
-  GrossMarginDifferenceQueryResult,
   GrossMarginMonitorRecord,
   GrossMarginPriceTable,
   GrossMarginServiceKind
 } from "@/lib/types";
-import { extractBvid, extractDouyinAwemeId, toNumber } from "@/lib/utils";
+import { extractBvid, extractDouyinAwemeId, safeSegment, shortHash, toNumber } from "@/lib/utils";
 import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey, normalizeVideoUrlInput } from "@/lib/video-links";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,7 @@ const serviceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "sha
 const amountSchema = z.coerce.number().finite().min(0, "金额不能小于 0").max(100_000_000, "金额过大，请检查输入");
 const minimumQuantitySchema = z.coerce.number().finite().gt(0, "起量必须大于 0").max(100_000_000, "起量过大，请检查输入");
 const DOUYIN_VIDEO_STATS_CACHE_TTL_MS = 3 * 60 * 1000;
+const MONITOR_REFRESH_CONCURRENCY = 3;
 
 const douyinSingleVideoStatsCache = new Map<
   string,
@@ -56,25 +58,6 @@ const mutationSchema = z.discriminatedUnion("action", [
     )
   }),
   z.object({
-    action: z.literal("queryDifference"),
-    template: z.string().trim().min(1, "请先粘贴维护模板"),
-    platformHint: platformSchema.optional(),
-    videoUrl: z.string().trim().optional(),
-    manualCurrentStats: z
-      .object({
-        play: z.coerce.number().finite().min(0).optional(),
-        like: z.coerce.number().finite().min(0).optional(),
-        douPlus: z.coerce.number().finite().min(0).optional(),
-        coin: z.coerce.number().finite().min(0).optional(),
-        comment: z.coerce.number().finite().min(0).optional(),
-        share: z.coerce.number().finite().min(0).optional(),
-        favorite: z.coerce.number().finite().min(0).optional(),
-        danmaku: z.coerce.number().finite().min(0).optional(),
-        blueLink: z.coerce.number().finite().min(0).optional()
-      })
-      .optional()
-  }),
-  z.object({
     action: z.literal("saveMonitorRecord"),
     platform: platformSchema,
     accountName: z.string().trim().optional(),
@@ -83,11 +66,18 @@ const mutationSchema = z.discriminatedUnion("action", [
     targetStats: z.record(serviceSchema, z.coerce.number().finite().min(0)).optional()
   }),
   z.object({
+    action: z.literal("bulkSaveMonitorRecords"),
+    template: z.string().trim().min(1, "请先粘贴监控模板"),
+    projectName: z.string().trim().max(80, "项目名太长").optional(),
+    createProject: z.boolean().optional()
+  }),
+  z.object({
     action: z.literal("refreshMonitorRecord"),
     recordId: z.string().trim().min(1, "缺少监控记录 ID")
   }),
   z.object({
-    action: z.literal("refreshMonitorRecords")
+    action: z.literal("refreshMonitorRecords"),
+    recordIds: z.array(z.string().trim().min(1, "监控记录 ID 不能为空")).optional()
   }),
   z.object({
     action: z.literal("updateMonitorPlayTarget"),
@@ -119,19 +109,20 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const input = mutationSchema.parse(await request.json());
-    if (input.action === "queryDifference") {
-      return NextResponse.json(await queryGrossMarginDifference(input));
-    }
     if (input.action === "saveMonitorRecord") {
       const record = await saveMonitorRecordFromInput(input);
       return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+    }
+    if (input.action === "bulkSaveMonitorRecords") {
+      const result = await bulkSaveMonitorRecordsFromInput(input);
+      return NextResponse.json({ ...result, library: await getGrossMarginLibrary() });
     }
     if (input.action === "refreshMonitorRecord") {
       const record = await refreshMonitorRecord(input.recordId);
       return NextResponse.json({ record, library: await getGrossMarginLibrary() });
     }
     if (input.action === "refreshMonitorRecords") {
-      const records = await refreshMonitorRecords();
+      const records = await refreshMonitorRecords(input.recordIds);
       return NextResponse.json({ records, library: await getGrossMarginLibrary() });
     }
     if (input.action === "updateMonitorPlayTarget") {
@@ -172,35 +163,7 @@ function isMissingOpenCliError(error: unknown) {
   return error instanceof Error && /opencli/i.test(error.message) && /未检测到|not found|enoent/i.test(error.message);
 }
 
-type DifferencePlatform = GrossMarginPriceTable["platform"];
-
-async function queryGrossMarginDifference(input: z.infer<typeof mutationSchema> & { action: "queryDifference" }) {
-  const parsed = parseMaintenanceTemplate(input.template);
-  const resolvedVideo = resolveVideoUrl(input.videoUrl || "", input.template);
-  const url = await normalizeDifferenceVideoUrl(resolvedVideo.url);
-  const platform = resolveDifferencePlatform(url, parsed.platform, input.platformHint);
-  const fetched =
-    platform === "bilibili"
-      ? await getBilibiliVideoStatsByUrl(url)
-      : await getDouyinDifferenceStats({
-          accountName: parsed.accountName,
-          url
-        });
-  const currentStats = {
-    ...fetched.stats,
-    ...(input.manualCurrentStats || {})
-  };
-  const result = buildDifferenceResult({
-    currentStats,
-    fetchedTitle: fetched.title,
-    platform,
-    templateStats: parsed.stats,
-    templateText: input.template,
-    url: fetched.url || url,
-    warnings: [...resolvedVideo.warnings, "warning" in fetched && fetched.warning ? fetched.warning : ""].filter(Boolean)
-  });
-  return result satisfies GrossMarginDifferenceQueryResult;
-}
+type MonitorPlatform = GrossMarginPriceTable["platform"];
 
 async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> & { action: "saveMonitorRecord" }) {
   const parsed = parseMaintenanceTemplate(input.sourceText);
@@ -209,8 +172,8 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
     ...(input.targetStats || {})
   };
   const resolvedVideo = resolveVideoUrl(input.videoUrl, input.sourceText);
-  const videoUrl = await normalizeDifferenceVideoUrl(resolvedVideo.url);
-  const platform = resolveDifferencePlatform(videoUrl, parsed.platform, input.platform);
+  const videoUrl = normalizeVideoUrlInput(resolvedVideo.url);
+  const platform = resolveMonitorPlatform(videoUrl, parsed.platform, input.platform);
   const videoKey = getVideoComparableKey(videoUrl);
   return upsertGrossMarginMonitorRecord({
     platform,
@@ -222,6 +185,38 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
   });
 }
 
+async function bulkSaveMonitorRecordsFromInput(input: z.infer<typeof mutationSchema> & { action: "bulkSaveMonitorRecords" }) {
+  const parsed = parseGrossMarginBulkMonitorTemplate(input.template);
+  if (!parsed.items.length) {
+    throw new Error(parsed.warnings[0] || "没有识别到可添加的监控模板。");
+  }
+
+  const trimmedProjectName = input.projectName?.trim() || "";
+  const shouldCreateProject = Boolean(input.createProject && parsed.items.length > 1);
+  const projectName = shouldCreateProject ? trimmedProjectName || makeDefaultGrossMarginProjectName(parsed.items.length) : "";
+  const projectId = projectName ? safeSegment(`${projectName}-${shortHash(input.template)}`, shortHash(projectName)) : "";
+  const records = await Promise.all(
+    parsed.items.map((item) =>
+      upsertGrossMarginMonitorRecord({
+        platform: item.platform,
+        accountName: item.accountName,
+        projectId: projectId || undefined,
+        projectName: projectName || undefined,
+        videoUrl: item.videoUrl,
+        videoKey: getVideoComparableKey(item.videoUrl),
+        sourceText: item.sourceText,
+        targetStats: item.targetStats
+      })
+    )
+  );
+
+  return {
+    records,
+    parsed,
+    project: projectId ? { id: projectId, name: projectName } : null
+  };
+}
+
 async function refreshMonitorRecord(recordId: string) {
   const record = await resolveGrossMarginMonitorRecord(recordId);
   return refreshMonitorRecordSnapshot(record);
@@ -230,15 +225,29 @@ async function refreshMonitorRecord(recordId: string) {
 async function refreshMonitorRecordSnapshot(
   record: GrossMarginMonitorRecord
 ) {
-  const warnings: string[] = [];
   try {
     const fetched =
       record.platform === "bilibili"
         ? await getBilibiliVideoStatsByUrl(record.videoUrl)
-        : await getDouyinDifferenceStats({
+        : await getDouyinMonitorStats({
             accountName: record.accountName,
             url: record.videoUrl
           });
+    return saveRefreshedMonitorRecord(record, fetched);
+  } catch (error) {
+    return saveFailedMonitorRecord(record, error);
+  }
+}
+
+async function saveRefreshedMonitorRecord(
+  record: GrossMarginMonitorRecord,
+  fetched:
+    | Awaited<ReturnType<typeof getBilibiliVideoStatsByUrl>>
+    | Awaited<ReturnType<typeof getDouyinVideoStatsByUrl>>
+    | Awaited<ReturnType<typeof getDouyinMonitorStats>>
+) {
+  const warnings: string[] = [];
+  try {
     if ("warning" in fetched && fetched.warning) warnings.push(fetched.warning);
     const fetchedStats = normalizeFetchedStatsForMonitor(record.platform, fetched.stats);
     const currentStats =
@@ -249,6 +258,12 @@ async function refreshMonitorRecordSnapshot(
       ...record,
       title: fetched.title || record.title,
       videoUrl: fetched.url || record.videoUrl,
+      videoKey:
+        "videoKey" in fetched && typeof fetched.videoKey === "string" && fetched.videoKey
+          ? fetched.videoKey
+          : fetched.url
+            ? getVideoComparableKey(fetched.url)
+            : record.videoKey,
       publishedAt: fetched.publishedAt || record.publishedAt,
       previousStats: record.currentStats,
       currentStats,
@@ -258,30 +273,65 @@ async function refreshMonitorRecordSnapshot(
       updatedAt: new Date().toISOString()
     });
   } catch (error) {
-    return saveGrossMarginMonitorRecord({
-      ...record,
-      status: "failed",
-      warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
-      lastRefreshedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
+    return saveFailedMonitorRecord(record, error);
   }
 }
 
-async function refreshMonitorRecords() {
-  const records = await getGrossMarginMonitorRecords();
-  const refreshed: GrossMarginMonitorRecord[] = [];
-  for (const record of records) {
-    refreshed.push(await refreshMonitorRecordSnapshot(record));
-  }
-  return refreshed;
+function saveFailedMonitorRecord(record: GrossMarginMonitorRecord, error: unknown) {
+  return saveGrossMarginMonitorRecord({
+    ...record,
+    status: "failed",
+    warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
+    lastRefreshedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function refreshMonitorRecords(recordIds?: string[]) {
+  const requestedIds = recordIds?.length ? new Set(recordIds.map((recordId) => recordId.trim())) : null;
+  const records = (await getGrossMarginMonitorRecords()).filter((record) => !requestedIds || requestedIds.has(record.id));
+  const douyinRecords = records.filter((record) => record.platform === "douyin");
+  const douyinResults = douyinRecords.length
+    ? await getDouyinVideoStatsBatchByUrl(douyinRecords.map((record) => record.videoUrl)).catch(() => [])
+    : [];
+  const douyinFetchedById = new Map(
+    douyinRecords.flatMap((record, index) => {
+      const result = douyinResults[index];
+      return result ? [[record.id, result] as const] : [];
+    })
+  );
+
+  return mapWithConcurrency(records, MONITOR_REFRESH_CONCURRENCY, async (record) => {
+    const fetched = douyinFetchedById.get(record.id);
+    if (fetched) return saveRefreshedMonitorRecord(record, fetched);
+    return refreshMonitorRecordSnapshot(record);
+  });
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    })
+  );
+
+  return results;
 }
 
 async function updateMonitorPlayTarget(recordId: string, target: number) {
   const record = await resolveGrossMarginMonitorRecord(recordId);
-  if (record.platform !== "bilibili") {
-    throw new Error("抖音播放量抓不到，请在监控卡片里填写当前播放量。");
-  }
   return saveGrossMarginMonitorRecord({
     ...record,
     targetStats: {
@@ -308,7 +358,7 @@ async function updateMonitorPlayCurrent(recordId: string, current: number) {
 }
 
 function normalizeFetchedStatsForMonitor(
-  platform: DifferencePlatform,
+  platform: MonitorPlatform,
   stats: Partial<Record<GrossMarginServiceKind, number>>
 ) {
   if (platform === "bilibili") {
@@ -364,13 +414,13 @@ function parseMaintenanceTemplate(template: string) {
   return {
     accountName: extractLineValue(lines, ["账号", "账号名", "账号名称", "账号昵称", "达人", "达人名称", "博主"]),
     platform: (normalized.includes("【抖音】") ? "douyin" : normalized.includes("【B站】") ? "bilibili" : undefined) as
-      | DifferencePlatform
+      | MonitorPlatform
       | undefined,
     stats
   };
 }
 
-async function getDouyinDifferenceStats(input: {
+async function getDouyinMonitorStats(input: {
   accountName: string;
   url: string;
 }) {
@@ -421,7 +471,7 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function resolveDifferencePlatform(url: string, templatePlatform?: DifferencePlatform, platformHint?: DifferencePlatform) {
+function resolveMonitorPlatform(url: string, templatePlatform?: MonitorPlatform, platformHint?: MonitorPlatform) {
   const platformFromUrl = detectVideoPlatform(url);
   if (platformFromUrl) return platformFromUrl;
   if (extractBvid(url)) return "bilibili" as const;
@@ -443,106 +493,13 @@ function resolveVideoUrl(explicitUrl: string, template: string) {
   throw new Error("没有从模板里识别到视频链接，请补充链接后再查询。");
 }
 
-async function normalizeDifferenceVideoUrl(url: string) {
-  const trimmed = normalizeVideoUrlInput(url);
-  if (!trimmed || !/v\.douyin\.com/i.test(trimmed)) return trimmed;
-
-  try {
-    const response = await fetch(trimmed, {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        "User-Agent": "Mozilla/5.0 style-library",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
-    });
-    return normalizeVideoUrlInput(response.url || trimmed);
-  } catch {
-    return trimmed;
-  }
-}
-
 function extractTemplateUrl(template: string) {
   return extractVideoUrl(template);
 }
 
-function buildDifferenceResult(input: {
-  platform: DifferencePlatform;
-  url: string;
-  fetchedTitle?: string;
-  templateText: string;
-  templateStats: Partial<Record<GrossMarginServiceKind, number>>;
-  currentStats: Partial<Record<GrossMarginServiceKind, number>>;
-  warnings?: string[];
-}) {
-  const orderedServices: Array<{ service: GrossMarginServiceKind; label: string }> =
-    input.platform === "bilibili"
-      ? [
-          { service: "play", label: "播放量" },
-          { service: "like", label: "点赞" },
-          { service: "coin", label: "投币" },
-          { service: "favorite", label: "收藏" },
-          { service: "comment", label: "评论" },
-          { service: "share", label: "分享" },
-          { service: "danmaku", label: "弹幕" },
-          { service: "blueLink", label: "蓝链点击" }
-        ]
-      : [
-          { service: "play", label: "播放量" },
-          { service: "like", label: "点赞" },
-          { service: "comment", label: "评论" },
-          { service: "favorite", label: "收藏" },
-          { service: "share", label: "转发" }
-        ];
-  const warnings: string[] = [...(input.warnings || [])];
-
-  const lines = orderedServices
-    .map(({ service, label }) => {
-      const current = input.currentStats[service];
-      const templateValue = input.templateStats[service];
-      const hasTemplateValue = typeof templateValue === "number" && !Number.isNaN(templateValue);
-
-      if (service === "blueLink" && (!hasTemplateValue || templateValue <= 0)) {
-        return "";
-      }
-
-      const hasCurrent = typeof current === "number" && !Number.isNaN(current);
-      if (input.platform === "douyin" && service === "play" && !hasCurrent) {
-        warnings.push("抖音播放量抓不到，请手动补充当前播放量后再生成播放差额。");
-        return "";
-      }
-      if (!hasCurrent && service !== "blueLink") {
-        warnings.push(`${label} 没有抓到当前数据，暂时按 0 处理。`);
-      }
-      if (!hasTemplateValue) {
-        warnings.push(`${label} 没有从维护模板里识别到，暂时按 0 处理。`);
-      }
-
-      const difference = Math.max(0, (templateValue || 0) - (hasCurrent ? current : 0));
-      return `${label}：${formatDifferenceValue(service, difference, input.platform)}`;
-    })
-    .filter(Boolean);
-
-  return {
-    platform: input.platform,
-    title: input.fetchedTitle || "",
-    url: input.url,
-    warnings: uniqueWarnings(warnings),
-    result: ["@罗月琴 目前差额：", "", ...lines].join("\n")
-  };
-}
-
-function formatDifferenceValue(service: GrossMarginServiceKind, value: number, platform: DifferencePlatform) {
-  if (service === "play" && value >= 10_000) {
-    return `${stripTrailingZeros((value / 10_000).toFixed(2))}${platform === "bilibili" ? "W" : "万"}`;
-  }
-  return String(Math.round(value));
-}
-
-function stripTrailingZeros(value: string) {
-  return value.replace(/\.?0+$/, "");
-}
-
-function uniqueWarnings(values: string[]) {
-  return [...new Set(values.filter(Boolean))];
+function makeDefaultGrossMarginProjectName(count: number) {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${month}${day} 批量监控 ${count} 条`;
 }

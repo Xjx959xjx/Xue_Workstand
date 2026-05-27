@@ -1,5 +1,6 @@
 "use client";
 
+import { Download } from "lucide-react";
 import { AssetTextList } from "./AssetTextList";
 import type { BusyState } from "./asset-view-utils";
 import { formatTime } from "./asset-view-utils";
@@ -10,6 +11,7 @@ type EngagementResultsPaneProps = {
   includeDanmaku: boolean;
   resultRecord: EngagementRecord | null;
   onCopyText: (text: string, message: string) => void;
+  onExportWord: (record: EngagementRecord) => void;
   onPublishAssetText: (kind: "comments" | "danmaku", items: string[], emptyMessage: string) => void;
 };
 
@@ -18,6 +20,7 @@ export function EngagementResultsPane({
   includeDanmaku,
   resultRecord,
   onCopyText,
+  onExportWord,
   onPublishAssetText
 }: EngagementResultsPaneProps) {
   const activeComments = resultRecord?.comments?.items || [];
@@ -35,6 +38,17 @@ export function EngagementResultsPane({
             {generation.mode === "model_batch" ? <span>模型解析 {generation.parsedCount}</span> : null}
           </div>
         ) : null}
+        <div className="engagement-export-row">
+          <button
+            className="btn"
+            disabled={!resultRecord || (!activeComments.length && !activeDanmaku.length) || Boolean(busy)}
+            onClick={() => resultRecord ? onExportWord(resultRecord) : undefined}
+            type="button"
+          >
+            <Download size={16} />
+            {busy === "export-word" ? "导出中..." : "Word 文档"}
+          </button>
+        </div>
         <AssetTextList
           empty="生成后会在这里显示评论池。"
           items={activeComments.map((item) => item.text)}

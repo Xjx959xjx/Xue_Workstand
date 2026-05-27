@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, Copy, RefreshCw, Save, Search, Upload } from "lucide-react";
+import { Calculator, Copy, FileText, RefreshCw, Save, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { getGrossMarginLibrary, saveGrossMarginMonitorRecord, saveGrossMarginPriceTable } from "@/lib/client";
+import { bulkSaveGrossMarginMonitorRecords, getGrossMarginLibrary, saveGrossMarginMonitorRecord, saveGrossMarginPriceTable } from "@/lib/client";
 import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/video-links";
-import { GrossMarginDifferenceModal } from "./_components/GrossMarginDifferenceModal";
+import { GrossMarginBulkMonitorModal } from "./_components/GrossMarginBulkMonitorModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
+import { GrossMarginTemplateModal } from "./_components/GrossMarginTemplateModal";
 import type {
   GrossMarginCalculationLine,
   GrossMarginCalculationResult,
@@ -68,8 +69,10 @@ export default function GrossMarginPage() {
   const [selectedOptions, setSelectedOptions] = useState<Partial<Record<GrossMarginServiceKind, string>>>({});
   const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
   const [importModalOpen, setImportModalOpen] = useState(false);
-  const [differenceModalOpen, setDifferenceModalOpen] = useState(false);
+  const [bulkMonitorModalOpen, setBulkMonitorModalOpen] = useState(false);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [splitDeliveryEnabled, setSplitDeliveryEnabled] = useState(false);
+  const [reviewTemplateOverride, setReviewTemplateOverride] = useState<string | null>(null);
   const tables = useMemo(() => library?.tables || [], [library]);
   const table = useMemo(
     () => tables.find((item) => item.platform === platform) || tables[0] || null,
@@ -114,6 +117,8 @@ export default function GrossMarginPage() {
     }),
     [accountName, calculation, matchedAccount, platform, splitDeliveryEnabled, videoUrl]
   );
+  const effectiveReviewTemplate = reviewTemplateOverride ?? reviewDraft;
+  const reviewTemplateLineCount = countTemplateLines(effectiveReviewTemplate);
   const configuredPriceCount = table?.items.filter((item) => toAmount(priceInputs[item.id] ?? item.unitPrice) > 0).length || 0;
 
   useEffect(() => {
@@ -142,6 +147,7 @@ export default function GrossMarginPage() {
 
   function handlePlatformChange(nextPlatform: PlatformKey) {
     setPlatform(nextPlatform);
+    setReviewTemplateOverride(null);
     const nextTable = tables.find((item) => item.platform === nextPlatform) || null;
     if (!nextTable) return;
     setPriceInputs(makePriceInputs(nextTable));
@@ -223,17 +229,19 @@ export default function GrossMarginPage() {
   }
 
   async function handleExportReview() {
+    if (busy) return;
     if (!videoUrl.trim()) {
-      notify({ tone: "error", message: "请先补视频链接，再导出审核文案" });
+      notify({ tone: "error", message: "请先补视频链接，再导出文案" });
       return;
     }
+    setBusy("export");
     try {
-      await navigator.clipboard.writeText(reviewDraft);
+      await navigator.clipboard.writeText(effectiveReviewTemplate);
       const result = await saveGrossMarginMonitorRecord({
         platform,
         accountName: matchedAccount?.name || accountName,
         videoUrl,
-        sourceText: reviewDraft,
+        sourceText: effectiveReviewTemplate,
         targetStats: Object.fromEntries(
           calculation.lines
             .filter((line) => line.quantity > 0)
@@ -241,9 +249,37 @@ export default function GrossMarginPage() {
         )
       });
       setLibrary(result.library);
-      notify({ tone: "success", message: "审核文案已复制，监控目标已保存" });
+      notify({ tone: "success", message: "文案已复制，监控目标已保存" });
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "复制或保存监控目标失败" });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function handleSaveReviewTemplate(value: string) {
+    const normalized = normalizeTemplateText(value);
+    setReviewTemplateOverride(normalized === reviewDraft ? null : normalized);
+    setTemplateModalOpen(false);
+    notify({ tone: "success", message: "文案模版已保存" });
+  }
+
+  async function handleBulkMonitorSubmit(input: { template: string; createProject: boolean; projectName: string }) {
+    setBusy("bulk-monitor");
+    try {
+      const result = await bulkSaveGrossMarginMonitorRecords(input);
+      setLibrary(result.library);
+      setBulkMonitorModalOpen(false);
+      notify({
+        tone: "success",
+        message: result.project
+          ? `已添加 ${result.records.length} 条监控，并创建项目「${result.project.name}」`
+          : `已添加 ${result.records.length} 条监控`
+      });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "添加监控失败" });
+    } finally {
+      setBusy("");
     }
   }
 
@@ -275,6 +311,7 @@ export default function GrossMarginPage() {
     const nextAccountName = template.accountName || accountName;
     setAccountName(nextAccountName);
     if (template.videoUrl) setVideoUrl(template.videoUrl);
+    setReviewTemplateOverride(null);
 
     const importedAccounts = (library?.accounts || []).filter((account) => account.platform === nextPlatform);
     const nextAccount = findGrossMarginAccount(importedAccounts, nextAccountName);
@@ -584,18 +621,18 @@ export default function GrossMarginPage() {
             </div>
 
             <div className="gross-result-tools">
-              <details className="gross-review-preview" aria-label="审核文案预览">
-                <summary className="gross-review-preview-head">
+              <button className="gross-template-entry" onClick={() => setTemplateModalOpen(true)} type="button">
+                <span className="gross-template-entry-copy">
+                  <FileText aria-hidden="true" size={16} />
                   <span>
-                    审核文案
-                    <small>{reviewDraft.split("\n").filter(Boolean).length} 行，默认收起</small>
+                    <strong>文案模版</strong>
+                    <small>
+                      {reviewTemplateLineCount} 行，{reviewTemplateOverride ? "已保存自定义" : "自动生成"}
+                    </small>
                   </span>
-                  <strong>查看</strong>
-                </summary>
-                <div className="gross-review-preview-body">
-                  <pre>{reviewDraft}</pre>
-                </div>
-              </details>
+                </span>
+                <strong className="gross-template-entry-action">编辑</strong>
+              </button>
 
               <label className={`gross-export-option${splitDeliveryEnabled ? " active" : ""}`}>
                 <input
@@ -617,13 +654,19 @@ export default function GrossMarginPage() {
                   <Upload aria-hidden="true" size={15} />
                   导入模板
                 </button>
-                <button className="btn" onClick={() => setDifferenceModalOpen(true)} type="button">
-                  <Search aria-hidden="true" size={15} />
-                  查询差额
+                <button className="btn" disabled={Boolean(busy)} onClick={() => setBulkMonitorModalOpen(true)} type="button">
+                  <Upload aria-hidden="true" size={15} />
+                  一键监控
                 </button>
-                <button className="btn primary gross-export-primary" onClick={() => void handleExportReview()} type="button">
+                <button
+                  aria-busy={busy === "export"}
+                  className="btn primary gross-export-primary"
+                  disabled={Boolean(busy)}
+                  onClick={() => void handleExportReview()}
+                  type="button"
+                >
                   <Copy aria-hidden="true" size={15} />
-                  导出并监控
+                  {busy === "export" ? "导出中" : "导出并监控"}
                 </button>
               </div>
             </div>
@@ -638,7 +681,22 @@ export default function GrossMarginPage() {
           onImport={handleImportTemplate}
         />
       ) : null}
-      {differenceModalOpen ? <GrossMarginDifferenceModal platform={platform} onClose={() => setDifferenceModalOpen(false)} /> : null}
+      {templateModalOpen ? (
+        <GrossMarginTemplateModal
+          generatedValue={reviewDraft}
+          isCustomized={reviewTemplateOverride !== null}
+          value={effectiveReviewTemplate}
+          onClose={() => setTemplateModalOpen(false)}
+          onSave={handleSaveReviewTemplate}
+        />
+      ) : null}
+      {bulkMonitorModalOpen ? (
+        <GrossMarginBulkMonitorModal
+          busy={busy === "bulk-monitor"}
+          onClose={() => setBulkMonitorModalOpen(false)}
+          onSubmit={handleBulkMonitorSubmit}
+        />
+      ) : null}
     </div>
   );
 }
@@ -785,6 +843,14 @@ function makeDefaultSelections(table: GrossMarginPriceTable) {
   return Object.fromEntries(
     serviceConfigs.map((config) => [config.service, getServiceOptions(table, config.service)[0]?.id || ""])
   ) as Partial<Record<GrossMarginServiceKind, string>>;
+}
+
+function normalizeTemplateText(value: string) {
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
+function countTemplateLines(value: string) {
+  return value.split("\n").filter((line) => line.trim()).length;
 }
 
 function getServiceOptions(table: GrossMarginPriceTable, service: GrossMarginServiceKind) {

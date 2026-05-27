@@ -12,6 +12,7 @@ type WriterHistoryPanelProps = {
   onSelectDraft: (draft: Draft) => void;
   onRenameDraft: (draft: Draft, title: string) => Promise<void>;
   onDeleteDraft: (draft: Draft) => Promise<void>;
+  onDeleteDrafts: (drafts: Draft[]) => Promise<void>;
 };
 
 type DraftContextMenu = {
@@ -26,13 +27,17 @@ export function WriterHistoryPanel({
   selectedDraftId,
   onSelectDraft,
   onRenameDraft,
-  onDeleteDraft
+  onDeleteDraft,
+  onDeleteDrafts
 }: WriterHistoryPanelProps) {
   const [editingDraftId, setEditingDraftId] = useState("");
   const [editingTitle, setEditingTitle] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
   const [contextMenu, setContextMenu] = useState<DraftContextMenu | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Draft | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [manageMode, setManageMode] = useState(false);
+  const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -43,6 +48,16 @@ export function WriterHistoryPanel({
     inputRef.current?.focus();
     inputRef.current?.select();
   }, [editingDraftId]);
+
+  useEffect(() => {
+    if (!drafts.length) {
+      setManageMode(false);
+      setSelectedDraftIds([]);
+      return;
+    }
+
+    setSelectedDraftIds((current) => current.filter((id) => drafts.some((draft) => draft.id === id)));
+  }, [drafts]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -130,6 +145,46 @@ export function WriterHistoryPanel({
     }
   };
 
+  const selectedDrafts = useMemo(
+    () => drafts.filter((draft) => selectedDraftIds.includes(draft.id)),
+    [drafts, selectedDraftIds]
+  );
+  const allDraftsSelected = Boolean(drafts.length) && selectedDraftIds.length === drafts.length;
+
+  const toggleManageMode = () => {
+    setContextMenu(null);
+    setEditingDraftId("");
+    setEditingTitle("");
+    setManageMode((current) => {
+      const next = !current;
+      if (!next) setSelectedDraftIds([]);
+      return next;
+    });
+  };
+
+  const toggleDraftSelection = (draftId: string) => {
+    setSelectedDraftIds((current) =>
+      current.includes(draftId) ? current.filter((id) => id !== draftId) : [...current, draftId]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedDraftIds(allDraftsSelected ? [] : drafts.map((draft) => draft.id));
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (!selectedDrafts.length || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await onDeleteDrafts(selectedDrafts);
+      setBulkDeleteOpen(false);
+      setManageMode(false);
+      setSelectedDraftIds([]);
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   return (
     <>
       <aside className="panel writer-history-panel">
@@ -139,14 +194,31 @@ export function WriterHistoryPanel({
               <h2>历史记录</h2>
               <p className="pane-subtitle">全部账号和项目</p>
             </div>
-            <span className="stat-pill">{drafts.length} 条</span>
+            <div className="writer-history-header-actions">
+              <span className="stat-pill">{drafts.length} 条</span>
+              <button className="btn compact" disabled={!drafts.length || loading} onClick={toggleManageMode} type="button">
+                {manageMode ? "取消" : "批量"}
+              </button>
+            </div>
           </div>
 
           <div className="writer-history-body">
-            <div className="status-summary">
-              <span>全部记录</span>
-              <span>按保存时间排序</span>
-            </div>
+            {manageMode ? (
+              <div className="writer-history-toolbar" role="toolbar" aria-label="历史记录批量操作">
+                <button className="btn compact" onClick={toggleSelectAll} type="button">
+                  {allDraftsSelected ? "取消全选" : "全选"}
+                </button>
+                <span>{selectedDraftIds.length} 已选</span>
+                <button
+                  className="btn danger compact"
+                  disabled={!selectedDraftIds.length}
+                  onClick={() => setBulkDeleteOpen(true)}
+                  type="button"
+                >
+                  删除
+                </button>
+              </div>
+            ) : null}
 
             {loading ? (
               <p className="subtle">正在读取历史记录。</p>
@@ -199,11 +271,20 @@ export function WriterHistoryPanel({
                   ) : (
                     <button
                       aria-current={active ? "true" : undefined}
-                      className={`list-button ${active ? "active" : ""}`}
+                      aria-pressed={manageMode ? selectedDraftIds.includes(draft.id) : undefined}
+                      className={`list-button ${active ? "active" : ""} ${manageMode && selectedDraftIds.includes(draft.id) ? "checked" : ""}`}
                       key={draft.id}
-                      onClick={() => onSelectDraft(draft)}
+                      onClick={() => {
+                        if (manageMode) {
+                          toggleDraftSelection(draft.id);
+                          return;
+                        }
+
+                        onSelectDraft(draft);
+                      }}
                       onContextMenu={(event) => {
                         event.preventDefault();
+                        if (manageMode) return;
                         setContextMenu(null);
                         setContextMenu({
                           draft,
@@ -213,9 +294,15 @@ export function WriterHistoryPanel({
                       }}
                       type="button"
                     >
+                      {manageMode ? (
+                        <span className="writer-history-check" aria-hidden="true">
+                          {selectedDraftIds.includes(draft.id) ? "✓" : ""}
+                        </span>
+                      ) : null}
                       <span
                         className="writer-history-copy"
                         onDoubleClick={(event) => {
+                          if (manageMode) return;
                           event.preventDefault();
                           handleStartRename(draft);
                         }}
@@ -268,6 +355,19 @@ export function WriterHistoryPanel({
             if (!deleteBusy) setDeleteTarget(null);
           }}
           onConfirm={() => void handleConfirmDelete()}
+        />
+      ) : null}
+
+      {bulkDeleteOpen ? (
+        <ConfirmDialog
+          body={`将从本地移除 ${selectedDrafts.length} 条历史记录，删除后无法恢复。确认继续吗？`}
+          busy={deleteBusy}
+          confirmLabel="删除"
+          title="批量删除草稿"
+          onCancel={() => {
+            if (!deleteBusy) setBulkDeleteOpen(false);
+          }}
+          onConfirm={() => void handleConfirmBulkDelete()}
         />
       ) : null}
     </>

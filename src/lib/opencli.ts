@@ -16,6 +16,7 @@ import {
   shortHash,
   toNumber
 } from "./utils";
+import { getVideoComparableKey } from "./video-links";
 
 const execFileAsync = promisify(execFile);
 const DOUYIN_BROWSER_SEARCH_LIMIT = 12;
@@ -70,6 +71,27 @@ type DouyinVideoStatsSnapshot = {
   authorName?: string;
   authorSecUid?: string;
 };
+
+type DouyinVideoStatsResult = {
+  platform: "douyin";
+  title: string;
+  url: string;
+  videoKey: string;
+  publishedAt?: string;
+  authorName?: string;
+  authorSecUid?: string;
+  stats: {
+    like: number;
+    comment: number;
+    favorite: number;
+    share: number;
+  };
+};
+
+const DOUYIN_STATS_BROWSER_WORKSPACE = `douyin-video-stats-${process.pid}`;
+const DOUYIN_STATS_HOME_URL = "https://www.douyin.com/robots.txt";
+let douyinStatsBrowserReady = false;
+let douyinStatsBrowserQueue: Promise<unknown> = Promise.resolve();
 
 function opencliBin() {
   return process.env.OPENCLI_BIN || "opencli";
@@ -1031,47 +1053,110 @@ export async function getDouyinVideoDetailMap(
   return details;
 }
 
-export async function getDouyinVideoStatsByUrl(url: string) {
+export function resetDouyinVideoStatsBrowser() {
+  douyinStatsBrowserReady = false;
+  return runOpenCli(buildOpenCliBrowserArgs(DOUYIN_STATS_BROWSER_WORKSPACE, "close"), { timeout: 5_000 }).catch(() => undefined);
+}
+
+export async function getDouyinVideoStatsByUrl(url: string): Promise<DouyinVideoStatsResult> {
+  return withDouyinStatsBrowser((workspace) => getDouyinVideoStatsByUrlInWorkspace(workspace, url));
+}
+
+export async function getDouyinVideoStatsBatchByUrl(urls: string[]): Promise<Array<DouyinVideoStatsResult | null>> {
+  const normalizedUrls = urls.map((url) => url.trim());
+  if (!normalizedUrls.length) return [];
+
+  return withDouyinStatsBrowser(async (workspace) => {
+    const directItems = await Promise.all(
+      normalizedUrls.map(async (url, index) => {
+        const resolvedShareUrl = await resolveDouyinShareVideoUrl(url).catch(() => "");
+        const awemeId = extractDouyinAwemeId(url) || extractDouyinAwemeId(resolvedShareUrl);
+        return {
+          index,
+          url,
+          resolvedUrl: resolvedShareUrl,
+          awemeId
+        };
+      })
+    );
+    const resultByIndex = new Map<number, DouyinVideoStatsResult | null>();
+    const directAwemeIds = [...new Set(directItems.map((item) => item.awemeId).filter(Boolean))];
+    const detailByAwemeId = await getDouyinVideoDetailSnapshots(workspace, directAwemeIds).catch(() => new Map<string, DouyinVideoStatsSnapshot>());
+
+    for (const item of directItems) {
+      const detail = item.awemeId ? detailByAwemeId.get(item.awemeId) : null;
+      if (!item.awemeId || !detail) continue;
+      resultByIndex.set(
+        item.index,
+        formatDouyinVideoStatsResult(detail, buildDouyinVideoUrl(item.awemeId) || item.resolvedUrl || item.url)
+      );
+    }
+
+    await mapWithLocalConcurrency(
+      directItems.filter((item) => !resultByIndex.has(item.index)),
+      2,
+      async (item) => {
+        const result = await getDouyinVideoStatsByUrlInWorkspace(workspace, item.url).catch(() => null);
+        resultByIndex.set(item.index, result);
+      }
+    );
+
+    return normalizedUrls.map((_, index) => resultByIndex.get(index) || null);
+  });
+}
+
+async function withDouyinStatsBrowser<T>(callback: (workspace: string) => Promise<T>): Promise<T> {
+  const run = douyinStatsBrowserQueue.then(async () => {
+    await ensureDouyinStatsBrowser();
+    return callback(DOUYIN_STATS_BROWSER_WORKSPACE);
+  });
+  douyinStatsBrowserQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function ensureDouyinStatsBrowser() {
+  if (douyinStatsBrowserReady) return;
+  await runOpenCli(buildOpenCliBrowserArgs(DOUYIN_STATS_BROWSER_WORKSPACE, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
+    timeout: 30_000
+  });
+  douyinStatsBrowserReady = true;
+}
+
+async function getDouyinVideoStatsByUrlInWorkspace(workspace: string, url: string): Promise<DouyinVideoStatsResult> {
   const inputUrl = url.trim();
-  const initialAwemeId = extractDouyinAwemeId(inputUrl);
-  const workspace = `douyin-single-video-${process.pid}-${Date.now()}-${shortHash(inputUrl || initialAwemeId)}`;
-  const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || inputUrl : inputUrl;
+  const resolvedShareUrl = await resolveDouyinShareVideoUrl(inputUrl).catch(() => "");
+  const initialAwemeId = extractDouyinAwemeId(inputUrl) || extractDouyinAwemeId(resolvedShareUrl);
+  const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || resolvedShareUrl || inputUrl : resolvedShareUrl || inputUrl;
 
   try {
+    if (initialAwemeId) {
+      const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId).catch(() => null);
+      if (fastDetail) {
+        return formatDouyinVideoStatsResult(fastDetail, buildDouyinVideoUrl(initialAwemeId) || pageUrl);
+      }
+    }
+
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
       timeout: 30_000
     });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "state"), { timeout: 12_000 }).catch(() => undefined);
     const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId);
     const awemeId = resolved.awemeId;
     if (!awemeId) {
       throw new Error("没有从链接里解析到抖音视频 ID，请确认是单条视频链接，或粘贴完整视频页链接。");
     }
-    const detail =
-      (await getDouyinVideoDetailFromNetwork(workspace, awemeId).catch(() => null)) ||
-      (await getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null));
+    const detail = await waitForDouyinVideoStats(workspace, awemeId);
 
     if (!detail) {
       throw new Error("抖音页面已打开，但没有从真实浏览器网络里抓到点赞、评论、收藏或转发数据。");
     }
 
-    return {
-      platform: "douyin" as const,
-      title: detail.title,
-      url: resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl,
-    publishedAt: detail.publishedAt,
-    authorName: detail.authorName,
-    authorSecUid: detail.authorSecUid,
-    stats: {
-      like: detail.likeCount,
-      comment: detail.commentCount,
-        favorite: detail.favoriteCount,
-        share: detail.shareCount
-      }
-    };
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
+    const resolvedUrl = resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl;
+    return formatDouyinVideoStatsResult(detail, resolvedUrl);
+  } catch (error) {
+    if (isOpenCliBrowserSessionError(error)) {
+      douyinStatsBrowserReady = false;
+    }
+    throw error;
   }
 }
 
@@ -1182,6 +1267,92 @@ async function getDouyinVideoDetailFromNetwork(workspace: string, awemeId: strin
   }
 
   return null;
+}
+
+async function resolveDouyinShareVideoUrl(url: string) {
+  if (!/v\.douyin\.com/i.test(url)) return "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4_000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 style-library",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    });
+    const resolvedUrl = response.url || "";
+    return extractDouyinAwemeId(resolvedUrl) ? resolvedUrl : "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function waitForDouyinVideoStats(workspace: string, awemeId: string) {
+  const deadline = Date.now() + 8_000;
+  let lastDetail: DouyinVideoStatsSnapshot | null = null;
+
+  while (Date.now() < deadline) {
+    lastDetail =
+      (await getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null)) ||
+      (await getDouyinVideoDetailFromNetwork(workspace, awemeId).catch(() => null));
+    if (lastDetail) return lastDetail;
+    await wait(700);
+  }
+
+  return (
+    lastDetail ||
+    (await getDouyinVideoDetailFromNetwork(workspace, awemeId).catch(() => null)) ||
+    (await getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null))
+  );
+}
+
+function formatDouyinVideoStatsResult(detail: DouyinVideoStatsSnapshot, url: string): DouyinVideoStatsResult {
+  return {
+    platform: "douyin",
+    title: detail.title,
+    url,
+    videoKey: getVideoComparableKey(url),
+    publishedAt: detail.publishedAt,
+    authorName: detail.authorName,
+    authorSecUid: detail.authorSecUid,
+    stats: {
+      like: detail.likeCount,
+      comment: detail.commentCount,
+      favorite: detail.favoriteCount,
+      share: detail.shareCount
+    }
+  };
+}
+
+function wait(durationMs: number) {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+async function mapWithLocalConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await mapper(items[index], index);
+      }
+    })
+  );
+}
+
+function isOpenCliBrowserSessionError(error: unknown) {
+  return error instanceof Error && /browser|session|target|tab|context|closed|crash/i.test(error.message);
 }
 
 async function getDouyinNetworkPreviews(workspace: string) {
@@ -1396,6 +1567,36 @@ async function getDouyinVideoDetailSnapshot(workspace: string, awemeId: string):
   };
 }
 
+async function getDouyinVideoDetailSnapshots(workspace: string, awemeIds: string[]) {
+  const uniqueAwemeIds = [...new Set(awemeIds.filter(Boolean))];
+  const details = new Map<string, DouyinVideoStatsSnapshot>();
+  if (!uniqueAwemeIds.length) return details;
+
+  const result = parseJsonish(
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchStatsExtractJs(uniqueAwemeIds)]), {
+      timeout: Math.max(20_000, uniqueAwemeIds.length * 2_500)
+    })
+  );
+  const rows = asArray(result);
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const object = row as Record<string, unknown>;
+    const awemeId = extractDouyinAwemeId(stringField(object.awemeId));
+    if (!awemeId || !object.hasStats) continue;
+    details.set(awemeId, {
+      title: stringField(object.title),
+      likeCount: toNumber(object.likeCount),
+      commentCount: toNumber(object.commentCount),
+      favoriteCount: toNumber(object.favoriteCount),
+      shareCount: toNumber(object.shareCount),
+      publishedAt: normalizeTimestamp(object.publishedAt || object.createTime || object.create_time),
+      authorName: stringField(object.authorName),
+      authorSecUid: stringField(object.authorSecUid)
+    });
+  }
+  return details;
+}
+
 function buildDouyinDetailExtractJs(options: { awemeId: string; commentLimit: number }) {
   return `
 (async () => {
@@ -1482,6 +1683,55 @@ function buildDouyinStatsExtractJs(awemeId: string) {
     authorName: (awemeDetail.author && (awemeDetail.author.nickname || awemeDetail.author.name || awemeDetail.author.unique_id)) || "",
     authorSecUid: (awemeDetail.author && (awemeDetail.author.sec_uid || awemeDetail.author.secUid || awemeDetail.author.sec_user_id)) || ""
   };
+})()
+`;
+}
+
+function buildDouyinBatchStatsExtractJs(awemeIds: string[]) {
+  return `
+(async () => {
+  const awemeIds = ${JSON.stringify(awemeIds)};
+  const fetchOne = async (awemeId) => {
+    const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
+    detailUrl.searchParams.set("aweme_id", awemeId);
+    detailUrl.searchParams.set("aid", "6383");
+    const response = await fetch(detailUrl.toString(), {
+      credentials: "include",
+      headers: {
+        accept: "application/json, text/plain, */*"
+      }
+    });
+    const payload = await response.json().catch(() => ({}));
+    const awemeDetail = payload && typeof payload === "object" ? payload.aweme_detail || {} : {};
+    const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
+    const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
+    return {
+      awemeId,
+      hasStats,
+      title: awemeDetail.desc || awemeDetail.title || "",
+      likeCount: Number(statistics.digg_count || 0),
+      commentCount: Number(statistics.comment_count || 0),
+      favoriteCount: Number(statistics.collect_count || 0),
+      shareCount: Number(statistics.share_count || 0),
+      publishedAt: awemeDetail.create_time || awemeDetail.createTime || "",
+      authorName: (awemeDetail.author && (awemeDetail.author.nickname || awemeDetail.author.name || awemeDetail.author.unique_id)) || "",
+      authorSecUid: (awemeDetail.author && (awemeDetail.author.sec_uid || awemeDetail.author.secUid || awemeDetail.author.sec_user_id)) || ""
+    };
+  };
+  const results = [];
+  const concurrency = 6;
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, awemeIds.length) }, async () => {
+    while (cursor < awemeIds.length) {
+      const index = cursor++;
+      try {
+        results[index] = await fetchOne(awemeIds[index]);
+      } catch {
+        results[index] = { awemeId: awemeIds[index], hasStats: false };
+      }
+    }
+  }));
+  return results;
 })()
 `;
 }

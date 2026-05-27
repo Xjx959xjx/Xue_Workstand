@@ -64,6 +64,7 @@ export const VideoTable = memo(function VideoTable({
         </div>
         <div className="video-header-tools">
           <div className="inline-sort-control">
+            <label htmlFor="library-video-sort">排序</label>
             <select
               aria-label="视频排序"
               id="library-video-sort"
@@ -126,6 +127,7 @@ export const VideoTable = memo(function VideoTable({
                 <tr
                   className={videoManageMode ? (checked ? "checked" : "") : selectedVideoId === video.id ? "active" : ""}
                   key={video.id}
+                  onClick={() => onSelectVideo(video.id)}
                 >
                   <td>
                     <button

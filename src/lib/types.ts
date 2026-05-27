@@ -399,6 +399,8 @@ export type GrossMarginMonitorRecord = {
   id: string;
   platform: GrossMarginPriceTable["platform"];
   accountName: string;
+  projectId?: string;
+  projectName?: string;
   videoUrl: string;
   videoKey: string;
   title?: string;
@@ -422,6 +424,12 @@ export type GrossMarginLibrary = {
   tables: GrossMarginPriceTable[];
   accounts: GrossMarginAccountPrice[];
   monitorRecords: GrossMarginMonitorRecord[];
+  monitorProjects: Array<{
+    id: string;
+    name: string;
+    count: number;
+    updatedAt: string;
+  }>;
 };
 
 export type GrossMarginCalculationInput = {
@@ -439,21 +447,6 @@ export type GrossMarginCalculationResult = {
   grossMarginRate: number;
   discountRate: number;
   lines: GrossMarginCalculationLine[];
-};
-
-export type GrossMarginDifferenceQueryInput = {
-  template: string;
-  platformHint?: GrossMarginPriceTable["platform"];
-  videoUrl?: string;
-  manualCurrentStats?: Partial<Record<GrossMarginServiceKind, number>>;
-};
-
-export type GrossMarginDifferenceQueryResult = {
-  platform: GrossMarginPriceTable["platform"];
-  title?: string;
-  url: string;
-  result: string;
-  warnings: string[];
 };
 
 export type LibraryState = {

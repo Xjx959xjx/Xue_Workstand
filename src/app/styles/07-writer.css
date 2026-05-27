@@ -230,22 +230,24 @@
 
 .writer-history-panel {
   display: grid;
+  height: 100%;
   min-height: 0;
 }
 
 .writer-history-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
 }
 
 .writer-history-header {
   display: flex;
-  min-height: 64px;
+  min-height: 72px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 14px;
+  padding: 16px 14px 14px;
   border-bottom: 1px solid var(--line-subtle);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--amber-soft) 42%, var(--surface-soft)) 0%, color-mix(in oklch, var(--panel-raised) 92%, white) 100%);
@@ -257,25 +259,74 @@
   line-height: 1.25;
 }
 
+.writer-history-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .writer-history-body {
   display: grid;
   align-content: start;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px;
+  scrollbar-gutter: stable;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
 
+.writer-history-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.writer-history-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.writer-history-body::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--line-strong) 82%, transparent);
+  background-clip: content-box;
+}
+
+.writer-history-body:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background-clip: content-box;
+}
+
 .writer-history-list {
   display: grid;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+.writer-history-toolbar {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  color: var(--muted);
+  background: color-mix(in oklch, var(--panel-raised) 94%, var(--surface-soft));
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .writer-history-copy {
   display: grid;
   min-width: 0;
+  gap: 4px;
 }
 
 .writer-history-editing {
@@ -303,6 +354,62 @@
 
 .writer-history-title-input:disabled {
   opacity: 0.72;
+}
+
+.writer-history-list .list-button,
+.writer-history-list .writer-history-editing {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.writer-history-list .list-button:has(.writer-history-check) {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.writer-history-list .list-button.checked {
+  border-color: var(--selected-border);
+  background: var(--surface-selected);
+}
+
+.writer-history-check {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  margin-top: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--accent-strong);
+  background: var(--panel);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.writer-history-list .status-pill {
+  align-self: start;
+  flex-shrink: 0;
+  margin-top: 2px;
+  padding-inline: 7px;
+  font-size: 10px;
+}
+
+.writer-history-list .list-title {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.writer-history-list .list-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feishu-success-card {
