@@ -249,6 +249,7 @@ async function copyReleaseLibrary() {
     } else {
       await fs.promises.mkdir(path.join(targetLibraryRoot, "gross-margin"), { recursive: true });
     }
+    await fs.promises.writeFile(path.join(targetLibraryRoot, "gross-margin", ".keep"), "", "utf8");
     await fs.promises.writeFile(path.join(targetLibraryRoot, ".keep"), "", "utf8");
     return;
   }

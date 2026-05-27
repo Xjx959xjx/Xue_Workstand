@@ -39,7 +39,7 @@ jobs:
 
       - name: Build runtime and Inno script
         shell: pwsh
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
           WINDOWS_NODE_DIR: ${{ github.workspace }}\.vendor\node-win-x64
         run: npm run package:release -- --preset gross-margin-win-installer --skip-zip --skip-installer-compile
