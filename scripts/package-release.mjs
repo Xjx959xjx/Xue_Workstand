@@ -11,6 +11,7 @@ const preset = readOption("--preset") || "portable";
 const includeLibrary = args.has("--include-library");
 const skipInstall = args.has("--skip-install");
 const skipArchive = args.has("--skip-archive");
+const skipZip = args.has("--skip-zip");
 const keepWork = args.has("--keep-work");
 const packageJson = JSON.parse(await fs.promises.readFile(path.join(root, "package.json"), "utf8"));
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "-");
@@ -68,7 +69,9 @@ async function main() {
     if (presetConfig.archiveTarGz) {
       await run("tar", ["-czf", tgzArchivePath, "-C", path.dirname(releaseRoot), path.basename(releaseRoot)], { cwd: root });
     }
-    if (await commandExists("zip")) {
+    if (skipZip) {
+      console.log("已按参数跳过 .zip 压缩包。");
+    } else if (await commandExists("zip")) {
       await run("zip", ["-qry", zipArchivePath, path.basename(releaseRoot)], { cwd: path.dirname(releaseRoot) });
     } else if (presetConfig.archiveZip) {
       console.log("未检测到 zip 命令，已跳过 .zip 压缩包。");

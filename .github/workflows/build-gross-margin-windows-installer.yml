@@ -39,10 +39,11 @@ jobs:
 
       - name: Build installer
         shell: pwsh
+        timeout-minutes: 15
         env:
           WINDOWS_NODE_DIR: ${{ github.workspace }}\.vendor\node-win-x64
           INNO_SETUP_COMPILER: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
-        run: npm run package:release -- --preset gross-margin-win-installer
+        run: npm run package:release -- --preset gross-margin-win-installer --skip-zip
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
@@ -50,6 +51,5 @@ jobs:
           name: gross-margin-windows-installer
           path: |
             dist/*gross-margin-win-installer*.exe
-            dist/*gross-margin-win-installer*.zip
             dist/*gross-margin-win-installer*.iss
           if-no-files-found: error
