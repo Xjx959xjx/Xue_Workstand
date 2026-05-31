@@ -6,8 +6,10 @@ import path from "path";
 import { promisify } from "util";
 import {
   buildOpenCliBrowserArgs,
+  getBilibiliVideoStatsByUrl,
   checkDouyinVideoAvailability,
   getBilibiliSubtitle,
+  getDouyinVideoStatsByUrl,
   parseOpenCliJsonish,
   refreshDouyinVideoDownloadUrl,
   resolveOpenCliCommand
@@ -33,6 +35,7 @@ export type LinkTranscriptionResult = {
   resolvedUrl?: string;
   platform: Platform | "unknown";
   title?: string;
+  sourceAccountName?: string;
   mediaUrls?: string[];
   text: string;
   source: "platform_subtitle" | "volcengine" | "metadata";
@@ -44,6 +47,7 @@ export type LinkTranscriptionResult = {
 type LinkMediaInfo = {
   mediaId?: string;
   title?: string;
+  sourceAccountName?: string;
   mediaUrls: string[];
 };
 
@@ -242,16 +246,18 @@ export async function transcribeLinkSource(input: {
       raw: resolvedUrl
     } as Video).catch(() => "");
     if (subtitle.trim()) {
+      const metadata = await resolveLinkStatsMetadata(resolvedUrl || input.url, platform);
       const cleaned = await cleanTranscriptText({
         platform,
-        title: input.titleHint,
+        title: input.titleHint || metadata.title,
         text: subtitle
       });
       subtitleResult = {
         url: input.url,
         resolvedUrl,
         platform,
-        title: input.titleHint,
+        title: input.titleHint || metadata.title,
+        sourceAccountName: metadata.sourceAccountName,
         text: cleaned.text,
         source: "platform_subtitle",
         fallback: cleaned.fallback,
@@ -275,6 +281,7 @@ export async function transcribeLinkSource(input: {
     return {
       ...subtitleResult,
       title: media.title || subtitleResult.title,
+      sourceAccountName: media.sourceAccountName || subtitleResult.sourceAccountName,
       mediaUrls: media.mediaUrls,
       timings: [{ stage: "resolve-video-media", ms: Date.now() - startedAt }]
     };
@@ -286,6 +293,7 @@ export async function transcribeLinkSource(input: {
         resolvedUrl,
         platform,
         title: media.title,
+        sourceAccountName: media.sourceAccountName,
         mediaUrls: [],
         text: media.title,
         source: "metadata",
@@ -316,6 +324,7 @@ export async function transcribeLinkSource(input: {
       resolvedUrl,
       platform,
       title: media.title || input.titleHint,
+      sourceAccountName: media.sourceAccountName,
       mediaUrls: media.mediaUrls,
       text: cleaned.text,
       source: "volcengine",
@@ -332,6 +341,26 @@ export async function transcribeLinkSource(input: {
   } finally {
     await Promise.all(cleanupTargets.map((target) => fs.rm(target, { recursive: true, force: true }).catch(() => undefined)));
   }
+}
+
+export async function resolveLinkSourceAccountName(url: string) {
+  const inputUrl = url.trim();
+  if (!inputUrl) return "";
+  const resolvedUrl = await resolveShareUrl(inputUrl).catch(() => inputUrl);
+  const platform = detectLinkPlatform(resolvedUrl || inputUrl);
+  if (platform !== "douyin" && platform !== "bilibili") return "";
+  const metadata = await resolveLinkStatsMetadata(resolvedUrl || inputUrl, platform);
+  if (metadata.sourceAccountName) return metadata.sourceAccountName;
+  const media = await resolveLinkMediaUrl({
+    url: inputUrl,
+    resolvedUrl,
+    platform
+  }).catch(() => null);
+  return media?.sourceAccountName?.trim() || "";
+}
+
+export function isSupportedVideoSourceLink(url: string) {
+  return detectLinkPlatform(url) !== "unknown";
 }
 
 export async function resolveLinkSourceMedia(input: {
@@ -362,6 +391,7 @@ export async function resolveLinkSourceMedia(input: {
     resolvedUrl,
     platform,
     title: media.title,
+    sourceAccountName: media.sourceAccountName,
     mediaUrls: media.mediaUrls
   };
 }
@@ -630,14 +660,45 @@ async function resolveLinkMediaUrl(input: {
   platform: Platform;
 }): Promise<LinkMediaInfo> {
   if (input.platform === "douyin") {
-    return resolveDouyinLinkMedia(input.resolvedUrl || input.url);
+    const media = await resolveDouyinLinkMedia(input.resolvedUrl || input.url);
+    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform);
   }
 
   if (input.platform === "bilibili") {
-    return resolveBilibiliLinkMedia(input.resolvedUrl || input.url);
+    const media = await resolveBilibiliLinkMedia(input.resolvedUrl || input.url);
+    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform);
   }
 
   return resolveGenericLinkMedia(input.resolvedUrl || input.url);
+}
+
+async function hydrateLinkMediaInfo(media: LinkMediaInfo, url: string, platform: Platform): Promise<LinkMediaInfo> {
+  if (media.title && media.sourceAccountName) return media;
+  const metadata = await resolveLinkStatsMetadata(url, platform);
+  return {
+    ...media,
+    title: media.title || metadata.title,
+    sourceAccountName: media.sourceAccountName || metadata.sourceAccountName
+  };
+}
+
+async function resolveLinkStatsMetadata(url: string, platform: Platform): Promise<Pick<LinkMediaInfo, "title" | "sourceAccountName">> {
+  if (!url.trim()) return {};
+  if (platform === "bilibili") {
+    const stats = await getBilibiliVideoStatsByUrl(url).catch(() => null);
+    return {
+      title: stats?.title?.trim() || undefined,
+      sourceAccountName: stats?.authorName?.trim() || undefined
+    };
+  }
+  if (platform === "douyin") {
+    const stats = await getDouyinVideoStatsByUrl(url).catch(() => null);
+    return {
+      title: stats?.title?.trim() || undefined,
+      sourceAccountName: stats?.authorName?.trim() || undefined
+    };
+  }
+  return {};
 }
 
 async function resolveBilibiliLinkMedia(url: string) {
@@ -671,6 +732,7 @@ async function resolveBilibiliLinkMedia(url: string) {
     return {
       mediaId: String(object.bvid || extractBvid(url) || ""),
       title: normalizeTitle(String(object.title || object.description || "")),
+      sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
@@ -713,6 +775,7 @@ async function resolveDouyinLinkMedia(url: string) {
     return {
       mediaId: String(object.awemeId || ""),
       title: normalizeTitle(String(object.title || object.description || "")),
+      sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
@@ -740,6 +803,7 @@ async function resolveGenericLinkMedia(url: string) {
   return {
     mediaId: response.url,
     title: normalizeTitle(extractHtmlTitle(html)),
+    sourceAccountName: "",
     mediaUrls: sortLinkMediaUrls(mediaUrls)
   };
 }
@@ -783,9 +847,36 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
   };
   const collect = () => {
     const urls = [];
+    let sourceAccountName = "";
     const pushUrl = (value) => {
       const normalized = normalizeUrl(String(value || ""));
       if (/^https?:\\/\\//i.test(normalized)) urls.push(normalized);
+    };
+    const collectAuthorDeep = (value, depth = 0) => {
+      if (!value || sourceAccountName || depth > 8) return;
+      if (Array.isArray(value)) {
+        for (const item of value.slice(0, 200)) collectAuthorDeep(item, depth + 1);
+        return;
+      }
+      if (typeof value !== "object") return;
+      const object = value;
+      const candidates = [
+        object.nickname,
+        object.name,
+        object.unique_id,
+        object.author_name,
+        object.user_name
+      ].map(clean).filter(Boolean);
+      if (candidates.length && (object.sec_uid || object.uid || object.user_id || object.short_id || object.avatar_thumb)) {
+        sourceAccountName = candidates[0];
+        return;
+      }
+      if (object.author && typeof object.author === "object") collectAuthorDeep(object.author, depth + 1);
+      if (object.user && typeof object.user === "object") collectAuthorDeep(object.user, depth + 1);
+      for (const [key, item] of Object.entries(object)) {
+        if (/author|user|owner|account|aweme|detail|item/i.test(key)) collectAuthorDeep(item, depth + 1);
+        if (sourceAccountName) return;
+      }
     };
     const collectUrlsDeep = (value, depth = 0) => {
       if (!value || depth > 8) return;
@@ -818,6 +909,15 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
       const name = normalizeUrl(entry.name || "");
       if (/douyinvod|mime_type=video|mime_type=audio|\\/aweme\\/v1\\/play\\//i.test(name)) pushUrl(name);
     }
+    const stateValues = [
+      window.__INITIAL_STATE__,
+      window.__INITIAL_DATA__,
+      window.__RENDER_DATA__,
+      window.__UNIVERSAL_DATA_FOR_REHYDRATION__,
+      window.__NEXT_DATA__
+    ];
+    for (const value of stateValues) collectUrlsDeep(value);
+    for (const value of stateValues) collectAuthorDeep(value);
     for (const script of Array.from(document.querySelectorAll("script"))) {
       const text = script.textContent || "";
       if (!/aweme|play_addr|download_addr|douyinvod|url_list/.test(text)) continue;
@@ -826,7 +926,9 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
       const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
       if (jsonMatch && jsonMatch[0].length < 8_000_000) {
         try {
-          collectUrlsDeep(JSON.parse(jsonMatch[0]));
+          const parsed = JSON.parse(jsonMatch[0]);
+          collectUrlsDeep(parsed);
+          collectAuthorDeep(parsed);
         } catch {}
       }
     }
@@ -835,10 +937,18 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
         .map((meta) => [meta.getAttribute("property") || meta.getAttribute("name") || "", meta.getAttribute("content") || ""])
         .filter(([key, value]) => key && value)
     );
+    const metaAccountName = clean(
+      metas.author ||
+      metas["article:author"] ||
+      metas["og:author"] ||
+      document.querySelector('[data-e2e="user-name"], [class*="author"], [class*="account"]')?.textContent ||
+      ""
+    );
     const awemeId = (location.href.match(/\\/video\\/(\\d{10,})/) || [])[1] || "";
     return {
       awemeId,
       title: clean(metas["og:title"] || document.title || ""),
+      sourceAccountName: sourceAccountName || metaAccountName,
       description: clean(metas.description || metas["og:description"] || ""),
       mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
     };
@@ -883,6 +993,7 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
   };
   const collect = () => {
     const urls = [];
+    let sourceAccountName = "";
     const pushUrl = (value) => {
       const normalized = normalizeUrl(trimCandidateUrl(String(value || "").replaceAll("\\\\/", "/")));
       if (/^https?:\\/\\//i.test(normalized) && isCandidate(normalized)) urls.push(normalized);
@@ -901,6 +1012,31 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
         for (const [key, item] of Object.entries(value)) {
           if (/url|base|audio|video|dash|backup|segment/i.test(key)) collectUrlsDeep(item, depth + 1);
         }
+      }
+    };
+    const collectOwnerDeep = (value, depth = 0) => {
+      if (!value || sourceAccountName || depth > 8) return;
+      if (Array.isArray(value)) {
+        for (const item of value.slice(0, 200)) collectOwnerDeep(item, depth + 1);
+        return;
+      }
+      if (typeof value !== "object") return;
+      const object = value;
+      if (object.owner && typeof object.owner === "object") {
+        const name = clean(object.owner.name || object.owner.uname || object.owner.nickname);
+        if (name) {
+          sourceAccountName = name;
+          return;
+        }
+      }
+      const name = clean(object.uname || object.author || object.owner_name);
+      if (name && (object.mid || object.uid || object.owner_mid)) {
+        sourceAccountName = name;
+        return;
+      }
+      for (const [key, item] of Object.entries(object)) {
+        if (/owner|author|user|account|video|data|state/i.test(key)) collectOwnerDeep(item, depth + 1);
+        if (sourceAccountName) return;
       }
     };
     for (const video of Array.from(document.querySelectorAll("video"))) {
@@ -922,6 +1058,7 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
       window.__NEXT_DATA__
     ];
     for (const value of stateValues) collectUrlsDeep(value);
+    for (const value of stateValues) collectOwnerDeep(value);
     for (const script of Array.from(document.querySelectorAll("script"))) {
       const text = script.textContent || "";
       if (!/playinfo|dash|baseUrl|backupUrl|upgcxcode|bilivideo/.test(text)) continue;
@@ -930,7 +1067,9 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
       const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
       if (jsonMatch && jsonMatch[0].length < 10_000_000) {
         try {
-          collectUrlsDeep(JSON.parse(jsonMatch[0]));
+          const parsed = JSON.parse(jsonMatch[0]);
+          collectUrlsDeep(parsed);
+          collectOwnerDeep(parsed);
         } catch {}
       }
     }
@@ -939,10 +1078,18 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
         .map((meta) => [meta.getAttribute("property") || meta.getAttribute("name") || "", meta.getAttribute("content") || ""])
         .filter(([key, value]) => key && value)
     );
+    const metaAccountName = clean(
+      metas.author ||
+      metas["article:author"] ||
+      metas["og:author"] ||
+      document.querySelector('[itemprop="author"] [itemprop="name"], [itemprop="author"], [class*="up-name"], [class*="author"]')?.textContent ||
+      ""
+    );
     const bvid = (location.href.match(/BV[0-9A-Za-z]+/) || [])[0] || "";
     return {
       bvid,
       title: clean(metas["og:title"] || document.title || ""),
+      sourceAccountName: sourceAccountName || metaAccountName,
       description: clean(metas.description || metas["og:description"] || ""),
       mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
     };

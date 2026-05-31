@@ -88,6 +88,23 @@ type DouyinVideoStatsResult = {
   };
 };
 
+type BilibiliVideoStatsResult = {
+  platform: "bilibili";
+  title: string;
+  url: string;
+  publishedAt?: string;
+  authorName?: string;
+  stats: {
+    play: number;
+    like: number;
+    coin: number;
+    favorite: number;
+    comment: number;
+    share: number;
+    danmaku: number;
+  };
+};
+
 const DOUYIN_STATS_BROWSER_WORKSPACE = `douyin-video-stats-${process.pid}`;
 const DOUYIN_STATS_HOME_URL = "https://www.douyin.com/robots.txt";
 let douyinStatsBrowserReady = false;
@@ -1952,29 +1969,41 @@ export async function hydrateBilibiliVideoStats(video: Video) {
   };
 }
 
-export async function getBilibiliVideoStatsByUrl(url: string) {
+export async function getBilibiliVideoStatsByUrl(url: string): Promise<BilibiliVideoStatsResult> {
   const resolvedUrl = await resolveBilibiliVideoUrl(url);
   const bvid = extractBvid(resolvedUrl);
   if (!bvid) {
     throw new Error("没有从链接里解析到 B 站 BV 号，请粘贴完整视频链接。");
   }
 
-  const [opencliFields, publicFields] = await Promise.all<Record<string, unknown>>([
-    getBilibiliVideoFields(bvid).catch(() => ({})),
-    getBilibiliPublicVideoFields(bvid).catch(() => ({}))
+  const [opencliResult, publicResult] = await Promise.allSettled([
+    getBilibiliVideoFields(bvid),
+    getBilibiliPublicVideoFields(bvid)
   ]);
+  const opencliFields = opencliResult.status === "fulfilled" ? opencliResult.value : {};
+  const publicFields = publicResult.status === "fulfilled" ? publicResult.value : {};
   const stat = publicFields.stat && typeof publicFields.stat === "object" ? (publicFields.stat as Record<string, unknown>) : {};
   const metadata = {
     ...publicFields,
     ...stat,
     ...opencliFields
   };
+  if (!hasBilibiliStatFields(metadata)) {
+    throw new Error(formatBilibiliStatsFetchError(bvid, opencliResult, publicResult));
+  }
+  const owner = metadata.owner && typeof metadata.owner === "object" ? (metadata.owner as Record<string, unknown>) : {};
 
   return {
     platform: "bilibili" as const,
     title: stringField(metadata.title),
     url: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`,
     publishedAt: normalizeTimestamp(metadata.pubdate || metadata.publish_time || metadata.created_at || metadata.date),
+    authorName:
+      stringField(owner.name) ||
+      stringField(owner.uname) ||
+      stringField(metadata.owner_name) ||
+      stringField(metadata.author) ||
+      stringField(metadata.uname),
     stats: {
       play: firstNumber(metadata.view, metadata.views),
       like: firstNumber(metadata.like, metadata.likes),
@@ -2068,10 +2097,20 @@ async function getBilibiliPublicVideoFields(bvid: string) {
       Referer: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`
     }
   });
-  if (!response.ok) return {};
+  if (!response.ok) {
+    throw new Error(`公开接口 HTTP ${response.status}`);
+  }
   const payload = (await response.json()) as unknown;
   const object = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const code = toNumber(object.code);
+  if (code !== 0) {
+    const message = stringField(object.message) || stringField(object.msg);
+    throw new Error(`公开接口返回 ${code}${message ? `：${message}` : ""}`);
+  }
   const data = object.data && typeof object.data === "object" ? (object.data as Record<string, unknown>) : {};
+  if (!Object.keys(data).length) {
+    throw new Error("公开接口未返回视频数据");
+  }
   return data;
 }
 
@@ -2157,6 +2196,54 @@ function firstNumber(...values: unknown[]) {
     if (number > 0) return number;
   }
   return 0;
+}
+
+function hasBilibiliStatFields(metadata: Record<string, unknown>) {
+  return [
+    "view",
+    "views",
+    "play",
+    "plays",
+    "like",
+    "likes",
+    "coin",
+    "favorite",
+    "favorites",
+    "reply",
+    "comments",
+    "share",
+    "shares",
+    "danmaku"
+  ].some((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
+}
+
+function formatBilibiliStatsFetchError(
+  bvid: string,
+  opencliResult: PromiseSettledResult<Record<string, unknown>>,
+  publicResult: PromiseSettledResult<Record<string, unknown>>
+) {
+  const details = [
+    describeBilibiliStatsSource("opencli", opencliResult),
+    describeBilibiliStatsSource("公开接口", publicResult)
+  ].filter(Boolean);
+  return `B站视频 ${bvid} 当前数据抓取失败：${details.join("；") || "没有返回可用统计数据"}。请检查本机网络或稍后重试。`;
+}
+
+function describeBilibiliStatsSource(label: string, result: PromiseSettledResult<Record<string, unknown>>) {
+  if (result.status === "rejected") {
+    return `${label}：${formatErrorMessage(result.reason)}`;
+  }
+  if (!Object.keys(result.value).length) {
+    return `${label}：未返回可用数据`;
+  }
+  return "";
+}
+
+function formatErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message.trim() : typeof error === "string" ? error.trim() : "";
+  if (/Failed to fetch|fetch failed/i.test(message)) return "网络请求失败（fetch failed）";
+  if (message) return message.replace(/\s+/g, " ").slice(0, 240);
+  return "未知错误";
 }
 
 function normalizeBilibiliComment(row: unknown, index: number): BilibiliCommentSample {

@@ -100,6 +100,16 @@ export type DraftAssets = {
     fallback: boolean;
     fallbackReason?: string;
     diagnostics?: {
+      sourceBrief?: {
+        summary: string;
+        topic: string;
+        subjects: string[];
+        keyFacts: string[];
+        viewerScenes: string[];
+        discussionAngles: string[];
+        skepticalAngles: string[];
+        anchorTerms: string[];
+      };
       research?: {
         originalCommentCount: number;
         originalCommentUsed: number;
@@ -292,6 +302,7 @@ export type EngagementRecord = {
   id: string;
   sourceType: EngagementSourceType;
   title: string;
+  sourceAccountName?: string;
   sourceUrl?: string;
   resolvedUrl?: string;
   platform: Platform | "unknown";
@@ -382,7 +393,7 @@ export type GrossMarginCalculationLine = {
   total: number;
 };
 
-export type GrossMarginMonitorStatus = "pending" | "completed" | "failed";
+export type GrossMarginMonitorStatus = "pending" | "completed" | "partial" | "failed";
 
 export type GrossMarginMonitorMetric = {
   service: GrossMarginServiceKind;
@@ -558,6 +569,14 @@ export type JobResultRef = {
   label: string;
 };
 
+export type JobEvent = {
+  at: string;
+  status: JobStatus;
+  stage?: string;
+  message: string;
+  progress: number;
+};
+
 export type JobRecord = {
   id: string;
   kind: JobKind;
@@ -571,6 +590,7 @@ export type JobRecord = {
   partialText?: string;
   resultRef?: JobResultRef;
   result?: unknown;
+  events?: JobEvent[];
   error?: string;
   createdAt: string;
   updatedAt: string;

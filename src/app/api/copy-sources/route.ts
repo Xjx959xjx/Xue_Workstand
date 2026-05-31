@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import {
   createCopySourceProject,
   deleteCopySources,
@@ -39,24 +39,20 @@ const reanalyzeSchema = z.object({
 });
 
 export async function GET() {
-  try {
-    return NextResponse.json({ sources: await getCopySources() });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取文案素材失败" },
-      { status: 500 }
-    );
-  }
+  return apiJson(async () => ({ sources: await getCopySources() }), {
+    fallbackMessage: "读取文案素材失败",
+    status: 500
+  });
 }
 
 export async function POST(request: Request) {
-  try {
+  return apiJson(async () => {
     const body = await request.json();
     const projectInput = projectSchema.safeParse(body);
     if (projectInput.success) {
-      return NextResponse.json({
+      return {
         project: await createCopySourceProject(projectInput.data)
-      });
+      };
     }
 
     const reanalyzeInput = reanalyzeSchema.safeParse(body);
@@ -75,7 +71,7 @@ export async function POST(request: Request) {
         url: media.resolvedUrl || source.resolvedUrl || source.url
       });
       const updated = await updateCopySourceMaterialAnalysis(source.id, materialAnalysis);
-      return NextResponse.json({ source: updated });
+      return { source: updated };
     }
 
     const input = transcribeSchema.parse(body);
@@ -105,23 +101,17 @@ export async function POST(request: Request) {
       materialAnalysis
     });
 
-    return NextResponse.json({ source, result });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "链接转写失败" },
-      { status: 400 }
-    );
-  }
+    return { source, result };
+  }, {
+    fallbackMessage: "链接转写失败"
+  });
 }
 
 export async function DELETE(request: Request) {
-  try {
-    const input = deleteSchema.parse(await request.json());
-    return NextResponse.json(await deleteCopySources(input.sourceIds));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "删除文案素材失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, deleteSchema);
+    return deleteCopySources(input.sourceIds);
+  }, {
+    fallbackMessage: "删除文案素材失败"
+  });
 }

@@ -122,7 +122,15 @@ export default function GrossMarginMonitorPage() {
     try {
       const result = await refreshGrossMarginMonitorRecord(recordId);
       setLibrary(result.library);
-      notify({ tone: result.record.status === "failed" ? "warning" : "success", message: result.record.status === "failed" ? "该记录刷新失败，请查看行内提示" : "监控记录已刷新" });
+      notify({
+        tone: result.record.status === "failed" || result.record.status === "partial" ? "warning" : "success",
+        message:
+          result.record.status === "failed"
+            ? "该记录刷新失败，请查看行内提示"
+            : result.record.status === "partial"
+              ? "监控记录已部分刷新，请查看行内提示"
+              : "监控记录已刷新"
+      });
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "刷新监控记录失败" });
     } finally {
@@ -186,7 +194,7 @@ export default function GrossMarginMonitorPage() {
       <div className="gross-monitor-topbar">
         <div className="page-header-meta">
           <span className="stat-pill">{hasActiveFilters ? `${sortedRecords.length} / ${records.length} 条记录` : `${records.length} 条记录`}</span>
-          <span className="stat-pill">{sortedRecords.filter((record) => record.status === "failed").length} 条异常</span>
+          <span className="stat-pill">{sortedRecords.filter((record) => record.status === "failed" || record.status === "partial").length} 条异常</span>
         </div>
         <div className="gross-monitor-toolbar">
           <div className="gross-monitor-inline-filters" role="group" aria-label="监控筛选">
@@ -624,6 +632,7 @@ function getOverallGap(record: GrossMarginMonitorRecord) {
 
 function getOverallGapTone(percent: number, status: GrossMarginMonitorRecord["status"]) {
   if (status === "pending") return "neutral";
+  if (status === "partial") return "warning";
   if (percent >= 0.75) return "danger";
   if (percent >= 0.45) return "warning";
   if (percent > 0) return "calm";
@@ -636,6 +645,7 @@ function formatPlatform(platform: GrossMarginMonitorRecord["platform"]) {
 
 function formatStatus(status: GrossMarginMonitorRecord["status"]) {
   if (status === "completed") return "已刷新";
+  if (status === "partial") return "部分刷新";
   if (status === "failed") return "失败";
   return "待刷新";
 }
@@ -671,6 +681,7 @@ function getMetricRefreshDelta(record: GrossMarginMonitorRecord, service: GrossM
 
 function renderStatusIcon(status: GrossMarginMonitorRecord["status"]) {
   if (status === "completed") return <CheckCircle2 aria-hidden="true" size={13} />;
+  if (status === "partial") return <AlertTriangle aria-hidden="true" size={13} />;
   if (status === "failed") return <XCircle aria-hidden="true" size={13} />;
   return <Clock3 aria-hidden="true" size={13} />;
 }

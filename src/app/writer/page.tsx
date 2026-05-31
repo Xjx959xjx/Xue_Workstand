@@ -50,6 +50,7 @@ function WriterPageContent() {
   const [styleOpen, setStyleOpen] = useState(false);
   const [fullDrafts, setFullDrafts] = useState<Draft[] | null>(null);
   const loadedDraftParamRef = useRef("");
+  const appliedSearchParamRef = useRef("");
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
@@ -157,6 +158,7 @@ function WriterPageContent() {
   }, [library?.drafts.length, loading]);
 
   useEffect(() => {
+    const searchKey = searchParams.toString();
     const target = searchParams.get("targetType");
     const nextMode = searchParams.get("mode");
     const nextPrompt = searchParams.get("prompt");
@@ -166,14 +168,15 @@ function WriterPageContent() {
     const draftId = searchParams.get("draftId");
     const sourceDraft = draftId ? allDrafts.find((draft) => draft.id === draftId) : null;
 
-    if (target === "project") setTargetType("project");
-    if (target === "account") setTargetType("account");
-    if (nextAccountId) setAccountId(nextAccountId);
-    if (nextProjectId) setProjectId(nextProjectId);
-
     if (sourceDraft) {
       if (loadedDraftParamRef.current === sourceDraft.id) return;
       loadedDraftParamRef.current = sourceDraft.id;
+      setTargetType(sourceDraft.targetType === "project" ? "project" : "account");
+      if (sourceDraft.targetType === "project") {
+        setProjectId(sourceDraft.projectId);
+      } else {
+        setAccountId(sourceDraft.accountId);
+      }
       setMode(sourceDraft.mode);
       setPrompt(sourceDraft.prompt);
       setSourceText(sourceDraft.input || "");
@@ -184,15 +187,37 @@ function WriterPageContent() {
 
     if (draftId && historyLoading) return;
     if (!draftId) loadedDraftParamRef.current = "";
+    if (appliedSearchParamRef.current === searchKey) return;
 
+    const hasUrlState =
+      Boolean(target || nextMode || nextAccountId || nextProjectId) ||
+      nextPrompt !== null ||
+      nextSourceText !== null;
+    if (!hasUrlState) {
+      appliedSearchParamRef.current = searchKey;
+      return;
+    }
+
+    const nextTargetType = target === "project" ? "project" : target === "account" ? "account" : undefined;
+
+    if (nextTargetType) setTargetType(nextTargetType);
+    if (nextAccountId) setAccountId(nextAccountId);
+    if (nextProjectId) setProjectId(nextProjectId);
     if (nextMode === "topic" || nextMode === "rewrite") setMode(nextMode);
     if (nextPrompt !== null) setPrompt(nextPrompt);
     if (nextSourceText !== null) setSourceText(nextSourceText);
+    appliedSearchParamRef.current = searchKey;
   }, [allDrafts, historyLoading, loadDraftResult, searchParams]);
 
   const handleSelectHistoryDraft = useCallback(
     (draft: Draft) => {
       loadedDraftParamRef.current = draft.id;
+      setTargetType(draft.targetType === "project" ? "project" : "account");
+      if (draft.targetType === "project") {
+        setProjectId(draft.projectId);
+      } else {
+        setAccountId(draft.accountId);
+      }
       setMode(draft.mode);
       setPrompt(draft.prompt);
       setSourceText(draft.input || "");
@@ -562,7 +587,7 @@ function WriterPageContent() {
                 <details className="style-reference" style={{ marginTop: 16 }}>
                   <summary>
                     <span className="style-reference-heading">
-                      <span className="style-reference-title">联网资料</span>
+                      <span className="style-reference-title">参考资料</span>
                       <small>研究摘要</small>
                     </span>
                   </summary>

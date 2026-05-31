@@ -151,6 +151,7 @@ function TaskRow({
   readOnly?: boolean;
 }) {
   const detail = job.status === "failed" ? formatJobErrorMessage(job.error || job.message) : job.message;
+  const recentEvents = (job.events || []).slice(-3);
   return (
     <div className={`task-center-row ${job.status}`}>
       <span className={`task-center-row-state ${job.status}`}>
@@ -175,8 +176,27 @@ function TaskRow({
         </span>
       ) : null}
       {job.status === "failed" && detail ? <span className="task-center-row-error">{detail}</span> : null}
+      {recentEvents.length > 1 ? (
+        <span className="task-center-row-events" title={recentEvents.map(formatJobEvent).join("\n")}>
+          {recentEvents.map((event) => event.message).join(" / ")}
+        </span>
+      ) : null}
     </div>
   );
+}
+
+function formatJobEvent(event: NonNullable<JobRecord["events"]>[number]) {
+  return `${formatEventTime(event.at)} ${event.message}（${event.progress}%）`;
+}
+
+function formatEventTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
 
 function isActiveJob(job: JobRecord) {

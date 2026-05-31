@@ -14,9 +14,10 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--text-body);
-  line-height: 1.6;
+  line-height: 1.55;
   letter-spacing: 0;
   overflow-x: hidden;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -107,15 +108,15 @@ p {
 h1 {
   color: var(--text-strong);
   font-size: var(--text-page-title);
-  font-weight: 700;
-  line-height: 1.08;
+  font-weight: 650;
+  line-height: 1.18;
   text-wrap: balance;
 }
 
 h2 {
   color: var(--text-strong);
   font-size: var(--text-section-title);
-  font-weight: 600;
+  font-weight: 650;
   line-height: 1.25;
   text-wrap: balance;
 }

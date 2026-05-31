@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteTranscript, readTranscript, saveTranscript } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
@@ -16,25 +16,22 @@ const updateSchema = schema.extend({
 });
 
 export async function GET(request: Request) {
-  try {
+  return apiJson(async () => {
     const url = new URL(request.url);
     const input = schema.parse({
       platform: url.searchParams.get("platform"),
       accountId: url.searchParams.get("accountId"),
       videoId: url.searchParams.get("videoId")
     });
-    return NextResponse.json({ transcript: await readTranscript(input.platform, input.accountId, input.videoId) });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取转写稿失败" },
-      { status: 400 }
-    );
-  }
+    return { transcript: await readTranscript(input.platform, input.accountId, input.videoId) };
+  }, {
+    fallbackMessage: "读取转写稿失败"
+  });
 }
 
 export async function PUT(request: Request) {
-  try {
-    const input = updateSchema.parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, updateSchema);
     const result = await saveTranscript({
       platform: input.platform,
       accountId: input.accountId,
@@ -42,23 +39,17 @@ export async function PUT(request: Request) {
       text: input.transcript,
       source: "manual"
     });
-    return NextResponse.json({ transcript: result.transcript });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "保存转写稿失败" },
-      { status: 400 }
-    );
-  }
+    return { transcript: result.transcript };
+  }, {
+    fallbackMessage: "保存转写稿失败"
+  });
 }
 
 export async function DELETE(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
-    return NextResponse.json(await deleteTranscript(input.platform, input.accountId, input.videoId));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "删除转写稿失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, schema);
+    return deleteTranscript(input.platform, input.accountId, input.videoId);
+  }, {
+    fallbackMessage: "删除转写稿失败"
+  });
 }

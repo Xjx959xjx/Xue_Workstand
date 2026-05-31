@@ -1,7 +1,14 @@
 import { extractRewriteSourceMaterial, RewriteSourceExtraction, SourceMaterial } from "./source-extraction";
-import { transcribeLinkSource, LinkTranscriptionResult } from "./transcription";
+import { isSupportedVideoSourceLink, transcribeLinkSource, LinkTranscriptionResult } from "./transcription";
 
-export async function resolveRewriteSourceMaterial(input: string): Promise<RewriteSourceExtraction> {
+type ResolveRewriteSourceMaterialOptions = {
+  linkMode?: "all" | "video-only";
+};
+
+export async function resolveRewriteSourceMaterial(
+  input: string,
+  options: ResolveRewriteSourceMaterialOptions = {}
+): Promise<RewriteSourceExtraction> {
   const extracted = extractRewriteSourceMaterial(input);
   if (!extracted.materials.some((material) => material.urls.length)) return extracted;
 
@@ -12,6 +19,7 @@ export async function resolveRewriteSourceMaterial(input: string): Promise<Rewri
       const transcriptBlocks: string[] = [];
       const errors: string[] = [];
       for (const url of material.urls) {
+        if (options.linkMode === "video-only" && !isSupportedVideoSourceLink(url)) continue;
         try {
           const result = await transcribeLinkSource({
             url,
@@ -32,9 +40,10 @@ export async function resolveRewriteSourceMaterial(input: string): Promise<Rewri
   );
 
   const linkMaterials = materials.filter((material) => material.urls.length);
+  const attemptedLinkMaterials = linkMaterials.filter((material) => material.transcribedText?.trim() || material.transcriptionError?.trim());
   const successfulLinkMaterials = linkMaterials.filter((material) => material.transcribedText?.trim());
-  if (linkMaterials.length && !successfulLinkMaterials.length) {
-    const detail = linkMaterials
+  if (attemptedLinkMaterials.length && !successfulLinkMaterials.length) {
+    const detail = attemptedLinkMaterials
       .map((material) => material.transcriptionError)
       .filter(Boolean)
       .join("\n");
@@ -58,11 +67,16 @@ function buildResolvedSourceText(materials: SourceMaterial[], fallback: string) 
       const lines = [`素材 ${material.index}：`];
       if (material.transcribedText) {
         lines.push(material.transcribedText);
-      } else if (material.urls.length) {
-        lines.push("链接转写失败，未取得可用视频文稿。");
-        if (material.transcriptionError) lines.push(material.transcriptionError);
-      } else if (material.text) {
-        lines.push(material.text);
+      } else {
+        if (material.text) lines.push(material.text);
+        if (material.urls.length) {
+          if (material.transcriptionError) {
+            lines.push("链接转写失败，未取得可用视频文稿。");
+            lines.push(material.transcriptionError);
+          } else if (!material.text) {
+            lines.push(`原始链接：${material.urls.join(" ")}`);
+          }
+        }
       }
       if (material.urls.length) lines.push(`来源链接：${material.urls.join(" ")}`);
       return lines.join("\n");

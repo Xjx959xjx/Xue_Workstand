@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateStyleProfile } from "@/lib/ai";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { saveStyle } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
@@ -12,26 +12,20 @@ const baseSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  try {
-    const input = baseSchema.parse(await request.json());
-    return NextResponse.json(await generateStyleProfile(input.platform, input.accountId));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "自动总结风格失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, baseSchema);
+    return generateStyleProfile(input.platform, input.accountId);
+  }, {
+    fallbackMessage: "自动总结风格失败"
+  });
 }
 
 export async function PUT(request: Request) {
-  try {
-    const input = baseSchema.extend({ content: z.string().min(1) }).parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, baseSchema.extend({ content: z.string().min(1) }));
     const style = await saveStyle(input.platform, input.accountId, input.content);
-    return NextResponse.json({ style });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "保存风格卡失败" },
-      { status: 400 }
-    );
-  }
+    return { style };
+  }, {
+    fallbackMessage: "保存风格卡失败"
+  });
 }

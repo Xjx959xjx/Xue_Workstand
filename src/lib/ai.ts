@@ -11,6 +11,7 @@ import {
   platforms
 } from "./types";
 import { clampText, makeTitleFromPrompt } from "./utils";
+import { fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
 import {
   getTopTranscriptSamples,
   getProjectSummary,
@@ -54,6 +55,7 @@ export type WriteCopyInput = {
   mode: Draft["mode"];
   prompt: string;
   sourceText?: string;
+  supportDocLinks?: string;
   save?: boolean;
   useWebResearch?: boolean;
 };
@@ -104,6 +106,7 @@ type FetchInitWithDispatcher = UndiciRequestInit & {
 };
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
+const WRITE_BRIEF_MAX_OUTPUT_TOKENS = 1400;
 const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
 const WEB_RESEARCH_TIMEOUT_MS = 180_000;
 
@@ -1345,24 +1348,58 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
     normalizedInput.mode === "topic"
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
       : `请按账号风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
+  const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks);
   const webContext = normalizedInput.useWebResearch ? await buildWebResearchContext(normalizedInput) : "未启用联网检索。";
+  const research = buildReferenceSummary({
+    supportDocLinks: normalizedInput.supportDocLinks,
+    supportDocContext,
+    useWebResearch: normalizedInput.useWebResearch,
+    webContext
+  });
+  const writingBrief = await buildAccountWritingBrief({
+    accountName: account.name,
+    platform: normalizedInput.platform,
+    style,
+    sampleContext,
+    input: normalizedInput,
+    supportDocContext,
+    webContext
+  });
 
   return {
     messages: [
       {
         role: "system",
         content:
-          "你是中文短视频文案助手。严格参考给定账号风格卡和样本话术，但不要照抄原转写稿。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实；资料不足时说明需要用户补充更明确关键词。输出可以直接使用的成稿，必要时给出标题、正文、口播节奏和结尾互动。"
+          "你是中文短视频爆款文案写手。严格按账号写作 brief 成稿，不要解释创作思路，不要输出审稿意见。必须保留用户给出的具体梗和事实线索，把它们写成能直接口播的短视频文案。"
       },
       {
         role: "user",
-        content: `参考账号：${account.name}\n平台：${normalizedInput.platform}\n\n风格卡：\n${style}\n\n代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
+        content: [
+          `参考账号：${account.name}`,
+          `平台：${normalizedInput.platform}`,
+          `账号写作 brief：\n${writingBrief}`,
+          `账号风格卡：\n${style}`,
+          `代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}`,
+          `支持文档资料：\n${supportDocContext}`,
+          `联网检索资料：\n${webContext}`,
+          `任务：\n${userTask}`,
+          [
+            "成稿硬性要求：",
+            "1. 只输出可直接使用的成稿，不解释创作思路。",
+            "2. 开头必须先给明确钩子或反差判断，不能铺垫背景。",
+            "3. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
+            "4. 保留用户给出的具体梗、场景、原话和事实线索。",
+            "5. 句子短，口播感强，少用抽象形容词。",
+            "6. 结尾给一个自然的评论区问题或行动引导。"
+          ].join("\n")
+        ].join("\n\n")
       }
     ],
     fallbackName: account.name,
     fallbackStyle: style,
     fallbackInput: normalizedInput,
-    research: normalizedInput.useWebResearch ? webContext : undefined,
+    research,
     draftBase: {
       platform: normalizedInput.platform,
       accountId: normalizedInput.accountId,
@@ -1371,6 +1408,7 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
       mode: normalizedInput.mode,
       prompt: normalizedInput.prompt,
       input: normalizedInput.sourceText,
+      supportDocLinks: normalizedInput.supportDocLinks,
       styleRef: {
         platform: normalizedInput.platform,
         accountId: normalizedInput.accountId,
@@ -1416,7 +1454,14 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
     input.mode === "topic"
       ? `请基于这个主题生成文案：\n${input.prompt}`
       : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文素材：\n${input.sourceText || ""}`;
+  const supportDocContext = await buildSupportDocumentContext(input.supportDocLinks);
   const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
+  const research = buildReferenceSummary({
+    supportDocLinks: input.supportDocLinks,
+    supportDocContext,
+    useWebResearch: input.useWebResearch,
+    webContext
+  });
 
   return {
     messages: [
@@ -1427,7 +1472,15 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       },
       {
         role: "user",
-        content: `参考项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n项目风格卡：\n${style}\n\n代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}\n\n联网检索资料：\n${webContext}\n\n任务：\n${userTask}`
+        content: [
+          `参考项目：${project.name}`,
+          `项目说明：${project.description || "暂无"}`,
+          `项目风格卡：\n${style}`,
+          `代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}`,
+          `支持文档资料：\n${supportDocContext}`,
+          `联网检索资料：\n${webContext}`,
+          `任务：\n${userTask}`
+        ].join("\n\n")
       }
     ],
     fallbackName: project.name,
@@ -1437,7 +1490,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       prompt: input.prompt,
       sourceText: input.sourceText
     },
-    research: input.useWebResearch ? webContext : undefined,
+    research,
     draftBase: {
       targetType: "project",
       projectId: project.id,
@@ -1446,6 +1499,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       mode: input.mode,
       prompt: input.prompt,
       input: input.sourceText,
+      supportDocLinks: input.supportDocLinks,
       styleRef: {
         projectId: project.id,
         projectName: project.name,
@@ -1454,6 +1508,154 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       }
     }
   };
+}
+
+async function buildAccountWritingBrief(input: {
+  accountName: string;
+  platform: Platform;
+  style: string;
+  sampleContext: string;
+  input: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+}) {
+  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
+  const userTask =
+    input.input.mode === "topic"
+      ? input.input.prompt
+      : `${input.input.prompt}\n\n${sourceText}`;
+
+  const result = await completeWriteBriefGeneration(
+    [
+      {
+        role: "system",
+        content:
+          "你是短视频文案策划。你的任务是把账号风格、代表样本和用户输入压缩成写作 brief，供下一步直接成稿使用。不要生成正文，不要解释过程。"
+      },
+      {
+        role: "user",
+        content: [
+          `参考账号：${input.accountName}`,
+          `平台：${input.platform}`,
+          `任务：\n${userTask}`,
+          `账号风格卡：\n${input.style}`,
+          `代表样本：\n${input.sampleContext || "暂无样本"}`,
+          `支持文档资料：\n${input.supportDocContext}`,
+          `联网检索资料：\n${input.webContext}`,
+          [
+            "请只输出以下结构：",
+            "## 核心事件",
+            "## 可见画面/具体细节",
+            "## 账号化切入",
+            "## 梗和映射",
+            "## 成稿路线",
+            "## 避坑"
+          ].join("\n")
+        ].join("\n\n")
+      }
+    ]
+  );
+
+  if (result.text.trim()) return result.text.trim();
+  return buildLocalAccountWritingBrief(input);
+}
+
+function completeWriteBriefGeneration(messages: ChatMessage[]) {
+  return streamResponseTextWithFallback({
+    messages,
+    reasoningEffort: "low",
+    maxOutputTokens: WRITE_BRIEF_MAX_OUTPUT_TOKENS,
+    onDelta() {
+      // Keep the brief bounded without surfacing intermediate planning text to the UI.
+    }
+  });
+}
+
+function buildLocalAccountWritingBrief(input: {
+  accountName: string;
+  input: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+}) {
+  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
+  const task = input.input.mode === "topic" ? input.input.prompt : `${input.input.prompt}\n\n${sourceText}`;
+
+  return [
+    "## 核心事件",
+    `- 围绕用户任务写：${clampText(task, 420)}`,
+    "## 可见画面/具体细节",
+    `- 只使用用户提供素材、链接转写结果和明确要求；素材不足时把“不确定”留在内部，不要写进成稿。`,
+    input.supportDocContext && input.supportDocContext !== "未提供支持文档。"
+      ? `- 支持文档资料：${clampText(input.supportDocContext, 360)}`
+      : "",
+    "## 账号化切入",
+    `- 按「${input.accountName}」的离谱奇闻/游戏化包装来写，开头先抛反差结论。`,
+    "## 梗和映射",
+    "- 优先把普通现实动作包装成游戏副本、装备觉醒、玩家整活、评论区围观。",
+    "## 成稿路线",
+    "- 开头抛离谱结论 -> 交代事情 -> 具体动作升级 -> 游戏梗命名 -> 评论区接梗。",
+    "## 避坑",
+    "- 不要写成教程，不要长篇解释梗，不要用空泛形容词替代具体画面。",
+    input.webContext && input.webContext !== "未启用联网检索。" ? `- 联网资料：${clampText(input.webContext, 300)}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function buildSupportDocumentContext(input?: string) {
+  const trimmed = input?.trim() || "";
+  if (!trimmed) return "未提供支持文档。";
+
+  if (!hasFeishuDocLink(trimmed)) {
+    return `用户粘贴的支持资料：\n${clampText(trimmed, 5000)}`;
+  }
+
+  const documents = await fetchFeishuSupportDocuments(trimmed);
+  if (!documents.length) {
+    return `用户粘贴的支持资料：\n${clampText(trimmed, 5000)}`;
+  }
+
+  const blocks: string[] = [];
+  if (hasPlainSupportText(trimmed)) {
+    blocks.push(`用户补充资料原文：\n${clampText(trimmed, 1800)}`);
+  }
+
+  blocks.push(...documents.map((document, index) => {
+    const title = document.title?.trim() || `文档 ${index + 1}`;
+    if (document.content?.trim()) {
+      return `文档 ${index + 1}｜${title}\n来源：${document.url}\n${clampText(document.content, 3600)}`;
+    }
+    return `文档 ${index + 1}｜${title}\n来源：${document.url}\n读取失败：${document.error || "没有返回可用正文"}`;
+  }));
+
+  return blocks.join("\n\n---\n\n");
+}
+
+function hasPlainSupportText(input: string) {
+  const withoutUrls = input
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/(?:[a-z0-9-]+\.)*(?:feishu\.cn|larksuite\.com|feishu-boe\.cn)\/\S+/gi, " ")
+    .replace(/\b(?:docxcn|doxcn|doccn|wikcn)[A-Za-z0-9_-]{8,}\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return /[\u4e00-\u9fff]/.test(withoutUrls) || withoutUrls.length >= 20;
+}
+
+function buildReferenceSummary(input: {
+  supportDocLinks?: string;
+  supportDocContext: string;
+  useWebResearch?: boolean;
+  webContext: string;
+}) {
+  const sections: string[] = [];
+  if (input.supportDocLinks?.trim()) {
+    sections.push(`支持文档资料：\n${input.supportDocContext}`);
+  }
+  if (input.useWebResearch) {
+    sections.push(`联网检索资料：\n${input.webContext}`);
+  }
+  return sections.length ? sections.join("\n\n---\n\n") : undefined;
 }
 
 async function buildProjectCopySourceContext(sourceIds: string[]) {

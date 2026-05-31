@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAccountTranscriptDocx } from "@/lib/account-transcript-export";
+import { apiError } from "@/lib/api-route";
 import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -27,9 +28,8 @@ export async function GET(request: Request) {
 
     return new NextResponse(new Uint8Array(result.buffer), { headers });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "导出转写稿失败" },
-      { status: 400 }
-    );
+    return apiError(error, {
+      fallbackMessage: "导出转写稿失败"
+    });
   }
 }

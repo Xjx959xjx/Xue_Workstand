@@ -49,8 +49,8 @@
 
 | 角色 | Token | 大小 | 字重 | 行高 | 用法 |
 | --- | --- | --- | --- | --- | --- |
-| 页面标题 | `--text-page-title` | `24px` | `700` | `1.18` | 页面主标题 |
-| 区块标题 | `--text-section-title` | `15px` | `600` | `1.25` | 面板和窗格标题 |
+| 页面标题 | `--text-page-title` | `24px` | `650` | `1.18` | 页面主标题 |
+| 区块标题 | `--text-section-title` | `15px` | `650` | `1.25` | 面板和窗格标题 |
 | 卡片标题 | `--text-card-title` | `13px` | `600` | `1.35` | 列表项、卡片标题 |
 | 正文 | `--text-body` | `13px` | `400` | `1.5` | 默认 UI 文案 |
 | 元信息 | `--text-meta` | `12px` | `500-600` | `1.45-1.65` | 标签、说明、辅助文本 |
@@ -59,8 +59,8 @@
 
 字体 token：
 
-- `--font-ui`: `"PingFang SC", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Microsoft YaHei", "Noto Sans SC", sans-serif`
-- `--font-mono`: `"SF Mono", "Cascadia Code", Consolas, monospace`
+- `--font-ui`: `Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif`
+- `--font-mono`: `"SF Mono", "SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace`
 
 规则：
 

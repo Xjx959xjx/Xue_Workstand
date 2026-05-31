@@ -13,10 +13,12 @@ import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
 import { hasFeishuDocLink } from "./feishu";
 import { libraryRoot } from "./storage";
+import { readJsonFile, writeJsonFile } from "./storage/fs";
 import { transcribeVideo } from "./transcription";
 import {
   BatchTranscribeResult,
   EngagementRecord,
+  JobEvent,
   JobKind,
   JobListItem,
   JobRecord,
@@ -88,18 +90,11 @@ async function ensureJobs() {
 }
 
 async function readJson<T>(target: string): Promise<T | null> {
-  try {
-    return JSON.parse(await fs.readFile(target, "utf8")) as T;
-  } catch {
-    return null;
-  }
+  return readJsonFile<T>(target);
 }
 
 async function writeJson(target: string, value: unknown) {
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
-  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await fs.rename(temp, target);
+  return writeJsonFile(target, value);
 }
 
 async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
@@ -117,6 +112,15 @@ async function patchJob(jobId: string, patch: Partial<JobRecord>, options: Patch
       ...patch,
       updatedAt: nowIso()
     };
+    if (shouldRecordJobEvent(current, next, patch)) {
+      next.events = appendJobEvent(current.events, {
+        at: next.updatedAt,
+        status: next.status,
+        stage: next.stage,
+        message: next.message,
+        progress: next.progress
+      });
+    }
     await writeJob(next, options);
     return next;
   });
@@ -217,6 +221,15 @@ export async function createJob(input: JobStartInput) {
     message: "任务已加入队列",
     progress: 0,
     href: input.href || defaultHref(input),
+    events: [
+      {
+        at: now,
+        status: "queued",
+        stage: "queued",
+        message: "任务已加入队列",
+        progress: 0
+      }
+    ],
     createdAt: now,
     updatedAt: now
   };
@@ -788,6 +801,28 @@ function isTerminalJob(job: Pick<JobRecord, "status">) {
     job.status === "cancelled" ||
     job.status === "interrupted"
   );
+}
+
+function shouldRecordJobEvent(
+  current: JobRecord,
+  next: JobRecord,
+  patch: Partial<JobRecord>
+) {
+  if (!("status" in patch) && !("stage" in patch) && !("message" in patch)) return false;
+  return current.status !== next.status || current.stage !== next.stage || current.message !== next.message;
+}
+
+function appendJobEvent(events: JobEvent[] | undefined, event: JobEvent) {
+  const last = events?.at(-1);
+  if (
+    last &&
+    last.status === event.status &&
+    last.stage === event.stage &&
+    last.message === event.message
+  ) {
+    return events;
+  }
+  return [...(events || []), event].slice(-80);
 }
 
 function throwIfCancelled(jobId: string): asserts jobId is string {

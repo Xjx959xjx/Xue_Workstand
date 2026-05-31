@@ -36,6 +36,7 @@ import {
   platforms
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
+import { fileExists, readJsonFile, writeJsonFile } from "./storage/fs";
 
 const DEFAULT_STYLE = `# 风格卡
 
@@ -265,30 +266,15 @@ async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
 }
 
 async function exists(target: string) {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
+  return fileExists(target);
 }
 
 async function readJson<T>(target: string): Promise<T | null> {
-  try {
-    return JSON.parse(await fs.readFile(target, "utf8")) as T;
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      console.warn(`[storage] JSON 解析失败：${target}`, error);
-    }
-    return null;
-  }
+  return readJsonFile<T>(target);
 }
 
 async function writeJson(target: string, value: unknown) {
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
-  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await fs.rename(temp, target);
+  return writeJsonFile(target, value);
 }
 
 async function ensureAccountDirs(platform: Platform, slug: string) {
@@ -725,7 +711,7 @@ export async function upsertGrossMarginMonitorRecord(input: {
   const record = normalizeGrossMarginMonitorRecord({
     id,
     platform,
-    accountName: input.accountName.trim(),
+    accountName: input.accountName.trim() || existing?.accountName || "",
     projectId: input.projectId?.trim() || existing?.projectId,
     projectName: input.projectName?.trim() || existing?.projectName,
     videoUrl: input.videoUrl.trim(),
@@ -1877,14 +1863,15 @@ function normalizeGrossMarginPriceTable(
     const id = safeSegment(item.id, shortHash(`${platform}-${service}-${item.name}`));
     if (isRetiredGrossMarginOption(platform, id)) continue;
     const defaultItem = byId.get(id);
+    const legacyName = normalizeLegacyGrossMarginOptionName(platform, id, item.name);
     byId.set(id, {
       id,
       service,
-      name: item.name?.trim() || formatGrossMarginServiceName(service),
+      name: legacyName || formatGrossMarginServiceName(service),
       unitPrice: normalizeGrossMarginUnitPrice(item.unitPrice),
       quantityUnit: normalizeGrossMarginQuantityUnit(item.quantityUnit),
       minimumQuantity: normalizeGrossMarginMinimumQuantity(item.minimumQuantity) ?? defaultItem?.minimumQuantity,
-      note: item.note?.trim() || undefined,
+      note: normalizeLegacyGrossMarginOptionNote(platform, id, item.note) || undefined,
       updatedAt: item.updatedAt || now
     });
   }
@@ -1894,6 +1881,32 @@ function normalizeGrossMarginPriceTable(
     items: [...byId.values()].sort(compareGrossMarginPriceOptions),
     updatedAt: now
   };
+}
+
+function normalizeLegacyGrossMarginOptionName(
+  platform: GrossMarginPriceTable["platform"],
+  id: string,
+  name?: string
+) {
+  const trimmed = name?.trim() || "";
+  if (platform !== "douyin") return trimmed;
+  if (id === "douyin-play-tech" && trimmed === "科技（5w起）") return "千川无视版（5w起）";
+  if (id === "douyin-play-qianchuan-10w" && trimmed === "低质千川（10w起）") return "普通千川（10w起）";
+  return trimmed;
+}
+
+function normalizeLegacyGrossMarginOptionNote(
+  platform: GrossMarginPriceTable["platform"],
+  id: string,
+  note?: string
+) {
+  const trimmed = note?.trim() || "";
+  if (platform !== "douyin") return trimmed;
+  if (id === "douyin-play-tech" && trimmed === "5w 起播放，55 元 / 万") return "千川无视版，5w 起播放，55 元 / 万";
+  if (id === "douyin-play-qianchuan-10w" && trimmed === "低质千川，10w 起播放，23 元 / 万") {
+    return "普通千川，10w 起播放，23 元 / 万";
+  }
+  return trimmed;
 }
 
 function normalizeGrossMarginAccounts(accounts?: GrossMarginAccountPrice[] | null): GrossMarginAccountPrice[] {
@@ -1983,7 +1996,7 @@ function buildGrossMarginMonitorProjects(records: GrossMarginMonitorRecord[]) {
 }
 
 function normalizeGrossMarginMonitorStatus(status?: GrossMarginMonitorStatus) {
-  if (status === "completed" || status === "failed" || status === "pending") return status;
+  if (status === "completed" || status === "partial" || status === "failed" || status === "pending") return status;
   return "pending";
 }
 
@@ -2078,21 +2091,21 @@ function getDefaultGrossMarginPriceOptions(
       {
         id: "douyin-play-tech",
         service: "play",
-        name: "科技（5w起）",
+        name: "千川无视版（5w起）",
         unitPrice: 55,
         quantityUnit: "万",
         minimumQuantity: 5,
-        note: "5w 起播放，55 元 / 万",
+        note: "千川无视版，5w 起播放，55 元 / 万",
         updatedAt: now
       },
       {
         id: "douyin-play-qianchuan-10w",
         service: "play",
-        name: "低质千川（10w起）",
+        name: "普通千川（10w起）",
         unitPrice: 23,
         quantityUnit: "万",
         minimumQuantity: 10,
-        note: "低质千川，10w 起播放，23 元 / 万",
+        note: "普通千川，10w 起播放，23 元 / 万",
         updatedAt: now
       },
       {

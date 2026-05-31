@@ -22,12 +22,10 @@ export function getVideoComparableKey(input?: string) {
   const normalized = extractVideoUrl(input) || input?.trim() || "";
   if (!normalized) return "";
 
-  const bvid = normalized.match(/BV[0-9A-Za-z]+/i)?.[0];
+  const bvid = extractBvidFromInput(normalized);
   if (bvid) return `bilibili:${bvid.toUpperCase()}`;
 
-  const douyinVideoId =
-    normalized.match(/\/video\/(\d{10,})/i)?.[1] ||
-    normalized.match(/\/aweme\/share\/video\/(\d{10,})/i)?.[1];
+  const douyinVideoId = extractDouyinAwemeIdFromInput(normalized);
   if (douyinVideoId) return `douyin:${douyinVideoId}`;
 
   try {
@@ -38,4 +36,21 @@ export function getVideoComparableKey(input?: string) {
   } catch {
     return normalized.replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
   }
+}
+
+function extractBvidFromInput(input: string) {
+  return input.match(/BV[0-9A-Za-z]+/i)?.[0] || "";
+}
+
+function extractDouyinAwemeIdFromInput(input: string) {
+  const trimmed = input.trim();
+  if (/^\d{10,}$/.test(trimmed)) return trimmed;
+
+  return (
+    trimmed.match(/\/video\/(\d{10,})/i)?.[1] ||
+    trimmed.match(/\/aweme\/share\/video\/(\d{10,})/i)?.[1] ||
+    trimmed.match(/[?&](?:aweme_id|modal_id|item_id)=(\d{10,})/i)?.[1] ||
+    trimmed.match(/(?:aweme_id|awemeId|modal_id|item_id)["'=:\s/]+(\d{10,})/i)?.[1] ||
+    ""
+  );
 }

@@ -24,7 +24,7 @@ export function useAssetFeishuPublish({ activeTitle, setBusy, setNotice }: UseAs
     setNotice("");
     try {
       const result = await publishFeishuDocument({
-        title: `${activeTitle}-${kind === "comments" ? "评论池" : "弹幕池"}`,
+        title: `${activeTitle}-${kind === "comments" ? "评论" : "弹幕"}`,
         content: items.join("\n")
       });
       setFeishuResult({ title: result.title, url: result.url });

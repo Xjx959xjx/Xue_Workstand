@@ -70,19 +70,19 @@ export async function publishFeishuDocument(input: { title: string; content: str
 }
 
 export async function fetchFeishuSupportDocuments(input: string) {
-  const urls = uniqueFeishuDocUrls(input).slice(0, 4);
-  if (!urls.length) return [];
+  const refs = uniqueFeishuDocRefs(input).slice(0, 4);
+  if (!refs.length) return [];
 
   const config = feishuConfig();
   const documents: FeishuFetchedDocument[] = [];
-  for (const url of urls) {
-    documents.push(await fetchFeishuDocument(config, url));
+  for (const ref of refs) {
+    documents.push(await fetchFeishuDocument(config, ref));
   }
   return documents;
 }
 
 export function hasFeishuDocLink(input?: string) {
-  return uniqueFeishuDocUrls(input || "").length > 0;
+  return uniqueFeishuDocRefs(input || "").length > 0;
 }
 
 async function publishWithOpenCli(config: FeishuConfig, input: { title: string; content: string }) {
@@ -221,11 +221,37 @@ function spawnWithInput(command: string, args: string[], input: string, options:
   });
 }
 
-function uniqueFeishuDocUrls(input: string) {
-  const urls = extractLinksFromInput(input)
-    .map((link) => link.url)
-    .filter(isFeishuDocUrl);
-  return [...new Set(urls)];
+function uniqueFeishuDocRefs(input: string) {
+  const refs: string[] = [];
+  const variants = collectFeishuInputVariants(input);
+
+  for (const text of variants) {
+    for (const link of extractLinksFromInput(text)) {
+      if (isFeishuDocUrl(link.url)) refs.push(link.url);
+      refs.push(...extractFeishuDocRefsFromDeepLink(link.url));
+    }
+
+    for (const match of text.matchAll(FEISHU_DOMAIN_URL_PATTERN)) {
+      const url = normalizeFeishuUrlToken(match[0]);
+      if (url && isFeishuDocUrl(url)) refs.push(url);
+    }
+
+    for (const token of text.split(/[\s,，;；]+/)) {
+      const ref = normalizePotentialFeishuDocToken(token);
+      if (ref) refs.push(ref);
+    }
+  }
+
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const ref of refs) {
+    const key = ref.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(ref);
+  }
+
+  return unique;
 }
 
 function isFeishuDocUrl(url: string) {
@@ -239,13 +265,103 @@ function isFeishuDocUrl(url: string) {
   }
 }
 
+const FEISHU_DOMAIN_URL_PATTERN =
+  /(?:[a-z0-9-]+\.)*(?:feishu\.cn|larksuite\.com|feishu-boe\.cn)\/[^\s<>"']+/gi;
+const WRAPPED_FEISHU_TOKEN_PATTERN = /^[A-Za-z0-9%=_+-]{20,180}\.[a-f0-9]{24,128}$/i;
+const NAMED_FEISHU_TOKEN_PATTERN = /^(?:docxcn|doxcn|doccn|wikcn)[A-Za-z0-9_-]{8,}$/i;
+
+function collectFeishuInputVariants(input: string) {
+  const variants = new Set<string>();
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed) variants.add(trimmed);
+  };
+
+  add(input);
+
+  const decodedInput = decodeUriComponentLoose(input);
+  if (decodedInput !== input) add(decodedInput);
+
+  for (const token of input.match(/[A-Za-z0-9+/_=-]{20,}(?:%3D|=)?/gi) || []) {
+    const decoded = decodeBase64Loose(decodeUriComponentLoose(token));
+    if (decoded && /feishu|larksuite|docx|docs|wiki|https?:\/\//i.test(decoded)) add(decoded);
+  }
+
+  return [...variants];
+}
+
+function normalizeFeishuUrlToken(token: string) {
+  const trimmed = trimDocumentRefToken(token);
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function extractFeishuDocRefsFromDeepLink(url: string) {
+  const refs: string[] = [];
+  try {
+    const parsed = new URL(url);
+    for (const value of parsed.searchParams.values()) {
+      const decoded = decodeUriComponentLoose(value);
+      if (isFeishuDocUrl(decoded)) refs.push(decoded);
+    }
+  } catch {
+    // Ignore malformed deep links; they may still be tried as raw tokens below.
+  }
+  return refs;
+}
+
+function normalizePotentialFeishuDocToken(token: string) {
+  const trimmed = trimDocumentRefToken(token);
+  if (!trimmed || /^https?:\/\//i.test(trimmed) || /[/:]/.test(trimmed)) return "";
+
+  const decoded = decodeUriComponentLoose(trimmed);
+  if (isLikelyFeishuDocToken(decoded)) return decoded;
+  if (isLikelyFeishuDocToken(trimmed)) return trimmed;
+  return "";
+}
+
+function trimDocumentRefToken(token: string) {
+  return token.trim().replace(/^[<"'「『（(【\[]+/, "").replace(/[>"'」』）)】\]，。！？、；;,.!?]+$/g, "");
+}
+
+function isLikelyFeishuDocToken(token: string) {
+  if (NAMED_FEISHU_TOKEN_PATTERN.test(token)) return true;
+  if (WRAPPED_FEISHU_TOKEN_PATTERN.test(token)) return true;
+  return false;
+}
+
+function decodeUriComponentLoose(value: string) {
+  let current = value;
+  for (let index = 0; index < 2; index += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) break;
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function decodeBase64Loose(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return Buffer.from(normalized, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
 function extractFetchedDocument(payload: unknown) {
   const root = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const data = root.data && typeof root.data === "object" ? (root.data as Record<string, unknown>) : root;
   const document = data.document && typeof data.document === "object" ? (data.document as Record<string, unknown>) : data;
   return {
     title: stringValue(document.title || document.name || data.title || root.title),
-    content: stringValue(document.content || data.content || root.content)
+    content:
+      stringValue(document.content || document.markdown || document.text || data.content || data.markdown || data.text || root.content) ||
+      findStringByKey(payload, ["content", "markdown", "text"])
   };
 }
 
@@ -253,11 +369,38 @@ function stringValue(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+function findStringByKey(value: unknown, keys: string[]): string {
+  if (!value || typeof value !== "object") return "";
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findStringByKey(item, keys);
+      if (found) return found;
+    }
+    return "";
+  }
+
+  const object = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = object[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
+  }
+
+  for (const candidate of Object.values(object)) {
+    const found = findStringByKey(candidate, keys);
+    if (found) return found;
+  }
+  return "";
+}
+
 function summarizeFeishuFetchError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
   if (/timeout|ETIMEDOUT|timed out/i.test(message)) return "lark-cli 读取超时";
   if (/permission|forbidden|403|unauthorized|401|无权限|权限/i.test(message)) return "当前 lark-cli 身份没有文档权限";
   if (/not found|404|不存在/i.test(message)) return "文档不存在或链接无效";
+  if (/field validation failed|99992402|400/i.test(message)) {
+    return "文档标识无效。请粘贴浏览器地址栏里的飞书文档链接，或 docx/doxcn/wikcn 开头的文档 token";
+  }
   if (/not found: opencli|ENOENT/i.test(message)) return "没有找到 opencli，请检查 OPENCLI_BIN";
   return message || "lark-cli 读取失败";
 }

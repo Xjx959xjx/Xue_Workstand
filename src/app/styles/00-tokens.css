@@ -94,17 +94,17 @@
   --radius-lg: 8px;
   --text-caption: 11px;
   --text-meta: 12px;
-  --text-body: 14px;
-  --text-card-title: 14px;
-  --text-section-title: 16px;
-  --text-page-title: 32px;
-  --control-height-sm: 34px;
-  --control-height-md: 40px;
-  --field-height: 42px;
-  --status-pill-height: 24px;
+  --text-body: 13px;
+  --text-card-title: 13px;
+  --text-section-title: 15px;
+  --text-page-title: 24px;
+  --control-height-sm: 30px;
+  --control-height-md: 32px;
+  --field-height: 36px;
+  --status-pill-height: 22px;
   --card-pad-sm: 12px;
-  --card-pad-md: 16px;
-  --card-pad-lg: 22px;
+  --card-pad-md: 14px;
+  --card-pad-lg: 20px;
   --panel-gap: var(--space-4);
   --status-neutral-text: var(--muted-strong);
   --status-neutral-bg: var(--panel);
@@ -118,12 +118,12 @@
   --status-danger-text: var(--rose);
   --status-danger-bg: var(--rose-soft);
   --status-danger-border: rgba(180, 35, 90, 0.28);
-  --page-pad: 28px;
+  --page-pad: 24px;
   --workspace-page-height: calc(100vh - (var(--page-pad) * 2));
   --workspace-default-height: clamp(520px, calc(100vh - 165px), 850px);
   --library-quick-start-height: 76px;
   --library-workspace-height: calc(var(--workspace-default-height) - var(--library-quick-start-height) - 12px);
-  --font-ui: "PingFang SC", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Microsoft YaHei",
-    "Noto Sans SC", sans-serif;
-  --font-mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+  --font-ui: Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", "SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace;
 }

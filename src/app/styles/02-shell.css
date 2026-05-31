@@ -479,6 +479,16 @@
   overflow-wrap: anywhere;
 }
 
+.task-center-row-events {
+  grid-column: 2 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .task-center-error {
   margin: 12px 14px 0;
   padding: 9px 10px;

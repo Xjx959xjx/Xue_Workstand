@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { saveAndGenerateProjectStyleProfile } from "@/lib/ai";
+import { apiError, parseJsonBody } from "@/lib/api-route";
 import { createNdjsonStream } from "@/lib/streaming";
 
 export const runtime = "nodejs";
@@ -15,7 +15,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const input = schema.parse(await request.json());
+    const input = await parseJsonBody(request, schema);
 
     const stream = createNdjsonStream(async (emit) => {
       emit({ type: "stage", stage: "validate", message: "正在校验项目配置", progress: 15 });
@@ -38,9 +38,8 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "自动总结项目风格失败" },
-      { status: 400 }
-    );
+    return apiError(error, {
+      fallbackMessage: "自动总结项目风格失败"
+    });
   }
 }

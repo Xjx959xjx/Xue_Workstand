@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { apiError } from "@/lib/api-route";
 import { getDraftAssetFile } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -17,9 +17,8 @@ export async function GET(request: Request) {
       }
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取素材失败" },
-      { status: 400 }
-    );
+    return apiError(error, {
+      fallbackMessage: "读取素材失败"
+    });
   }
 }

@@ -850,7 +850,7 @@ export async function exportEngagementRecord(recordId: string) {
     throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
   }
 
-  const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition")) || "评论池.docx";
+  const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition")) || "数据维护.docx";
   downloadBlob(await response.blob(), fileName);
   return { fileName };
 }

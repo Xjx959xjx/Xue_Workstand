@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiError, parseJsonBody } from "@/lib/api-route";
 import { collectDraftCoverReferences } from "@/lib/cover";
 import { saveUploadedDraftCoverReferences } from "@/lib/storage";
 
@@ -52,12 +53,11 @@ export async function POST(request: Request) {
       return NextResponse.json(await saveUploadedDraftCoverReferences({ draftId, files }));
     }
 
-    const input = jsonSchema.parse(await request.json());
+    const input = await parseJsonBody(request, jsonSchema);
     return NextResponse.json(await collectDraftCoverReferences(input.draftId));
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "处理封面参考图失败" },
-      { status: 400 }
-    );
+    return apiError(error, {
+      fallbackMessage: "处理封面参考图失败"
+    });
   }
 }

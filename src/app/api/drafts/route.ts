@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteDrafts, getDrafts, saveDraft, updateDraftTitle } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
@@ -54,48 +54,32 @@ const updateSchema = z.object({
 });
 
 export async function GET() {
-  try {
-    return NextResponse.json({ drafts: await getDrafts() });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取草稿失败" },
-      { status: 500 }
-    );
-  }
+  return apiJson(async () => ({ drafts: await getDrafts() }), {
+    fallbackMessage: "读取草稿失败",
+    status: 500
+  });
 }
 
 export async function POST(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
-    return NextResponse.json(await saveDraft(input));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "保存草稿失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => saveDraft(await parseJsonBody(request, schema)), {
+    fallbackMessage: "保存草稿失败"
+  });
 }
 
 export async function DELETE(request: Request) {
-  try {
-    const input = deleteSchema.parse(await request.json());
-    return NextResponse.json(await deleteDrafts(input.draftIds));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "删除草稿失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, deleteSchema);
+    return deleteDrafts(input.draftIds);
+  }, {
+    fallbackMessage: "删除草稿失败"
+  });
 }
 
 export async function PATCH(request: Request) {
-  try {
-    const input = updateSchema.parse(await request.json());
-    return NextResponse.json(await updateDraftTitle(input.draftId, input.title));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "更新草稿名称失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, updateSchema);
+    return updateDraftTitle(input.draftId, input.title);
+  }, {
+    fallbackMessage: "更新草稿名称失败"
+  });
 }

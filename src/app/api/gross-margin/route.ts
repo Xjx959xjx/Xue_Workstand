@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import {
   getBilibiliVideoStatsByUrl,
   getDouyinVideoStatsBatchByUrl,
@@ -96,55 +96,50 @@ const mutationSchema = z.discriminatedUnion("action", [
 ]);
 
 export async function GET() {
-  try {
-    return NextResponse.json(await getGrossMarginLibrary());
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取毛利单价表失败" },
-      { status: 500 }
-    );
-  }
+  return apiJson(() => getGrossMarginLibrary(), {
+    fallbackMessage: "读取毛利单价表失败",
+    status: 500,
+    formatError: formatGrossMarginError
+  });
 }
 
 export async function POST(request: Request) {
-  try {
-    const input = mutationSchema.parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, mutationSchema);
     if (input.action === "saveMonitorRecord") {
       const record = await saveMonitorRecordFromInput(input);
-      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+      return { record, library: await getGrossMarginLibrary() };
     }
     if (input.action === "bulkSaveMonitorRecords") {
       const result = await bulkSaveMonitorRecordsFromInput(input);
-      return NextResponse.json({ ...result, library: await getGrossMarginLibrary() });
+      return { ...result, library: await getGrossMarginLibrary() };
     }
     if (input.action === "refreshMonitorRecord") {
       const record = await refreshMonitorRecord(input.recordId);
-      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+      return { record, library: await getGrossMarginLibrary() };
     }
     if (input.action === "refreshMonitorRecords") {
       const records = await refreshMonitorRecords(input.recordIds);
-      return NextResponse.json({ records, library: await getGrossMarginLibrary() });
+      return { records, library: await getGrossMarginLibrary() };
     }
     if (input.action === "updateMonitorPlayTarget") {
       const record = await updateMonitorPlayTarget(input.recordId, input.target);
-      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+      return { record, library: await getGrossMarginLibrary() };
     }
     if (input.action === "updateMonitorPlayCurrent") {
       const record = await updateMonitorPlayCurrent(input.recordId, input.current);
-      return NextResponse.json({ record, library: await getGrossMarginLibrary() });
+      return { record, library: await getGrossMarginLibrary() };
     }
     if (input.action === "deleteMonitorRecord") {
       const result = await deleteGrossMarginMonitorRecord(input.recordId);
-      return NextResponse.json({ ...result, library: await getGrossMarginLibrary() });
+      return { ...result, library: await getGrossMarginLibrary() };
     }
     const table = await saveGrossMarginPriceTable(input);
-    return NextResponse.json({ table, library: await getGrossMarginLibrary() });
-  } catch (error) {
-    return NextResponse.json(
-      { error: formatGrossMarginError(error) },
-      { status: 400 }
-    );
-  }
+    return { table, library: await getGrossMarginLibrary() };
+  }, {
+    fallbackMessage: "保存毛利单价表失败",
+    formatError: formatGrossMarginError
+  });
 }
 
 function formatGrossMarginError(error: unknown) {
@@ -256,6 +251,7 @@ async function saveRefreshedMonitorRecord(
         : fetchedStats;
     return saveGrossMarginMonitorRecord({
       ...record,
+      accountName: record.accountName || getFetchedAuthorName(fetched),
       title: fetched.title || record.title,
       videoUrl: fetched.url || record.videoUrl,
       videoKey:
@@ -267,7 +263,7 @@ async function saveRefreshedMonitorRecord(
       publishedAt: fetched.publishedAt || record.publishedAt,
       previousStats: record.currentStats,
       currentStats,
-      status: "completed",
+      status: warnings.length ? "partial" : "completed",
       warnings,
       lastRefreshedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -275,6 +271,15 @@ async function saveRefreshedMonitorRecord(
   } catch (error) {
     return saveFailedMonitorRecord(record, error);
   }
+}
+
+function getFetchedAuthorName(
+  fetched:
+    | Awaited<ReturnType<typeof getBilibiliVideoStatsByUrl>>
+    | Awaited<ReturnType<typeof getDouyinVideoStatsByUrl>>
+    | Awaited<ReturnType<typeof getDouyinMonitorStats>>
+) {
+  return "authorName" in fetched ? fetched.authorName?.trim() || "" : "";
 }
 
 function saveFailedMonitorRecord(record: GrossMarginMonitorRecord, error: unknown) {

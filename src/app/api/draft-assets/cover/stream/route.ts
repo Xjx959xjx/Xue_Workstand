@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiError, parseJsonBody } from "@/lib/api-route";
 import { generateDraftCover } from "@/lib/cover";
 import { createNdjsonStream } from "@/lib/streaming";
 
@@ -14,7 +14,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const input = schema.parse(await request.json());
+    const input = await parseJsonBody(request, schema);
     const stream = createNdjsonStream(async (emit) => {
       const result = await generateDraftCover({
         ...input,
@@ -33,9 +33,8 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "生成封面失败" },
-      { status: 400 }
-    );
+    return apiError(error, {
+      fallbackMessage: "生成封面失败"
+    });
   }
 }

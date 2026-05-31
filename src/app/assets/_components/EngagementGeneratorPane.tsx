@@ -58,7 +58,7 @@ export function EngagementGeneratorPane({
               <input checked={includeComments} type="checkbox" onChange={(event) => onIncludeCommentsChange(event.target.checked)} />
               <span>
                 <strong>评论</strong>
-                <small>默认生成评论池</small>
+                <small>默认生成评论</small>
               </span>
               <input
                 aria-label="评论条数"

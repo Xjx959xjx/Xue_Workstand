@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { collectVideos, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
 import { collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
@@ -27,8 +27,8 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, schema);
     const uidOrUrl = input.uidOrUrl ? normalizeLinkInput(input.uidOrUrl, { kind: "account" }) : "";
     const order = normalizeCollectOrder(input.order);
     validateCollectOrder(input.platform, order);
@@ -78,20 +78,17 @@ export async function POST(request: Request) {
     });
     const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), order);
 
-    return NextResponse.json({
+    return {
       account: await getAccountSummary(updatedAccount),
       videos,
       command: result.command,
       rawCount: result.rawCount,
       filteredCount: filteredVideos.length,
       dateFilter: dateFilter.summary
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "采集失败" },
-      { status: 400 }
-    );
-  }
+    };
+  }, {
+    fallbackMessage: "采集失败"
+  });
 }
 
 function normalizeCollectOrder(order: LegacyCollectOrder): CollectOrder {

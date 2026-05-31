@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteAccounts, findAccountByName, getAccountDetail, getAccountSummary, upsertAccount } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 import { resolveAccountUid } from "@/lib/opencli";
@@ -19,7 +19,7 @@ const deleteSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  try {
+  return apiJson(async () => {
     const { searchParams } = new URL(request.url);
     const input = z.object({
       platform: z.enum(platforms),
@@ -28,17 +28,12 @@ export async function GET(request: Request) {
       platform: searchParams.get("platform"),
       accountId: searchParams.get("accountId")
     });
-    return NextResponse.json(
-      await getAccountDetail(input.platform, input.accountId, {
-        includeStyle: parseBooleanFlag(searchParams.get("includeStyle"))
-      })
-    );
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取账号详情失败" },
-      { status: 400 }
-    );
-  }
+    return getAccountDetail(input.platform, input.accountId, {
+      includeStyle: parseBooleanFlag(searchParams.get("includeStyle"))
+    });
+  }, {
+    fallbackMessage: "读取账号详情失败"
+  });
 }
 
 function parseBooleanFlag(value: string | null) {
@@ -46,12 +41,12 @@ function parseBooleanFlag(value: string | null) {
 }
 
 export async function POST(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, schema);
     const uidOrUrl = normalizeAccountLinkInput(input.uidOrUrl);
     const sourceUrl = normalizeAccountLinkInput(input.sourceUrl);
     const existing = !uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
-    if (existing) return NextResponse.json(await getAccountSummary(existing));
+    if (existing) return getAccountSummary(existing);
 
     const uid = await resolveAccountUid(input.platform, input.name, uidOrUrl);
     const account = await upsertAccount({
@@ -61,13 +56,10 @@ export async function POST(request: Request) {
       sourceUrl: sourceUrl || uidOrUrl || input.name
     });
 
-    return NextResponse.json(await getAccountSummary(account));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "保存账号失败" },
-      { status: 400 }
-    );
-  }
+    return getAccountSummary(account);
+  }, {
+    fallbackMessage: "保存账号失败"
+  });
 }
 
 function normalizeAccountLinkInput(input?: string) {
@@ -75,13 +67,10 @@ function normalizeAccountLinkInput(input?: string) {
 }
 
 export async function DELETE(request: Request) {
-  try {
-    const input = deleteSchema.parse(await request.json());
-    return NextResponse.json(await deleteAccounts(input.accountIds));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "删除账号失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, deleteSchema);
+    return deleteAccounts(input.accountIds);
+  }, {
+    fallbackMessage: "删除账号失败"
+  });
 }

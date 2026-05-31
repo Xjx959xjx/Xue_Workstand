@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { runBatchTranscribe } from "@/lib/batch-transcribe";
 import { platforms } from "@/lib/types";
 
@@ -13,13 +13,7 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
-    return NextResponse.json(await runBatchTranscribe(input));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "批量转写失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => runBatchTranscribe(await parseJsonBody(request, schema)), {
+    fallbackMessage: "批量转写失败"
+  });
 }

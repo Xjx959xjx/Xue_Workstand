@@ -96,7 +96,7 @@ function AssetsPageContent() {
       const result = await exportEngagementRecord(record.id);
       setNotice(`已导出 Word 文档：${result.fileName}`);
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "导出评论池失败");
+      setNotice(err instanceof Error ? err.message : "导出数据维护文档失败");
     } finally {
       setBusy("");
     }

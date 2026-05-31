@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { createJob, listJobSummaries } from "@/lib/jobs";
 import { createUrlPreprocessor } from "@/lib/link-input";
 import { platforms } from "@/lib/types";
+import { writeCopyInputSchema } from "@/lib/write-validation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,18 +18,7 @@ const writeCopySchema = z.object({
   title: z.string().optional(),
   inputSummary: z.string().optional(),
   href: z.string().optional(),
-  input: z.object({
-    targetType: z.enum(["account", "project"]).optional(),
-    platform: z.enum(platforms).optional(),
-    accountId: z.string().optional(),
-    projectId: z.string().optional(),
-    mode: z.enum(["topic", "rewrite"]),
-    prompt: z.string().optional().default(""),
-    sourceText: z.string().optional(),
-    supportDocLinks: z.string().optional(),
-    save: z.boolean().optional(),
-    useWebResearch: z.boolean().optional()
-  })
+  input: writeCopyInputSchema
 });
 
 const accountStyleSchema = z.object({
@@ -126,46 +116,18 @@ const startJobSchema = z.discriminatedUnion("kind", [
 ]);
 
 export async function GET() {
-  try {
-    const jobs = await listJobSummaries();
-    return NextResponse.json({
-      jobs
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "读取任务失败" },
-      { status: 500 }
-    );
-  }
+  return apiJson(async () => ({ jobs: await listJobSummaries() }), {
+    fallbackMessage: "读取任务失败",
+    status: 500
+  });
 }
 
 export async function POST(request: Request) {
-  try {
-    const input = startJobSchema.parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, startJobSchema);
     const job = await createJob(input);
-    return NextResponse.json({ job, jobId: job.id });
-  } catch (error) {
-    return NextResponse.json(
-      { error: formatStartJobError(error) },
-      { status: 400 }
-    );
-  }
-}
-
-function formatStartJobError(error: unknown) {
-  if (error instanceof z.ZodError) {
-    const issue = error.issues[0];
-    if (!issue) return "创建任务失败：参数不完整。";
-
-    const field = issue.path.join(".");
-    if (field === "input.url" || field === "input.mediaUrl") {
-      return "链接格式不正确，请粘贴完整的 http(s) 地址。";
-    }
-    if (issue.message && !/^Invalid\b/i.test(issue.message)) {
-      return issue.message;
-    }
-    return "创建任务失败：参数不完整或格式不正确。";
-  }
-
-  return error instanceof Error ? error.message : "创建任务失败";
+    return { job, jobId: job.id };
+  }, {
+    fallbackMessage: "创建任务失败"
+  });
 }

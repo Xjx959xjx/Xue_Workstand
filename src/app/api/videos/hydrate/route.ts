@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { hydrateBilibiliVideoStats } from "@/lib/opencli";
 import { getVideo, saveVideo } from "@/lib/storage";
 import { platforms } from "@/lib/types";
@@ -13,15 +13,12 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, schema);
     const { account, video } = await getVideo(input.platform, input.accountId, input.videoId);
     const hydrated = input.platform === "bilibili" ? await hydrateBilibiliVideoStats(video) : video;
-    return NextResponse.json({ video: await saveVideo(account, hydrated) });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "补充视频数据失败" },
-      { status: 400 }
-    );
-  }
+    return { video: await saveVideo(account, hydrated) };
+  }, {
+    fallbackMessage: "补充视频数据失败"
+  });
 }

@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { generateEngagement } from "@/lib/engagement";
 import { createUrlPreprocessor } from "@/lib/link-input";
 import { deleteEngagementRecords } from "@/lib/storage";
@@ -42,37 +42,16 @@ const deleteSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  try {
-    const input = schema.parse(await request.json());
-    return NextResponse.json(await generateEngagement(input));
-  } catch (error) {
-    return NextResponse.json(
-      { error: formatEngagementError(error) },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => generateEngagement(await parseJsonBody(request, schema)), {
+    fallbackMessage: "生成评论失败"
+  });
 }
 
 export async function DELETE(request: Request) {
-  try {
-    const input = deleteSchema.parse(await request.json());
-    return NextResponse.json(await deleteEngagementRecords(input.recordIds));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "删除互动素材失败" },
-      { status: 400 }
-    );
-  }
-}
-
-function formatEngagementError(error: unknown) {
-  if (error instanceof z.ZodError) {
-    const issue = error.issues[0];
-    if (!issue) return "生成评论失败：参数不完整。";
-    if (issue.path.join(".") === "url") return "链接格式不正确，请粘贴完整的 http(s) 地址。";
-    if (issue.message && !/^Invalid\b/i.test(issue.message)) return issue.message;
-    return "生成评论失败：参数不完整或格式不正确。";
-  }
-
-  return error instanceof Error ? error.message : "生成评论失败";
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, deleteSchema);
+    return deleteEngagementRecords(input.recordIds);
+  }, {
+    fallbackMessage: "删除互动素材失败"
+  });
 }

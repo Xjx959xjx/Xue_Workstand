@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiError, parseJsonBody } from "@/lib/api-route";
 import { runBatchTranscribe } from "@/lib/batch-transcribe";
 import { createNdjsonStream } from "@/lib/streaming";
 import { platforms } from "@/lib/types";
@@ -15,7 +15,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const input = schema.parse(await request.json());
+    const input = await parseJsonBody(request, schema);
 
     const stream = createNdjsonStream(async (emit) => {
       const result = await runBatchTranscribe(input, {
@@ -60,9 +60,8 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "批量转写失败" },
-      { status: 400 }
-    );
+    return apiError(error, {
+      fallbackMessage: "批量转写失败"
+    });
   }
 }

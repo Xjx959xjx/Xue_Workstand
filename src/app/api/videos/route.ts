@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
+import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteVideos } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
@@ -12,13 +12,10 @@ const deleteSchema = z.object({
 });
 
 export async function DELETE(request: Request) {
-  try {
-    const input = deleteSchema.parse(await request.json());
-    return NextResponse.json(await deleteVideos(input.platform, input.accountId, input.videoIds));
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "删除视频失败" },
-      { status: 400 }
-    );
-  }
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, deleteSchema);
+    return deleteVideos(input.platform, input.accountId, input.videoIds);
+  }, {
+    fallbackMessage: "删除视频失败"
+  });
 }
