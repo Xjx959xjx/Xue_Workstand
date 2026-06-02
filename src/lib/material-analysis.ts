@@ -7,6 +7,7 @@ import { analyzeMaterialFrames } from "./ai";
 import type { CopySource, Platform } from "./types";
 
 const execFileAsync = promisify(execFile);
+const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 const FRAME_EXTRACTION_TIMEOUT_MS = 25_000;
 const FRAME_EXTRACTION_URL_LIMIT = 2;
 const MATERIAL_MODEL_TIMEOUT_MS = 45_000;
@@ -112,6 +113,7 @@ async function extractVideoFrames(urls: string[]) {
         "3",
         output
       ], {
+        ...HIDDEN_CHILD_PROCESS_OPTIONS,
         maxBuffer: 1024 * 1024 * 4,
         timeout: FRAME_EXTRACTION_TIMEOUT_MS,
         killSignal: "SIGKILL"

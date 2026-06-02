@@ -18,8 +18,9 @@ type CasePipelinePanelProps = {
   deletingSourcePool: boolean;
   onDeleteSelectedPoolSources: () => void;
   onOpenAccountPicker: () => void;
-  onOpenSourceAddModal: () => void;
+  onOpenLinkIntake: () => void;
   onOpenProjectModal: () => void;
+  onOpenSourcePicker: () => void;
   onOpenSourcePreview: (source: CopySource) => void;
   onToggleAccount: (accountId: string) => void;
   onToggleManagedSource: (sourceId: string) => void;
@@ -39,8 +40,9 @@ export function CasePipelinePanel({
   deletingSourcePool,
   onDeleteSelectedPoolSources,
   onOpenAccountPicker,
-  onOpenSourceAddModal,
+  onOpenLinkIntake,
   onOpenProjectModal,
+  onOpenSourcePicker,
   onOpenSourcePreview,
   onToggleAccount,
   onToggleManagedSource,
@@ -51,7 +53,7 @@ export function CasePipelinePanel({
   const emptyAccountHint = accounts.length ? "未选择时，仅用素材池生成风格卡。" : "暂无账号，可只用素材池生成。";
   const contextSummary = projectSources.length
     ? `${projectSources.length} 份案例素材将参与风格提炼`
-    : "先放入 1-3 个高质量案例，风格卡会更稳。";
+    : "从素材池检索已有案例，或粘贴链接转写后加入。";
 
   return (
     <aside className="project-workbench-section project-context-panel" aria-label="项目上下文">
@@ -95,11 +97,16 @@ export function CasePipelinePanel({
                   删除
                 </button>
               ) : (
-                <button className="btn compact" onClick={onOpenSourceAddModal} type="button">
+                <button className="btn compact" onClick={onOpenSourcePicker} type="button">
                   <Plus aria-hidden="true" size={14} />
-                  添加
+                  加入
                 </button>
               )}
+              {!sourcePoolManage ? (
+                <button className="btn compact" onClick={onOpenLinkIntake} type="button">
+                  转写
+                </button>
+              ) : null}
               <button className="btn compact" onClick={onToggleSourcePoolManage} type="button">
                 {sourcePoolManage ? <Check aria-hidden="true" size={14} /> : null}
                 {sourcePoolManage ? "完成" : "管理"}
@@ -127,9 +134,14 @@ export function CasePipelinePanel({
             ))}
           </div>
         ) : (
-          <button className="project-workbench-empty action" onClick={onOpenSourceAddModal} type="button">
-            添加素材
-          </button>
+          <div className="project-empty-actions">
+            <button className="project-workbench-empty action" onClick={onOpenSourcePicker} type="button">
+              选已有素材
+            </button>
+            <button className="project-workbench-empty action" onClick={onOpenLinkIntake} type="button">
+              转写链接
+            </button>
+          </div>
         )}
       </div>
 
@@ -141,7 +153,7 @@ export function CasePipelinePanel({
           </div>
           <button className="btn compact" onClick={onOpenAccountPicker} type="button">
             <UsersRound aria-hidden="true" size={14} />
-            选择
+            账号
           </button>
         </div>
         {selectedAccounts.length ? (

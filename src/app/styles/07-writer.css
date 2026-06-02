@@ -16,6 +16,54 @@
   background: var(--surface-panel);
 }
 
+.writer-flow-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-subtle);
+  background: color-mix(in oklch, var(--panel-raised) 94%, var(--surface-soft));
+}
+
+.writer-flow-step {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.writer-flow-step.active,
+.writer-flow-step.pending {
+  border-color: color-mix(in oklch, var(--accent) 24%, var(--line));
+  background: color-mix(in oklch, var(--accent-tint) 70%, var(--panel-raised));
+}
+
+.writer-flow-step.done {
+  border-color: color-mix(in oklch, var(--green) 28%, var(--line));
+  background: color-mix(in oklch, var(--green-soft) 58%, var(--panel-raised));
+}
+
+.writer-flow-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.writer-flow-step strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .writer-refbar {
   display: grid;
   grid-template-columns: auto minmax(200px, 280px) minmax(0, 1fr) auto;
@@ -87,6 +135,33 @@
     transparent;
 }
 
+.writer-context-summary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.writer-context-summary span {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  color: var(--muted-strong);
+  background: color-mix(in oklch, var(--panel-raised) 92%, var(--surface-soft));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.writer-context-summary span:first-child {
+  color: var(--text-strong);
+}
+
 .writer-textarea.main {
   min-height: 220px;
   background: color-mix(in oklch, var(--panel-raised) 96%, white);
@@ -114,6 +189,54 @@
   background: var(--surface-raised);
 }
 
+.writer-brief-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in oklch, var(--line-strong) 72%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--panel-raised) 94%, var(--surface-soft));
+}
+
+.writer-brief-panel.ready {
+  border-color: color-mix(in oklch, var(--green) 28%, var(--line));
+  background: color-mix(in oklch, var(--green-soft) 42%, var(--panel-raised));
+}
+
+.writer-brief-panel.stale {
+  border-color: color-mix(in oklch, var(--amber) 28%, var(--line));
+  background: color-mix(in oklch, var(--amber-soft) 46%, var(--panel-raised));
+}
+
+.writer-brief-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.writer-brief-head > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.writer-textarea.brief {
+  min-height: 132px;
+  max-height: 260px;
+  background: color-mix(in oklch, var(--panel-raised) 98%, white);
+}
+
+.writer-brief-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .source-detect-row {
   display: flex;
   min-width: 0;
@@ -123,9 +246,14 @@
 
 .writer-actionbar {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
   padding-top: 4px;
+}
+
+.writer-actionbar .icon-toggle {
+  margin-right: auto;
 }
 
 .result-box {
@@ -443,7 +571,7 @@
 
   .writer-main {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   .writer-content-grid {
@@ -454,8 +582,15 @@
   .writer-task,
   .writer-result {
     min-height: 0;
-    overflow: hidden;
     padding: 12px;
+  }
+
+  .writer-task {
+    overflow: auto;
+  }
+
+  .writer-result {
+    overflow: hidden;
   }
 
   .writer-history-body {
@@ -464,13 +599,8 @@
     padding: 12px;
   }
 
-  .writer-task {
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
-  }
-
   .writer-textarea.main {
-    height: 100%;
-    min-height: 0;
+    min-height: 168px;
   }
 
   .writer-textarea.source {
@@ -506,6 +636,10 @@
 }
 
 @media (max-width: 780px) {
+  .writer-flow-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .writer-refbar {
     grid-template-columns: 1fr;
   }

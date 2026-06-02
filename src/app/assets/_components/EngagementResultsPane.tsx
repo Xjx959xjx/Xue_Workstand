@@ -28,6 +28,8 @@ export function EngagementResultsPane({
   const diagnostics = resultRecord?.comments?.diagnostics;
   const generation = diagnostics?.generation;
   const sourceBrief = diagnostics?.sourceBrief;
+  const entityGuard = diagnostics?.entityGuard;
+  const relatedResearch = diagnostics?.relatedResearch;
 
   return (
     <section className="engagement-result-pane">
@@ -37,6 +39,18 @@ export function EngagementResultsPane({
             <span>{generation.mode === "keyword_local" ? "关键词生成" : `${generation.batchCount} 批增强`}</span>
             <span>完成 {generation.completedCount}/{generation.requestedCount}</span>
             {sourceBrief ? <span>锚点 {sourceBrief.keyFacts.length + sourceBrief.anchorTerms.length}</span> : null}
+            {(generation.lowSignalRejectedCount || generation.syntheticRejectedCount || generation.nearDuplicateRejectedCount || generation.repeatedStyleRejectedCount) ? (
+              <span>过滤 {(generation.lowSignalRejectedCount || 0) + (generation.syntheticRejectedCount || 0) + (generation.nearDuplicateRejectedCount || 0) + (generation.repeatedStyleRejectedCount || 0)}</span>
+            ) : null}
+            {generation.entityCorrectedCount ? <span>型号纠错 {generation.entityCorrectedCount}</span> : null}
+            {generation.unsupportedEntityRejectedCount ? <span>型号过滤 {generation.unsupportedEntityRejectedCount}</span> : null}
+            {entityGuard?.allowedModels?.length ? <span>型号 {entityGuard.allowedModels.length}</span> : null}
+            {generation.lengthBuckets?.long ? <span>长评 {generation.lengthBuckets.long}/{generation.targetLongCommentCount || generation.lengthBuckets.long}</span> : null}
+            {generation.intentBuckets ? <span>追问 {generation.intentBuckets.question}</span> : null}
+            {generation.intentBuckets ? <span>价格 {generation.intentBuckets.price}</span> : null}
+            {generation.intentBuckets ? <span>观望 {generation.intentBuckets.skeptical}</span> : null}
+            {generation.intentBuckets?.chatter ? <span>吹水 {generation.intentBuckets.chatter}</span> : null}
+            {relatedResearch?.longCommentCount ? <span>长评样本 {relatedResearch.longCommentCount}</span> : null}
             {generation.mode === "model_batch" ? <span>模型解析 {generation.parsedCount}</span> : null}
           </div>
         ) : null}

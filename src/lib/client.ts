@@ -21,7 +21,9 @@ import {
   Platform,
   ProjectDetail,
   ProjectSummary,
-  Video
+  Video,
+  WriteBriefResult,
+  WriteResult
 } from "./types";
 
 let draftsCache: { drafts: Draft[] } | null = null;
@@ -704,10 +706,29 @@ export function writeCopy(input: {
   prompt?: string;
   sourceText?: string;
   supportDocLinks?: string;
+  brief?: string;
   save?: boolean;
   useWebResearch?: boolean;
 }) {
-  return requestJson<{ content: string; research?: string; draft?: Draft; usedModel: string; fallback: boolean; fallbackReason?: string }>("/api/write", {
+  return requestJson<WriteResult>("/api/write", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function prepareWriteBrief(input: {
+  targetType?: "account" | "project";
+  platform?: Platform;
+  accountId?: string;
+  projectId?: string;
+  mode: Draft["mode"];
+  prompt?: string;
+  sourceText?: string;
+  supportDocLinks?: string;
+  brief?: string;
+  useWebResearch?: boolean;
+}) {
+  return requestJson<WriteBriefResult>("/api/write/brief", {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -723,6 +744,7 @@ export async function streamWriteCopy(
     prompt?: string;
     sourceText?: string;
     supportDocLinks?: string;
+    brief?: string;
     save?: boolean;
     useWebResearch?: boolean;
   },
@@ -730,13 +752,13 @@ export async function streamWriteCopy(
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
     onDelta?: (delta: string) => void;
     onResearch?: (research: string) => void;
-    onResult?: (result: { content: string; research?: string; draft?: Draft; usedModel: string; fallback: boolean; fallbackReason?: string }) => void;
+    onResult?: (result: WriteResult) => void;
   }
 ) {
   await readNdjsonStream<
     | { type: "stage"; stage: string; message: string; progress?: number }
     | { type: "delta"; delta: string }
-    | { type: "result"; data: { research?: string; phase?: string; content?: string; draft?: Draft; usedModel?: string; fallback?: boolean; fallbackReason?: string } }
+    | { type: "result"; data: Partial<WriteResult> & { phase?: string } }
     | { type: "error"; message: string }
     | { type: "done" }
   >(
@@ -759,7 +781,9 @@ export async function streamWriteCopy(
       if (event.type === "result" && typeof event.data.content === "string" && typeof event.data.usedModel === "string") {
         handlers.onResult?.({
           content: event.data.content,
+          brief: event.data.brief,
           research: event.data.research,
+          sourceDigest: event.data.sourceDigest,
           draft: event.data.draft,
           usedModel: event.data.usedModel,
           fallback: Boolean(event.data.fallback),

@@ -5,6 +5,7 @@ import { resolveOpenCliCommand } from "./opencli";
 import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
+const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 
 type FeishuConfig = {
   folderToken: string;
@@ -44,6 +45,7 @@ export async function checkFeishuRuntime() {
   try {
     const runtime = resolveOpenCliCommand();
     const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, "lark-cli", "doctor", "--offline"], {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
       timeout: 10000
     });
@@ -144,6 +146,7 @@ async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<F
 
   try {
     const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, ...args], {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 20,
       timeout: 60000
     });
@@ -171,7 +174,7 @@ async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<F
 
 function spawnWithInput(command: string, args: string[], input: string, options: { maxBuffer: number; timeout: number }) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
     let settled = false;

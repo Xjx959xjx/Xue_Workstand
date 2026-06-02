@@ -1195,6 +1195,26 @@
   color: var(--muted-strong);
 }
 
+.gross-monitor-daily-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: color-mix(in oklch, var(--blue) 82%, var(--text-strong));
+  background: color-mix(in oklch, var(--blue-soft) 42%, white);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.gross-monitor-daily-pill.pending {
+  color: var(--muted);
+  background: color-mix(in oklch, var(--surface-soft) 88%, white);
+}
+
 .gross-monitor-card-actions {
   display: flex;
   flex-wrap: wrap;

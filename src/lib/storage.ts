@@ -17,6 +17,7 @@ import {
   GrossMarginAccountPrice,
   GrossMarginLibrary,
   GrossMarginMonitorMetric,
+  GrossMarginMonitorPlaySample,
   GrossMarginMonitorRecord,
   GrossMarginPriceOption,
   GrossMarginPriceTable,
@@ -59,6 +60,7 @@ const DEFAULT_STYLE = `# 风格卡
 const draftAssetQueues = new Map<string, Promise<unknown>>();
 const grossMarginTablePlatforms = ["douyin", "bilibili"] as const;
 const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"] as const;
+const maxGrossMarginPlaySamples = 180;
 
 type DetailReadOptions = {
   includeStyle?: boolean;
@@ -722,6 +724,7 @@ export async function upsertGrossMarginMonitorRecord(input: {
     targetStats: normalizeGrossMarginTargetStats(input.targetStats, platform),
     currentStats: existing?.currentStats,
     previousStats: existing?.previousStats,
+    playSamples: existing?.playSamples,
     metrics: [],
     maxDifferencePercent: 0,
     highRisk: false,
@@ -1941,6 +1944,7 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
   const targetStats = normalizeGrossMarginTargetStats(record.targetStats, platform);
   const currentStats = normalizeGrossMarginCurrentStats(record.currentStats);
   const previousStats = normalizeGrossMarginCurrentStats(record.previousStats);
+  const playSamples = normalizeGrossMarginPlaySamples(record, currentStats);
   const metrics = buildGrossMarginMonitorMetrics(platform, targetStats, currentStats);
   const maxDifferencePercent = metrics.reduce((max, metric) => Math.max(max, metric.differencePercent), 0);
   const status = normalizeGrossMarginMonitorStatus(record.status);
@@ -1959,6 +1963,7 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     targetStats,
     currentStats: Object.keys(currentStats).length ? currentStats : undefined,
     previousStats: Object.keys(previousStats).length ? previousStats : undefined,
+    playSamples: playSamples.length ? playSamples : undefined,
     metrics,
     maxDifferencePercent,
     highRisk: metrics.some((metric) => metric.highRisk),
@@ -1968,6 +1973,74 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     createdAt: record.createdAt || nowIso(),
     updatedAt: record.updatedAt || record.createdAt || nowIso()
   };
+}
+
+function normalizeGrossMarginPlaySamples(
+  record: GrossMarginMonitorRecord,
+  currentStats: Partial<Record<GrossMarginServiceKind, number>>
+) {
+  const samples = normalizeGrossMarginPlaySampleList(record.playSamples);
+  if (
+    record.platform !== "bilibili" ||
+    samples.length ||
+    typeof currentStats.play !== "number" ||
+    !record.lastRefreshedAt
+  ) {
+    return samples;
+  }
+
+  return normalizeGrossMarginPlaySampleList([
+    {
+      value: currentStats.play,
+      capturedAt: record.lastRefreshedAt,
+      source: "refresh"
+    }
+  ]);
+}
+
+function normalizeGrossMarginPlaySampleList(samples: GrossMarginMonitorPlaySample[] | undefined) {
+  const byTimestamp = new Map<string, GrossMarginMonitorPlaySample>();
+
+  for (const sample of samples || []) {
+    const capturedAt = normalizeIsoTime(sample.capturedAt);
+    if (!capturedAt) continue;
+    byTimestamp.set(capturedAt, {
+      value: normalizeGrossMarginMetricValue(sample.value),
+      capturedAt,
+      source: sample.source === "manual" ? "manual" : "refresh"
+    });
+  }
+
+  return [...byTimestamp.values()]
+    .sort((left, right) => +new Date(left.capturedAt) - +new Date(right.capturedAt))
+    .slice(-maxGrossMarginPlaySamples);
+}
+
+export function appendGrossMarginPlaySample(
+  samples: GrossMarginMonitorPlaySample[] | undefined,
+  value: number | undefined,
+  capturedAt: string,
+  source: GrossMarginMonitorPlaySample["source"]
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return normalizeGrossMarginPlaySampleList(samples);
+  }
+
+  return normalizeGrossMarginPlaySampleList([
+    ...(samples || []),
+    {
+      value,
+      capturedAt,
+      source
+    }
+  ]);
+}
+
+function normalizeIsoTime(value?: string) {
+  if (!value) return "";
+  const time = +new Date(value);
+  if (!Number.isFinite(time)) return "";
+  return new Date(time).toISOString();
 }
 
 function buildGrossMarginMonitorProjects(records: GrossMarginMonitorRecord[]) {

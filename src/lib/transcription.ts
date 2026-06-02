@@ -20,6 +20,7 @@ import { Account, Platform, Video } from "./types";
 import { extractBvid } from "./utils";
 
 const execFileAsync = promisify(execFile);
+const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 type Timing = { stage: string; ms: number };
 
 function openCliExecArgs(args: string[]) {
@@ -709,11 +710,13 @@ async function resolveBilibiliLinkMedia(url: string) {
       window: "background"
     }));
     await execFileAsync(openArgs.command, openArgs.args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 8,
       timeout: 30_000
     });
     const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]));
     await execFileAsync(waitArgs.command, waitArgs.args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
       timeout: 12_000
     }).catch(() => undefined);
@@ -722,8 +725,9 @@ async function resolveBilibiliLinkMedia(url: string) {
       evalArgs.command,
       evalArgs.args,
       {
-      maxBuffer: 1024 * 1024 * 20,
-      timeout: 30_000
+        ...HIDDEN_CHILD_PROCESS_OPTIONS,
+        maxBuffer: 1024 * 1024 * 20,
+        timeout: 30_000
       }
     );
     const data = parseOpenCliJsonish(stdout.trim());
@@ -738,6 +742,7 @@ async function resolveBilibiliLinkMedia(url: string) {
   } finally {
     const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
     await execFileAsync(closeArgs.command, closeArgs.args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
       timeout: 5_000
     }).catch(() => undefined);
@@ -752,11 +757,13 @@ async function resolveDouyinLinkMedia(url: string) {
       window: "background"
     }));
     await execFileAsync(openArgs.command, openArgs.args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 8,
       timeout: 30_000
     });
     const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]));
     await execFileAsync(waitArgs.command, waitArgs.args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
       timeout: 10_000
     }).catch(() => undefined);
@@ -765,8 +772,9 @@ async function resolveDouyinLinkMedia(url: string) {
       evalArgs.command,
       evalArgs.args,
       {
-      maxBuffer: 1024 * 1024 * 20,
-      timeout: 30_000
+        ...HIDDEN_CHILD_PROCESS_OPTIONS,
+        maxBuffer: 1024 * 1024 * 20,
+        timeout: 30_000
       }
     );
     const data = parseOpenCliJsonish(stdout.trim());
@@ -781,6 +789,7 @@ async function resolveDouyinLinkMedia(url: string) {
   } finally {
     const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
     await execFileAsync(closeArgs.command, closeArgs.args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
       timeout: 5_000
     }).catch(() => undefined);
@@ -1318,6 +1327,7 @@ async function downloadRemoteAudio(url: string, fileName: string) {
   try {
     const startedAt = Date.now();
     await execFileAsync(ffmpegBin(), args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 4,
       timeout: 10 * 60 * 1000
     });
@@ -1355,6 +1365,7 @@ async function extractLocalAudio(mediaPath: string, fileName: string) {
   try {
     const startedAt = Date.now();
     await execFileAsync(ffmpegBin(), args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 4,
       timeout: 10 * 60 * 1000
     });

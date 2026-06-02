@@ -19,13 +19,16 @@ type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput
 type UseWriterGenerationInput = {
   activeJobs: JobRecord[];
   activeTitle?: string;
+  brief: string;
   busy: string;
   hasTaskInput: boolean;
   mode: Draft["mode"];
   normalizedPrompt: string;
   normalizedSourceText: string;
+  preparedSourceText: string;
   supportDocLinks: string;
   recentJobs: JobRecord[];
+  onGenerationResult?: (result: WriteResult) => void;
   onDraftSaved?: (draft: Draft) => void;
   cancelTask: (jobId: string) => Promise<JobRecord>;
   refresh: () => Promise<void>;
@@ -42,13 +45,16 @@ type UseWriterGenerationInput = {
 export function useWriterGeneration({
   activeJobs,
   activeTitle,
+  brief,
   busy,
   hasTaskInput,
   mode,
   normalizedPrompt,
   normalizedSourceText,
+  preparedSourceText,
   supportDocLinks,
   recentJobs,
+  onGenerationResult,
   onDraftSaved,
   cancelTask,
   refresh,
@@ -110,6 +116,7 @@ export function useWriterGeneration({
         setLastSavedContent(result.draft ? result.content : "");
         setLastDraftId(result.draft?.id || "");
         setLastDraftBase(result.draft ? draftToSaveBase(result.draft) : null);
+        onGenerationResult?.(result);
         if (result.draft) {
           onDraftSaved?.(result.draft);
           void refresh();
@@ -137,7 +144,7 @@ export function useWriterGeneration({
       setGenerateStage("已停止");
       setGenerateProgress(Math.max(0, activeWriteJob.progress || 0));
     }
-  }, [activeWriteJob, onDraftSaved, refresh, setBusy, setNotice, useWebResearch]);
+  }, [activeWriteJob, onDraftSaved, onGenerationResult, refresh, setBusy, setNotice, useWebResearch]);
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;
@@ -161,8 +168,9 @@ export function useWriterGeneration({
           projectId: targetType === "project" ? selectedProject?.id : undefined,
           mode,
           prompt: normalizedPrompt,
-          sourceText: normalizedSourceText,
+          sourceText: preparedSourceText || normalizedSourceText,
           supportDocLinks: supportDocLinks.trim() || undefined,
+          brief: brief.trim() || undefined,
           save: true,
           useWebResearch
         }
@@ -180,6 +188,8 @@ export function useWriterGeneration({
     mode,
     normalizedPrompt,
     normalizedSourceText,
+    preparedSourceText,
+    brief,
     supportDocLinks,
     selectedAccount,
     selectedProject,
@@ -288,6 +298,8 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
       prompt: draft.prompt,
       input: draft.input,
       supportDocLinks: draft.supportDocLinks,
+      brief: draft.brief,
+      sourceDigest: draft.sourceDigest,
       styleRef: draft.styleRef
     };
   }
@@ -301,6 +313,8 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
     prompt: draft.prompt,
     input: draft.input,
     supportDocLinks: draft.supportDocLinks,
+    brief: draft.brief,
+    sourceDigest: draft.sourceDigest,
     styleRef: draft.styleRef
   };
 }

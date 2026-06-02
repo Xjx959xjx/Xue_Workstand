@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Copy, Eye, FileUp, Globe2, MessageSquarePlus, PenLine, RotateCcw, Send } from "lucide-react";
+import { Copy, Eye, FileText, FileUp, Globe2, ListChecks, MessageSquarePlus, PenLine, RotateCcw, Send } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -15,10 +15,10 @@ import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { deleteDrafts, getDrafts, renameDraft } from "@/lib/client";
+import { deleteDrafts, getDrafts, prepareWriteBrief, renameDraft } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
-import type { Draft } from "@/lib/types";
+import type { Draft, WriteResult } from "@/lib/types";
 
 export default function WriterPage() {
   return (
@@ -45,6 +45,15 @@ function WriterPageContent() {
   const [sourceText, setSourceText] = useState("");
   const [supportDocLinks, setSupportDocLinks] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
+  const [brief, setBrief] = useState("");
+  const [briefResearch, setBriefResearch] = useState("");
+  const [briefSignature, setBriefSignature] = useState("");
+  const [briefMeta, setBriefMeta] = useState<{
+    usedModel: string;
+    fallback: boolean;
+    fallbackReason?: string;
+  } | null>(null);
+  const [preparedSourceText, setPreparedSourceText] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
@@ -84,7 +93,89 @@ function WriterPageContent() {
   const normalizedSourceText = sourceText;
   const hasRewriteSource = Boolean(normalizedSourceText.trim());
   const hasTaskInput = mode === "topic" ? Boolean(normalizedPrompt.trim()) : Boolean(normalizedPrompt.trim() || hasRewriteSource);
+  const activeReference = targetType === "project" ? selectedProject : selectedAccount;
+  const writerInputSignature = useMemo(
+    () =>
+      makeWriterInputSignature({
+        targetType,
+        referenceId: activeReference?.id || "",
+        mode,
+        prompt: normalizedPrompt,
+        sourceText: normalizedSourceText,
+        supportDocLinks,
+        useWebResearch
+      }),
+    [activeReference?.id, mode, normalizedPrompt, normalizedSourceText, supportDocLinks, targetType, useWebResearch]
+  );
+  const briefReady = Boolean(brief.trim()) && briefSignature === writerInputSignature;
+  const briefStale = Boolean(brief.trim()) && briefSignature !== writerInputSignature;
+  const canPrepareBrief = Boolean(hasTaskInput && activeReference && !busy);
   const noticeIsError = notice.includes("失败") || notice.includes("未配置");
+
+  const handleGenerationResult = useCallback(
+    (result: WriteResult) => {
+      if (result.brief) setBrief(result.brief);
+      if (result.research) setBriefResearch(result.research);
+      if (result.sourceDigest?.resolvedSourceText) {
+        setPreparedSourceText(result.sourceDigest.resolvedSourceText);
+      }
+      if (result.brief || result.sourceDigest) {
+        setBriefSignature(writerInputSignature);
+        setBriefMeta({
+          usedModel: result.usedModel,
+          fallback: result.fallback,
+          fallbackReason: result.fallbackReason
+        });
+      }
+    },
+    [writerInputSignature]
+  );
+
+  const handlePrepareBrief = useCallback(async () => {
+    if (!canPrepareBrief) return;
+    setBusy("brief");
+    setNotice("");
+    try {
+      const result = await prepareWriteBrief({
+        targetType,
+        platform: targetType === "account" ? selectedAccount?.platform : undefined,
+        accountId: targetType === "account" ? selectedAccount?.id : undefined,
+        projectId: targetType === "project" ? selectedProject?.id : undefined,
+        mode,
+        prompt: normalizedPrompt,
+        sourceText: normalizedSourceText,
+        supportDocLinks: supportDocLinks.trim() || undefined,
+        useWebResearch
+      });
+      setBrief(result.brief);
+      setBriefResearch(result.research || "");
+      setPreparedSourceText(result.sourceDigest.resolvedSourceText || normalizedSourceText);
+      setBriefSignature(writerInputSignature);
+      setBriefMeta({
+        usedModel: result.usedModel,
+        fallback: result.fallback,
+        fallbackReason: result.fallbackReason
+      });
+      setNotice(result.fallback ? result.fallbackReason || "已用本地结构准备 brief。" : "写作 brief 已准备。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "准备写作 brief 失败");
+    } finally {
+      setBusy("");
+    }
+  }, [
+    canPrepareBrief,
+    mode,
+    normalizedPrompt,
+    normalizedSourceText,
+    selectedAccount?.id,
+    selectedAccount?.platform,
+    selectedProject?.id,
+    setNotice,
+    supportDocLinks,
+    targetType,
+    useWebResearch,
+    writerInputSignature
+  ]);
 
   const {
     canGenerate,
@@ -104,12 +195,15 @@ function WriterPageContent() {
     activeTitle,
     cancelTask,
     busy,
-    hasTaskInput,
+    hasTaskInput: hasTaskInput && briefReady,
+    brief,
     mode,
     normalizedPrompt,
     normalizedSourceText,
+    preparedSourceText,
     supportDocLinks,
     recentJobs,
+    onGenerationResult: handleGenerationResult,
     onDraftSaved: handleDraftSaved,
     refresh,
     routerPush: router.push,
@@ -128,6 +222,26 @@ function WriterPageContent() {
     setBusy,
     setNotice
   });
+  const displayResearch = lastResearch || briefResearch;
+  const referenceFlowValue = activeTitle || "待选择";
+  const materialFlowValue =
+    mode === "topic"
+      ? normalizedPrompt.trim()
+        ? "主题就绪"
+        : "待主题"
+      : sourceExtraction.materials.length
+        ? `${sourceExtraction.materials.length} 条素材`
+        : "待素材";
+  const briefFlowState = busy === "brief" ? "active" : briefReady ? "done" : briefStale ? "pending" : "neutral";
+  const draftFlowState = busy === "generate" ? "active" : lastContent ? "done" : "neutral";
+  const briefStatusLabel = busy === "brief" ? "准备中" : briefReady ? "已确认" : briefStale ? "需更新" : "待准备";
+  const briefMetaLabel = briefMeta
+    ? briefMeta.fallback
+      ? briefMeta.fallbackReason || "本地结构"
+      : briefMeta.usedModel === "历史记录"
+        ? "来自历史记录"
+        : `已调用 ${briefMeta.usedModel}`
+    : "";
 
   useEffect(() => {
     if (!notice || isTaskProgressMessage(notice)) return;
@@ -181,6 +295,12 @@ function WriterPageContent() {
       setPrompt(sourceDraft.prompt);
       setSourceText(sourceDraft.input || "");
       setSupportDocLinks(sourceDraft.supportDocLinks || "");
+      setUseWebResearch(Boolean(sourceDraft.sourceDigest?.webResearchEnabled));
+      setBrief(sourceDraft.brief || "");
+      setBriefResearch("");
+      setPreparedSourceText(sourceDraft.sourceDigest?.resolvedSourceText || sourceDraft.input || "");
+      setBriefSignature(sourceDraft.brief ? makeDraftWriterInputSignature(sourceDraft) : "");
+      setBriefMeta(sourceDraft.brief ? { usedModel: "历史记录", fallback: false } : null);
       loadDraftResult(sourceDraft);
       return;
     }
@@ -206,6 +326,12 @@ function WriterPageContent() {
     if (nextMode === "topic" || nextMode === "rewrite") setMode(nextMode);
     if (nextPrompt !== null) setPrompt(nextPrompt);
     if (nextSourceText !== null) setSourceText(nextSourceText);
+    setUseWebResearch(false);
+    setBrief("");
+    setBriefResearch("");
+    setPreparedSourceText("");
+    setBriefSignature("");
+    setBriefMeta(null);
     appliedSearchParamRef.current = searchKey;
   }, [allDrafts, historyLoading, loadDraftResult, searchParams]);
 
@@ -222,6 +348,12 @@ function WriterPageContent() {
       setPrompt(draft.prompt);
       setSourceText(draft.input || "");
       setSupportDocLinks(draft.supportDocLinks || "");
+      setUseWebResearch(Boolean(draft.sourceDigest?.webResearchEnabled));
+      setBrief(draft.brief || "");
+      setBriefResearch("");
+      setPreparedSourceText(draft.sourceDigest?.resolvedSourceText || draft.input || "");
+      setBriefSignature(draft.brief ? makeDraftWriterInputSignature(draft) : "");
+      setBriefMeta(draft.brief ? { usedModel: "历史记录", fallback: false } : null);
       loadDraftResult(draft);
       router.replace(buildWriterDraftHref(draft), { scroll: false });
     },
@@ -246,6 +378,12 @@ function WriterPageContent() {
             setPrompt("");
             setSourceText("");
             setSupportDocLinks("");
+            setUseWebResearch(false);
+            setBrief("");
+            setBriefResearch("");
+            setPreparedSourceText("");
+            setBriefSignature("");
+            setBriefMeta(null);
             const params = new URLSearchParams({
               targetType,
               mode
@@ -306,6 +444,12 @@ function WriterPageContent() {
             setPrompt("");
             setSourceText("");
             setSupportDocLinks("");
+            setUseWebResearch(false);
+            setBrief("");
+            setBriefResearch("");
+            setPreparedSourceText("");
+            setBriefSignature("");
+            setBriefMeta(null);
             const params = new URLSearchParams({
               targetType,
               mode
@@ -407,6 +551,13 @@ function WriterPageContent() {
 
       <section className="writer-workbench">
         <section className="panel writer-main">
+          <div className="writer-flow-strip" aria-label="写作链路">
+            <WriterFlowStep label="引用" state={activeReference ? "done" : "pending"} value={referenceFlowValue} />
+            <WriterFlowStep label="素材" state={hasTaskInput ? "done" : "pending"} value={materialFlowValue} />
+            <WriterFlowStep label="Brief" state={briefFlowState} value={briefStatusLabel} />
+            <WriterFlowStep label="成稿" state={draftFlowState} value={busy === "generate" ? "生成中" : lastContent ? "已生成" : "待生成"} />
+          </div>
+
           <div className="writer-refbar">
             <div aria-label="选择引用类型" className="segmented" role="group">
               <button aria-pressed={targetType === "account"} className={targetType === "account" ? "active" : ""} onClick={() => setTargetType("account")} type="button">
@@ -475,6 +626,21 @@ function WriterPageContent() {
                 </div>
               </div>
 
+              <div className="writer-context-summary" aria-label="当前写作上下文">
+                <span>
+                  <FileText aria-hidden="true" size={14} />
+                  {activeTitle || "未选择引用"}
+                </span>
+                <span>{activeStyle?.trim().length ? `${activeStyle.trim().length} 字风格卡` : "无风格卡"}</span>
+                <span>
+                  {targetType === "project" && selectedProject
+                    ? `${selectedProject.sourceMaterialCount} 份案例 · ${selectedProject.sourceAccounts.length} 个账号`
+                    : selectedAccount
+                      ? `${selectedAccount.transcriptCount} 份转写 · ${selectedAccount.videoCount} 条视频`
+                      : "待选择"}
+                </span>
+              </div>
+
               <textarea
                 aria-label={mode === "topic" ? "写作主题和要求" : "改写要求"}
                 autoComplete="off"
@@ -519,6 +685,28 @@ function WriterPageContent() {
                 />
               </label>
 
+              <div className={`writer-brief-panel ${briefReady ? "ready" : ""} ${briefStale ? "stale" : ""}`}>
+                <div className="writer-brief-head">
+                  <span>
+                    <ListChecks aria-hidden="true" size={14} />
+                    写作 Brief
+                  </span>
+                  <span className={`status-pill ${briefReady ? "done" : briefStale ? "pending" : ""}`}>
+                    {briefStatusLabel}
+                  </span>
+                </div>
+                <textarea
+                  aria-label="写作 brief"
+                  autoComplete="off"
+                  className="writer-textarea brief"
+                  name="brief"
+                  placeholder="先准备 brief，再生成成稿。"
+                  value={brief}
+                  onChange={(event) => setBrief(event.target.value)}
+                />
+                {briefMetaLabel ? <p className="writer-brief-meta">{briefMetaLabel}</p> : null}
+              </div>
+
               <div className="writer-actionbar">
                 <button
                   className={`btn icon-toggle ${useWebResearch ? "active" : ""}`}
@@ -531,14 +719,23 @@ function WriterPageContent() {
                   {useWebResearch ? "联网开" : "联网关"}
                 </button>
                 <button
-                  className="btn primary"
+                  className={`btn ${briefReady ? "" : "primary"}`}
+                  disabled={!canPrepareBrief || busy === "brief"}
+                  onClick={handlePrepareBrief}
+                  type="button"
+                >
+                  <ListChecks aria-hidden="true" size={16} />
+                  {busy === "brief" ? "准备中" : briefReady ? "更新 Brief" : "准备 Brief"}
+                </button>
+                <button
+                  className={`btn ${briefReady ? "primary" : ""}`}
                   disabled={!canGenerate}
                   onClick={handleGenerate}
-                  title={canGenerate ? "按当前引用风格生成文案" : mode === "rewrite" ? "填写改写要求或粘贴原文素材后可生成" : "填写写作主题后可生成"}
+                  title={canGenerate ? "按当前 brief 生成文案" : briefStale ? "先更新 brief" : "先准备 brief"}
                   type="button"
                 >
                   <Send aria-hidden="true" size={16} />
-                  {busy === "generate" ? "生成中" : "生成"}
+                  {busy === "generate" ? "生成中" : "生成文案"}
                 </button>
               </div>
             </div>
@@ -583,7 +780,7 @@ function WriterPageContent() {
               <div className={`result-box ${lastContent ? "" : "empty"}`}>
                 {busy === "generate" && !lastContent ? "等待内容。" : lastContent || "结果在这里。"}
               </div>
-              {lastResearch ? (
+              {displayResearch ? (
                 <details className="style-reference" style={{ marginTop: 16 }}>
                   <summary>
                     <span className="style-reference-heading">
@@ -593,7 +790,7 @@ function WriterPageContent() {
                   </summary>
                   <div>
                     <pre className="result-box" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                      {lastResearch}
+                      {displayResearch}
                     </pre>
                   </div>
                 </details>
@@ -650,6 +847,49 @@ function mergeDraftLists(...groups: Draft[][]) {
 
 function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
   return +new Date(right.createdAt) - +new Date(left.createdAt);
+}
+
+type WriterFlowState = "active" | "done" | "neutral" | "pending";
+
+function WriterFlowStep({ label, state, value }: { label: string; state: WriterFlowState; value: string }) {
+  return (
+    <div className={`writer-flow-step ${state}`}>
+      <span className="writer-flow-label">{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function makeDraftWriterInputSignature(draft: Draft) {
+  return makeWriterInputSignature({
+    targetType: draft.targetType === "project" ? "project" : "account",
+    referenceId: draft.targetType === "project" ? draft.projectId : draft.accountId,
+    mode: draft.mode,
+    prompt: draft.prompt,
+    sourceText: draft.input || "",
+    supportDocLinks: draft.supportDocLinks || "",
+    useWebResearch: Boolean(draft.sourceDigest?.webResearchEnabled)
+  });
+}
+
+function makeWriterInputSignature(input: {
+  targetType: "account" | "project";
+  referenceId: string;
+  mode: Draft["mode"];
+  prompt: string;
+  sourceText: string;
+  supportDocLinks: string;
+  useWebResearch: boolean;
+}) {
+  return JSON.stringify({
+    targetType: input.targetType,
+    referenceId: input.referenceId,
+    mode: input.mode,
+    prompt: input.prompt.trim(),
+    sourceText: input.sourceText.trim(),
+    supportDocLinks: input.supportDocLinks.trim(),
+    useWebResearch: input.useWebResearch
+  });
 }
 
 function WriterFallback() {

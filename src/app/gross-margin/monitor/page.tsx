@@ -355,6 +355,7 @@ function MonitorCard({
     const delta = getMetricRefreshDelta(record, metric.service);
     return delta !== null && delta !== 0;
   }).length;
+  const dailyPlayGain = getDailyPlayGainSummary(record);
   const visibleWarnings = record.warnings.filter((warning) => !isBlueLinkFetchWarning(warning));
   const [editingPlay, setEditingPlay] = useState(false);
   const playMetric = metrics.find((metric) => metric.service === "play");
@@ -436,6 +437,15 @@ function MonitorCard({
             {record.status === "completed" ? (
               <em className={`gross-monitor-refresh-summary ${changedMetricCount ? "changed" : "stable"}`}>
                 {changedMetricCount ? `${changedMetricCount} 项变化` : "本次无变化"}
+              </em>
+            ) : null}
+            {dailyPlayGain ? (
+              <em
+                className={`gross-monitor-daily-pill ${dailyPlayGain.state}`}
+                title={formatDailyPlayGainTitle(dailyPlayGain, record.platform)}
+              >
+                <Gauge aria-hidden="true" size={12} />
+                当天 {formatDailyPlayGainSummary(dailyPlayGain, record.platform)}
               </em>
             ) : null}
           </span>
@@ -600,8 +610,13 @@ function buildMonitorDifferenceText(record: GrossMarginMonitorRecord) {
   const lines = getDisplayMetrics(record)
     .map((metric) => `${getMetricLabel(metric)}：${formatGapMetric(metric.difference, metric.service, record.platform)}`)
     .filter(Boolean);
+  const dailyPlayGain = getDailyPlayGainSummary(record);
+  const dailyGainLines =
+    dailyPlayGain?.state === "ready"
+      ? ["", `当天新增：${formatDailyPlayGainSummary(dailyPlayGain, record.platform)}`]
+      : [];
 
-  return ["@罗月琴 目前差额：", "", ...lines].join("\n");
+  return ["@罗月琴 目前差额：", "", ...lines, ...dailyGainLines].join("\n");
 }
 
 function isBlueLinkFetchWarning(warning: string) {
@@ -617,6 +632,65 @@ function getDisplayMetrics(record: GrossMarginMonitorRecord) {
   const order: GrossMarginMonitorMetric["service"][] = ["play", "danmaku", "comment", "like", "favorite", "coin", "share", "blueLink"];
   const index = new Map(order.map((service, position) => [service, position]));
   return [...record.metrics].sort((left, right) => (index.get(left.service) ?? 999) - (index.get(right.service) ?? 999));
+}
+
+type DailyPlayGainSummary =
+  | {
+      state: "ready";
+      delta: number;
+      sampleCount: number;
+      firstValue: number;
+      latestValue: number;
+      firstCapturedAt: string;
+      latestCapturedAt: string;
+    }
+  | {
+      state: "pending";
+      sampleCount: number;
+      reason: "empty" | "single";
+    };
+
+function getDailyPlayGainSummary(record: GrossMarginMonitorRecord): DailyPlayGainSummary | null {
+  if (!record.metrics.some((metric) => metric.service === "play")) return null;
+  const samples = normalizePlaySamplesForDisplay(record);
+  if (!samples.length) return { state: "pending", sampleCount: 0, reason: "empty" };
+  const latest = samples[samples.length - 1];
+  const sameDaySamples = samples.filter((sample) => isSameLocalDay(sample.capturedAt, latest.capturedAt));
+  if (sameDaySamples.length < 2) return { state: "pending", sampleCount: sameDaySamples.length, reason: "single" };
+
+  const first = sameDaySamples[0];
+  const latestSameDay = sameDaySamples[sameDaySamples.length - 1];
+  const delta = latestSameDay.value - first.value;
+  return {
+    state: "ready",
+    delta,
+    sampleCount: sameDaySamples.length,
+    firstValue: first.value,
+    latestValue: latestSameDay.value,
+    firstCapturedAt: first.capturedAt,
+    latestCapturedAt: latestSameDay.capturedAt
+  };
+}
+
+function isSameLocalDay(left: string, right: string) {
+  const leftDate = new Date(left);
+  const rightDate = new Date(right);
+  if (Number.isNaN(+leftDate) || Number.isNaN(+rightDate)) return false;
+  return (
+    leftDate.getFullYear() === rightDate.getFullYear() &&
+    leftDate.getMonth() === rightDate.getMonth() &&
+    leftDate.getDate() === rightDate.getDate()
+  );
+}
+
+function normalizePlaySamplesForDisplay(record: GrossMarginMonitorRecord) {
+  return (record.playSamples || [])
+    .map((sample) => ({
+      value: Number(sample.value),
+      capturedAt: sample.capturedAt
+    }))
+    .filter((sample) => Number.isFinite(sample.value) && Number.isFinite(+new Date(sample.capturedAt)))
+    .sort((left, right) => +new Date(left.capturedAt) - +new Date(right.capturedAt));
 }
 
 function getOverallGap(record: GrossMarginMonitorRecord) {
@@ -715,6 +789,21 @@ function formatMetricRefreshDelta(value: number, service: GrossMarginMonitorMetr
   const sign = value > 0 ? "+" : "-";
   const absolute = Math.abs(value);
   return `${sign}${formatGapMetric(absolute, service, platform)}`;
+}
+
+function formatDailyPlayGainSummary(summary: DailyPlayGainSummary, platform: GrossMarginMonitorRecord["platform"]) {
+  if (summary.state === "pending") {
+    return summary.reason === "single" ? "待二次采样" : "待采样";
+  }
+  return formatMetricRefreshDelta(summary.delta, "play", platform);
+}
+
+function formatDailyPlayGainTitle(summary: DailyPlayGainSummary, platform: GrossMarginMonitorRecord["platform"]) {
+  if (summary.state === "pending") {
+    return summary.sampleCount ? "当天需要至少两次播放量采样后计算实际新增。" : "刷新或手动填写当前播放量后开始积累播放采样。";
+  }
+
+  return `按最新采样当天内第一条与最新一条计算：${formatMetric(summary.firstValue, platform)} 到 ${formatMetric(summary.latestValue, platform)}，${summary.sampleCount} 次采样。`;
 }
 
 function formatPercent(value: number) {

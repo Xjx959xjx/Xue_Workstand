@@ -27,6 +27,8 @@ const installerScriptPath = path.join(root, "dist", `${releaseName}.iss`);
 const installerOutputPath = path.join(root, "dist", `${releaseName}-setup.exe`);
 const presetConfig = getPresetConfig(preset);
 const bundledOpenCliVersion = "1.8.0";
+const openCliExtensionStoreUrl = "https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk";
+const openCliExtensionReleaseUrl = "https://github.com/jackwener/opencli/releases";
 
 try {
   await main();
@@ -126,7 +128,7 @@ function getPresetConfig(value) {
       archiveTarGz: false,
       archiveZip: true,
       includeMacLaunchers: false,
-      finishHint: "交付给别人时，发 Windows .zip 即可；解压后双击 start.cmd。",
+      finishHint: "交付给别人时，发 Windows .zip 即可；首次解压后先运行 setup-browser-bridge.cmd，再双击 start.cmd。",
       readmeTitle: "数据维护/监控 Windows 便携包",
       brandName: "数据维护监控",
       installerExe: false,
@@ -322,6 +324,7 @@ async function bundleOpenCli() {
   if (!isGrossMarginWindowsPreset()) return;
 
   const packageRoot = await installBundledOpenCli();
+  await patchBundledOpenCliForWindows(packageRoot);
   const targetRoot = path.join(releaseRoot, "runtime", "node_modules");
   await fs.promises.mkdir(path.dirname(targetRoot), { recursive: true });
   await fs.promises.cp(packageRoot, targetRoot, { recursive: true });
@@ -333,6 +336,32 @@ async function installBundledOpenCli() {
   await fs.promises.mkdir(installRoot, { recursive: true });
   await run("npm", ["install", `@jackwener/opencli@${bundledOpenCliVersion}`], { cwd: installRoot });
   return path.join(installRoot, "node_modules");
+}
+
+async function patchBundledOpenCliForWindows(nodeModulesRoot) {
+  const lifecycleFile = path.join(
+    nodeModulesRoot,
+    "@jackwener",
+    "opencli",
+    "dist",
+    "src",
+    "browser",
+    "daemon-lifecycle.js"
+  );
+  if (!(await exists(lifecycleFile))) {
+    throw new Error(`内置 opencli 缺少 daemon-lifecycle.js：${lifecycleFile}`);
+  }
+
+  const source = await fs.promises.readFile(lifecycleFile, "utf8");
+  if (source.includes("windowsHide: true")) return;
+
+  const before = "        env: { ...process.env },\n    });";
+  const after = "        env: { ...process.env },\n        windowsHide: true,\n    });";
+  if (!source.includes(before)) {
+    throw new Error("无法给内置 opencli daemon 补充 windowsHide，opencli 启动逻辑可能已变化。");
+  }
+
+  await fs.promises.writeFile(lifecycleFile, source.replace(before, after), "utf8");
 }
 
 async function writeWindowsInstallerScript() {
@@ -387,7 +416,8 @@ function executableOnPath(command) {
     const child = spawn(probe, args, {
       cwd: root,
       stdio: "ignore",
-      shell: process.platform !== "win32"
+      shell: process.platform !== "win32",
+      windowsHide: true
     });
     child.on("error", () => resolve(false));
     child.on("close", (code) => resolve(code === 0));
@@ -461,6 +491,8 @@ async function verifyGrossMarginWindowsPackage() {
     ["内置 Node", path.join(releaseRoot, "runtime", "node", "node.exe")],
     ["opencli 脚本", path.join(releaseRoot, "runtime", "node_modules", "@jackwener", "opencli", "dist", "src", "main.js")],
     ["启动脚本", path.join(releaseRoot, "start.cmd")],
+    ["Browser Bridge 设置脚本", path.join(releaseRoot, "setup-browser-bridge.cmd")],
+    ["opencli doctor 脚本", path.join(releaseRoot, "opencli-doctor.cmd")],
     ["毛利数据目录", path.join(releaseRoot, "style-library", "gross-margin")]
   ];
 
@@ -489,6 +521,10 @@ function launcherFiles() {
     "status.cmd": windowsRuntimeLauncher("status", "状态"),
     "create-desktop-shortcut.bat": windowsDesktopShortcutLauncher(),
     "create-desktop-shortcut.cmd": windowsDesktopShortcutLauncher(),
+    "setup-browser-bridge.bat": windowsBrowserBridgeSetupLauncher(),
+    "setup-browser-bridge.cmd": windowsBrowserBridgeSetupLauncher(),
+    "opencli-doctor.bat": windowsOpenCliDoctorLauncher(),
+    "opencli-doctor.cmd": windowsOpenCliDoctorLauncher(),
     "install-deps.bat": windowsInstallDepsLauncher(),
     "install-deps.cmd": windowsInstallDepsLauncher()
   };
@@ -652,7 +688,140 @@ exit /b %EXIT_CODE%
 `;
 }
 
+function windowsOpenCliDoctorLauncher() {
+  return `@echo off
+setlocal EnableExtensions
+chcp 65001 >nul
+title ${presetConfig.brandName} - opencli doctor
+
+cd /d "%~dp0"
+if errorlevel 1 (
+  echo 无法进入运行目录："%~dp0"
+  echo 请先把压缩包完整解压到一个普通文件夹，再运行本脚本。
+  pause
+  exit /b 1
+)
+
+set "BUNDLED_NODE=%~dp0runtime\\node\\node.exe"
+set "NODE_BIN=node"
+if exist "%BUNDLED_NODE%" set "NODE_BIN=%BUNDLED_NODE%"
+
+if not exist "%NODE_BIN%" (
+  where node >nul 2>nul
+  if errorlevel 1 (
+    echo 未检测到可用的 Node.js。
+    echo gross-margin-win 便携包应内置 node.exe；如果文件缺失，请重新解压或重新打包。
+    pause
+    exit /b 1
+  )
+)
+
+echo 正在检查 opencli Browser Bridge...
+echo.
+"%NODE_BIN%" "%~dp0tools\\runtime.mjs" opencli-doctor
+set EXIT_CODE=%ERRORLEVEL%
+echo.
+
+if "%EXIT_CODE%"=="0" (
+  echo opencli Browser Bridge 检查完成。
+) else (
+  echo opencli Browser Bridge 检查未通过，错误码：%EXIT_CODE%
+  echo 请先运行 setup-browser-bridge.cmd 安装/启用浏览器扩展后再试。
+)
+
+pause
+exit /b %EXIT_CODE%
+`;
+}
+
+function windowsBrowserBridgeSetupLauncher() {
+  return `@echo off
+setlocal EnableExtensions
+chcp 65001 >nul
+title ${presetConfig.brandName} - Browser Bridge 设置
+
+cd /d "%~dp0"
+if errorlevel 1 (
+  echo 无法进入运行目录："%~dp0"
+  echo 请先把压缩包完整解压到一个普通文件夹，再运行本脚本。
+  pause
+  exit /b 1
+)
+
+set "BUNDLED_NODE=%~dp0runtime\\node\\node.exe"
+set "NODE_BIN=node"
+if exist "%BUNDLED_NODE%" set "NODE_BIN=%BUNDLED_NODE%"
+
+if not exist "%NODE_BIN%" (
+  where node >nul 2>nul
+  if errorlevel 1 (
+    echo 未检测到可用的 Node.js。
+    echo gross-margin-win 便携包应内置 node.exe；如果文件缺失，请重新解压或重新打包。
+    pause
+    exit /b 1
+  )
+)
+
+echo 这一步用于让 opencli 连接 Chrome / Edge 浏览器。
+echo B站 / 抖音实时刷新需要这个 Browser Bridge 扩展。
+echo.
+echo 即将打开 OpenCLI 扩展安装页：
+echo ${openCliExtensionStoreUrl}
+echo.
+start "" "${openCliExtensionStoreUrl}"
+start "" "chrome://extensions/"
+start "" "edge://extensions/"
+echo 如果商店无法打开，可手动从这里下载扩展：
+echo ${openCliExtensionReleaseUrl}
+echo.
+echo 请在浏览器中安装并启用 OpenCLI 扩展，保持浏览器打开。
+echo 安装完成后回到本窗口，按任意键运行连通性检查。
+pause >nul
+echo.
+
+"%NODE_BIN%" "%~dp0tools\\runtime.mjs" opencli-doctor
+set EXIT_CODE=%ERRORLEVEL%
+echo.
+
+if "%EXIT_CODE%"=="0" (
+  echo Browser Bridge 已可用。现在可以运行 start.cmd。
+) else (
+  echo Browser Bridge 仍未连通，错误码：%EXIT_CODE%
+  echo 请确认扩展已启用、Chrome / Edge 正在运行，并重新执行本脚本。
+)
+
+pause
+exit /b %EXIT_CODE%
+`;
+}
+
 function windowsInstallDepsLauncher() {
+  if (isGrossMarginWindowsPreset()) {
+    return `@echo off
+setlocal EnableExtensions
+chcp 65001 >nul
+title ${presetConfig.brandName} - 依赖检查
+
+cd /d "%~dp0"
+if errorlevel 1 (
+  echo 无法进入运行目录："%~dp0"
+  echo 请先把压缩包完整解压到一个普通文件夹，再运行本脚本。
+  pause
+  exit /b 1
+)
+
+echo 这个专用包已内置 Node.js 和 opencli 主程序，不需要安装全局 opencli。
+echo B站 / 抖音实时刷新还需要浏览器里的 OpenCLI Browser Bridge 扩展。
+echo.
+call "%~dp0setup-browser-bridge.cmd"
+set EXIT_CODE=%ERRORLEVEL%
+echo.
+echo 如需无字幕视频转写，请另外确认本机已安装 ffmpeg。
+pause
+exit /b %EXIT_CODE%
+`;
+  }
+
   return `@echo off
 setlocal EnableExtensions
 chcp 65001 >nul
@@ -864,6 +1033,8 @@ begin
       'OPENCLI_BIN=./runtime/node/node.exe' + #13#10 +
       'OPENCLI_NODE_BIN=./runtime/node/node.exe' + #13#10 +
       'OPENCLI_SCRIPT=./runtime/node_modules/@jackwener/opencli/dist/src/main.js' + #13#10 +
+      'OPENCLI_BROWSER_CONNECT_TIMEOUT=8' + #13#10 +
+      'OPENCLI_WINDOW=background' + #13#10 +
       'FFMPEG_BIN=ffmpeg' + #13#10 +
       'STYLE_LIBRARY_DIR=' + ExpandConstant('${escapeInnoPascalString(dataStyleLibrary)}') + #13#10;
     SaveStringToFile(EnvPath, EnvText, False);
@@ -915,6 +1086,8 @@ async function main() {
     OPENCLI_BIN: process.env.OPENCLI_BIN || fileEnv.OPENCLI_BIN || bundledOpenCliCommand(),
     OPENCLI_NODE_BIN: process.env.OPENCLI_NODE_BIN || fileEnv.OPENCLI_NODE_BIN || bundledOpenCliNode(),
     OPENCLI_SCRIPT: process.env.OPENCLI_SCRIPT || fileEnv.OPENCLI_SCRIPT || bundledOpenCliScript(),
+    OPENCLI_BROWSER_CONNECT_TIMEOUT: process.env.OPENCLI_BROWSER_CONNECT_TIMEOUT || fileEnv.OPENCLI_BROWSER_CONNECT_TIMEOUT || "8",
+    OPENCLI_WINDOW: process.env.OPENCLI_WINDOW || fileEnv.OPENCLI_WINDOW || "background",
     STYLE_LIBRARY_DIR: process.env.STYLE_LIBRARY_DIR || fileEnv.STYLE_LIBRARY_DIR || "./style-library"
   };
 
@@ -931,8 +1104,9 @@ async function main() {
     return start(env);
   }
   if (command === "status") return status(env);
+  if (command === "opencli-doctor") return openCliDoctor(env);
 
-  console.error("用法：node tools/runtime.mjs <start|stop|restart|status>");
+  console.error("用法：node tools/runtime.mjs <start|stop|restart|status|opencli-doctor>");
   process.exit(1);
 }
 
@@ -965,7 +1139,8 @@ async function start(env) {
     cwd: root,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env
+    env,
+    windowsHide: true
   });
   child.unref();
   fs.writeFileSync(pidFile, \`\${child.pid}\\n\`, "utf8");
@@ -1124,7 +1299,7 @@ function buildUrl(port, startPath) {
 function openBrowser(url) {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-  const child = spawn(command, args, { stdio: "ignore", detached: true });
+  const child = spawn(command, args, { stdio: "ignore", detached: true, windowsHide: true });
   child.unref();
 }
 
@@ -1132,7 +1307,82 @@ function printToolWarnings(env) {
   const opencli = env.OPENCLI_SCRIPT ? resolveOpenCliScript(env) : resolveExecutable(env.OPENCLI_BIN || "opencli");
   const ffmpeg = resolveExecutable(env.FFMPEG_BIN || "ffmpeg");
   if (!opencli) console.log("提示：未检测到 opencli，页面仍可使用，但 B站/抖音实时刷新不可用。可运行 install-deps 脚本安装。");
+  if (opencli && env.APP_MODE === "gross-margin") console.log("提示：首次刷新 B站/抖音前，请先运行 setup-browser-bridge.cmd，确保 opencli Browser Bridge 已连接。");
   if (!ffmpeg) console.log("提示：未检测到 ffmpeg。只有需要无字幕视频转写时才需要它，可运行 install-deps 脚本安装。");
+}
+
+async function openCliDoctor(env) {
+  const runtime = resolveOpenCliRuntime(env);
+  if (!runtime) {
+    console.error("未检测到 opencli。请确认发布包完整，或重新解压后再试。");
+    process.exit(1);
+  }
+
+  console.log(\`opencli：\${runtime.label}\`);
+  console.log("如果提示 Extension not connected，请运行 setup-browser-bridge.cmd 安装/启用浏览器扩展。");
+  console.log("");
+
+  const code = await runChild(runtime.command, [...runtime.argsPrefix, "doctor"], {
+    env: {
+      ...process.env,
+      ...env,
+      OPENCLI_BROWSER_CONNECT_TIMEOUT: env.OPENCLI_BROWSER_CONNECT_TIMEOUT || "8"
+    },
+    timeoutMs: 45000
+  });
+  process.exit(code);
+}
+
+function resolveOpenCliRuntime(env) {
+  const script = resolveOpenCliScript(env);
+  if (script) {
+    const nodeBin = resolveExecutable(env.OPENCLI_NODE_BIN || process.execPath);
+    if (nodeBin) {
+      return {
+        command: nodeBin,
+        argsPrefix: [script],
+        label: \`\${nodeBin} \${script}\`
+      };
+    }
+  }
+
+  const bin = resolveExecutable(env.OPENCLI_BIN || "opencli");
+  return bin ? { command: bin, argsPrefix: [], label: bin } : null;
+}
+
+function runChild(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: root,
+      stdio: "inherit",
+      env: options.env || process.env,
+      windowsHide: true
+    });
+    let settled = false;
+    const timer = options.timeoutMs
+      ? setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          console.error(\`命令超时：\${command} \${args.join(" ")}\`);
+          child.kill("SIGTERM");
+          resolve(1);
+        }, options.timeoutMs)
+      : null;
+
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      console.error(error instanceof Error ? error.message : String(error));
+      resolve(1);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(code ?? 1);
+    });
+  });
 }
 
 function resolveOpenCliScript(env) {
@@ -1223,6 +1473,8 @@ APP_START_PATH=${presetConfig.startPath}
 OPENCLI_BIN=${isGrossMarginWindowsPreset() ? "./runtime/node/node.exe" : "opencli"}
 OPENCLI_NODE_BIN=${isGrossMarginWindowsPreset() ? "./runtime/node/node.exe" : ""}
 OPENCLI_SCRIPT=${isGrossMarginWindowsPreset() ? "./runtime/node_modules/@jackwener/opencli/dist/src/main.js" : ""}
+OPENCLI_BROWSER_CONNECT_TIMEOUT=8
+OPENCLI_WINDOW=background
 FFMPEG_BIN=ffmpeg
 STYLE_LIBRARY_DIR=./style-library
 `;
@@ -1237,8 +1489,9 @@ function releaseReadme() {
 ## 最短使用路径
 
 1. 完整解压 .zip，不要在压缩包预览窗口里直接双击。
-2. 双击 \`start.cmd\`。
-3. 浏览器会自动打开 \`http://localhost:3000/gross-margin\`。
+2. 首次使用先双击 \`setup-browser-bridge.cmd\`，按提示安装/启用 OpenCLI 浏览器扩展，直到检查通过。
+3. 双击 \`start.cmd\`。
+4. 浏览器会自动打开 \`http://localhost:3000/gross-margin\`。
 
 如果想让对方以后直接双击桌面图标启动，再额外运行一次 \`create-desktop-shortcut.cmd\`。
 
@@ -1246,13 +1499,13 @@ function releaseReadme() {
 
 - 已构建好的本地网页程序
 - Windows 内置 Node 运行时
-- 已内置可直接使用的 \`opencli\`
+- 已内置可直接使用的 \`opencli\` 主程序
 - 数据维护 / 数据监控专用启动脚本
 - 默认会带上毛利账号库数据；当前优先复制 V1 文案工作台里的 \`style-library/gross-margin\`
 
 ## 还需要你自己准备什么
 
-- 实时刷新 B站 / 抖音数据所需的 \`opencli\` 已随包内置
+- 实时刷新 B站 / 抖音数据需要浏览器里的 OpenCLI Browser Bridge 扩展；运行 \`setup-browser-bridge.cmd\` 会打开安装页并执行 \`opencli doctor\`
 - 只有无字幕视频转写时才需要 \`ffmpeg\`
 - 不需要配置任何大模型 API Key，就能使用数据维护 / 数据监控
 
@@ -1261,12 +1514,14 @@ function releaseReadme() {
 - \`start.cmd\`：启动并打开浏览器
 - \`stop.cmd\`：停止后台服务
 - \`status.cmd\`：查看运行状态
+- \`setup-browser-bridge.cmd\`：安装/启用 OpenCLI 浏览器扩展并检查连通性
+- \`opencli-doctor.cmd\`：重新检查 opencli Browser Bridge 状态
 - \`create-desktop-shortcut.cmd\`：在桌面创建一个可直接启动的快捷方式
-- \`install-deps.cmd\`：安装 / 检查 \`ffmpeg\`
+- \`install-deps.cmd\`：兼容旧说明的依赖检查入口，会转到 Browser Bridge 设置
 
 ## 常见问题
 
-- 页面能打开，但刷新失败：先查看 \`.runtime\\server.log\`；这版已内置 \`opencli\`，通常不需要再单独安装。
+- 页面能打开，但刷新很慢或日志里有 \`BROWSER_CONNECT\` / \`Extension not connected\`：运行 \`setup-browser-bridge.cmd\`，确认 Chrome / Edge 已安装并启用 OpenCLI 扩展。
 - 想让别人以后直接点桌面图标：先运行 \`create-desktop-shortcut.cmd\`。
 - 浏览器没自动打开：手动访问 \`http://localhost:3000/gross-margin\`。
 - 端口冲突：编辑 \`.env\`，把 \`PORT=3000\` 改成其他端口。
@@ -1351,7 +1606,8 @@ function commandExists(command) {
     const child = spawn(command, ["--version"], {
       cwd: root,
       stdio: "ignore",
-      shell: process.platform === "win32"
+      shell: process.platform === "win32",
+      windowsHide: true
     });
     child.on("error", () => resolve(false));
     child.on("close", (code) => resolve(code === 0));
@@ -1364,7 +1620,8 @@ function run(command, args, options = {}) {
       cwd: options.cwd || root,
       env: options.env || process.env,
       stdio: "inherit",
-      shell: process.platform === "win32"
+      shell: process.platform === "win32",
+      windowsHide: true
     });
     child.on("error", reject);
     child.on("close", (code) => {

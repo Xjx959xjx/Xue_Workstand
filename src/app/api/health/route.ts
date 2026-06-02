@@ -10,6 +10,7 @@ import { resolveOpenCliCommand } from "@/lib/opencli";
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
+const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 
 export async function GET() {
   const runtime = resolveOpenCliCommand();
@@ -21,7 +22,10 @@ export async function GET() {
   let opencliVersion = "";
 
   try {
-    const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], { timeout: 5000 });
+    const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
+      timeout: 5000
+    });
     opencliOk = true;
     opencliVersion = stdout.trim();
   } catch {

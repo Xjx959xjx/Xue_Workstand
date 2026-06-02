@@ -15,10 +15,9 @@ import { extractSourceUrls } from "@/lib/source-extraction";
 import type { CopySource, ProjectDetail, ProjectListItem, ProjectSummary } from "@/lib/types";
 import { ProjectPickerModal } from "./_components/ProjectPickerModal";
 import { CasePipelinePanel } from "./_components/CasePipelinePanel";
-import { AccountPickerModal } from "./_components/AccountPickerModal";
 import { CopySourcePreviewModal } from "./_components/CopySourcePreviewModal";
+import { ProjectCaseDrawer, type ProjectCaseDrawerTab } from "./_components/ProjectCaseDrawer";
 import { ProjectStylePanel } from "./_components/ProjectStylePanel";
-import { SourceAddModal } from "./_components/SourceAddModal";
 import type { LinkJob } from "./_components/project-workbench-utils";
 
 type WorkbenchSnapshot = {
@@ -55,8 +54,9 @@ export default function ProjectWorkbenchPage() {
   const [projectDetailLoading, setProjectDetailLoading] = useState(false);
   const [projectDetailError, setProjectDetailError] = useState("");
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  const [sourceAddModalOpen, setSourceAddModalOpen] = useState(false);
-  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
+  const [caseDrawerOpen, setCaseDrawerOpen] = useState(false);
+  const [caseDrawerInitialTab, setCaseDrawerInitialTab] = useState<ProjectCaseDrawerTab>("sources");
+  const [sourceSearch, setSourceSearch] = useState("");
   const [previewSource, setPreviewSource] = useState<CopySource | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState<WorkbenchSnapshot | null>(null);
   const [fullCopySources, setFullCopySources] = useState<CopySource[] | null>(null);
@@ -80,6 +80,23 @@ export default function ProjectWorkbenchPage() {
     () => sourceMaterialIds.map((sourceId) => copySources.find((source) => source.id === sourceId)).filter(Boolean) as CopySource[],
     [copySources, sourceMaterialIds]
   );
+  const filteredSources = useMemo(() => {
+    const selected = new Set(sourceMaterialIds);
+    const keyword = sourceSearch.trim().toLowerCase();
+    const matchesKeyword = (source: CopySource) => {
+      if (!keyword) return true;
+      return [source.title, source.url, source.transcript, source.platform].some((value) => value.toLowerCase().includes(keyword));
+    };
+
+    return copySources
+      .filter(matchesKeyword)
+      .sort((left, right) => {
+        const leftSelected = selected.has(left.id);
+        const rightSelected = selected.has(right.id);
+        if (leftSelected !== rightSelected) return leftSelected ? -1 : 1;
+        return left.title.localeCompare(right.title, "zh-CN");
+      });
+  }, [copySources, sourceMaterialIds, sourceSearch]);
   const selectedAccounts = useMemo(
     () => accounts.filter((account) => sourceAccountIds.includes(account.id)),
     [accounts, sourceAccountIds]
@@ -274,6 +291,12 @@ export default function ProjectWorkbenchPage() {
     );
   }
 
+  function toggleSourceMaterial(sourceId: string) {
+    setSourceMaterialIds((current) =>
+      current.includes(sourceId) ? current.filter((id) => id !== sourceId) : [...current, sourceId]
+    );
+  }
+
   function toggleManagedSource(sourceId: string) {
     setManagedSourceIds((current) =>
       current.includes(sourceId) ? current.filter((id) => id !== sourceId) : [...current, sourceId]
@@ -401,7 +424,7 @@ export default function ProjectWorkbenchPage() {
         await saveProject(nextSourceIds);
         setLinkInput("");
       }
-      if (createdIds.length && !failed) setSourceAddModalOpen(false);
+      if (createdIds.length && !failed) setCaseDrawerOpen(false);
       setMessage(`已加入 ${createdIds.length} 份案例素材${failed ? `，${failed} 条失败` : ""}。`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "添加案例素材失败");
@@ -465,9 +488,10 @@ export default function ProjectWorkbenchPage() {
     if (saved) setProjectModalOpen(false);
   }
 
-  function openSourceAddModal() {
-    setJobs([]);
-    setSourceAddModalOpen(true);
+  function openCaseDrawer(tab: ProjectCaseDrawerTab = "sources") {
+    if (tab === "links") setJobs([]);
+    setCaseDrawerInitialTab(tab);
+    setCaseDrawerOpen(true);
   }
 
   async function handleDeleteManagedSources() {
@@ -551,7 +575,7 @@ export default function ProjectWorkbenchPage() {
           writerHref={writerHref}
           onGenerateStyle={handleStartStyleJob}
           onOpenProjectModal={() => setProjectModalOpen(true)}
-          onOpenSourceAddModal={openSourceAddModal}
+          onOpenSourceAddModal={() => openCaseDrawer(copySources.length ? "sources" : "links")}
           onSaveWorkspace={handleSaveWorkspace}
         />
         <main className="project-workbench-canvas">
@@ -568,9 +592,10 @@ export default function ProjectWorkbenchPage() {
               sourcePoolManage={sourcePoolManage}
               deletingSourcePool={busy === "delete-sources"}
               onDeleteSelectedPoolSources={() => setDeleteSourcesConfirmOpen(true)}
-              onOpenAccountPicker={() => setAccountPickerOpen(true)}
-              onOpenSourceAddModal={openSourceAddModal}
+              onOpenAccountPicker={() => openCaseDrawer("accounts")}
+              onOpenLinkIntake={() => openCaseDrawer("links")}
               onOpenProjectModal={() => setProjectModalOpen(true)}
+              onOpenSourcePicker={() => openCaseDrawer(copySources.length ? "sources" : "links")}
               onOpenSourcePreview={setPreviewSource}
               onToggleManagedSource={toggleManagedSource}
               onToggleAccount={toggleAccount}
@@ -612,27 +637,27 @@ export default function ProjectWorkbenchPage() {
         />
       ) : null}
 
-      {sourceAddModalOpen ? (
-        <SourceAddModal
+      {caseDrawerOpen ? (
+        <ProjectCaseDrawer
+          accounts={accounts}
           busy={busy}
+          filteredSources={filteredSources}
+          initialTab={caseDrawerInitialTab}
           jobs={jobs}
           linkAnalyzeVideo={linkAnalyzeVideo}
           linkInput={linkInput}
           parsedLinkCount={parsedLinks.length}
-          onClose={() => setSourceAddModalOpen(false)}
+          selectedAccounts={selectedAccounts}
+          sourceAccountIds={sourceAccountIds}
+          sourceMaterialIds={sourceMaterialIds}
+          sourceSearch={sourceSearch}
+          onClose={() => setCaseDrawerOpen(false)}
           onLinkAnalyzeVideoChange={setLinkAnalyzeVideo}
           onLinkInputChange={setLinkInput}
-          onTranscribeLinks={handleTranscribeLinks}
-        />
-      ) : null}
-
-      {accountPickerOpen ? (
-        <AccountPickerModal
-          accounts={accounts}
-          selectedAccountIds={sourceAccountIds}
-          selectedAccounts={selectedAccounts}
-          onClose={() => setAccountPickerOpen(false)}
+          onSourceSearchChange={setSourceSearch}
           onToggleAccount={toggleAccount}
+          onToggleSource={toggleSourceMaterial}
+          onTranscribeLinks={handleTranscribeLinks}
         />
       ) : null}
 
@@ -721,32 +746,37 @@ function ProjectWorkbenchFlow({
         />
       </div>
       <div className="project-flow-action">
-        <span>下一步</span>
+        <span>主操作</span>
         {!projectReady ? (
           <button className="btn primary" onClick={onOpenProjectModal} type="button">
             选择项目
             <ArrowRight aria-hidden="true" size={15} />
           </button>
-        ) : !hasReferenceInput ? (
-          <button className="btn primary" onClick={onOpenSourceAddModal} type="button">
-            添加素材
-            <ArrowRight aria-hidden="true" size={15} />
-          </button>
-        ) : !styleCount ? (
+        ) : busy === "style" ? (
           <button className="btn primary" disabled={busy === "style"} onClick={onGenerateStyle} type="button">
             <Sparkles aria-hidden="true" size={15} />
-            {busy === "style" ? "生成中" : "生成风格"}
+            生成中
           </button>
         ) : isDirty ? (
           <button className="btn primary" disabled={!canSaveWorkspace} onClick={onSaveWorkspace} type="button">
             保存修改
             <ArrowRight aria-hidden="true" size={15} />
           </button>
-        ) : (
+        ) : styleCount ? (
           <Link className={`btn primary ${canWrite ? "" : "disabled"}`} href={writerHref} aria-disabled={!canWrite}>
             进入写作
             <ArrowRight aria-hidden="true" size={15} />
           </Link>
+        ) : !hasReferenceInput ? (
+          <button className="btn primary" onClick={onOpenSourceAddModal} type="button">
+            添加素材
+            <ArrowRight aria-hidden="true" size={15} />
+          </button>
+        ) : (
+          <button className="btn primary" onClick={onGenerateStyle} type="button">
+            <Sparkles aria-hidden="true" size={15} />
+            生成风格
+          </button>
         )}
       </div>
     </div>

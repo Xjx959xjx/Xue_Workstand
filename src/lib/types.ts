@@ -105,10 +105,48 @@ export type DraftAssets = {
         topic: string;
         subjects: string[];
         keyFacts: string[];
+        audiencePersonas?: string[];
         viewerScenes: string[];
         discussionAngles: string[];
         skepticalAngles: string[];
         anchorTerms: string[];
+      };
+      entityGuard?: {
+        allowedModels: string[];
+        correctedTerms: {
+          from: string;
+          to: string;
+          stage: "brief" | "relatedResearch" | "comment";
+        }[];
+      };
+      relatedResearch?: {
+        usedQueries: string[];
+        failedQueries: string[];
+        relatedVideoCount: number;
+        relatedCommentCount: number;
+        longCommentCount?: number;
+        lengthBuckets?: {
+          short: number;
+          medium: number;
+          long: number;
+        };
+        intentBuckets?: {
+          reaction: number;
+          question: number;
+          price: number;
+          comparison: number;
+          skeptical: number;
+          experience: number;
+          follow: number;
+          chatter: number;
+        };
+        themes: string[];
+        phrases: string[];
+        questions: string[];
+        objections: string[];
+        longCommentPatterns?: string[];
+        chatterAngles?: string[];
+        summaryError?: string;
       };
       research?: {
         originalCommentCount: number;
@@ -116,6 +154,17 @@ export type DraftAssets = {
         relatedCommentCount: number;
         relatedCommentUsed: number;
         relatedVideoCount: number;
+        relatedLongCommentCount?: number;
+        relatedIntentBuckets?: {
+          reaction: number;
+          question: number;
+          price: number;
+          comparison: number;
+          skeptical: number;
+          experience: number;
+          follow: number;
+          chatter: number;
+        };
         usedQueries: string[];
         failedQueries: string[];
         skippedRelatedSearch: boolean;
@@ -132,6 +181,38 @@ export type DraftAssets = {
         parsedCount: number;
         completedCount: number;
         supplementedCount: number;
+        targetLongCommentCount?: number;
+        lengthBuckets?: {
+          short: number;
+          medium: number;
+          long: number;
+        };
+        targetIntentBuckets?: {
+          reaction: number;
+          question: number;
+          price: number;
+          comparison: number;
+          skeptical: number;
+          experience: number;
+          follow: number;
+          chatter: number;
+        };
+        intentBuckets?: {
+          reaction: number;
+          question: number;
+          price: number;
+          comparison: number;
+          skeptical: number;
+          experience: number;
+          follow: number;
+          chatter: number;
+        };
+        lowSignalRejectedCount?: number;
+        syntheticRejectedCount?: number;
+        nearDuplicateRejectedCount?: number;
+        repeatedStyleRejectedCount?: number;
+        entityCorrectedCount?: number;
+        unsupportedEntityRejectedCount?: number;
         batches: {
           index: number;
           requestedCount: number;
@@ -166,10 +247,22 @@ type DraftBase = {
   prompt: string;
   input?: string;
   supportDocLinks?: string;
+  brief?: string;
+  sourceDigest?: WriteSourceDigest;
   content: string;
   assets?: DraftAssets;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WriteSourceDigest = {
+  resolvedSourceText?: string;
+  materialCount: number;
+  linkCount: number;
+  textMaterialCount: number;
+  onlyLinkCount: number;
+  supportDocProvided?: boolean;
+  webResearchEnabled?: boolean;
 };
 
 export type AccountDraft = DraftBase & {
@@ -406,6 +499,12 @@ export type GrossMarginMonitorMetric = {
   manualOnly?: boolean;
 };
 
+export type GrossMarginMonitorPlaySample = {
+  value: number;
+  capturedAt: string;
+  source: "refresh" | "manual";
+};
+
 export type GrossMarginMonitorRecord = {
   id: string;
   platform: GrossMarginPriceTable["platform"];
@@ -420,6 +519,7 @@ export type GrossMarginMonitorRecord = {
   targetStats: Partial<Record<GrossMarginServiceKind, number>>;
   currentStats?: Partial<Record<GrossMarginServiceKind, number>>;
   previousStats?: Partial<Record<GrossMarginServiceKind, number>>;
+  playSamples?: GrossMarginMonitorPlaySample[];
   metrics: GrossMarginMonitorMetric[];
   maxDifferencePercent: number;
   highRisk: boolean;
@@ -514,8 +614,20 @@ export type CollectResult = {
 
 export type WriteResult = {
   content: string;
+  brief?: string;
   research?: string;
+  sourceDigest?: WriteSourceDigest;
   draft?: Draft;
+  usedModel: string;
+  fallback: boolean;
+  fallbackReason?: string;
+};
+
+export type WriteBriefResult = {
+  brief: string;
+  research?: string;
+  sourceDigest: WriteSourceDigest;
+  targetTitle: string;
   usedModel: string;
   fallback: boolean;
   fallbackReason?: string;
@@ -617,6 +729,7 @@ export type JobStartInput =
         prompt: string;
         sourceText?: string;
         supportDocLinks?: string;
+        brief?: string;
         save?: boolean;
         useWebResearch?: boolean;
       };

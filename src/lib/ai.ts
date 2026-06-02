@@ -7,7 +7,9 @@ import {
   Platform,
   ProjectDraftInput,
   ProjectSummary,
+  WriteBriefResult,
   WriteResult,
+  WriteSourceDigest,
   platforms
 } from "./types";
 import { clampText, makeTitleFromPrompt } from "./utils";
@@ -24,7 +26,7 @@ import {
   saveStyle,
   upsertProject
 } from "./storage";
-import { normalizeRewritePrompt } from "./source-extraction";
+import { extractRewriteSourceMaterial, normalizeRewritePrompt } from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
 
 type ChatMessage = {
@@ -56,6 +58,7 @@ export type WriteCopyInput = {
   prompt: string;
   sourceText?: string;
   supportDocLinks?: string;
+  brief?: string;
   save?: boolean;
   useWebResearch?: boolean;
 };
@@ -65,7 +68,12 @@ export type PreparedWriteContext = {
   fallbackName: string;
   fallbackStyle: string;
   fallbackInput: { mode: Draft["mode"]; prompt: string; sourceText?: string };
+  brief: string;
+  briefFallback: boolean;
+  briefFallbackReason?: string;
+  briefModel: string;
   research?: string;
+  sourceDigest: WriteSourceDigest;
   draftBase?: Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
 };
 
@@ -1292,7 +1300,9 @@ export async function writeCopy(input: WriteCopyInput): Promise<WriteResult> {
 
   return {
     content,
+    brief: prepared.brief,
     research: prepared.research,
+    sourceDigest: prepared.sourceDigest,
     draft,
     usedModel: result.model,
     fallback: result.fallback,
@@ -1316,13 +1326,28 @@ export async function completePreparedWriteCopy(input: {
 
   return {
     content,
+    brief: input.prepared.brief,
     research: input.prepared.research,
+    sourceDigest: input.prepared.sourceDigest,
     draft,
     usedModel: input.result.model,
     fallback: input.result.fallback || !input.result.text.trim(),
     fallbackReason:
       input.result.fallbackReason ||
       (!input.result.text.trim() ? "模型没有返回可用内容，已自动切换到本地模板。" : undefined)
+  };
+}
+
+export async function prepareWriteBrief(input: WriteCopyInput): Promise<WriteBriefResult> {
+  const prepared = await prepareWriteCopyContext(input);
+  return {
+    brief: prepared.brief,
+    research: prepared.research,
+    sourceDigest: prepared.sourceDigest,
+    targetTitle: prepared.draftBase?.title || makeTitleFromPrompt(input.prompt),
+    usedModel: prepared.briefModel,
+    fallback: prepared.briefFallback,
+    fallbackReason: prepared.briefFallbackReason
   };
 }
 
@@ -1356,7 +1381,8 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
     useWebResearch: normalizedInput.useWebResearch,
     webContext
   });
-  const writingBrief = await buildAccountWritingBrief({
+  const sourceDigest = buildWriteSourceDigest(normalizedInput);
+  const briefResult = await buildAccountWritingBrief({
     accountName: account.name,
     platform: normalizedInput.platform,
     style,
@@ -1365,6 +1391,7 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
     supportDocContext,
     webContext
   });
+  const writingBrief = briefResult.text.trim();
 
   return {
     messages: [
@@ -1399,7 +1426,12 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
     fallbackName: account.name,
     fallbackStyle: style,
     fallbackInput: normalizedInput,
+    brief: writingBrief,
+    briefFallback: briefResult.fallback,
+    briefFallbackReason: briefResult.fallbackReason,
+    briefModel: briefResult.model,
     research,
+    sourceDigest,
     draftBase: {
       platform: normalizedInput.platform,
       accountId: normalizedInput.accountId,
@@ -1409,6 +1441,8 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
       prompt: normalizedInput.prompt,
       input: normalizedInput.sourceText,
       supportDocLinks: normalizedInput.supportDocLinks,
+      brief: writingBrief,
+      sourceDigest,
       styleRef: {
         platform: normalizedInput.platform,
         accountId: normalizedInput.accountId,
@@ -1462,6 +1496,17 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
     useWebResearch: input.useWebResearch,
     webContext
   });
+  const sourceDigest = buildWriteSourceDigest(input);
+  const briefResult = await buildProjectWritingBrief({
+    projectName: project.name,
+    projectDescription: project.description,
+    style,
+    referenceContext,
+    input,
+    supportDocContext,
+    webContext
+  });
+  const writingBrief = briefResult.text.trim();
 
   return {
     messages: [
@@ -1475,11 +1520,21 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
         content: [
           `参考项目：${project.name}`,
           `项目说明：${project.description || "暂无"}`,
+          `项目写作 brief：\n${writingBrief}`,
           `项目风格卡：\n${style}`,
           `代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}`,
           `支持文档资料：\n${supportDocContext}`,
           `联网检索资料：\n${webContext}`,
-          `任务：\n${userTask}`
+          `任务：\n${userTask}`,
+          [
+            "成稿硬性要求：",
+            "1. 只输出可直接使用的成稿，不解释创作思路。",
+            "2. 开头必须先给明确钩子或反差判断，不能铺垫背景。",
+            "3. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
+            "4. 保留用户给出的具体梗、场景、原话和事实线索。",
+            "5. 句子短，口播感强，少用抽象形容词。",
+            "6. 结尾给一个自然的评论区问题或行动引导。"
+          ].join("\n")
         ].join("\n\n")
       }
     ],
@@ -1490,7 +1545,12 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       prompt: input.prompt,
       sourceText: input.sourceText
     },
+    brief: writingBrief,
+    briefFallback: briefResult.fallback,
+    briefFallbackReason: briefResult.fallbackReason,
+    briefModel: briefResult.model,
     research,
+    sourceDigest,
     draftBase: {
       targetType: "project",
       projectId: project.id,
@@ -1500,6 +1560,8 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
       prompt: input.prompt,
       input: input.sourceText,
       supportDocLinks: input.supportDocLinks,
+      brief: writingBrief,
+      sourceDigest,
       styleRef: {
         projectId: project.id,
         projectName: project.name,
@@ -1519,6 +1581,15 @@ async function buildAccountWritingBrief(input: {
   supportDocContext: string;
   webContext: string;
 }) {
+  const manualBrief = input.input.brief?.trim();
+  if (manualBrief) {
+    return {
+      text: manualBrief,
+      model: "edited-brief",
+      fallback: false
+    } satisfies ChatCompletionResult;
+  }
+
   const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
   const userTask =
     input.input.mode === "topic"
@@ -1556,8 +1627,77 @@ async function buildAccountWritingBrief(input: {
     ]
   );
 
-  if (result.text.trim()) return result.text.trim();
-  return buildLocalAccountWritingBrief(input);
+  if (result.text.trim()) return { ...result, text: result.text.trim() };
+  return {
+    ...result,
+    text: buildLocalAccountWritingBrief(input),
+    fallback: true,
+    fallbackReason: result.fallbackReason || "模型没有返回可用 brief，已用本地结构整理。"
+  };
+}
+
+async function buildProjectWritingBrief(input: {
+  projectName: string;
+  projectDescription?: string;
+  style: string;
+  referenceContext: string;
+  input: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+}) {
+  const manualBrief = input.input.brief?.trim();
+  if (manualBrief) {
+    return {
+      text: manualBrief,
+      model: "edited-brief",
+      fallback: false
+    } satisfies ChatCompletionResult;
+  }
+
+  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
+  const userTask =
+    input.input.mode === "topic"
+      ? input.input.prompt
+      : `${input.input.prompt}\n\n${sourceText}`;
+
+  const result = await completeWriteBriefGeneration(
+    [
+      {
+        role: "system",
+        content:
+          "你是短视频项目文案策划。你的任务是把项目风格、案例素材和用户输入压缩成写作 brief，供下一步直接成稿使用。不要生成正文，不要解释过程。"
+      },
+      {
+        role: "user",
+        content: [
+          `参考项目：${input.projectName}`,
+          `项目说明：${input.projectDescription || "暂无"}`,
+          `任务：\n${userTask}`,
+          `项目风格卡：\n${input.style}`,
+          `代表样本和案例素材：\n${input.referenceContext || "暂无样本"}`,
+          `支持文档资料：\n${input.supportDocContext}`,
+          `联网检索资料：\n${input.webContext}`,
+          [
+            "请只输出以下结构：",
+            "## 核心事件",
+            "## 可见画面/具体细节",
+            "## 项目化切入",
+            "## 梗和映射",
+            "## 成稿路线",
+            "## 避坑"
+          ].join("\n")
+        ].join("\n\n")
+      }
+    ]
+  );
+
+  if (result.text.trim()) return { ...result, text: result.text.trim() };
+  return {
+    ...result,
+    text: buildLocalProjectWritingBrief(input),
+    fallback: true,
+    fallbackReason: result.fallbackReason || "模型没有返回可用 brief，已用本地结构整理。"
+  };
 }
 
 function completeWriteBriefGeneration(messages: ChatMessage[]) {
@@ -1600,6 +1740,53 @@ function buildLocalAccountWritingBrief(input: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildLocalProjectWritingBrief(input: {
+  projectName: string;
+  projectDescription?: string;
+  input: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+}) {
+  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
+  const task = input.input.mode === "topic" ? input.input.prompt : `${input.input.prompt}\n\n${sourceText}`;
+
+  return [
+    "## 核心事件",
+    `- 围绕用户任务写：${clampText(task, 420)}`,
+    input.projectDescription ? `- 项目说明：${clampText(input.projectDescription, 240)}` : "",
+    "## 可见画面/具体细节",
+    "- 优先使用案例素材、用户输入、链接转写和支持资料中的具体人物、动作、画面、商品信息。",
+    input.supportDocContext && input.supportDocContext !== "未提供支持文档。"
+      ? `- 支持文档资料：${clampText(input.supportDocContext, 360)}`
+      : "",
+    "## 项目化切入",
+    `- 按「${input.projectName}」的项目风格组织信息，先给钩子，再把事实推进成可口播段落。`,
+    "## 梗和映射",
+    "- 保留素材里已有的热词、反差、场景和评论区接话点，不凭空发明事实。",
+    "## 成稿路线",
+    "- 开头钩子 -> 具体事件 -> 关键细节 -> 情绪/观点推进 -> 评论区问题或行动引导。",
+    "## 避坑",
+    "- 不要写成资料摘要，不要堆砌项目背景，不要复述风格卡条目。",
+    input.webContext && input.webContext !== "未启用联网检索。" ? `- 联网资料：${clampText(input.webContext, 300)}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildWriteSourceDigest(input: WriteCopyInput): WriteSourceDigest {
+  const sourceText = input.sourceText || "";
+  const extracted = extractRewriteSourceMaterial(sourceText);
+  return {
+    resolvedSourceText: sourceText.trim() || undefined,
+    materialCount: extracted.materials.length,
+    linkCount: extracted.linkCount,
+    textMaterialCount: extracted.textMaterialCount,
+    onlyLinkCount: extracted.onlyLinkCount,
+    supportDocProvided: Boolean(input.supportDocLinks?.trim()),
+    webResearchEnabled: Boolean(input.useWebResearch)
+  };
 }
 
 async function buildSupportDocumentContext(input?: string) {

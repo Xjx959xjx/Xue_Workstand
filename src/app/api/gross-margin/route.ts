@@ -5,8 +5,10 @@ import {
   getDouyinVideoStatsBatchByUrl,
   getDouyinVideoStatsByUrl,
 } from "@/lib/opencli";
+import type { OpenCliTimingSink } from "@/lib/opencli";
 import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
 import {
+  appendGrossMarginPlaySample,
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
   getGrossMarginMonitorRecords,
@@ -31,7 +33,7 @@ const serviceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "sha
 const amountSchema = z.coerce.number().finite().min(0, "金额不能小于 0").max(100_000_000, "金额过大，请检查输入");
 const minimumQuantitySchema = z.coerce.number().finite().gt(0, "起量必须大于 0").max(100_000_000, "起量过大，请检查输入");
 const DOUYIN_VIDEO_STATS_CACHE_TTL_MS = 3 * 60 * 1000;
-const MONITOR_REFRESH_CONCURRENCY = 3;
+const MONITOR_REFRESH_LOG_PREFIX = "[gross-margin-monitor]";
 
 const douyinSingleVideoStatsCache = new Map<
   string,
@@ -40,6 +42,11 @@ const douyinSingleVideoStatsCache = new Map<
     promise: ReturnType<typeof getDouyinVideoStatsByUrl>;
   }
 >();
+
+type MonitorFetchedStats =
+  | Awaited<ReturnType<typeof getBilibiliVideoStatsByUrl>>
+  | Awaited<ReturnType<typeof getDouyinVideoStatsByUrl>>
+  | Awaited<ReturnType<typeof getDouyinMonitorStats>>;
 
 const mutationSchema = z.discriminatedUnion("action", [
   z.object({
@@ -213,33 +220,64 @@ async function bulkSaveMonitorRecordsFromInput(input: z.infer<typeof mutationSch
 }
 
 async function refreshMonitorRecord(recordId: string) {
-  const record = await resolveGrossMarginMonitorRecord(recordId);
-  return refreshMonitorRecordSnapshot(record);
+  const logger = createMonitorRefreshLogger("refresh-one", { recordId });
+  let refreshed: GrossMarginMonitorRecord | null = null;
+  try {
+    const record = await timeMonitorOperation(
+      logger.onTiming,
+      "storage.resolve-monitor-record",
+      () => resolveGrossMarginMonitorRecord(recordId),
+      { recordId }
+    );
+    refreshed = await refreshMonitorRecordSnapshot(record, logger.onTiming);
+    return refreshed;
+  } finally {
+    logger.finish(refreshed?.status || "failed", refreshed ? recordTimingMeta(refreshed) : { recordId });
+  }
 }
 
 async function refreshMonitorRecordSnapshot(
-  record: GrossMarginMonitorRecord
+  record: GrossMarginMonitorRecord,
+  onTiming?: OpenCliTimingSink
 ) {
+  const meta = recordTimingMeta(record);
   try {
-    const fetched =
-      record.platform === "bilibili"
-        ? await getBilibiliVideoStatsByUrl(record.videoUrl)
-        : await getDouyinMonitorStats({
-            accountName: record.accountName,
-            url: record.videoUrl
-          });
-    return saveRefreshedMonitorRecord(record, fetched);
+    const fetched = await timeMonitorOperation(
+      onTiming,
+      `${record.platform}.record.fetch-total`,
+      () => fetchMonitorRecordStats(record, onTiming, meta),
+      meta
+    );
+    return saveRefreshedMonitorRecord(record, fetched, onTiming);
   } catch (error) {
-    return saveFailedMonitorRecord(record, error);
+    return saveFailedMonitorRecord(record, error, onTiming);
   }
+}
+
+function fetchMonitorRecordStats(
+  record: GrossMarginMonitorRecord,
+  onTiming: OpenCliTimingSink | undefined,
+  meta: MonitorTimingMeta
+): Promise<MonitorFetchedStats> {
+  if (record.platform === "bilibili") {
+    return getBilibiliVideoStatsByUrl(record.videoUrl, {
+      onTiming,
+      timingMeta: meta
+    });
+  }
+  return getDouyinMonitorStats({
+    accountName: record.accountName,
+    url: record.videoUrl
+  }, {
+    onTiming,
+    timingMeta: meta
+  });
 }
 
 async function saveRefreshedMonitorRecord(
   record: GrossMarginMonitorRecord,
-  fetched:
-    | Awaited<ReturnType<typeof getBilibiliVideoStatsByUrl>>
-    | Awaited<ReturnType<typeof getDouyinVideoStatsByUrl>>
-    | Awaited<ReturnType<typeof getDouyinMonitorStats>>
+  fetched: MonitorFetchedStats,
+  onTiming?: OpenCliTimingSink
 ) {
   const warnings: string[] = [];
   try {
@@ -249,27 +287,39 @@ async function saveRefreshedMonitorRecord(
       record.platform === "douyin" && typeof record.currentStats?.play === "number"
         ? { ...fetchedStats, play: record.currentStats.play }
         : fetchedStats;
-    return saveGrossMarginMonitorRecord({
-      ...record,
-      accountName: record.accountName || getFetchedAuthorName(fetched),
-      title: fetched.title || record.title,
-      videoUrl: fetched.url || record.videoUrl,
-      videoKey:
-        "videoKey" in fetched && typeof fetched.videoKey === "string" && fetched.videoKey
-          ? fetched.videoKey
-          : fetched.url
-            ? getVideoComparableKey(fetched.url)
-            : record.videoKey,
-      publishedAt: fetched.publishedAt || record.publishedAt,
-      previousStats: record.currentStats,
-      currentStats,
-      status: warnings.length ? "partial" : "completed",
-      warnings,
-      lastRefreshedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
+    const refreshedAt = new Date().toISOString();
+    const shouldCapturePlaySample =
+      typeof fetchedStats.play === "number" && Number.isFinite(fetchedStats.play) && currentStats.play === fetchedStats.play;
+    const playSamples = shouldCapturePlaySample
+      ? appendGrossMarginPlaySample(record.playSamples, currentStats.play, refreshedAt, "refresh")
+      : record.playSamples;
+    return timeMonitorOperation(
+      onTiming,
+      "storage.save-monitor-record",
+      () => saveGrossMarginMonitorRecord({
+        ...record,
+        accountName: record.accountName || getFetchedAuthorName(fetched),
+        title: fetched.title || record.title,
+        videoUrl: fetched.url || record.videoUrl,
+        videoKey:
+          "videoKey" in fetched && typeof fetched.videoKey === "string" && fetched.videoKey
+            ? fetched.videoKey
+            : fetched.url
+              ? getVideoComparableKey(fetched.url)
+              : record.videoKey,
+        publishedAt: fetched.publishedAt || record.publishedAt,
+        previousStats: record.currentStats,
+        currentStats,
+        playSamples,
+        status: warnings.length ? "partial" : "completed",
+        warnings,
+        lastRefreshedAt: refreshedAt,
+        updatedAt: refreshedAt
+      }),
+      recordTimingMeta(record)
+    );
   } catch (error) {
-    return saveFailedMonitorRecord(record, error);
+    return saveFailedMonitorRecord(record, error, onTiming);
   }
 }
 
@@ -282,57 +332,79 @@ function getFetchedAuthorName(
   return "authorName" in fetched ? fetched.authorName?.trim() || "" : "";
 }
 
-function saveFailedMonitorRecord(record: GrossMarginMonitorRecord, error: unknown) {
-  return saveGrossMarginMonitorRecord({
-    ...record,
-    status: "failed",
-    warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
-    lastRefreshedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
+function saveFailedMonitorRecord(record: GrossMarginMonitorRecord, error: unknown, onTiming?: OpenCliTimingSink) {
+  return timeMonitorOperation(
+    onTiming,
+    "storage.save-failed-monitor-record",
+    () => saveGrossMarginMonitorRecord({
+      ...record,
+      status: "failed",
+      warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
+      lastRefreshedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }),
+    recordTimingMeta(record)
+  );
 }
 
 async function refreshMonitorRecords(recordIds?: string[]) {
-  const requestedIds = recordIds?.length ? new Set(recordIds.map((recordId) => recordId.trim())) : null;
-  const records = (await getGrossMarginMonitorRecords()).filter((record) => !requestedIds || requestedIds.has(record.id));
-  const douyinRecords = records.filter((record) => record.platform === "douyin");
-  const douyinResults = douyinRecords.length
-    ? await getDouyinVideoStatsBatchByUrl(douyinRecords.map((record) => record.videoUrl)).catch(() => [])
-    : [];
-  const douyinFetchedById = new Map(
-    douyinRecords.flatMap((record, index) => {
-      const result = douyinResults[index];
-      return result ? [[record.id, result] as const] : [];
-    })
-  );
-
-  return mapWithConcurrency(records, MONITOR_REFRESH_CONCURRENCY, async (record) => {
-    const fetched = douyinFetchedById.get(record.id);
-    if (fetched) return saveRefreshedMonitorRecord(record, fetched);
-    return refreshMonitorRecordSnapshot(record);
+  const logger = createMonitorRefreshLogger("refresh-many", {
+    requestedRecordCount: recordIds?.length || "all"
   });
-}
+  let refreshed: GrossMarginMonitorRecord[] = [];
+  let status = "completed";
+  const requestedIds = recordIds?.length ? new Set(recordIds.map((recordId) => recordId.trim())) : null;
+  try {
+    const records = await timeMonitorOperation(
+      logger.onTiming,
+      "storage.load-monitor-records",
+      async () => (await getGrossMarginMonitorRecords()).filter((record) => !requestedIds || requestedIds.has(record.id)),
+      { requestedRecordCount: recordIds?.length || "all" }
+    );
+    logger.info("records-selected", {
+      recordCount: records.length,
+      douyinCount: records.filter((record) => record.platform === "douyin").length,
+      bilibiliCount: records.filter((record) => record.platform === "bilibili").length
+    });
+    const douyinRecords = records.filter((record) => record.platform === "douyin");
+    const douyinResults = douyinRecords.length
+      ? await timeMonitorOperation(
+          logger.onTiming,
+          "douyin.batch.fetch-total",
+          () => getDouyinVideoStatsBatchByUrl(douyinRecords.map((record) => record.videoUrl), {
+            onTiming: logger.onTiming,
+            timingMeta: { platform: "douyin", mode: "batch", count: douyinRecords.length }
+          }),
+          { count: douyinRecords.length }
+        ).catch(() => [])
+      : [];
+    const douyinFetchedById = new Map(
+      douyinRecords.flatMap((record, index) => {
+        const result = douyinResults[index];
+        return result ? [[record.id, result] as const] : [];
+      })
+    );
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
-) {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workerCount = Math.max(1, Math.min(concurrency, items.length));
-
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        results[index] = await mapper(items[index], index);
-      }
-    })
-  );
-
-  return results;
+    refreshed = await timeMonitorOperation(
+      logger.onTiming,
+      "monitor.records.process",
+      () => Promise.all(records.map(async (record) => {
+        const fetched = douyinFetchedById.get(record.id);
+        if (fetched) return saveRefreshedMonitorRecord(record, fetched, logger.onTiming);
+        return refreshMonitorRecordSnapshot(record, logger.onTiming);
+      })),
+      { recordCount: records.length, concurrency: "unbounded" }
+    );
+    return refreshed;
+  } catch (error) {
+    status = "failed";
+    throw error;
+  } finally {
+    logger.finish(status, {
+      refreshedCount: refreshed.length,
+      failedCount: refreshed.filter((record) => record.status === "failed").length
+    });
+  }
 }
 
 async function updateMonitorPlayTarget(recordId: string, target: number) {
@@ -352,13 +424,16 @@ async function updateMonitorPlayCurrent(recordId: string, current: number) {
   if (record.platform !== "douyin") {
     throw new Error("只有抖音监控需要手动填写当前播放量。");
   }
+  const updatedAt = new Date().toISOString();
+  const roundedCurrent = Math.round(current);
   return saveGrossMarginMonitorRecord({
     ...record,
     currentStats: {
       ...(record.currentStats || {}),
-      play: Math.round(current)
+      play: roundedCurrent
     },
-    updatedAt: new Date().toISOString()
+    playSamples: appendGrossMarginPlaySample(record.playSamples, roundedCurrent, updatedAt, "manual"),
+    updatedAt
   });
 }
 
@@ -428,8 +503,11 @@ function parseMaintenanceTemplate(template: string) {
 async function getDouyinMonitorStats(input: {
   accountName: string;
   url: string;
-}) {
-  const fallback = await getCachedDouyinVideoStatsByUrl(input.url).catch((error) => ({
+}, options: {
+  timingMeta?: MonitorTimingMeta;
+  onTiming?: OpenCliTimingSink;
+} = {}) {
+  const fallback = await getCachedDouyinVideoStatsByUrl(input.url, options).catch((error) => ({
     platform: "douyin" as const,
     title: "",
     url: input.url,
@@ -444,13 +522,27 @@ async function getDouyinMonitorStats(input: {
   };
 }
 
-function getCachedDouyinVideoStatsByUrl(url: string) {
+function getCachedDouyinVideoStatsByUrl(url: string, options: {
+  timingMeta?: MonitorTimingMeta;
+  onTiming?: OpenCliTimingSink;
+} = {}) {
   const cacheKey = extractDouyinAwemeId(url) || normalizeVideoUrlInput(url);
   const now = Date.now();
   const existing = douyinSingleVideoStatsCache.get(cacheKey);
-  if (existing && existing.expiresAt > now) return existing.promise;
+  if (existing && existing.expiresAt > now) {
+    options.onTiming?.({
+      stage: "douyin.single-cache-hit",
+      ms: 0,
+      ok: true,
+      meta: options.timingMeta
+    });
+    return existing.promise;
+  }
 
-  const pending = getDouyinVideoStatsByUrl(url).catch((error) => {
+  const pending = getDouyinVideoStatsByUrl(url, {
+    onTiming: options.onTiming,
+    timingMeta: options.timingMeta
+  }).catch((error) => {
     const current = douyinSingleVideoStatsCache.get(cacheKey);
     if (current?.promise === pending) douyinSingleVideoStatsCache.delete(cacheKey);
     throw error;
@@ -460,6 +552,112 @@ function getCachedDouyinVideoStatsByUrl(url: string) {
     promise: pending
   });
   return pending;
+}
+
+type MonitorTimingMeta = Record<string, string | number | boolean | null | undefined>;
+
+function createMonitorRefreshLogger(action: string, meta: MonitorTimingMeta = {}) {
+  const runId = `${Date.now().toString(36)}-${shortHash(`${action}-${JSON.stringify(meta)}`)}`;
+  const startedAt = Date.now();
+  logMonitorRefreshEvent("start", {
+    runId,
+    action,
+    meta: compactMonitorMeta(meta)
+  });
+
+  const onTiming: OpenCliTimingSink = (entry) => {
+    logMonitorRefreshEvent("timing", {
+      runId,
+      action,
+      stage: entry.stage,
+      ms: entry.ms,
+      ok: entry.ok,
+      meta: compactMonitorMeta(entry.meta),
+      error: entry.error
+    });
+  };
+
+  return {
+    onTiming,
+    info(event: string, payload: MonitorTimingMeta = {}) {
+      logMonitorRefreshEvent(event, {
+        runId,
+        action,
+        meta: compactMonitorMeta(payload)
+      });
+    },
+    finish(status: string, payload: MonitorTimingMeta = {}) {
+      logMonitorRefreshEvent("finish", {
+        runId,
+        action,
+        status,
+        totalMs: Date.now() - startedAt,
+        meta: compactMonitorMeta(payload)
+      });
+    }
+  };
+}
+
+async function timeMonitorOperation<T>(
+  onTiming: OpenCliTimingSink | undefined,
+  stage: string,
+  operation: () => Promise<T>,
+  meta?: MonitorTimingMeta
+) {
+  const startedAt = Date.now();
+  try {
+    const result = await operation();
+    onTiming?.({
+      stage,
+      ms: Date.now() - startedAt,
+      ok: true,
+      meta: compactMonitorMeta(meta)
+    });
+    return result;
+  } catch (error) {
+    onTiming?.({
+      stage,
+      ms: Date.now() - startedAt,
+      ok: false,
+      meta: compactMonitorMeta(meta),
+      error: formatMonitorTimingError(error)
+    });
+    throw error;
+  }
+}
+
+function recordTimingMeta(record: GrossMarginMonitorRecord): MonitorTimingMeta {
+  return {
+    recordId: record.id,
+    platform: record.platform,
+    videoKey: record.videoKey || getVideoComparableKey(record.videoUrl),
+    accountName: record.accountName || ""
+  };
+}
+
+function compactMonitorMeta(meta?: MonitorTimingMeta) {
+  if (!meta) return undefined;
+  const compact: MonitorTimingMeta = {};
+  for (const [key, value] of Object.entries(meta)) {
+    if (value !== undefined && value !== "") compact[key] = value;
+  }
+  return Object.keys(compact).length ? compact : undefined;
+}
+
+function logMonitorRefreshEvent(event: string, payload: Record<string, unknown>) {
+  const compactPayload = Object.fromEntries(
+    Object.entries({
+      at: new Date().toISOString(),
+      event,
+      ...payload
+    }).filter(([, value]) => value !== undefined)
+  );
+  console.log(`${MONITOR_REFRESH_LOG_PREFIX} ${JSON.stringify(compactPayload)}`);
+}
+
+function formatMonitorTimingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return message.replace(/\s+/g, " ").trim().slice(0, 220);
 }
 
 function extractLineValue(lines: string[], labels: string | string[]) {

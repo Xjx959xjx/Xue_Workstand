@@ -11,6 +11,7 @@ export const writeCopyInputSchema = z.object({
   prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
   supportDocLinks: z.string().optional(),
+  brief: z.string().optional(),
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional()
 }).superRefine((input, ctx) => {

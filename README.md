@@ -29,7 +29,7 @@ npm run dev:stop
 npm run package:release -- --preset gross-margin-win
 ```
 
-这个专用包不是单文件 `exe`，而是 Windows 便携包：解压后双击 `start.cmd`，浏览器默认打开 `/gross-margin`，并且只保留“数据维护”和“数据监控”两页；其他工作台页面在专用模式下会被自动拦回毛利模块。专用包现在也会内置 `opencli`，目标 Windows 机器不需要再单独安装它。
+这个专用包不是单文件 `exe`，而是 Windows 便携包：解压后先运行一次 `setup-browser-bridge.cmd` 安装/启用 OpenCLI 浏览器扩展，再双击 `start.cmd`，浏览器默认打开 `/gross-margin`，并且只保留“数据维护”和“数据监控”两页；其他工作台页面在专用模式下会被自动拦回毛利模块。专用包会内置 `opencli` 主程序，目标 Windows 机器不需要再单独安装全局 opencli；B站 / 抖音实时刷新仍需要 Chrome / Edge 里的 OpenCLI Browser Bridge 扩展连通。
 
 开发服务器运行时不要同时执行 `npm run build`，Next.js 会复用 `.next` 目录，可能让开发页的 CSS/JS 静态资源短暂 404。若页面看起来像样式丢失，执行：
 
@@ -41,6 +41,8 @@ npm run dev
 ## 配置
 
 - `OPENCLI_BIN`：默认使用 `opencli`，用于 B站 / 抖音采集。
+- `OPENCLI_BROWSER_CONNECT_TIMEOUT`：opencli 等待 Browser Bridge 连接的秒数，Windows 专用包默认 `8`，避免扩展未连接时每条刷新长时间卡住。
+- `OPENCLI_WINDOW`：opencli 浏览器窗口模式，Windows 专用包默认 `background`，减少刷新时反复弹出浏览器窗口。
 - `FFMPEG_BIN`：默认使用 `ffmpeg`，抖音和无字幕 B站回退转写时会先抽取音频。
 - `STYLE_LIBRARY_DIR`：本地风格库目录，默认 `./style-library`。
 - `JOB_MAX_ACTIVE`：后台任务最大同时运行数，默认 `2`，允许 `1-6`；多任务会先排队再执行。
@@ -113,6 +115,6 @@ npm run package:release -- --include-library
 
 - macOS 双击 `install-deps.command` 检查/安装 Node.js、opencli、ffmpeg，再双击 `start.command`。
 - 终端运行 `./install-deps.sh`、`./start.sh`、`./stop.sh`。
-- Windows 先完整解压 `.zip`，再运行 `install-deps.cmd`、`start.cmd`、`stop.cmd`；不要在压缩包预览窗口里直接双击。`gross-margin-win` 专用包会优先使用包内 `node.exe`，目标机不需要先全局安装 Node。
+- Windows 先完整解压 `.zip`，首次使用运行 `setup-browser-bridge.cmd`，确认 OpenCLI Browser Bridge 扩展连通后再运行 `start.cmd`、`stop.cmd`；不要在压缩包预览窗口里直接双击。`gross-margin-win` 专用包会优先使用包内 `node.exe`，目标机不需要先全局安装 Node 或 opencli。
 
-数据维护 / 数据监控模块不需要大模型；专用包已内置 `opencli` 以支持刷新平台数据，无字幕视频转写才需要 `ffmpeg` 和火山转写配置。
+数据维护 / 数据监控模块不需要大模型；专用包已内置 `opencli` 主程序以支持刷新平台数据，但浏览器型抓取需要 Browser Bridge 扩展，无字幕视频转写才需要 `ffmpeg` 和火山转写配置。

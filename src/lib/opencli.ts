@@ -24,9 +24,27 @@ const DOUYIN_BROWSER_VIDEO_SCAN_LIMIT = 500;
 const DOUYIN_RELATED_COMMENT_VIDEO_LIMIT = 6;
 const DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT = 20;
 const DOUYIN_POST_PAGE_SIZE = 20;
+const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 
 type RunOpenCliOptions = {
   timeout?: number;
+  timingStage?: string;
+  timingMeta?: OpenCliTimingMeta;
+  onTiming?: OpenCliTimingSink;
+};
+
+export type OpenCliTimingMeta = Record<string, string | number | boolean | null | undefined>;
+export type OpenCliTimingEntry = {
+  stage: string;
+  ms: number;
+  ok: boolean;
+  meta?: OpenCliTimingMeta;
+  error?: string;
+};
+export type OpenCliTimingSink = (entry: OpenCliTimingEntry) => void;
+type VideoStatsTimingOptions = {
+  timingMeta?: OpenCliTimingMeta;
+  onTiming?: OpenCliTimingSink;
 };
 
 type OpenCliBrowserWindowMode = "foreground" | "background";
@@ -58,6 +76,20 @@ export type DouyinRelatedCommentVideo = {
 export type DouyinRelatedCommentResult = {
   query: string;
   videos: DouyinRelatedCommentVideo[];
+  comments: string[];
+};
+
+export type BilibiliRelatedCommentVideo = {
+  id: string;
+  title: string;
+  author: string;
+  score: number;
+  url: string;
+};
+
+export type BilibiliRelatedCommentResult = {
+  query: string;
+  videos: BilibiliRelatedCommentVideo[];
   comments: string[];
 };
 
@@ -136,23 +168,112 @@ async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
   let stdout: string;
   let stderr: string;
   const runtime = resolveOpenCliCommand();
+  const startedAt = Date.now();
+  let timingRecorded = false;
 
   try {
     const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 20,
       timeout: options.timeout
     });
     stdout = result.stdout;
     stderr = result.stderr;
   } catch (error) {
+    recordTiming(options, startedAt, false, undefined, error);
     throw wrapOpenCliError(error);
   }
 
   if (stderr && stderr.toLowerCase().includes("error")) {
-    throw new Error(stderr.trim());
+    const error = new Error(stderr.trim());
+    recordTiming(options, startedAt, false, undefined, error);
+    timingRecorded = true;
+    throw error;
   }
 
+  if (!timingRecorded) recordTiming(options, startedAt, true);
   return stdout.trim();
+}
+
+function recordTiming(
+  options: RunOpenCliOptions | VideoStatsTimingOptions,
+  startedAt: number,
+  ok: boolean,
+  meta?: OpenCliTimingMeta,
+  error?: unknown
+) {
+  const stage = "timingStage" in options ? options.timingStage : "";
+  if (!stage || !options.onTiming) return;
+  options.onTiming(makeTimingEntry(stage, Date.now() - startedAt, ok, mergeTimingMeta(options.timingMeta, meta), error));
+}
+
+async function timeOpenCliOperation<T>(
+  options: VideoStatsTimingOptions | undefined,
+  stage: string,
+  operation: () => Promise<T>,
+  meta?: OpenCliTimingMeta
+) {
+  const startedAt = Date.now();
+  try {
+    const result = await operation();
+    options?.onTiming?.(makeTimingEntry(stage, Date.now() - startedAt, true, mergeTimingMeta(options.timingMeta, meta)));
+    return result;
+  } catch (error) {
+    options?.onTiming?.(makeTimingEntry(stage, Date.now() - startedAt, false, mergeTimingMeta(options?.timingMeta, meta), error));
+    throw error;
+  }
+}
+
+function makeTimingEntry(
+  stage: string,
+  ms: number,
+  ok: boolean,
+  meta?: OpenCliTimingMeta,
+  error?: unknown
+): OpenCliTimingEntry {
+  const entry: OpenCliTimingEntry = {
+    stage,
+    ms,
+    ok
+  };
+  const cleanMeta = compactTimingMeta(meta);
+  if (cleanMeta) entry.meta = cleanMeta;
+  const message = formatTimingError(error);
+  if (message) entry.error = message;
+  return entry;
+}
+
+function mergeTimingMeta(...metas: Array<OpenCliTimingMeta | undefined>) {
+  const merged: OpenCliTimingMeta = {};
+  for (const meta of metas) {
+    if (!meta) continue;
+    for (const [key, value] of Object.entries(meta)) {
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+function compactTimingMeta(meta: OpenCliTimingMeta | undefined) {
+  if (!meta) return undefined;
+  const clean: OpenCliTimingMeta = {};
+  for (const [key, value] of Object.entries(meta)) {
+    if (value !== undefined) clean[key] = value;
+  }
+  return Object.keys(clean).length ? clean : undefined;
+}
+
+function withTimingMeta(options: VideoStatsTimingOptions | undefined, meta: OpenCliTimingMeta): VideoStatsTimingOptions {
+  return {
+    onTiming: options?.onTiming,
+    timingMeta: mergeTimingMeta(options?.timingMeta, meta)
+  };
+}
+
+function formatTimingError(error: unknown) {
+  if (!error) return "";
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/\s+/g, " ").trim().slice(0, 220);
 }
 
 function wrapOpenCliError(error: unknown) {
@@ -337,6 +458,63 @@ export async function getDouyinRelatedTopicComments(
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
+}
+
+export async function getBilibiliRelatedTopicComments(
+  query: string,
+  options: { videoLimit?: number; commentLimit?: number } = {}
+): Promise<BilibiliRelatedCommentResult> {
+  const cleanQuery = query.replace(/\s+/g, " ").trim();
+  if (!cleanQuery) {
+    return { query: "", videos: [], comments: [] };
+  }
+
+  const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 50));
+  const stdout = await runOpenCli([
+    "bilibili",
+    "search",
+    cleanQuery,
+    "--type",
+    "video",
+    "--limit",
+    String(Math.max(videoLimit * 2, videoLimit)),
+    "-f",
+    "json"
+  ], { timeout: 30_000 });
+
+  const videos = asArray(parseJsonish(stdout))
+    .map(normalizeBilibiliRelatedVideo)
+    .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
+    .filter((video) => isDouyinRelatedVideoRelevant(video.title, cleanQuery))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, videoLimit);
+
+  const comments: string[] = [];
+  for (const video of videos) {
+    const rows = await getBilibiliComments({ id: video.id, url: video.url, raw: video.url }, commentLimit).catch(() => []);
+    comments.push(...rows.map((comment) => comment.text).filter(Boolean));
+  }
+
+  return {
+    query: cleanQuery,
+    videos,
+    comments: uniqueStrings(comments)
+  };
+}
+
+function normalizeBilibiliRelatedVideo(row: unknown): BilibiliRelatedCommentVideo | null {
+  const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+  const url = stringField(object.url);
+  const id = extractBvid(url || stringField(object.id) || stringField(object.bvid) || String(object.raw || ""));
+  if (!id) return null;
+  return {
+    id,
+    title: String(object.title || object.desc || "").replace(/\s+/g, " ").trim(),
+    author: String(object.author || object.name || object.uname || "").replace(/\s+/g, " ").trim(),
+    score: toNumber(object.score || object.view || object.views || object.play || object.play_count),
+    url: url || `https://www.bilibili.com/video/${id}`
+  };
 }
 
 function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | null {
@@ -1075,30 +1253,41 @@ export function resetDouyinVideoStatsBrowser() {
   return runOpenCli(buildOpenCliBrowserArgs(DOUYIN_STATS_BROWSER_WORKSPACE, "close"), { timeout: 5_000 }).catch(() => undefined);
 }
 
-export async function getDouyinVideoStatsByUrl(url: string): Promise<DouyinVideoStatsResult> {
-  return withDouyinStatsBrowser((workspace) => getDouyinVideoStatsByUrlInWorkspace(workspace, url));
+export async function getDouyinVideoStatsByUrl(
+  url: string,
+  options: VideoStatsTimingOptions = {}
+): Promise<DouyinVideoStatsResult> {
+  return withDouyinStatsBrowser((workspace) => getDouyinVideoStatsByUrlInWorkspace(workspace, url, options), options);
 }
 
-export async function getDouyinVideoStatsBatchByUrl(urls: string[]): Promise<Array<DouyinVideoStatsResult | null>> {
+export async function getDouyinVideoStatsBatchByUrl(
+  urls: string[],
+  options: VideoStatsTimingOptions = {}
+): Promise<Array<DouyinVideoStatsResult | null>> {
   const normalizedUrls = urls.map((url) => url.trim());
   if (!normalizedUrls.length) return [];
 
   return withDouyinStatsBrowser(async (workspace) => {
-    const directItems = await Promise.all(
-      normalizedUrls.map(async (url, index) => {
-        const resolvedShareUrl = await resolveDouyinShareVideoUrl(url).catch(() => "");
-        const awemeId = extractDouyinAwemeId(url) || extractDouyinAwemeId(resolvedShareUrl);
-        return {
-          index,
-          url,
-          resolvedUrl: resolvedShareUrl,
-          awemeId
-        };
-      })
+    const directItems = await timeOpenCliOperation(
+      options,
+      "douyin.batch.resolve-share-url",
+      () => Promise.all(
+        normalizedUrls.map(async (url, index) => {
+          const resolvedShareUrl = await resolveDouyinShareVideoUrl(url).catch(() => "");
+          const awemeId = extractDouyinAwemeId(url) || extractDouyinAwemeId(resolvedShareUrl);
+          return {
+            index,
+            url,
+            resolvedUrl: resolvedShareUrl,
+            awemeId
+          };
+        })
+      ),
+      { count: normalizedUrls.length }
     );
     const resultByIndex = new Map<number, DouyinVideoStatsResult | null>();
     const directAwemeIds = [...new Set(directItems.map((item) => item.awemeId).filter(Boolean))];
-    const detailByAwemeId = await getDouyinVideoDetailSnapshots(workspace, directAwemeIds).catch(() => new Map<string, DouyinVideoStatsSnapshot>());
+    const detailByAwemeId = await getDouyinVideoDetailSnapshots(workspace, directAwemeIds, options).catch(() => new Map<string, DouyinVideoStatsSnapshot>());
 
     for (const item of directItems) {
       const detail = item.awemeId ? detailByAwemeId.get(item.awemeId) : null;
@@ -1113,55 +1302,77 @@ export async function getDouyinVideoStatsBatchByUrl(urls: string[]): Promise<Arr
       directItems.filter((item) => !resultByIndex.has(item.index)),
       2,
       async (item) => {
-        const result = await getDouyinVideoStatsByUrlInWorkspace(workspace, item.url).catch(() => null);
+        const result = await getDouyinVideoStatsByUrlInWorkspace(
+          workspace,
+          item.url,
+          withTimingMeta(options, { index: item.index, fallback: true })
+        ).catch(() => null);
         resultByIndex.set(item.index, result);
       }
     );
 
     return normalizedUrls.map((_, index) => resultByIndex.get(index) || null);
-  });
+  }, options);
 }
 
-async function withDouyinStatsBrowser<T>(callback: (workspace: string) => Promise<T>): Promise<T> {
+async function withDouyinStatsBrowser<T>(
+  callback: (workspace: string) => Promise<T>,
+  options: VideoStatsTimingOptions = {}
+): Promise<T> {
   const run = douyinStatsBrowserQueue.then(async () => {
-    await ensureDouyinStatsBrowser();
+    await ensureDouyinStatsBrowser(options);
     return callback(DOUYIN_STATS_BROWSER_WORKSPACE);
   });
   douyinStatsBrowserQueue = run.catch(() => undefined);
   return run;
 }
 
-async function ensureDouyinStatsBrowser() {
+async function ensureDouyinStatsBrowser(options: VideoStatsTimingOptions = {}) {
   if (douyinStatsBrowserReady) return;
   await runOpenCli(buildOpenCliBrowserArgs(DOUYIN_STATS_BROWSER_WORKSPACE, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
-    timeout: 30_000
+    timeout: 30_000,
+    timingStage: "douyin.browser.ensure-open",
+    onTiming: options.onTiming,
+    timingMeta: options.timingMeta
   });
   douyinStatsBrowserReady = true;
 }
 
-async function getDouyinVideoStatsByUrlInWorkspace(workspace: string, url: string): Promise<DouyinVideoStatsResult> {
+async function getDouyinVideoStatsByUrlInWorkspace(
+  workspace: string,
+  url: string,
+  options: VideoStatsTimingOptions = {}
+): Promise<DouyinVideoStatsResult> {
   const inputUrl = url.trim();
-  const resolvedShareUrl = await resolveDouyinShareVideoUrl(inputUrl).catch(() => "");
+  const resolvedShareUrl = await timeOpenCliOperation(
+    options,
+    "douyin.resolve-share-url",
+    () => resolveDouyinShareVideoUrl(inputUrl).catch(() => ""),
+    { shortLink: /v\.douyin\.com/i.test(inputUrl) }
+  );
   const initialAwemeId = extractDouyinAwemeId(inputUrl) || extractDouyinAwemeId(resolvedShareUrl);
   const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || resolvedShareUrl || inputUrl : resolvedShareUrl || inputUrl;
 
   try {
     if (initialAwemeId) {
-      const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId).catch(() => null);
+      const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId, options).catch(() => null);
       if (fastDetail) {
         return formatDouyinVideoStatsResult(fastDetail, buildDouyinVideoUrl(initialAwemeId) || pageUrl);
       }
     }
 
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
-      timeout: 30_000
+      timeout: 30_000,
+      timingStage: "douyin.browser.open-video",
+      onTiming: options.onTiming,
+      timingMeta: options.timingMeta
     });
-    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId);
+    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId, options);
     const awemeId = resolved.awemeId;
     if (!awemeId) {
       throw new Error("没有从链接里解析到抖音视频 ID，请确认是单条视频链接，或粘贴完整视频页链接。");
     }
-    const detail = await waitForDouyinVideoStats(workspace, awemeId);
+    const detail = await waitForDouyinVideoStats(workspace, awemeId, options);
 
     if (!detail) {
       throw new Error("抖音页面已打开，但没有从真实浏览器网络里抓到点赞、评论、收藏或转发数据。");
@@ -1264,8 +1475,12 @@ export async function getDouyinVideoStatsFromAccount(input: {
   };
 }
 
-async function getDouyinVideoDetailFromNetwork(workspace: string, awemeId: string): Promise<DouyinVideoStatsSnapshot | null> {
-  const previews = await getDouyinNetworkPreviews(workspace);
+async function getDouyinVideoDetailFromNetwork(
+  workspace: string,
+  awemeId: string,
+  options: VideoStatsTimingOptions = {}
+): Promise<DouyinVideoStatsSnapshot | null> {
+  const previews = await getDouyinNetworkPreviews(workspace, options);
   const candidates = getOpenCliNetworkEntries(previews)
     .filter((entry) => isLikelyDouyinAwemeDetailEntry(entry, awemeId))
     .sort(compareDouyinNetworkEntries);
@@ -1276,7 +1491,10 @@ async function getDouyinVideoDetailFromNetwork(workspace: string, awemeId: strin
 
     const detail = parseJsonish(
       await runOpenCli(buildOpenCliBrowserArgs(workspace, "network", ["--detail", key, "--max-body", "0"]), {
-        timeout: 20_000
+        timeout: 20_000,
+        timingStage: "douyin.browser.network.detail",
+        onTiming: options.onTiming,
+        timingMeta: mergeTimingMeta(options.timingMeta, { awemeId })
       })
     );
     const snapshot = extractDouyinStatsSnapshotFromNetworkDetail(detail, awemeId);
@@ -1309,22 +1527,26 @@ async function resolveDouyinShareVideoUrl(url: string) {
   }
 }
 
-async function waitForDouyinVideoStats(workspace: string, awemeId: string) {
+async function waitForDouyinVideoStats(
+  workspace: string,
+  awemeId: string,
+  options: VideoStatsTimingOptions = {}
+) {
   const deadline = Date.now() + 8_000;
   let lastDetail: DouyinVideoStatsSnapshot | null = null;
 
   while (Date.now() < deadline) {
     lastDetail =
-      (await getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null)) ||
-      (await getDouyinVideoDetailFromNetwork(workspace, awemeId).catch(() => null));
+      (await getDouyinVideoDetailSnapshot(workspace, awemeId, options).catch(() => null)) ||
+      (await getDouyinVideoDetailFromNetwork(workspace, awemeId, options).catch(() => null));
     if (lastDetail) return lastDetail;
     await wait(700);
   }
 
   return (
     lastDetail ||
-    (await getDouyinVideoDetailFromNetwork(workspace, awemeId).catch(() => null)) ||
-    (await getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null))
+    (await getDouyinVideoDetailFromNetwork(workspace, awemeId, options).catch(() => null)) ||
+    (await getDouyinVideoDetailSnapshot(workspace, awemeId, options).catch(() => null))
   );
 }
 
@@ -1372,16 +1594,24 @@ function isOpenCliBrowserSessionError(error: unknown) {
   return error instanceof Error && /browser|session|target|tab|context|closed|crash/i.test(error.message);
 }
 
-async function getDouyinNetworkPreviews(workspace: string) {
+async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTimingOptions = {}) {
   const filtered = await runOpenCli(
     buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s", "--filter", "aweme_detail,statistics"]),
-    { timeout: 12_000 }
+    {
+      timeout: 12_000,
+      timingStage: "douyin.browser.network.preview-filtered",
+      onTiming: options.onTiming,
+      timingMeta: options.timingMeta
+    }
   ).catch(() => "");
   const parsedFiltered = parseJsonish(filtered);
   if (getOpenCliNetworkEntries(parsedFiltered).length) return parsedFiltered;
 
   const all = await runOpenCli(buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s"]), {
-    timeout: 12_000
+    timeout: 12_000,
+    timingStage: "douyin.browser.network.preview-all",
+    onTiming: options.onTiming,
+    timingMeta: options.timingMeta
   }).catch(() => "");
   return parseJsonish(all);
 }
@@ -1519,7 +1749,11 @@ function matchesDouyinAwemeId(object: Record<string, unknown>, awemeId: string) 
   return candidates.some((candidate) => String(candidate || "") === awemeId);
 }
 
-async function resolveDouyinAwemeIdFromOpenPage(workspace: string, fallbackAwemeId = "") {
+async function resolveDouyinAwemeIdFromOpenPage(
+  workspace: string,
+  fallbackAwemeId = "",
+  options: VideoStatsTimingOptions = {}
+) {
   if (fallbackAwemeId) {
     return {
       awemeId: fallbackAwemeId,
@@ -1529,7 +1763,10 @@ async function resolveDouyinAwemeIdFromOpenPage(workspace: string, fallbackAweme
 
   const result = parseJsonish(
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_AWEME_ID_EXTRACT_JS]), {
-      timeout: 20_000
+      timeout: 20_000,
+      timingStage: "douyin.browser.eval.resolve-id",
+      onTiming: options.onTiming,
+      timingMeta: options.timingMeta
     })
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
@@ -1566,10 +1803,17 @@ async function getDouyinVideoDetailWithBrowser(
   };
 }
 
-async function getDouyinVideoDetailSnapshot(workspace: string, awemeId: string): Promise<DouyinVideoStatsSnapshot | null> {
+async function getDouyinVideoDetailSnapshot(
+  workspace: string,
+  awemeId: string,
+  options: VideoStatsTimingOptions = {}
+): Promise<DouyinVideoStatsSnapshot | null> {
   const result = parseJsonish(
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinStatsExtractJs(awemeId)]), {
-      timeout: 20_000
+      timeout: 20_000,
+      timingStage: "douyin.browser.eval.stats",
+      onTiming: options.onTiming,
+      timingMeta: mergeTimingMeta(options.timingMeta, { awemeId })
     })
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
@@ -1584,14 +1828,21 @@ async function getDouyinVideoDetailSnapshot(workspace: string, awemeId: string):
   };
 }
 
-async function getDouyinVideoDetailSnapshots(workspace: string, awemeIds: string[]) {
+async function getDouyinVideoDetailSnapshots(
+  workspace: string,
+  awemeIds: string[],
+  options: VideoStatsTimingOptions = {}
+) {
   const uniqueAwemeIds = [...new Set(awemeIds.filter(Boolean))];
   const details = new Map<string, DouyinVideoStatsSnapshot>();
   if (!uniqueAwemeIds.length) return details;
 
   const result = parseJsonish(
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchStatsExtractJs(uniqueAwemeIds)]), {
-      timeout: Math.max(20_000, uniqueAwemeIds.length * 2_500)
+      timeout: Math.max(20_000, uniqueAwemeIds.length * 2_500),
+      timingStage: "douyin.browser.eval.batch-stats",
+      onTiming: options.onTiming,
+      timingMeta: mergeTimingMeta(options.timingMeta, { count: uniqueAwemeIds.length })
     })
   );
   const rows = asArray(result);
@@ -1969,16 +2220,24 @@ export async function hydrateBilibiliVideoStats(video: Video) {
   };
 }
 
-export async function getBilibiliVideoStatsByUrl(url: string): Promise<BilibiliVideoStatsResult> {
-  const resolvedUrl = await resolveBilibiliVideoUrl(url);
+export async function getBilibiliVideoStatsByUrl(
+  url: string,
+  options: VideoStatsTimingOptions = {}
+): Promise<BilibiliVideoStatsResult> {
+  const resolvedUrl = await timeOpenCliOperation(
+    options,
+    "bilibili.resolve-url",
+    () => resolveBilibiliVideoUrl(url),
+    { shortLink: /b23\.tv/i.test(url) }
+  );
   const bvid = extractBvid(resolvedUrl);
   if (!bvid) {
     throw new Error("没有从链接里解析到 B 站 BV 号，请粘贴完整视频链接。");
   }
 
   const [opencliResult, publicResult] = await Promise.allSettled([
-    getBilibiliVideoFields(bvid),
-    getBilibiliPublicVideoFields(bvid)
+    getBilibiliVideoFields(bvid, options),
+    getBilibiliPublicVideoFields(bvid, options)
   ]);
   const opencliFields = opencliResult.status === "fulfilled" ? opencliResult.value : {};
   const publicFields = publicResult.status === "fulfilled" ? publicResult.value : {};
@@ -2073,8 +2332,12 @@ async function normalizeBilibiliVideo(
   };
 }
 
-async function getBilibiliVideoFields(bvid: string) {
-  const stdout = await runOpenCli(["bilibili", "video", bvid, "-f", "json"]);
+async function getBilibiliVideoFields(bvid: string, options: VideoStatsTimingOptions = {}) {
+  const stdout = await runOpenCli(["bilibili", "video", bvid, "-f", "json"], {
+    timingStage: "bilibili.opencli.video",
+    onTiming: options.onTiming,
+    timingMeta: mergeTimingMeta(options.timingMeta, { bvid })
+  });
   const raw = parseJsonish(stdout);
   if (Array.isArray(raw)) {
     return Object.fromEntries(
@@ -2090,13 +2353,18 @@ async function getBilibiliVideoFields(bvid: string) {
   return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 }
 
-async function getBilibiliPublicVideoFields(bvid: string) {
-  const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 style-library",
-      Referer: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`
-    }
-  });
+async function getBilibiliPublicVideoFields(bvid: string, options: VideoStatsTimingOptions = {}) {
+  const response = await timeOpenCliOperation(
+    options,
+    "bilibili.public.view",
+    () => fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 style-library",
+        Referer: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`
+      }
+    }),
+    { bvid }
+  );
   if (!response.ok) {
     throw new Error(`公开接口 HTTP ${response.status}`);
   }
