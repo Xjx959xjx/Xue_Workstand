@@ -64,6 +64,25 @@
   white-space: nowrap;
 }
 
+.writer-flow-progress {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 16%, var(--line-subtle));
+}
+
+.writer-flow-progress span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-strong);
+  transform-origin: left center;
+  transition: transform var(--motion-base) ease;
+}
+
 .writer-refbar {
   display: grid;
   grid-template-columns: auto minmax(200px, 280px) minmax(0, 1fr) auto;
@@ -230,6 +249,30 @@
   background: color-mix(in oklch, var(--panel-raised) 98%, white);
 }
 
+.writer-brief-progress {
+  display: grid;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--accent-tint) 76%, var(--panel-raised));
+}
+
+.writer-brief-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.writer-brief-progress-copy strong {
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
 .writer-brief-meta {
   margin: 0;
   color: var(--muted);
@@ -287,6 +330,25 @@
 .writer-result:has(.project-progress) .result-box.empty {
   border-color: color-mix(in oklch, var(--accent) 32%, transparent);
   background: color-mix(in oklch, var(--accent-tint) 82%, var(--panel-raised));
+}
+
+.writer-page .progress-track {
+  overflow: hidden;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 12%, var(--line-subtle));
+}
+
+.writer-page .progress-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  transition:
+    width var(--motion-base) ease,
+    transform var(--motion-base) ease;
 }
 
 .result-box.empty::before {

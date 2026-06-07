@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Calculator, FileText, FolderKanban, MessageSquarePlus, PenLine, Sparkles } from "lucide-react";
+import { Activity, Calculator, FileText, FolderKanban, MessageSquarePlus, PenLine, Sparkles, Wrench } from "lucide-react";
 import { TaskCenter } from "./TaskCenter";
 import type { AppMode } from "@/lib/app-mode";
 
@@ -17,6 +17,7 @@ const navItems: NavItem[] = [
   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban },
   { href: "/writer", label: "对话写作", icon: PenLine },
   { href: "/assets", label: "评论生成", icon: MessageSquarePlus },
+  { href: "/tools", label: "工具台", icon: Wrench },
   { href: "/gross-margin", label: "数据维护", icon: Calculator },
   { href: "/gross-margin/monitor", label: "数据监控", icon: Activity }
 ];

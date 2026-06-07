@@ -6,7 +6,9 @@ import path from "path";
 import { promisify } from "util";
 import {
   buildOpenCliBrowserArgs,
+  downloadBilibiliVideo,
   getBilibiliVideoStatsByUrl,
+  getBilibiliVideoReference,
   checkDouyinVideoAvailability,
   getBilibiliSubtitle,
   getDouyinVideoStatsByUrl,
@@ -37,6 +39,7 @@ export type LinkTranscriptionResult = {
   platform: Platform | "unknown";
   title?: string;
   sourceAccountName?: string;
+  coverUrl?: string;
   mediaUrls?: string[];
   text: string;
   source: "platform_subtitle" | "volcengine" | "metadata";
@@ -49,7 +52,30 @@ type LinkMediaInfo = {
   mediaId?: string;
   title?: string;
   sourceAccountName?: string;
+  coverUrl?: string;
   mediaUrls: string[];
+};
+
+export type LinkSourceAssetKind = "video" | "cover" | "audio";
+
+export type LinkSourceResolvedMedia = {
+  url: string;
+  resolvedUrl?: string;
+  platform: Platform | "unknown";
+  title?: string;
+  sourceAccountName?: string;
+  coverUrl?: string;
+  mediaUrls: string[];
+};
+
+export type LinkSourceDownloadAsset = {
+  kind: LinkSourceAssetKind;
+  fileName: string;
+  contentType: string;
+  filePath?: string;
+  remoteUrl?: string;
+  requestHeaders?: Record<string, string>;
+  cleanupTargets?: string[];
 };
 
 function transcriptionConfig() {
@@ -259,6 +285,7 @@ export async function transcribeLinkSource(input: {
         platform,
         title: input.titleHint || metadata.title,
         sourceAccountName: metadata.sourceAccountName,
+        coverUrl: metadata.coverUrl,
         text: cleaned.text,
         source: "platform_subtitle",
         fallback: cleaned.fallback,
@@ -283,6 +310,7 @@ export async function transcribeLinkSource(input: {
       ...subtitleResult,
       title: media.title || subtitleResult.title,
       sourceAccountName: media.sourceAccountName || subtitleResult.sourceAccountName,
+      coverUrl: media.coverUrl || subtitleResult.coverUrl,
       mediaUrls: media.mediaUrls,
       timings: [{ stage: "resolve-video-media", ms: Date.now() - startedAt }]
     };
@@ -295,6 +323,7 @@ export async function transcribeLinkSource(input: {
         platform,
         title: media.title,
         sourceAccountName: media.sourceAccountName,
+        coverUrl: media.coverUrl,
         mediaUrls: [],
         text: media.title,
         source: "metadata",
@@ -326,6 +355,7 @@ export async function transcribeLinkSource(input: {
       platform,
       title: media.title || input.titleHint,
       sourceAccountName: media.sourceAccountName,
+      coverUrl: media.coverUrl,
       mediaUrls: media.mediaUrls,
       text: cleaned.text,
       source: "volcengine",
@@ -368,7 +398,7 @@ export async function resolveLinkSourceMedia(input: {
   url: string;
   resolvedUrl?: string;
   platform?: Platform | "unknown";
-}) {
+}): Promise<LinkSourceResolvedMedia> {
   const resolvedUrl = input.resolvedUrl || (await resolveShareUrl(input.url).catch(() => input.url));
   const platform = input.platform && input.platform !== "unknown"
     ? input.platform
@@ -379,6 +409,8 @@ export async function resolveLinkSourceMedia(input: {
       resolvedUrl,
       platform,
       title: undefined,
+      sourceAccountName: undefined,
+      coverUrl: undefined,
       mediaUrls: []
     };
   }
@@ -393,7 +425,80 @@ export async function resolveLinkSourceMedia(input: {
     platform,
     title: media.title,
     sourceAccountName: media.sourceAccountName,
+    coverUrl: media.coverUrl,
     mediaUrls: media.mediaUrls
+  };
+}
+
+export async function prepareLinkSourceDownload(input: {
+  url: string;
+  kind: LinkSourceAssetKind;
+}): Promise<LinkSourceDownloadAsset> {
+  const media = await resolveLinkSourceMedia({ url: input.url });
+  if (media.platform !== "bilibili" && media.platform !== "douyin") {
+    throw new Error("暂不支持下载这个链接，请粘贴 B站或抖音单条视频链接。");
+  }
+
+  const baseName = makeLinkSourceFileBaseName(media);
+
+  if (input.kind === "cover") {
+    if (!media.coverUrl) {
+      throw new Error("没有解析到这条视频的封面地址。");
+    }
+    return {
+      kind: input.kind,
+      fileName: `${baseName}${inferRemoteFileExtension(media.coverUrl, "image")}`,
+      contentType: inferRemoteContentType(media.coverUrl, "image"),
+      remoteUrl: media.coverUrl,
+      requestHeaders: buildRemoteAssetRequestHeaders(media.coverUrl)
+    };
+  }
+
+  if (input.kind === "audio") {
+    if (!media.mediaUrls.length) {
+      throw new Error("没有解析到可提取音频的媒体地址。");
+    }
+    const downloaded = await downloadFirstAvailableRemoteAudio(
+      media.mediaUrls,
+      `${baseName}.mp3`
+    );
+    return {
+      kind: input.kind,
+      fileName: `${baseName}.mp3`,
+      contentType: "audio/mpeg",
+      filePath: downloaded.mediaPath,
+      cleanupTargets: [downloaded.mediaPath]
+    };
+  }
+
+  if (media.platform === "bilibili") {
+    const filePath = await downloadBilibiliVideo({
+      id: media.resolvedUrl || media.url,
+      url: media.resolvedUrl || media.url,
+      title: media.title || baseName,
+      coverUrl: media.coverUrl,
+      raw: media.resolvedUrl || media.url
+    } as Video);
+    return {
+      kind: input.kind,
+      fileName: `${baseName}${inferLocalFileExtension(filePath, ".mp4")}`,
+      contentType: inferLocalContentType(filePath, "video/mp4"),
+      filePath,
+      cleanupTargets: [findTempRoot(filePath, "style-library-bilibili-") || path.dirname(filePath)]
+    };
+  }
+
+  const videoUrl = selectVideoMediaUrl(media.mediaUrls);
+  if (!videoUrl) {
+    throw new Error("没有解析到可下载的视频地址。");
+  }
+
+  return {
+    kind: input.kind,
+    fileName: `${baseName}${inferRemoteFileExtension(videoUrl, "video")}`,
+    contentType: inferRemoteContentType(videoUrl, "video"),
+    remoteUrl: videoUrl,
+    requestHeaders: buildRemoteAssetRequestHeaders(videoUrl)
   };
 }
 
@@ -674,29 +779,39 @@ async function resolveLinkMediaUrl(input: {
 }
 
 async function hydrateLinkMediaInfo(media: LinkMediaInfo, url: string, platform: Platform): Promise<LinkMediaInfo> {
-  if (media.title && media.sourceAccountName) return media;
+  if (media.title && media.sourceAccountName && media.coverUrl) return media;
   const metadata = await resolveLinkStatsMetadata(url, platform);
   return {
     ...media,
     title: media.title || metadata.title,
-    sourceAccountName: media.sourceAccountName || metadata.sourceAccountName
+    sourceAccountName: media.sourceAccountName || metadata.sourceAccountName,
+    coverUrl: media.coverUrl || metadata.coverUrl
   };
 }
 
-async function resolveLinkStatsMetadata(url: string, platform: Platform): Promise<Pick<LinkMediaInfo, "title" | "sourceAccountName">> {
+async function resolveLinkStatsMetadata(url: string, platform: Platform): Promise<Pick<LinkMediaInfo, "title" | "sourceAccountName" | "coverUrl">> {
   if (!url.trim()) return {};
   if (platform === "bilibili") {
     const stats = await getBilibiliVideoStatsByUrl(url).catch(() => null);
+    const reference = await getBilibiliVideoReference({
+      id: url,
+      url,
+      raw: url,
+      title: stats?.title || "",
+      coverUrl: ""
+    }).catch(() => null);
     return {
       title: stats?.title?.trim() || undefined,
-      sourceAccountName: stats?.authorName?.trim() || undefined
+      sourceAccountName: stats?.authorName?.trim() || undefined,
+      coverUrl: reference?.thumbnail?.trim() || undefined
     };
   }
   if (platform === "douyin") {
     const stats = await getDouyinVideoStatsByUrl(url).catch(() => null);
     return {
       title: stats?.title?.trim() || undefined,
-      sourceAccountName: stats?.authorName?.trim() || undefined
+      sourceAccountName: stats?.authorName?.trim() || undefined,
+      coverUrl: undefined
     };
   }
   return {};
@@ -737,6 +852,7 @@ async function resolveBilibiliLinkMedia(url: string) {
       mediaId: String(object.bvid || extractBvid(url) || ""),
       title: normalizeTitle(String(object.title || object.description || "")),
       sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
+      coverUrl: normalizeRemoteMediaUrl(String(object.coverUrl || "")),
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
@@ -784,6 +900,7 @@ async function resolveDouyinLinkMedia(url: string) {
       mediaId: String(object.awemeId || ""),
       title: normalizeTitle(String(object.title || object.description || "")),
       sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
+      coverUrl: normalizeRemoteMediaUrl(String(object.coverUrl || "")),
       mediaUrls: sortLinkMediaUrls(mediaUrls)
     };
   } finally {
@@ -813,6 +930,7 @@ async function resolveGenericLinkMedia(url: string) {
     mediaId: response.url,
     title: normalizeTitle(extractHtmlTitle(html)),
     sourceAccountName: "",
+    coverUrl: normalizeRemoteMediaUrl(extractHtmlImage(html)),
     mediaUrls: sortLinkMediaUrls(mediaUrls)
   };
 }
@@ -953,11 +1071,18 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
       document.querySelector('[data-e2e="user-name"], [class*="author"], [class*="account"]')?.textContent ||
       ""
     );
+    const coverUrl = normalizeUrl(
+      metas["og:image"] ||
+      metas["twitter:image"] ||
+      document.querySelector("video")?.poster ||
+      ""
+    );
     const awemeId = (location.href.match(/\\/video\\/(\\d{10,})/) || [])[1] || "";
     return {
       awemeId,
       title: clean(metas["og:title"] || document.title || ""),
       sourceAccountName: sourceAccountName || metaAccountName,
+      coverUrl,
       description: clean(metas.description || metas["og:description"] || ""),
       mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
     };
@@ -1094,11 +1219,18 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
       document.querySelector('[itemprop="author"] [itemprop="name"], [itemprop="author"], [class*="up-name"], [class*="author"]')?.textContent ||
       ""
     );
+    const coverUrl = normalizeUrl(
+      metas["og:image"] ||
+      metas["twitter:image"] ||
+      document.querySelector("video")?.poster ||
+      ""
+    );
     const bvid = (location.href.match(/BV[0-9A-Za-z]+/) || [])[0] || "";
     return {
       bvid,
       title: clean(metas["og:title"] || document.title || ""),
       sourceAccountName: sourceAccountName || metaAccountName,
+      coverUrl,
       description: clean(metas.description || metas["og:description"] || ""),
       mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
     };
@@ -1146,12 +1278,13 @@ function linkMediaUrlScore(url: string) {
 }
 
 function normalizeRemoteMediaUrl(input: string) {
-  return String(input || "")
+  const cleaned = String(input || "")
     .trim()
     .replaceAll("\\/", "/")
     .split(/[\s|<>]/)[0]
     .replace(/,https?:\/\/.+$/i, "")
     .trim();
+  return cleaned.startsWith("//") ? `https:${cleaned}` : cleaned;
 }
 
 function isSupportedRemoteMediaUrl(input: string) {
@@ -1177,6 +1310,12 @@ function extractHtmlTitle(html: string) {
   return ogTitle || title || "";
 }
 
+function extractHtmlImage(html: string) {
+  const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  const twitterImage = html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  return ogImage || twitterImage || "";
+}
+
 function normalizeTitle(input: string) {
   return input
     .replace(/\s*-\s*抖音$/i, "")
@@ -1191,6 +1330,120 @@ function safeFileName(input: string) {
 
 function browserUserAgent() {
   return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+}
+
+function makeLinkSourceFileBaseName(media: LinkSourceResolvedMedia) {
+  const title = media.title || media.sourceAccountName || media.resolvedUrl || media.url || "single-video";
+  return safeFileName(normalizeTitle(title)).slice(0, 64) || "single-video";
+}
+
+function selectVideoMediaUrl(urls: string[]) {
+  const candidates = urls
+    .map((url) => normalizeRemoteMediaUrl(url))
+    .filter(Boolean)
+    .filter((url) => !isLikelyAudioMediaUrl(url))
+    .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
+  return candidates[0] || "";
+}
+
+function isLikelyAudioMediaUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const text = `${parsed.pathname} ${parsed.search}`.toLowerCase();
+    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+    return mimeType.startsWith("audio_") || /\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(parsed.pathname) || /audio|30216|30232|30280|30250/.test(text);
+  } catch {
+    return /\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(url) || /audio|30216|30232|30280|30250/i.test(url);
+  }
+}
+
+function videoMediaUrlScore(url: string) {
+  try {
+    const parsed = new URL(url);
+    const text = `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase();
+    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+    let score = 0;
+    if (mimeType.startsWith("video_")) score += 1000;
+    if (/\.(mp4|webm|mov|mkv)(\?|$)/i.test(parsed.pathname)) score += 900;
+    if (/douyinvod|play_addr|download_addr|mime_type=video|video_mp4/.test(text)) score += 700;
+    if (/bilivideo|upgcxcode|mime_type=video|\.m4s/.test(text)) score += 300;
+    return score;
+  } catch {
+    if (/\.(mp4|webm|mov|mkv)(\?|$)/i.test(url)) return 900;
+    if (/mime_type=video|video_mp4|douyinvod|bilivideo|upgcxcode/i.test(url)) return 700;
+  }
+  return 0;
+}
+
+function buildRemoteAssetRequestHeaders(url: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "User-Agent": browserUserAgent(),
+    Accept: "*/*"
+  };
+  if (/bilibili|bilivideo|akamaized|upgcxcode/i.test(url)) {
+    headers.Referer = "https://www.bilibili.com/";
+    headers.Origin = "https://www.bilibili.com";
+  }
+  if (/douyin|douyinvod/i.test(url)) {
+    headers.Referer = "https://www.douyin.com/";
+    headers.Origin = "https://www.douyin.com";
+  }
+  return headers;
+}
+
+function inferRemoteFileExtension(url: string, family: "video" | "image") {
+  try {
+    const parsed = new URL(url);
+    const pathName = parsed.pathname.toLowerCase();
+    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
+    const match = pathName.match(/\.(mp4|m4s|webm|mov|mkv|jpe?g|png|webp|gif)$/i);
+    if (match?.[0]) return match[0].toLowerCase();
+    if (mimeType.includes("webp")) return ".webp";
+    if (mimeType.includes("png")) return ".png";
+    if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return ".jpg";
+    if (mimeType.includes("webm")) return ".webm";
+    if (mimeType.includes("video")) return ".mp4";
+  } catch {
+    const match = url.match(/\.(mp4|m4s|webm|mov|mkv|jpe?g|png|webp|gif)(?:\?|$)/i);
+    if (match?.[0]) return match[0].replace(/\?$/, "").toLowerCase();
+  }
+  return family === "image" ? ".jpg" : ".mp4";
+}
+
+function inferRemoteContentType(url: string, family: "video" | "image") {
+  const extension = inferRemoteFileExtension(url, family);
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webm") return "video/webm";
+  return family === "image" ? "image/jpeg" : "video/mp4";
+}
+
+function inferLocalFileExtension(filePath: string, fallback: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  return extension || fallback;
+}
+
+function inferLocalContentType(filePath: string, fallback: string) {
+  const extension = inferLocalFileExtension(filePath, "");
+  if (extension === ".webm") return "video/webm";
+  if (extension === ".mov") return "video/quicktime";
+  if (extension === ".mp3") return "audio/mpeg";
+  if (extension === ".m4a") return "audio/mp4";
+  return fallback;
+}
+
+function findTempRoot(filePath: string, prefix: string) {
+  const tmpRoot = os.tmpdir();
+  let current = path.dirname(filePath);
+  while (current && current.startsWith(tmpRoot)) {
+    if (path.basename(current).startsWith(prefix)) return current;
+    const next = path.dirname(current);
+    if (next === current) break;
+    current = next;
+  }
+  return "";
 }
 
 function normalizeVolcengineAudioFormat(value: string | undefined) {

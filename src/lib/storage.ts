@@ -66,6 +66,19 @@ type DetailReadOptions = {
   includeStyle?: boolean;
 };
 
+export type AccountStyleMeta = {
+  sampleHash: string;
+  sampleFingerprints: Array<{
+    videoId: string;
+    hash: string;
+  }>;
+  sampleVideoIds: string[];
+  sampleCount: number;
+  generationMode: "full" | "incremental";
+  usedModel: string;
+  updatedAt: string;
+};
+
 function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {
   return video.transcriptStatus === "completed" || Boolean(video.transcriptPath);
 }
@@ -186,6 +199,10 @@ function draftAssetsPath(platform: Platform, slug: string, draftId: string) {
 
 function stylePath(platform: Platform, slug: string) {
   return path.join(accountPath(platform, slug), "style.md");
+}
+
+function styleMetaPath(platform: Platform, slug: string) {
+  return path.join(accountPath(platform, slug), "style.meta.json");
 }
 
 function normalizeStorageSegment(value: string, label: string) {
@@ -1129,6 +1146,29 @@ export async function saveStyle(platform: Platform, accountId: string, content: 
   const account = await resolveAccount(platform, accountId);
   await fs.writeFile(stylePath(account.platform, account.slug), content.trimEnd() + "\n", "utf8");
   return content.trimEnd();
+}
+
+export async function readStyle(platform: Platform, accountId: string) {
+  const account = await resolveAccount(platform, accountId);
+  await ensureAccountDirs(account.platform, account.slug);
+  return fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE);
+}
+
+export async function readAccountStyleMeta(platform: Platform, accountId: string) {
+  const account = await resolveAccount(platform, accountId);
+  await ensureAccountDirs(account.platform, account.slug);
+  return readJson<AccountStyleMeta>(styleMetaPath(account.platform, account.slug));
+}
+
+export async function saveAccountStyleMeta(platform: Platform, accountId: string, meta: Omit<AccountStyleMeta, "updatedAt">) {
+  const account = await resolveAccount(platform, accountId);
+  await ensureAccountDirs(account.platform, account.slug);
+  const next: AccountStyleMeta = {
+    ...meta,
+    updatedAt: nowIso()
+  };
+  await writeJson(styleMetaPath(account.platform, account.slug), next);
+  return next;
 }
 
 export async function saveProjectStyle(projectId: string, content: string) {

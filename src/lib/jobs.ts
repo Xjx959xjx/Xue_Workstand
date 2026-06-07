@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import {
+  completeCachedAccountStyle,
   completePreparedAccountStyle,
   completePreparedWriteCopy,
   prepareAccountStyleContext,
@@ -426,10 +427,30 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
   });
   const context = await prepareAccountStyleContext(start.input.platform, start.input.accountId);
   throwIfCancelled(jobId);
+  const cached = completeCachedAccountStyle(context);
+  if (cached) {
+    await patchJob(jobId, {
+      stage: "cache",
+      message: "样本未变化，已复用现有风格卡",
+      progress: 95,
+      partialText: cached.style
+    });
+    await completeJob(jobId, {
+      message: "账号风格卡已复用",
+      result: cached,
+      partialText: cached.style,
+      resultRef: {
+        id: start.input.accountId,
+        href: start.href || "/library",
+        label: "查看账号库"
+      }
+    });
+    return;
+  }
 
   await patchJob(jobId, {
     stage: "generate",
-    message: "正在生成账号风格卡",
+    message: context.generationMode === "incremental" ? "正在增量更新账号风格卡" : "正在生成账号风格卡",
     progress: 35
   });
   const result = await streamResponseTextWithFallback({

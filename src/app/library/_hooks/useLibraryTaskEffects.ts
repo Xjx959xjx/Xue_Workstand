@@ -78,8 +78,12 @@ export function useLibraryTaskEffects({
       setStyleStage("风格卡已生成");
       setStyleProgress(100);
       setMessage(
-        result?.fallback
+        result?.cached
+          ? "样本未变化，已复用现有风格卡。"
+          : result?.fallback
           ? `已降级生成风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
+          : result?.generationMode === "incremental"
+          ? "已根据新增/变化样本增量更新风格卡。"
           : "已自动总结风格卡。"
       );
       return;

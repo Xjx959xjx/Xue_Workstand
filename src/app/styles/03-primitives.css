@@ -79,17 +79,16 @@
 }
 
 @media (min-width: 1181px) {
-  :is(.library-page, .projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page) {
-    grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
+  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page) {
+    grid-template-rows: auto minmax(0, 1fr);
     height: var(--workspace-page-height);
   }
 
-  :is(.library-page, .projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
-  :is(.library-page, .projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
-    grid-template-rows: auto auto minmax(0, auto) minmax(0, 1fr);
+  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
+  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
-  :is(.library-page:has(> .notice), .library-page:has(> .error)) > .library-workspace,
   :is(.projects-page:has(> .notice), .projects-page:has(> .error)) > .project-workspace,
   :is(.assets-page:has(> .notice), .assets-page:has(> .error)) > :is(.assets-workspace, .engagement-workbench),
   :is(.writer-page:has(> .notice), .writer-page:has(> .error)) > .writer-workbench,
@@ -98,14 +97,44 @@
     grid-row: 3;
   }
 
+  .library-page {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: var(--workspace-page-height);
+  }
+
+  .library-page:has(> .notice),
+  .library-page:has(> .error) {
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+  }
+
+  :is(.library-page:has(> .notice), .library-page:has(> .error)) > .library-workspace {
+    grid-row: 4;
+  }
+
+  .tools-page {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: var(--workspace-page-height);
+  }
+
+  .tools-page:has(> .notice),
+  .tools-page:has(> .error) {
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+  }
+
+  :is(.tools-page:has(> .notice), .tools-page:has(> .error)) > .tools-workbench {
+    grid-row: 4;
+  }
+
   .library-page > .panel.three-pane,
+  .library-page > .panel.three-pane.library-workspace,
   .assets-page > :is(.panel.three-pane, .engagement-workbench),
   .projects-page > .project-workspace,
   .writer-page > .writer-workbench,
   .gross-margin-page > .gross-margin-workspace,
-  .project-workbench-page > .project-workbench-shell {
+  .project-workbench-page > .project-workbench-shell,
+  .tools-page > .tools-workbench {
     min-height: 0;
-    height: var(--workspace-default-height);
+    height: 100%;
   }
 }
 

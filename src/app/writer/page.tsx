@@ -20,6 +20,11 @@ import { buildWriterDraftHref } from "@/lib/draft-links";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import type { Draft, WriteResult } from "@/lib/types";
 
+const BRIEF_PROGRESS_INITIAL = 8;
+const BRIEF_PROGRESS_CAP = 92;
+const BRIEF_PROGRESS_ESTIMATE_MS = 120_000;
+const BRIEF_PROGRESS_TICK_MS = 1_000;
+
 export default function WriterPage() {
   return (
     <Suspense fallback={<WriterFallback />}>
@@ -53,6 +58,9 @@ function WriterPageContent() {
     fallback: boolean;
     fallbackReason?: string;
   } | null>(null);
+  const [briefProgress, setBriefProgress] = useState(0);
+  const [briefStage, setBriefStage] = useState("");
+  const [briefStartedAt, setBriefStartedAt] = useState<number | null>(null);
   const [preparedSourceText, setPreparedSourceText] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
@@ -133,6 +141,9 @@ function WriterPageContent() {
 
   const handlePrepareBrief = useCallback(async () => {
     if (!canPrepareBrief) return;
+    setBriefStartedAt(Date.now());
+    setBriefProgress(BRIEF_PROGRESS_INITIAL);
+    setBriefStage("整理上下文");
     setBusy("brief");
     setNotice("");
     try {
@@ -161,6 +172,7 @@ function WriterPageContent() {
       setNotice(error instanceof Error ? error.message : "准备写作 brief 失败");
     } finally {
       setBusy("");
+      setBriefStartedAt(null);
     }
   }, [
     canPrepareBrief,
@@ -176,6 +188,30 @@ function WriterPageContent() {
     useWebResearch,
     writerInputSignature
   ]);
+
+  useEffect(() => {
+    if (busy !== "brief" || !briefStartedAt) {
+      if (busy !== "brief") {
+        setBriefProgress(0);
+        setBriefStage("");
+      }
+      return;
+    }
+
+    const updateBriefProgress = () => {
+      const elapsedMs = Date.now() - briefStartedAt;
+      const nextProgress = Math.min(
+        BRIEF_PROGRESS_CAP,
+        BRIEF_PROGRESS_INITIAL + Math.round((elapsedMs / BRIEF_PROGRESS_ESTIMATE_MS) * (BRIEF_PROGRESS_CAP - BRIEF_PROGRESS_INITIAL))
+      );
+      setBriefProgress(nextProgress);
+      setBriefStage(getBriefProgressStage(elapsedMs, useWebResearch));
+    };
+
+    updateBriefProgress();
+    const timer = window.setInterval(updateBriefProgress, BRIEF_PROGRESS_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [briefStartedAt, busy, useWebResearch]);
 
   const {
     canGenerate,
@@ -235,6 +271,7 @@ function WriterPageContent() {
   const briefFlowState = busy === "brief" ? "active" : briefReady ? "done" : briefStale ? "pending" : "neutral";
   const draftFlowState = busy === "generate" ? "active" : lastContent ? "done" : "neutral";
   const briefStatusLabel = busy === "brief" ? "准备中" : briefReady ? "已确认" : briefStale ? "需更新" : "待准备";
+  const briefProgressLabel = busy === "brief" ? `${briefStage || "等待模型"} ${briefProgress}%` : "";
   const briefMetaLabel = briefMeta
     ? briefMeta.fallback
       ? briefMeta.fallbackReason || "本地结构"
@@ -554,7 +591,12 @@ function WriterPageContent() {
           <div className="writer-flow-strip" aria-label="写作链路">
             <WriterFlowStep label="引用" state={activeReference ? "done" : "pending"} value={referenceFlowValue} />
             <WriterFlowStep label="素材" state={hasTaskInput ? "done" : "pending"} value={materialFlowValue} />
-            <WriterFlowStep label="Brief" state={briefFlowState} value={briefStatusLabel} />
+            <WriterFlowStep
+              label="Brief"
+              state={briefFlowState}
+              value={busy === "brief" ? briefProgressLabel : briefStatusLabel}
+              progress={busy === "brief" ? briefProgress : undefined}
+            />
             <WriterFlowStep label="成稿" state={draftFlowState} value={busy === "generate" ? "生成中" : lastContent ? "已生成" : "待生成"} />
           </div>
 
@@ -704,6 +746,17 @@ function WriterPageContent() {
                   value={brief}
                   onChange={(event) => setBrief(event.target.value)}
                 />
+                {busy === "brief" ? (
+                  <div className="writer-brief-progress" role="status" aria-live="polite">
+                    <div className="writer-brief-progress-copy">
+                      <span>{briefStage || "等待模型"}</span>
+                      <strong>{briefProgress}%</strong>
+                    </div>
+                    <div className="progress-track" aria-hidden="true">
+                      <div className="progress-fill" style={{ transform: `scaleX(${briefProgress / 100})` }} />
+                    </div>
+                  </div>
+                ) : null}
                 {briefMetaLabel ? <p className="writer-brief-meta">{briefMetaLabel}</p> : null}
               </div>
 
@@ -720,6 +773,7 @@ function WriterPageContent() {
                 </button>
                 <button
                   className={`btn ${briefReady ? "" : "primary"}`}
+                  aria-busy={busy === "brief"}
                   disabled={!canPrepareBrief || busy === "brief"}
                   onClick={handlePrepareBrief}
                   type="button"
@@ -851,13 +905,42 @@ function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: s
 
 type WriterFlowState = "active" | "done" | "neutral" | "pending";
 
-function WriterFlowStep({ label, state, value }: { label: string; state: WriterFlowState; value: string }) {
+function WriterFlowStep({
+  label,
+  state,
+  value,
+  progress
+}: {
+  label: string;
+  state: WriterFlowState;
+  value: string;
+  progress?: number;
+}) {
+  const safeProgress = clampPercent(progress);
+
   return (
-    <div className={`writer-flow-step ${state}`}>
+    <div className={`writer-flow-step ${state}`} aria-busy={state === "active" ? "true" : undefined}>
       <span className="writer-flow-label">{label}</span>
       <strong>{value}</strong>
+      {typeof safeProgress === "number" ? (
+        <span className="writer-flow-progress" aria-label={`${label} 进度 ${safeProgress}%`}>
+          <span style={{ transform: `scaleX(${safeProgress / 100})` }} />
+        </span>
+      ) : null}
     </div>
   );
+}
+
+function clampPercent(value?: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function getBriefProgressStage(elapsedMs: number, useWebResearch: boolean) {
+  if (elapsedMs < 3_000) return "整理上下文";
+  if (useWebResearch && elapsedMs < 60_000) return "联网检索";
+  if (elapsedMs < 105_000) return "等待模型";
+  return "远端较慢";
 }
 
 function makeDraftWriterInputSignature(draft: Draft) {

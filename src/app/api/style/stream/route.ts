@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  completeCachedAccountStyle,
   completePreparedAccountStyle,
   prepareAccountStyleContext,
   streamResponseTextWithFallback
@@ -22,9 +23,21 @@ export async function POST(request: Request) {
     const stream = createNdjsonStream(async (emit) => {
       emit({ type: "stage", stage: "prepare", message: "正在读取账号转写样本", progress: 12 });
       const context = await prepareAccountStyleContext(input.platform, input.accountId);
+      const cached = completeCachedAccountStyle(context);
+      if (cached) {
+        emit({ type: "stage", stage: "cache", message: "样本未变化，已复用现有风格卡", progress: 100 });
+        emit({ type: "delta", delta: cached.style });
+        emit({ type: "result", data: cached });
+        return;
+      }
 
       let generated = "";
-      emit({ type: "stage", stage: "generate", message: "正在生成账号风格卡", progress: 35 });
+      emit({
+        type: "stage",
+        stage: "generate",
+        message: context.generationMode === "incremental" ? "正在增量更新账号风格卡" : "正在生成账号风格卡",
+        progress: 35
+      });
       const result = await streamResponseTextWithFallback({
         messages: context.messages,
         maxOutputTokens: 3200,

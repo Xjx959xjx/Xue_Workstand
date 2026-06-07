@@ -538,6 +538,57 @@ export function transcribeCopySource(input: { url: string; titleHint?: string; a
   });
 }
 
+export type SingleVideoAssetKind = "video" | "cover" | "audio";
+
+export type SingleVideoTranscribeResult = {
+  url: string;
+  resolvedUrl?: string;
+  platform: Platform | "unknown";
+  title?: string;
+  sourceAccountName?: string;
+  coverUrl?: string;
+  mediaUrls?: string[];
+  text: string;
+  source: "platform_subtitle" | "volcengine" | "metadata";
+  fallback?: boolean;
+  fallbackReason?: string;
+  timings?: { stage: string; ms: number }[];
+};
+
+export function transcribeSingleVideoLink(input: { url: string; titleHint?: string }) {
+  return requestJson<{ result: SingleVideoTranscribeResult }>("/api/tools/single-video/transcribe", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function downloadSingleVideoAsset(input: { url: string; kind: SingleVideoAssetKind }) {
+  const response = await fetch("/api/tools/single-video/download", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input),
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  if (!response.ok) {
+    const fallbackResponse = response.clone();
+    const data = await response.json().catch(async () => {
+      const text = await fallbackResponse.text().catch(() => "");
+      return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+    });
+    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
+  }
+
+  const fallbackName = input.kind === "cover" ? "视频封面.jpg" : input.kind === "audio" ? "视频音频.mp3" : "视频文件.mp4";
+  const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition")) || fallbackName;
+  downloadBlob(await response.blob(), fileName);
+  return { fileName };
+}
+
 export function createProjectFromCopySources(input: {
   name: string;
   description?: string;
@@ -583,6 +634,9 @@ export type StyleGenerationResponse = {
   fallback: boolean;
   usedModel: string;
   fallbackReason?: string;
+  cached?: boolean;
+  generationMode?: "full" | "incremental" | "cached";
+  sampleHash?: string;
 };
 
 export function generateStyle(platform: Platform, accountId: string) {

@@ -12,16 +12,19 @@ import {
   WriteSourceDigest,
   platforms
 } from "./types";
-import { clampText, makeTitleFromPrompt } from "./utils";
+import { clampText, makeTitleFromPrompt, shortHash } from "./utils";
 import { fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
 import {
   getTopTranscriptSamples,
   getProjectSummary,
   resolveCopySource,
   libraryRoot,
+  readAccountStyleMeta,
+  readStyle,
   resolveAccount,
   resolveProject,
   saveDraft,
+  saveAccountStyleMeta,
   saveProjectStyle,
   saveStyle,
   upsertProject
@@ -107,6 +110,24 @@ export type PreparedAccountStyleContext = {
   accountName: string;
   messages: ChatMessage[];
   fallback: string;
+  sampleHash: string;
+  sampleFingerprints: Array<{
+    videoId: string;
+    hash: string;
+  }>;
+  sampleVideoIds: string[];
+  generationMode: "full" | "incremental";
+  cachedStyle?: string;
+};
+
+export type AccountStyleGenerationResult = {
+  style: string;
+  fallback: boolean;
+  usedModel: string;
+  fallbackReason?: string;
+  cached?: boolean;
+  generationMode?: "full" | "incremental" | "cached";
+  sampleHash?: string;
 };
 
 type FetchInitWithDispatcher = UndiciRequestInit & {
@@ -1157,15 +1178,29 @@ function describeErrorForLog(error: unknown) {
   return `${error.name}: ${error.message}${causeDetail}`;
 }
 
-export async function prepareAccountStyleContext(platform: Platform, accountId: string): Promise<PreparedAccountStyleContext> {
-  const account = await resolveAccount(platform, accountId);
-  const samples = await getTopTranscriptSamples(platform, accountId, 8);
+type AccountStyleSample = Awaited<ReturnType<typeof getTopTranscriptSamples>>[number];
 
-  if (!samples.length) {
-    throw new Error("这个账号还没有可用于总结的转写稿");
-  }
+function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
+  const sampleFingerprints = samples.map(({ video, transcript }) => ({
+    videoId: video.id,
+    hash: shortHash([
+      video.id,
+      video.title,
+      video.stats.views,
+      video.stats.likes,
+      transcript
+    ].join("\n"))
+  }));
 
-  const corpus = samples
+  return {
+    sampleFingerprints,
+    sampleVideoIds: sampleFingerprints.map((sample) => sample.videoId),
+    sampleHash: shortHash(JSON.stringify(sampleFingerprints))
+  };
+}
+
+function formatAccountStyleSampleCorpus(samples: AccountStyleSample[]) {
+  return samples
     .map(
       ({ video, transcript }, index) =>
         `样本 ${index + 1}｜${video.title}\n播放:${video.stats.views} 点赞:${video.stats.likes}\n${clampText(
@@ -1174,40 +1209,146 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
         )}`
     )
     .join("\n\n---\n\n");
+}
 
-  const fallback = buildFallbackStyle(account.name, corpus);
-  const messages: ChatMessage[] = [
-    {
-      role: "system",
-      content:
-        "你是短视频账号风格分析师。请根据爆款转写稿，提炼可复用的中文文案风格卡。输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
-    },
-    {
-      role: "user",
-      content: `账号：${account.name}\n平台：${platform}\n\n爆款样本：\n${corpus}`
-    }
-  ];
+function selectIncrementalAccountStyleSamples(
+  samples: AccountStyleSample[],
+  sampleFingerprints: PreparedAccountStyleContext["sampleFingerprints"],
+  previousFingerprints?: PreparedAccountStyleContext["sampleFingerprints"]
+) {
+  if (!previousFingerprints?.length) return { samples, canIncremental: false };
+
+  const currentById = new Map(sampleFingerprints.map((sample) => [sample.videoId, sample.hash]));
+  const previousById = new Map(previousFingerprints.map((sample) => [sample.videoId, sample.hash]));
+  const removedSamples = previousFingerprints.some((sample) => !currentById.has(sample.videoId));
+  const changedSamples = samples.filter((sample) => previousById.get(sample.video.id) !== currentById.get(sample.video.id));
+
+  return {
+    samples: changedSamples.length && !removedSamples ? changedSamples : samples,
+    canIncremental: Boolean(changedSamples.length && !removedSamples)
+  };
+}
+
+export async function prepareAccountStyleContext(platform: Platform, accountId: string): Promise<PreparedAccountStyleContext> {
+  const account = await resolveAccount(platform, accountId);
+  const samples = await getTopTranscriptSamples(platform, accountId, 8);
+
+  if (!samples.length) {
+    throw new Error("这个账号还没有可用于总结的转写稿");
+  }
+
+  const sampleState = buildAccountStyleSampleState(samples);
+  const [styleMeta, existingStyle] = await Promise.all([
+    readAccountStyleMeta(platform, accountId),
+    readStyle(platform, accountId)
+  ]);
+  const currentStyle = existingStyle.trim();
+  if (styleMeta?.sampleHash === sampleState.sampleHash && currentStyle) {
+    return {
+      platform,
+      accountId,
+      accountName: account.name,
+      messages: [],
+      fallback: currentStyle,
+      ...sampleState,
+      generationMode: "full",
+      cachedStyle: currentStyle
+    };
+  }
+
+  const incremental = currentStyle
+    ? selectIncrementalAccountStyleSamples(samples, sampleState.sampleFingerprints, styleMeta?.sampleFingerprints)
+    : { samples, canIncremental: false };
+  const generationMode = incremental.canIncremental ? "incremental" : "full";
+  const corpus = formatAccountStyleSampleCorpus(incremental.samples);
+  const fallback = generationMode === "incremental" ? currentStyle : buildFallbackStyle(account.name, corpus);
+  const messages: ChatMessage[] = generationMode === "incremental"
+    ? [
+        {
+          role: "system",
+          content:
+            "你是短视频账号风格分析师。请基于已有风格卡和新增/变化样本做增量更新，输出一份完整 Markdown 风格卡。保留仍然成立的洞察，只在新样本提供充分证据时修订；结论要具体贴合样本，不要输出泛泛模板。"
+        },
+        {
+          role: "user",
+          content: [
+            `账号：${account.name}`,
+            `平台：${platform}`,
+            `已有风格卡：\n${currentStyle}`,
+            `新增/变化样本：\n${corpus}`,
+            [
+              "输出要求：",
+              "1. 输出完整风格卡，不要只输出差异说明。",
+              "2. 结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。",
+              "3. 不要编造样本没有体现的新定位或事实。"
+            ].join("\n")
+          ].join("\n\n")
+        }
+      ]
+    : [
+        {
+          role: "system",
+          content:
+            "你是短视频账号风格分析师。请根据爆款转写稿，提炼可复用的中文文案风格卡。输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
+        },
+        {
+          role: "user",
+          content: `账号：${account.name}\n平台：${platform}\n\n爆款样本：\n${corpus}`
+        }
+      ];
 
   return {
     platform,
     accountId,
     accountName: account.name,
     messages,
-    fallback
+    fallback,
+    ...sampleState,
+    generationMode
   };
 }
 
 export async function completePreparedAccountStyle(
   context: PreparedAccountStyleContext,
   result: ChatCompletionResult
-) {
+): Promise<AccountStyleGenerationResult> {
   const style = result.text || context.fallback;
   await saveStyle(context.platform, context.accountId, style);
-  return { style, fallback: result.fallback, usedModel: result.model, fallbackReason: result.fallbackReason };
+  await saveAccountStyleMeta(context.platform, context.accountId, {
+    sampleHash: context.sampleHash,
+    sampleFingerprints: context.sampleFingerprints,
+    sampleVideoIds: context.sampleVideoIds,
+    sampleCount: context.sampleVideoIds.length,
+    generationMode: context.generationMode,
+    usedModel: result.model
+  });
+  return {
+    style,
+    fallback: result.fallback,
+    usedModel: result.model,
+    fallbackReason: result.fallbackReason,
+    cached: false,
+    generationMode: context.generationMode,
+    sampleHash: context.sampleHash
+  };
 }
 
-export async function generateStyleProfile(platform: Platform, accountId: string) {
+export function completeCachedAccountStyle(context: PreparedAccountStyleContext): AccountStyleGenerationResult | null {
+  if (!context.cachedStyle) return null;
+  return {
+    style: context.cachedStyle,
+    fallback: false,
+    usedModel: "style-cache",
+    cached: true,
+    generationMode: "cached",
+    sampleHash: context.sampleHash
+  };
+}
+
+export async function generateStyleProfile(platform: Platform, accountId: string): Promise<AccountStyleGenerationResult> {
   const context = await prepareAccountStyleContext(platform, accountId);
+  const cached = completeCachedAccountStyle(context);
+  if (cached) return cached;
   const result = await completeStyleGeneration(context.messages);
   return completePreparedAccountStyle(context, result);
 }
@@ -1627,13 +1768,7 @@ async function buildAccountWritingBrief(input: {
     ]
   );
 
-  if (result.text.trim()) return { ...result, text: result.text.trim() };
-  return {
-    ...result,
-    text: buildLocalAccountWritingBrief(input),
-    fallback: true,
-    fallbackReason: result.fallbackReason || "模型没有返回可用 brief，已用本地结构整理。"
-  };
+  return requireWriteBriefResult(result);
 }
 
 async function buildProjectWritingBrief(input: {
@@ -1691,17 +1826,11 @@ async function buildProjectWritingBrief(input: {
     ]
   );
 
-  if (result.text.trim()) return { ...result, text: result.text.trim() };
-  return {
-    ...result,
-    text: buildLocalProjectWritingBrief(input),
-    fallback: true,
-    fallbackReason: result.fallbackReason || "模型没有返回可用 brief，已用本地结构整理。"
-  };
+  return requireWriteBriefResult(result);
 }
 
 function completeWriteBriefGeneration(messages: ChatMessage[]) {
-  return streamResponseTextWithFallback({
+  return streamResponseText({
     messages,
     reasoningEffort: "low",
     maxOutputTokens: WRITE_BRIEF_MAX_OUTPUT_TOKENS,
@@ -1711,68 +1840,11 @@ function completeWriteBriefGeneration(messages: ChatMessage[]) {
   });
 }
 
-function buildLocalAccountWritingBrief(input: {
-  accountName: string;
-  input: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-}) {
-  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
-  const task = input.input.mode === "topic" ? input.input.prompt : `${input.input.prompt}\n\n${sourceText}`;
+function requireWriteBriefResult(result: ChatCompletionResult) {
+  const text = result.text.trim();
+  if (text) return { ...result, text };
 
-  return [
-    "## 核心事件",
-    `- 围绕用户任务写：${clampText(task, 420)}`,
-    "## 可见画面/具体细节",
-    `- 只使用用户提供素材、链接转写结果和明确要求；素材不足时把“不确定”留在内部，不要写进成稿。`,
-    input.supportDocContext && input.supportDocContext !== "未提供支持文档。"
-      ? `- 支持文档资料：${clampText(input.supportDocContext, 360)}`
-      : "",
-    "## 账号化切入",
-    `- 按「${input.accountName}」的离谱奇闻/游戏化包装来写，开头先抛反差结论。`,
-    "## 梗和映射",
-    "- 优先把普通现实动作包装成游戏副本、装备觉醒、玩家整活、评论区围观。",
-    "## 成稿路线",
-    "- 开头抛离谱结论 -> 交代事情 -> 具体动作升级 -> 游戏梗命名 -> 评论区接梗。",
-    "## 避坑",
-    "- 不要写成教程，不要长篇解释梗，不要用空泛形容词替代具体画面。",
-    input.webContext && input.webContext !== "未启用联网检索。" ? `- 联网资料：${clampText(input.webContext, 300)}` : ""
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function buildLocalProjectWritingBrief(input: {
-  projectName: string;
-  projectDescription?: string;
-  input: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-}) {
-  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
-  const task = input.input.mode === "topic" ? input.input.prompt : `${input.input.prompt}\n\n${sourceText}`;
-
-  return [
-    "## 核心事件",
-    `- 围绕用户任务写：${clampText(task, 420)}`,
-    input.projectDescription ? `- 项目说明：${clampText(input.projectDescription, 240)}` : "",
-    "## 可见画面/具体细节",
-    "- 优先使用案例素材、用户输入、链接转写和支持资料中的具体人物、动作、画面、商品信息。",
-    input.supportDocContext && input.supportDocContext !== "未提供支持文档。"
-      ? `- 支持文档资料：${clampText(input.supportDocContext, 360)}`
-      : "",
-    "## 项目化切入",
-    `- 按「${input.projectName}」的项目风格组织信息，先给钩子，再把事实推进成可口播段落。`,
-    "## 梗和映射",
-    "- 保留素材里已有的热词、反差、场景和评论区接话点，不凭空发明事实。",
-    "## 成稿路线",
-    "- 开头钩子 -> 具体事件 -> 关键细节 -> 情绪/观点推进 -> 评论区问题或行动引导。",
-    "## 避坑",
-    "- 不要写成资料摘要，不要堆砌项目背景，不要复述风格卡条目。",
-    input.webContext && input.webContext !== "未启用联网检索。" ? `- 联网资料：${clampText(input.webContext, 300)}` : ""
-  ]
-    .filter(Boolean)
-    .join("\n");
+  throw new Error(result.fallbackReason || "对话模型没有返回可用写作 Brief，请稍后重试或检查模型配置。");
 }
 
 function buildWriteSourceDigest(input: WriteCopyInput): WriteSourceDigest {
