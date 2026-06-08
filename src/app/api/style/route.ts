@@ -14,7 +14,7 @@ const baseSchema = z.object({
 export async function POST(request: Request) {
   return apiJson(async () => {
     const input = await parseJsonBody(request, baseSchema);
-    return generateStyleProfile(input.platform, input.accountId);
+    return generateStyleProfile(input.platform, input.accountId, { signal: request.signal });
   }, {
     fallbackMessage: "自动总结风格失败"
   });

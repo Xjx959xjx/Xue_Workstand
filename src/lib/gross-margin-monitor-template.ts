@@ -1,5 +1,5 @@
 import type { GrossMarginPriceTable, GrossMarginServiceKind } from "./types";
-import { extractVideoUrl, normalizeVideoUrlInput } from "./video-links";
+import { extractVideoUrl, normalizeVideoUrlInput } from "./platform-links";
 
 export type GrossMarginBulkMonitorItem = {
   platform: GrossMarginPriceTable["platform"];

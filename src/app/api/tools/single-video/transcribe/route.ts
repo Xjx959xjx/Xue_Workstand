@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
-import { createUrlPreprocessor } from "@/lib/link-input";
+import { createUrlPreprocessor } from "@/lib/platform-links";
 import { transcribeLinkSource } from "@/lib/transcription";
 
 export const runtime = "nodejs";
@@ -16,7 +16,8 @@ export async function POST(request: Request) {
     const result = await transcribeLinkSource({
       url: input.url,
       titleHint: input.titleHint,
-      analyzeVideo: true
+      analyzeVideo: true,
+      signal: request.signal
     });
     return { result };
   }, {

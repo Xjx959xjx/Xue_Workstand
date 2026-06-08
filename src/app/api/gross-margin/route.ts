@@ -22,8 +22,15 @@ import type {
   GrossMarginPriceTable,
   GrossMarginServiceKind
 } from "@/lib/types";
-import { extractBvid, extractDouyinAwemeId, safeSegment, shortHash, toNumber } from "@/lib/utils";
-import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey, normalizeVideoUrlInput } from "@/lib/video-links";
+import {
+  detectVideoPlatform,
+  extractBvid,
+  extractDouyinAwemeId,
+  extractVideoUrl,
+  getVideoComparableKey,
+  normalizeVideoUrlInput
+} from "@/lib/platform-links";
+import { safeSegment, shortHash, toNumber } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,6 +41,8 @@ const amountSchema = z.coerce.number().finite().min(0, "金额不能小于 0").m
 const minimumQuantitySchema = z.coerce.number().finite().gt(0, "起量必须大于 0").max(100_000_000, "起量过大，请检查输入");
 const DOUYIN_VIDEO_STATS_CACHE_TTL_MS = 3 * 60 * 1000;
 const MONITOR_REFRESH_LOG_PREFIX = "[gross-margin-monitor]";
+const DEFAULT_MONITOR_REFRESH_CONCURRENCY = 3;
+const MAX_MONITOR_REFRESH_CONCURRENCY = 6;
 
 const douyinSingleVideoStatsCache = new Map<
   string,
@@ -183,7 +192,8 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
     videoUrl,
     videoKey,
     sourceText: input.sourceText,
-    targetStats
+    targetStats,
+    warnings: resolvedVideo.warnings
   });
 }
 
@@ -385,15 +395,16 @@ async function refreshMonitorRecords(recordIds?: string[]) {
       })
     );
 
+    const concurrency = monitorRefreshConcurrency();
     refreshed = await timeMonitorOperation(
       logger.onTiming,
       "monitor.records.process",
-      () => Promise.all(records.map(async (record) => {
+      () => runWithConcurrency(records, concurrency, async (record) => {
         const fetched = douyinFetchedById.get(record.id);
         if (fetched) return saveRefreshedMonitorRecord(record, fetched, logger.onTiming);
         return refreshMonitorRecordSnapshot(record, logger.onTiming);
-      })),
-      { recordCount: records.length, concurrency: "unbounded" }
+      }),
+      { recordCount: records.length, concurrency }
     );
     return refreshed;
   } catch (error) {
@@ -405,6 +416,31 @@ async function refreshMonitorRecords(recordIds?: string[]) {
       failedCount: refreshed.filter((record) => record.status === "failed").length
     });
   }
+}
+
+function monitorRefreshConcurrency() {
+  const parsed = Number.parseInt(process.env.GROSS_MARGIN_MONITOR_REFRESH_CONCURRENCY || "", 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_MONITOR_REFRESH_CONCURRENCY;
+  return Math.max(1, Math.min(parsed, MAX_MONITOR_REFRESH_CONCURRENCY));
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 async function updateMonitorPlayTarget(recordId: string, target: number) {

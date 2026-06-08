@@ -766,7 +766,6 @@ export type JobStartInput =
         platform: Platform;
         accountId: string;
         videoId: string;
-        mediaPath?: string;
         mediaUrl?: string;
         allowRemoteDownload?: boolean;
       };

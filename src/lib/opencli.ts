@@ -1,70 +1,78 @@
-import { execFile } from "child_process";
-import { promises as fs } from "fs";
-import os from "os";
-import path from "path";
-import { promisify } from "util";
 import { Account, CollectOrder, Platform, Video } from "./types";
+import {
+  asArray,
+  buildOpenCliBrowserArgs,
+  mergeTimingMeta,
+  opencliBin,
+  openCliRows,
+  parseJsonish,
+  parseOpenCliJsonish,
+  resolveOpenCliCommand,
+  runOpenCli,
+  stringField,
+  timeOpenCliOperation,
+  withTimingMeta,
+  type OpenCliTimingEntry,
+  type OpenCliTimingMeta,
+  type OpenCliTimingOptions,
+  type OpenCliTimingSink
+} from "./opencli-runtime";
 import {
   buildDouyinVideoUrl,
   extractBilibiliUid,
-  extractBvid,
   extractDouyinAwemeId,
   extractDouyinSecUid,
-  isLikelyDirectMediaUrl,
-  nowIso,
-  safeSegment,
-  shortHash,
-  toNumber
-} from "./utils";
-import { getVideoComparableKey } from "./video-links";
+  getVideoComparableKey,
+  isLikelyDirectMediaUrl
+} from "./platform-links";
+import { nowIso, safeSegment, shortHash, toNumber } from "./utils";
+import { firstNumber, isRelatedVideoRelevant, normalizeCommentText, normalizeTimestamp, uniqueStrings } from "./opencli-normalizers";
+import { collectBilibiliVideos, searchBilibiliUserUid } from "./opencli-bilibili";
+import {
+  DOUYIN_AWEME_ID_EXTRACT_JS,
+  DOUYIN_MEDIA_EXTRACT_JS,
+  DOUYIN_RELATED_VIDEO_EXTRACT_JS,
+  DOUYIN_SEARCH_EXTRACT_JS,
+  DOUYIN_VIDEO_COMMENT_EXTRACT_JS,
+  buildDouyinBatchStatsExtractJs,
+  buildDouyinDetailExtractJs,
+  buildDouyinPostExtractJs,
+  buildDouyinStatsExtractJs
+} from "./opencli-douyin-scripts";
 
-const execFileAsync = promisify(execFile);
-const DOUYIN_BROWSER_SEARCH_LIMIT = 12;
 const DOUYIN_BROWSER_VIDEO_SCAN_LIMIT = 500;
 const DOUYIN_RELATED_COMMENT_VIDEO_LIMIT = 6;
 const DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT = 20;
-const DOUYIN_POST_PAGE_SIZE = 20;
-const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 
-type RunOpenCliOptions = {
-  timeout?: number;
-  timingStage?: string;
-  timingMeta?: OpenCliTimingMeta;
-  onTiming?: OpenCliTimingSink;
+type DouyinMediaLookupOptions = {
+  limit?: number;
+  signal?: AbortSignal;
 };
+type VideoStatsTimingOptions = OpenCliTimingOptions;
 
-export type OpenCliTimingMeta = Record<string, string | number | boolean | null | undefined>;
-export type OpenCliTimingEntry = {
-  stage: string;
-  ms: number;
-  ok: boolean;
-  meta?: OpenCliTimingMeta;
-  error?: string;
+export type { OpenCliTimingEntry, OpenCliTimingMeta, OpenCliTimingSink };
+export {
+  buildOpenCliBrowserArgs,
+  openCliRows,
+  parseOpenCliJsonish,
+  resolveOpenCliCommand
 };
-export type OpenCliTimingSink = (entry: OpenCliTimingEntry) => void;
-type VideoStatsTimingOptions = {
-  timingMeta?: OpenCliTimingMeta;
-  onTiming?: OpenCliTimingSink;
-};
-
-type OpenCliBrowserWindowMode = "foreground" | "background";
-
-export type BilibiliCommentSample = {
-  rank: number;
-  author: string;
-  text: string;
-  likes: number;
-  replies: number;
-  time: string;
-};
-
-export type BilibiliVideoReference = {
-  bvid: string;
-  aid?: string;
-  cid?: string;
-  thumbnail?: string;
-  title?: string;
-};
+export {
+  downloadBilibiliVideo,
+  getBilibiliComments,
+  getBilibiliRelatedTopicComments,
+  getBilibiliSubtitle,
+  getBilibiliVideoReference,
+  getBilibiliVideoStatsByUrl,
+  hydrateBilibiliVideoStats
+} from "./opencli-bilibili";
+export type {
+  BilibiliCommentSample,
+  BilibiliRelatedCommentResult,
+  BilibiliRelatedCommentVideo,
+  BilibiliVideoReference,
+  BilibiliVideoStatsResult
+} from "./opencli-bilibili";
 
 export type DouyinRelatedCommentVideo = {
   id: string;
@@ -76,20 +84,6 @@ export type DouyinRelatedCommentVideo = {
 export type DouyinRelatedCommentResult = {
   query: string;
   videos: DouyinRelatedCommentVideo[];
-  comments: string[];
-};
-
-export type BilibiliRelatedCommentVideo = {
-  id: string;
-  title: string;
-  author: string;
-  score: number;
-  url: string;
-};
-
-export type BilibiliRelatedCommentResult = {
-  query: string;
-  videos: BilibiliRelatedCommentVideo[];
   comments: string[];
 };
 
@@ -120,227 +114,10 @@ type DouyinVideoStatsResult = {
   };
 };
 
-type BilibiliVideoStatsResult = {
-  platform: "bilibili";
-  title: string;
-  url: string;
-  publishedAt?: string;
-  authorName?: string;
-  stats: {
-    play: number;
-    like: number;
-    coin: number;
-    favorite: number;
-    comment: number;
-    share: number;
-    danmaku: number;
-  };
-};
-
 const DOUYIN_STATS_BROWSER_WORKSPACE = `douyin-video-stats-${process.pid}`;
 const DOUYIN_STATS_HOME_URL = "https://www.douyin.com/robots.txt";
 let douyinStatsBrowserReady = false;
 let douyinStatsBrowserQueue: Promise<unknown> = Promise.resolve();
-
-function opencliBin() {
-  return process.env.OPENCLI_BIN || "opencli";
-}
-
-export function resolveOpenCliCommand() {
-  const configured = opencliBin().trim() || "opencli";
-  const scriptPath = process.env.OPENCLI_SCRIPT?.trim() || "";
-  const nodeBin = process.env.OPENCLI_NODE_BIN?.trim() || process.execPath;
-
-  if (scriptPath) {
-    return {
-      command: nodeBin,
-      argsPrefix: [scriptPath]
-    };
-  }
-
-  return {
-    command: configured,
-    argsPrefix: []
-  };
-}
-
-async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
-  let stdout: string;
-  let stderr: string;
-  const runtime = resolveOpenCliCommand();
-  const startedAt = Date.now();
-  let timingRecorded = false;
-
-  try {
-    const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024 * 20,
-      timeout: options.timeout
-    });
-    stdout = result.stdout;
-    stderr = result.stderr;
-  } catch (error) {
-    recordTiming(options, startedAt, false, undefined, error);
-    throw wrapOpenCliError(error);
-  }
-
-  if (stderr && stderr.toLowerCase().includes("error")) {
-    const error = new Error(stderr.trim());
-    recordTiming(options, startedAt, false, undefined, error);
-    timingRecorded = true;
-    throw error;
-  }
-
-  if (!timingRecorded) recordTiming(options, startedAt, true);
-  return stdout.trim();
-}
-
-function recordTiming(
-  options: RunOpenCliOptions | VideoStatsTimingOptions,
-  startedAt: number,
-  ok: boolean,
-  meta?: OpenCliTimingMeta,
-  error?: unknown
-) {
-  const stage = "timingStage" in options ? options.timingStage : "";
-  if (!stage || !options.onTiming) return;
-  options.onTiming(makeTimingEntry(stage, Date.now() - startedAt, ok, mergeTimingMeta(options.timingMeta, meta), error));
-}
-
-async function timeOpenCliOperation<T>(
-  options: VideoStatsTimingOptions | undefined,
-  stage: string,
-  operation: () => Promise<T>,
-  meta?: OpenCliTimingMeta
-) {
-  const startedAt = Date.now();
-  try {
-    const result = await operation();
-    options?.onTiming?.(makeTimingEntry(stage, Date.now() - startedAt, true, mergeTimingMeta(options.timingMeta, meta)));
-    return result;
-  } catch (error) {
-    options?.onTiming?.(makeTimingEntry(stage, Date.now() - startedAt, false, mergeTimingMeta(options?.timingMeta, meta), error));
-    throw error;
-  }
-}
-
-function makeTimingEntry(
-  stage: string,
-  ms: number,
-  ok: boolean,
-  meta?: OpenCliTimingMeta,
-  error?: unknown
-): OpenCliTimingEntry {
-  const entry: OpenCliTimingEntry = {
-    stage,
-    ms,
-    ok
-  };
-  const cleanMeta = compactTimingMeta(meta);
-  if (cleanMeta) entry.meta = cleanMeta;
-  const message = formatTimingError(error);
-  if (message) entry.error = message;
-  return entry;
-}
-
-function mergeTimingMeta(...metas: Array<OpenCliTimingMeta | undefined>) {
-  const merged: OpenCliTimingMeta = {};
-  for (const meta of metas) {
-    if (!meta) continue;
-    for (const [key, value] of Object.entries(meta)) {
-      if (value !== undefined) merged[key] = value;
-    }
-  }
-  return Object.keys(merged).length ? merged : undefined;
-}
-
-function compactTimingMeta(meta: OpenCliTimingMeta | undefined) {
-  if (!meta) return undefined;
-  const clean: OpenCliTimingMeta = {};
-  for (const [key, value] of Object.entries(meta)) {
-    if (value !== undefined) clean[key] = value;
-  }
-  return Object.keys(clean).length ? clean : undefined;
-}
-
-function withTimingMeta(options: VideoStatsTimingOptions | undefined, meta: OpenCliTimingMeta): VideoStatsTimingOptions {
-  return {
-    onTiming: options?.onTiming,
-    timingMeta: mergeTimingMeta(options?.timingMeta, meta)
-  };
-}
-
-function formatTimingError(error: unknown) {
-  if (!error) return "";
-  const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/\s+/g, " ").trim().slice(0, 220);
-}
-
-function wrapOpenCliError(error: unknown) {
-  if (isMissingExecutableError(error)) {
-    return new Error("未检测到 opencli。数据维护 / 数据监控页面可以继续使用，但实时刷新 B站/抖音数据前请先运行 install-deps.cmd 安装 opencli。");
-  }
-  if (error instanceof Error) {
-    return error;
-  }
-  return new Error("opencli 执行失败");
-}
-
-function isMissingExecutableError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
-  const message = "message" in error ? String((error as { message?: unknown }).message || "") : "";
-  return code === "ENOENT" || /not found|enoent/i.test(message);
-}
-
-export function buildOpenCliBrowserArgs(
-  session: string,
-  command: string,
-  commandArgs: string[] = [],
-  options: {
-    tab?: string;
-    window?: OpenCliBrowserWindowMode;
-  } = {}
-) {
-  const args = ["browser", session];
-  if (options.window) {
-    args.push("--window", options.window);
-  }
-  args.push(command);
-  if (options.tab) {
-    args.push("--tab", options.tab);
-  }
-  args.push(...commandArgs);
-  return args;
-}
-
-export function parseOpenCliJsonish(stdout: string): unknown {
-  return parseJsonish(stdout);
-}
-
-export function openCliRows(raw: unknown): unknown[] {
-  return asArray(raw);
-}
-
-function parseJsonish(stdout: string): unknown {
-  if (!stdout) return [];
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    return stdout;
-  }
-}
-
-function asArray(raw: unknown): unknown[] {
-  if (Array.isArray(raw)) return raw;
-  if (raw && typeof raw === "object") {
-    const object = raw as Record<string, unknown>;
-    for (const key of ["data", "items", "results", "videos", "list", "users", "user_list"]) {
-      if (Array.isArray(object[key])) return object[key] as unknown[];
-    }
-  }
-  return [];
-}
 
 export function normalizeAccountInput(platform: Platform, uidOrUrl: string) {
   return platform === "bilibili" ? extractBilibiliUid(uidOrUrl) : extractDouyinSecUid(uidOrUrl);
@@ -355,36 +132,6 @@ export async function resolveAccountUid(platform: Platform, name: string, uidOrU
   }
 
   return searchDouyinUserSecUid(name);
-}
-
-async function searchBilibiliUserUid(name: string) {
-  const stdout = await runOpenCli(["bilibili", "search", name, "--type", "user", "--limit", "8", "-f", "json"]);
-  const rows = asArray(parseJsonish(stdout));
-  const normalizedName = name.trim().toLowerCase();
-  const candidates = rows
-    .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
-    .filter(Boolean) as Array<Record<string, unknown>>;
-  const matched = candidates.sort((a, b) => userSearchRank(b, normalizedName) - userSearchRank(a, normalizedName))[0];
-
-  if (!matched || typeof matched !== "object") {
-    throw new Error(`没有搜索到 B站账号：${name}`);
-  }
-
-  const object = matched as Record<string, unknown>;
-  const uid = extractBilibiliUid(String(object.url || object.uid || object.mid || ""));
-  if (!uid) {
-    throw new Error(`没有从搜索结果里解析到 B站 UID：${name}`);
-  }
-
-  return uid;
-}
-
-function userSearchRank(row: Record<string, unknown>, normalizedName: string) {
-  const hasAuthor = String(row.author || "").trim() ? 10_000 : 0;
-  const title = String(row.title || "").trim().toLowerCase();
-  const exactTitle = title === normalizedName ? 5_000 : 0;
-  const containsTitle = title.includes(normalizedName) || normalizedName.includes(title) ? 2_000 : 0;
-  return hasAuthor + exactTitle + containsTitle + toNumber(row.score);
 }
 
 async function searchDouyinUserSecUid(name: string) {
@@ -438,7 +185,7 @@ export async function getDouyinRelatedTopicComments(
     const videos = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), { timeout: 20_000 })))
       .map(normalizeDouyinRelatedVideo)
       .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
-      .filter((video) => isDouyinRelatedVideoRelevant(video.title, cleanQuery))
+      .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery))
       .sort((a, b) => b.likes - a.likes)
       .slice(0, videoLimit);
 
@@ -460,63 +207,6 @@ export async function getDouyinRelatedTopicComments(
   }
 }
 
-export async function getBilibiliRelatedTopicComments(
-  query: string,
-  options: { videoLimit?: number; commentLimit?: number } = {}
-): Promise<BilibiliRelatedCommentResult> {
-  const cleanQuery = query.replace(/\s+/g, " ").trim();
-  if (!cleanQuery) {
-    return { query: "", videos: [], comments: [] };
-  }
-
-  const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 50));
-  const stdout = await runOpenCli([
-    "bilibili",
-    "search",
-    cleanQuery,
-    "--type",
-    "video",
-    "--limit",
-    String(Math.max(videoLimit * 2, videoLimit)),
-    "-f",
-    "json"
-  ], { timeout: 30_000 });
-
-  const videos = asArray(parseJsonish(stdout))
-    .map(normalizeBilibiliRelatedVideo)
-    .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
-    .filter((video) => isDouyinRelatedVideoRelevant(video.title, cleanQuery))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, videoLimit);
-
-  const comments: string[] = [];
-  for (const video of videos) {
-    const rows = await getBilibiliComments({ id: video.id, url: video.url, raw: video.url }, commentLimit).catch(() => []);
-    comments.push(...rows.map((comment) => comment.text).filter(Boolean));
-  }
-
-  return {
-    query: cleanQuery,
-    videos,
-    comments: uniqueStrings(comments)
-  };
-}
-
-function normalizeBilibiliRelatedVideo(row: unknown): BilibiliRelatedCommentVideo | null {
-  const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
-  const url = stringField(object.url);
-  const id = extractBvid(url || stringField(object.id) || stringField(object.bvid) || String(object.raw || ""));
-  if (!id) return null;
-  return {
-    id,
-    title: String(object.title || object.desc || "").replace(/\s+/g, " ").trim(),
-    author: String(object.author || object.name || object.uname || "").replace(/\s+/g, " ").trim(),
-    score: toNumber(object.score || object.view || object.views || object.play || object.play_count),
-    url: url || `https://www.bilibili.com/video/${id}`
-  };
-}
-
 function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | null {
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   const id = String(object.id || object.aweme_id || extractDouyinAwemeId(String(object.url || ""))).trim();
@@ -529,47 +219,6 @@ function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | 
     url: `https://www.douyin.com/video/${encodeURIComponent(id)}`
   };
 }
-
-function isDouyinRelatedVideoRelevant(title: string, query: string) {
-  const normalizedTitle = normalizeSearchComparableText(title);
-  if (!normalizedTitle) return false;
-  const terms = extractRelatedSearchTerms(query);
-  if (!terms.length) return true;
-
-  const matched = terms.filter((term) => normalizedTitle.includes(normalizeSearchComparableText(term)));
-  if (matched.length >= Math.min(2, terms.length)) return true;
-  return matched.some((term) => Array.from(term).length >= 4);
-}
-
-function extractRelatedSearchTerms(query: string) {
-  return uniqueStrings(
-    query
-      .split(/[\s，,。.!！?？；;：:、｜|/\\()[\]{}<>《》“”"‘’#]+/)
-      .map((term) => term.trim())
-      .filter((term) => Array.from(term).length >= 2)
-      .filter((term) => !RELATED_SEARCH_TERM_STOP_WORDS.has(term.toLowerCase()))
-  ).slice(0, 8);
-}
-
-function normalizeSearchComparableText(value: string) {
-  return value
-    .replace(/\s+/g, "")
-    .replace(/[^\u4e00-\u9fa5A-Za-z0-9._-]+/g, "")
-    .toLowerCase();
-}
-
-const RELATED_SEARCH_TERM_STOP_WORDS = new Set([
-  "视频",
-  "评论",
-  "弹幕",
-  "文案",
-  "素材",
-  "热点",
-  "话题",
-  "生成",
-  "douyin",
-  "抖音"
-]);
 
 function selectDouyinSecUidFromRows(rows: unknown[], name: string) {
   const normalizedName = name.trim().toLowerCase();
@@ -604,194 +253,6 @@ function extractSecUidFromSearchRow(row: Record<string, unknown>) {
   return String(row.sec_uid || row.sec_user_id || row.secUid || userInfo.sec_uid || userInfo.sec_user_id || extractDouyinSecUid(String(row.url || "")));
 }
 
-const DOUYIN_SEARCH_EXTRACT_JS = `
-(async () => {
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-  const normalizeUrl = (href) => {
-    if (!href) return "";
-    if (href.startsWith("//")) return "https:" + href;
-    if (href.startsWith("/")) return location.origin + href;
-    return href;
-  };
-  const followerValue = (text) => {
-    const match = clean(text).match(/([0-9.]+\\s*[万億亿kKmM]?)\\s*粉丝/);
-    return match ? match[1] : "";
-  };
-  const extract = () => {
-    const seen = new Set();
-    return Array.from(document.querySelectorAll('a[href*="/user/"]'))
-      .map((anchor, index) => {
-        const href = normalizeUrl(anchor.getAttribute("href") || anchor.href || "");
-        const match = href.match(/\\/user\\/([^/?#]+)/);
-        const secUid = match ? decodeURIComponent(match[1]) : "";
-        if (!secUid || secUid === "self" || seen.has(secUid)) return null;
-        seen.add(secUid);
-        const lines = String(anchor.innerText || anchor.textContent || "")
-          .split(/\\n+/)
-          .map(clean)
-          .filter(Boolean);
-        const nickname = lines.find((line) => line !== "关注" && !/^抖音号[:：]/.test(line)) || "";
-        const rawText = clean(lines.join(" "));
-        return {
-          rank: index + 1,
-          nickname,
-          name: nickname,
-          title: nickname,
-          sec_uid: secUid,
-          sec_user_id: secUid,
-          follower_count: followerValue(rawText),
-          url: href,
-          raw_text: rawText
-        };
-      })
-      .filter(Boolean);
-  };
-
-  for (let i = 0; i < 8; i += 1) {
-    const rows = extract();
-    if (rows.length) return rows.slice(0, ${DOUYIN_BROWSER_SEARCH_LIMIT});
-    await sleep(1000);
-  }
-  return extract().slice(0, ${DOUYIN_BROWSER_SEARCH_LIMIT});
-})()
-`;
-
-const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
-(() => {
-  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-  const isTitleLike = (line) => {
-    const text = clean(line);
-    if (!text || text === "相关搜索") return false;
-    if (/^@/.test(text)) return false;
-    if (/^(关注|粉丝|合集|直播中|广告|查看更多|搜索|大家都在搜|用户|音乐)$/.test(text)) return false;
-    if (/^\\d{1,2}:\\d{2}$/.test(text)) return false;
-    if (/^\\d+(\\.\\d+)?\\s*[万億亿kKmM]?$/.test(text)) return false;
-    if (/^(点赞|评论|分享|收藏|转发)\\s*\\d*/.test(text)) return false;
-    if (/^(\\d+\\s*)?(分钟前|小时前|天前|周前|月前|年前)$/.test(text)) return false;
-    return /[\\u4e00-\\u9fa5A-Za-z]/.test(text) && text.length >= 2;
-  };
-  const pickTitle = (lines, fallback = "") => {
-    const values = lines.map(clean).filter(Boolean);
-    return values.find((line) => isTitleLike(line) && !/^#/.test(line)) ||
-      values.find(isTitleLike) ||
-      clean(fallback);
-  };
-  const numberValue = (text) => {
-    const match = clean(text).match(/([0-9.]+)\\s*([万億亿kKmM]?)/);
-    if (!match) return 0;
-    const base = Number(match[1]);
-    if (!Number.isFinite(base)) return 0;
-    const unit = String(match[2] || "").toLowerCase();
-    if (unit === "万") return Math.round(base * 10000);
-    if (unit === "亿" || unit === "億") return Math.round(base * 100000000);
-    if (unit === "k") return Math.round(base * 1000);
-    if (unit === "m") return Math.round(base * 1000000);
-    return Math.round(base);
-  };
-  const seen = new Set();
-  const byWaterfall = Array.from(document.querySelectorAll('[id^="waterfall_item_"]'))
-    .map((element) => {
-      const id = String(element.id || "").replace(/^waterfall_item_/, "");
-      const lines = String(element.innerText || element.textContent || "")
-        .split(/\\n+/)
-        .map(clean)
-        .filter(Boolean);
-      const title = pickTitle(lines);
-      const likes = numberValue(lines.find((line) => /^\\d/.test(line) && !/^\\d{1,2}:\\d{2}/.test(line)) || "");
-      if (!id || seen.has(id) || !title || title === "相关搜索") return null;
-      seen.add(id);
-      return { id, aweme_id: id, title, likes, url: location.origin + "/video/" + id };
-    })
-    .filter(Boolean);
-
-  const byLinks = Array.from(document.querySelectorAll('a[href*="/video/"]'))
-    .map((anchor) => {
-      const href = anchor.getAttribute("href") || anchor.href || "";
-      const match = href.match(/\\/video\\/(\\d+)/);
-      const id = match ? match[1] : "";
-      if (!id || seen.has(id)) return null;
-      seen.add(id);
-      const container = anchor.closest("li") || anchor.closest("div");
-      const lines = String(container?.innerText || anchor.innerText || anchor.textContent || "")
-        .split(/\\n+/)
-        .map(clean)
-        .filter(Boolean);
-      const title = pickTitle(lines, anchor.innerText || anchor.textContent || "");
-      const likes = numberValue(lines.find((line) => /^\\d/.test(line) && !/^\\d{1,2}:\\d{2}/.test(line)) || "");
-      return title ? { id, aweme_id: id, title, likes, url: location.origin + "/video/" + id } : null;
-    })
-    .filter(Boolean);
-
-  return [...byWaterfall, ...byLinks].slice(0, 30);
-})()
-`;
-
-const DOUYIN_VIDEO_COMMENT_EXTRACT_JS = `
-(async () => {
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-  const collect = () => {
-    const text = String(document.body?.innerText || "");
-    const marker = text.indexOf("全部评论");
-    const source = marker >= 0 ? text.slice(marker) : text;
-    const stopWords = [
-      "推荐视频",
-      "广告投放",
-      "用户服务协议",
-      "隐私政策",
-      "2026 © 抖音",
-      "热门：",
-      "加载中"
-    ];
-    let section = source;
-    for (const word of stopWords) {
-      const index = section.indexOf(word);
-      if (index > 0) section = section.slice(0, index);
-    }
-    const noise = /^(全部评论|留下你的精彩评论吧|分享|回复|举报|发布时间：|展开\\d+条回复|\\d+(\\.\\d+)?万?|\\d+小时前.*|\\d+分钟前.*|\\d+天前.*|IP属地.*|\\.\\.\\.)$/;
-    const lines = section
-      .split(/\\n+/)
-      .map(clean)
-      .filter(Boolean)
-      .filter((line) => !noise.test(line));
-    const seen = new Set();
-    const comments = [];
-    let skipSearchHints = false;
-    for (const line of lines) {
-      if (line === "大家都在搜：") {
-        skipSearchHints = true;
-        continue;
-      }
-      if (line === "...") {
-        skipSearchHints = false;
-        continue;
-      }
-      if (skipSearchHints) continue;
-      if (line.length < 1 || line.length > 240) continue;
-      if (seen.has(line)) continue;
-      seen.add(line);
-      comments.push(line);
-    }
-    return comments;
-  };
-
-  const scrollTargets = Array.from(document.querySelectorAll('[class*="comment"], [id*="comment"], div'))
-    .filter((element) => {
-      const text = clean(element.innerText || element.textContent || "");
-      return text.includes("全部评论") && text.length > 100;
-    })
-    .sort((a, b) => (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight));
-  const target = scrollTargets.find((element) => element.scrollHeight > element.clientHeight + 80) || document.scrollingElement || document.documentElement;
-  for (let i = 0; i < 3; i += 1) {
-    target.scrollTop += Math.max(500, target.clientHeight || 700);
-    target.dispatchEvent(new Event("scroll", { bubbles: true }));
-    await sleep(900);
-  }
-  return collect().slice(0, 80);
-})()
-`;
-
 export async function collectVideos(input: {
   platform: Platform;
   account: Account;
@@ -802,66 +263,41 @@ export async function collectVideos(input: {
   fromDate?: string;
   toDate?: string;
 }) {
-  const args =
-    input.platform === "bilibili"
-      ? [
-          "bilibili",
-          "user-videos",
-          input.account.uid,
-          "--limit",
-          String(input.limit),
-          "--order",
-          getBilibiliOpenCliOrder(input.order),
-          "--page",
-          String(input.page || 1),
-          "-f",
-          "json"
-        ]
-      : [
-          "browser",
-          "aweme-post",
-          `https://www.douyin.com/user/${input.account.uid}`,
-          "--limit",
-          String(input.limit),
-          ...(input.fromDate ? ["--from", input.fromDate] : []),
-          ...(input.toDate ? ["--to", input.toDate] : [])
-        ];
-
-  if (input.platform === "douyin") {
-    let rows: unknown[];
-    try {
-      rows = await scanDouyinPostVideoRows(input.account, {
-        limit: input.limit,
-        fromDate: input.fromDate,
-        toDate: input.toDate
-      });
-    } catch {
-      rows = await getDouyinVideoRows(input.account, { limit: input.limit });
-    }
-    return {
-      command: `${opencliBin()} ${args.join(" ")}`,
-      rawCount: rows.length,
-      raw: rows,
-      videos: rows.map((row) => normalizeDouyinVideo(row, input.account))
-    };
+  if (input.platform === "bilibili") {
+    return collectBilibiliVideos({
+      account: input.account,
+      limit: input.limit,
+      order: input.order,
+      page: input.page,
+      hydrateDetails: input.hydrateDetails
+    });
   }
 
-  const stdout = await runOpenCli(args);
-  const raw = parseJsonish(stdout);
-  const rows = asArray(raw);
-  const videos = await Promise.all(
-    rows.map((row) =>
-      normalizeBilibiliVideo(row, input.account, {
-        hydrateDetails: input.hydrateDetails ?? true
-      })
-    )
-  );
+  const args = [
+    "browser",
+    "aweme-post",
+    `https://www.douyin.com/user/${input.account.uid}`,
+    "--limit",
+    String(input.limit),
+    ...(input.fromDate ? ["--from", input.fromDate] : []),
+    ...(input.toDate ? ["--to", input.toDate] : [])
+  ];
+  let rows: unknown[];
+  try {
+    rows = await scanDouyinPostVideoRows(input.account, {
+      limit: input.limit,
+      fromDate: input.fromDate,
+      toDate: input.toDate
+    });
+  } catch {
+    rows = await getDouyinVideoRows(input.account, { limit: input.limit });
+  }
 
   return {
     command: `${opencliBin()} ${args.join(" ")}`,
     rawCount: rows.length,
-    raw,
-    videos
+    raw: rows,
+    videos: rows.map((row) => normalizeDouyinVideo(row, input.account))
   };
 }
 
@@ -896,249 +332,33 @@ async function scanDouyinPostVideoRows(
   }
 }
 
-function buildDouyinPostExtractJs(options: {
-  secUid: string;
-  limit: number;
-  fromDate?: string;
-  toDate?: string;
-}) {
-  const fromEpoch = boundaryDateToEpochSeconds(options.fromDate, "start");
-  const toEpoch = boundaryDateToEpochSeconds(options.toDate, "end");
-  return `
-(async () => {
-  const secUid = ${JSON.stringify(options.secUid)};
-  const limit = ${options.limit};
-  const fromEpoch = ${fromEpoch ?? "null"};
-  const toEpoch = ${toEpoch ?? "null"};
-  const pageSize = ${DOUYIN_POST_PAGE_SIZE};
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const toNumber = (value) => {
-    const number = Number(value || 0);
-    return Number.isFinite(number) ? number : 0;
-  };
-  const normalizeUrl = (url) => {
-    if (!url) return "";
-    if (url.startsWith("//")) return "https:" + url;
-    if (url.startsWith("/")) return location.origin + url;
-    return url;
-  };
-  const firstUrl = (value) => {
-    if (!value) return "";
-    if (typeof value === "string") return normalizeUrl(value);
-    if (Array.isArray(value)) return normalizeUrl(String(value[0] || ""));
-    if (Array.isArray(value.url_list)) return normalizeUrl(String(value.url_list[0] || ""));
-    return "";
-  };
-  const normalizeItem = (item, index) => {
-    const awemeId = String(item.aweme_id || item.awemeId || item.id || "");
-    const stats = item.statistics || {};
-    const author = item.author || {};
-    return {
-      index,
-      aweme_id: awemeId,
-      id: awemeId,
-      title: String(item.desc || item.caption || item.title || "未命名视频"),
-      desc: String(item.desc || item.caption || item.title || "未命名视频"),
-      duration: toNumber(item.duration) ? Math.round(toNumber(item.duration) / 1000) : "",
-      create_time: toNumber(item.create_time || item.createTime),
-      digg_count: toNumber(stats.digg_count ?? item.digg_count),
-      comment_count: toNumber(stats.comment_count ?? item.comment_count),
-      share_count: toNumber(stats.share_count ?? item.share_count),
-      collect_count: toNumber(stats.collect_count ?? item.collect_count),
-      play_count: toNumber(stats.play_count ?? item.play_count),
-      share_url: item.share_url || (awemeId ? "https://www.douyin.com/video/" + awemeId : ""),
-      web_url: awemeId ? "https://www.douyin.com/video/" + awemeId : "",
-      url: awemeId ? "https://www.douyin.com/video/" + awemeId : "",
-      author_uid: String(author.uid || ""),
-      sec_uid: String(author.sec_uid || secUid),
-      video_url: firstUrl(item.video && (item.video.play_addr || item.video.download_addr)),
-      raw_statistics: stats,
-      source: "douyin_aweme_post_api"
-    };
-  };
-
-  const rows = [];
-  const seen = new Set();
-  let cursor = 0;
-  let hasMore = true;
-  let page = 0;
-  let reachedBeforeFrom = false;
-
-  const fetchPage = async (targetUrl) => {
-    let lastError = "";
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(targetUrl, {
-        credentials: "include",
-        headers: {
-          accept: "application/json, text/plain, */*"
-        }
-      });
-      const text = await response.text();
-      if (!response.ok) throw new Error("aweme/post " + response.status + (text ? ": " + text.slice(0, 120) : ""));
-      if (text.trim()) {
-        try {
-          return JSON.parse(text);
-        } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error);
-        }
-      } else {
-        lastError = "empty response";
-      }
-      await sleep(800 * (attempt + 1));
-    }
-    throw new Error("aweme/post JSON parse failed: " + lastError);
-  };
-
-  while (hasMore && !reachedBeforeFrom && rows.length < limit && page < 80) {
-    const url = new URL("https://www.douyin.com/aweme/v1/web/aweme/post/");
-    url.searchParams.set("sec_user_id", secUid);
-    url.searchParams.set("max_cursor", String(cursor));
-    url.searchParams.set("count", String(pageSize));
-    url.searchParams.set("aid", "6383");
-    const data = await fetchPage(url.toString());
-    const list = Array.isArray(data.aweme_list) ? data.aweme_list : [];
-    if (!list.length) break;
-
-    for (const item of list) {
-      const createTime = toNumber(item.create_time || item.createTime);
-      if (fromEpoch && createTime && createTime < fromEpoch) {
-        reachedBeforeFrom = true;
-        continue;
-      }
-      if (toEpoch && createTime && createTime > toEpoch) continue;
-      const row = normalizeItem(item, rows.length + 1);
-      if (!row.aweme_id || seen.has(row.aweme_id)) continue;
-      seen.add(row.aweme_id);
-      rows.push(row);
-      if (rows.length >= limit) break;
-    }
-
-    cursor = data.max_cursor || data.maxCursor || 0;
-    hasMore = !reachedBeforeFrom && Boolean(data.has_more || data.hasMore) && Boolean(cursor);
-    page += 1;
-    if (hasMore && rows.length < limit) await sleep(250);
-  }
-
-  return rows;
-})()
-`;
-}
-
-function boundaryDateToEpochSeconds(value: string | undefined, boundary: "start" | "end") {
-  if (!value) return null;
-  const date = new Date(`${value}T${boundary === "start" ? "00:00:00" : "23:59:59"}+08:00`);
-  return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
-}
-
-function getBilibiliOpenCliOrder(order: CollectOrder | undefined) {
-  if (order === "pubdate") return "pubdate";
-  if (order === "favorites") return "stow";
-  return "click";
-}
-
-export async function getBilibiliSubtitle(video: Video) {
-  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
-  if (!bvid) return "";
-
-  const preferredLangs = ["zh-CN", "ai-zh"];
-  for (const lang of preferredLangs) {
-    const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "--lang", lang, "-f", "json"]).catch(() => "");
-    const text = extractSubtitleText(parseJsonish(stdout));
-    if (isUsableBilibiliSubtitle(text, video)) return text;
-  }
-
-  const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "-f", "json"]).catch(() => "");
-  const text = extractSubtitleText(parseJsonish(stdout));
-  return isUsableBilibiliSubtitle(text, video) ? text : "";
-}
-
-export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw">, limit = 50) {
-  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
-  if (!bvid) return [];
-
-  const stdout = await runOpenCli([
-    "bilibili",
-    "comments",
-    bvid,
-    "--limit",
-    String(Math.max(1, Math.min(limit, 50))),
-    "-f",
-    "json"
-  ]);
-  return asArray(parseJsonish(stdout))
-    .map((row, index) => normalizeBilibiliComment(row, index))
-    .filter((comment) => comment.text) as BilibiliCommentSample[];
-}
-
-export async function getBilibiliVideoReference(video: Pick<Video, "id" | "url" | "raw" | "title" | "coverUrl">) {
-  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
-  if (!bvid) return null;
-
-  const opencliFields: Record<string, unknown> = await getBilibiliVideoFields(bvid).catch(() => ({}));
-  const publicFields =
-    extractBilibiliCid(opencliFields) && (stringField(opencliFields.thumbnail) || stringField(opencliFields.pic))
-      ? {}
-      : await getBilibiliPublicVideoFields(bvid).catch(() => ({}));
-  const fields: Record<string, unknown> = {
-    ...publicFields,
-    ...opencliFields
-  };
-  const reference: BilibiliVideoReference = {
-    bvid,
-    aid: stringField(fields.aid),
-    cid: extractBilibiliCid(fields),
-    thumbnail: stringField(fields.thumbnail) || stringField(fields.pic) || video.coverUrl || findCoverUrlInRaw(video.raw),
-    title: stringField(fields.title) || video.title
-  };
-  return reference;
-}
-
-export async function downloadBilibiliVideo(video: Video) {
-  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
-  if (!bvid) {
-    throw new Error("无法解析 B站视频 BV 号，不能下载音视频文件");
-  }
-
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "style-library-bilibili-"));
-  const stdout = await runOpenCli(["bilibili", "download", bvid, "--output", outputDir, "-f", "json"]);
-  const raw = parseJsonish(stdout);
-  const rows = asArray(raw);
-  const failed = rows.find((row) => {
-    if (!row || typeof row !== "object") return false;
-    return String((row as Record<string, unknown>).status || "").toLowerCase() === "failed";
-  }) as Record<string, unknown> | undefined;
-
-  if (failed) {
-    const detail = String(failed.size || failed.message || failed.error || "下载失败");
-    throw new Error(`B站视频下载失败：${detail}`);
-  }
-
-  const files = await collectMediaFiles(outputDir);
-  if (!files.length) {
-    throw new Error("B站视频下载后没有找到可转写的本地媒体文件");
-  }
-
-  return files[0];
-}
-
 export async function refreshDouyinVideoDownloadUrl(
   account: Account,
   video: Pick<Video, "id" | "url" | "raw">,
-  options: { preferBrowser?: boolean; excludeUrls?: string[] } = {}
+  options: { preferBrowser?: boolean; excludeUrls?: string[]; signal?: AbortSignal } = {}
 ) {
   const awemeId = resolveDouyinAwemeId(video);
   if (!awemeId) return "";
   const excludedUrls = new Set(options.excludeUrls || []);
   if (options.preferBrowser) {
-    const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId).catch(() => "");
+    const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId, { signal: options.signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return "";
+    });
     if (browserUrl && !excludedUrls.has(browserUrl)) return browserUrl;
   }
 
   const limit = resolveDouyinVideoLookupLimit(video);
-  const urls = await getDouyinVideoDownloadUrlsWithUserVideos(account, { limit }).catch(() => new Map<string, string>());
+  const urls = await getDouyinVideoDownloadUrlsWithUserVideos(account, { limit, signal: options.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return new Map<string, string>();
+  });
   const opencliUrl = urls.get(awemeId);
   if (opencliUrl && !excludedUrls.has(opencliUrl)) return opencliUrl;
-  const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId).catch(() => "");
+  const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId, { signal: options.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return "";
+  });
   return browserUrl && !excludedUrls.has(browserUrl) ? browserUrl : "";
 }
 
@@ -1175,7 +395,7 @@ export async function checkDouyinVideoAvailability(
   }
 }
 
-export async function getDouyinVideoDownloadUrls(account: Account, options: { limit?: number } = {}) {
+export async function getDouyinVideoDownloadUrls(account: Account, options: DouyinMediaLookupOptions = {}) {
   return getDouyinVideoDownloadUrlsWithUserVideos(account, options);
 }
 
@@ -1183,7 +403,7 @@ export function getDouyinVideoDownloadLookupLimit(videos: Array<Pick<Video, "id"
   return videos.reduce((limit, video) => Math.max(limit, resolveDouyinVideoLookupLimit(video)), 20);
 }
 
-async function getDouyinVideoDownloadUrlsWithUserVideos(account: Account, options: { limit?: number } = {}) {
+async function getDouyinVideoDownloadUrlsWithUserVideos(account: Account, options: DouyinMediaLookupOptions = {}) {
   const urls = new Map<string, string>();
 
   try {
@@ -1201,7 +421,7 @@ async function getDouyinVideoDownloadUrlsWithUserVideos(account: Account, option
   }
 }
 
-async function getDouyinVideoRows(account: Account, options: { limit?: number } = {}) {
+async function getDouyinVideoRows(account: Account, options: DouyinMediaLookupOptions = {}) {
   const stdout = await runOpenCli([
     "douyin",
     "user-videos",
@@ -1212,7 +432,10 @@ async function getDouyinVideoRows(account: Account, options: { limit?: number } 
     "false",
     "-f",
     "json"
-  ]);
+  ], {
+    timeout: 90_000,
+    signal: options.signal
+  });
   return asArray(parseJsonish(stdout))
     .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
     .filter(Boolean) as Array<Record<string, unknown>>;
@@ -1594,6 +817,10 @@ function isOpenCliBrowserSessionError(error: unknown) {
   return error instanceof Error && /browser|session|target|tab|context|closed|crash/i.test(error.message);
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
+}
+
 async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTimingOptions = {}) {
   const filtered = await runOpenCli(
     buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s", "--filter", "aweme_detail,statistics"]),
@@ -1865,177 +1092,6 @@ async function getDouyinVideoDetailSnapshots(
   return details;
 }
 
-function buildDouyinDetailExtractJs(options: { awemeId: string; commentLimit: number }) {
-  return `
-(async () => {
-  const awemeId = ${JSON.stringify(options.awemeId)};
-  const commentLimit = ${options.commentLimit};
-  const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-  const normalizeComment = (comment) => {
-    if (!comment || typeof comment !== "object") return "";
-    return normalizeText(
-      comment.text ||
-      comment.content ||
-      comment.reply_comment?.text ||
-      comment.reply_comment?.content ||
-      ""
-    );
-  };
-  const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
-  detailUrl.searchParams.set("aweme_id", awemeId);
-  detailUrl.searchParams.set("aid", "6383");
-  const detailResponse = await fetch(detailUrl.toString(), {
-    credentials: "include",
-    headers: {
-      accept: "application/json, text/plain, */*"
-    }
-  });
-  const detailPayload = await detailResponse.json().catch(() => ({}));
-  const awemeDetail = detailPayload && typeof detailPayload === "object" ? detailPayload.aweme_detail || {} : {};
-  const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
-  let topComments = [];
-  try {
-    const commentUrl = new URL("https://www.douyin.com/aweme/v1/web/comment/list/");
-    commentUrl.searchParams.set("aweme_id", awemeId);
-    commentUrl.searchParams.set("cursor", "0");
-    commentUrl.searchParams.set("count", String(commentLimit));
-    commentUrl.searchParams.set("item_type", "0");
-    commentUrl.searchParams.set("insert_ids", "");
-    commentUrl.searchParams.set("whale_cut_token", "");
-    commentUrl.searchParams.set("cut_version", "1");
-    commentUrl.searchParams.set("rcFT", "");
-    commentUrl.searchParams.set("device_platform", "webapp");
-    commentUrl.searchParams.set("aid", "6383");
-    const commentResponse = await fetch(commentUrl.toString(), {
-      credentials: "include",
-      headers: {
-        accept: "application/json, text/plain, */*"
-      }
-    });
-    const commentPayload = await commentResponse.json().catch(() => ({}));
-    const comments = Array.isArray(commentPayload.comments) ? commentPayload.comments : [];
-    topComments = comments.map(normalizeComment).filter(Boolean);
-  } catch {}
-  return {
-    commentCount: Number(statistics.comment_count || 0),
-    topComments
-  };
-})()
-`;
-}
-
-function buildDouyinStatsExtractJs(awemeId: string) {
-  return `
-(async () => {
-  const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
-  detailUrl.searchParams.set("aweme_id", ${JSON.stringify(awemeId)});
-  detailUrl.searchParams.set("aid", "6383");
-  const response = await fetch(detailUrl.toString(), {
-    credentials: "include",
-    headers: {
-      accept: "application/json, text/plain, */*"
-    }
-  });
-  const payload = await response.json().catch(() => ({}));
-  const awemeDetail = payload && typeof payload === "object" ? payload.aweme_detail || {} : {};
-  const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
-  const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
-  return {
-    hasStats,
-    title: awemeDetail.desc || awemeDetail.title || "",
-    likeCount: Number(statistics.digg_count || 0),
-    commentCount: Number(statistics.comment_count || 0),
-    favoriteCount: Number(statistics.collect_count || 0),
-    shareCount: Number(statistics.share_count || 0),
-    publishedAt: awemeDetail.create_time || awemeDetail.createTime || "",
-    authorName: (awemeDetail.author && (awemeDetail.author.nickname || awemeDetail.author.name || awemeDetail.author.unique_id)) || "",
-    authorSecUid: (awemeDetail.author && (awemeDetail.author.sec_uid || awemeDetail.author.secUid || awemeDetail.author.sec_user_id)) || ""
-  };
-})()
-`;
-}
-
-function buildDouyinBatchStatsExtractJs(awemeIds: string[]) {
-  return `
-(async () => {
-  const awemeIds = ${JSON.stringify(awemeIds)};
-  const fetchOne = async (awemeId) => {
-    const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
-    detailUrl.searchParams.set("aweme_id", awemeId);
-    detailUrl.searchParams.set("aid", "6383");
-    const response = await fetch(detailUrl.toString(), {
-      credentials: "include",
-      headers: {
-        accept: "application/json, text/plain, */*"
-      }
-    });
-    const payload = await response.json().catch(() => ({}));
-    const awemeDetail = payload && typeof payload === "object" ? payload.aweme_detail || {} : {};
-    const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
-    const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
-    return {
-      awemeId,
-      hasStats,
-      title: awemeDetail.desc || awemeDetail.title || "",
-      likeCount: Number(statistics.digg_count || 0),
-      commentCount: Number(statistics.comment_count || 0),
-      favoriteCount: Number(statistics.collect_count || 0),
-      shareCount: Number(statistics.share_count || 0),
-      publishedAt: awemeDetail.create_time || awemeDetail.createTime || "",
-      authorName: (awemeDetail.author && (awemeDetail.author.nickname || awemeDetail.author.name || awemeDetail.author.unique_id)) || "",
-      authorSecUid: (awemeDetail.author && (awemeDetail.author.sec_uid || awemeDetail.author.secUid || awemeDetail.author.sec_user_id)) || ""
-    };
-  };
-  const results = [];
-  const concurrency = 6;
-  let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, awemeIds.length) }, async () => {
-    while (cursor < awemeIds.length) {
-      const index = cursor++;
-      try {
-        results[index] = await fetchOne(awemeIds[index]);
-      } catch {
-        results[index] = { awemeId: awemeIds[index], hasStats: false };
-      }
-    }
-  }));
-  return results;
-})()
-`;
-}
-
-const DOUYIN_AWEME_ID_EXTRACT_JS = `
-(() => {
-  const candidates = [location.href];
-  for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
-    const href = anchor.href || anchor.getAttribute("href") || "";
-    if (href) candidates.push(href);
-  }
-  for (const entry of performance.getEntriesByType("resource")) {
-    if (entry.name) candidates.push(entry.name);
-  }
-  const html = document.documentElement?.innerHTML || "";
-  const textMatches = html.match(/(?:\\/video\\/|aweme_id["'=:\\s]+)(\\d{10,})/g) || [];
-  candidates.push(...textMatches);
-
-  const extract = (value) => {
-    const text = String(value || "");
-    return (
-      text.match(/\\/video\\/(\\d{10,})/)?.[1] ||
-      text.match(/[?&]aweme_id=(\\d{10,})/)?.[1] ||
-      text.match(/aweme_id["'=:\\s]+(\\d{10,})/)?.[1] ||
-      text.match(/awemeId["'=:\\s]+(\\d{10,})/)?.[1] ||
-      ""
-    );
-  };
-  const awemeId = candidates.map(extract).find(Boolean) || "";
-  return {
-    awemeId,
-    url: awemeId ? "https://www.douyin.com/video/" + awemeId : location.href
-  };
-})()
-`;
-
 export async function getDouyinTopComments(account: Account, options: { limit?: number; commentLimit?: number } = {}) {
   const stdout = await runOpenCli([
     "douyin",
@@ -2065,7 +1121,7 @@ function resolveDouyinVideoLookupLimit(video: Pick<Video, "id" | "url" | "raw">)
   return Math.min(Math.max(index || 20, 20), 50);
 }
 
-async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string) {
+async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string, options: { signal?: AbortSignal } = {}) {
   const workspace = `douyin-media-${process.pid}-${Date.now()}-${shortHash(awemeId)}`;
   const videoUrl = buildDouyinVideoUrl(awemeId);
   if (!videoUrl) return "";
@@ -2073,12 +1129,13 @@ async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string) {
   try {
     const openResult = parseJsonish(
       await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [videoUrl], { window: "background" }), {
-        timeout: 30_000
+        timeout: 30_000,
+        signal: options.signal
       })
     );
     const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
     const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_MEDIA_EXTRACT_JS], tab ? { tab } : {});
-    const candidates = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000 })))
+    const candidates = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000, signal: options.signal })))
       .map((value) => String(value || "").trim())
       .filter(isLikelyDirectMediaUrl);
     return selectBestDouyinMediaUrl(candidates);
@@ -2086,38 +1143,6 @@ async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string) {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 }
-
-const DOUYIN_MEDIA_EXTRACT_JS = `
-(async () => {
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const collect = () => {
-    const urls = [];
-    for (const video of Array.from(document.querySelectorAll("video"))) {
-      for (const value of [video.currentSrc, video.src]) {
-        if (value) urls.push(value);
-      }
-      for (const source of Array.from(video.querySelectorAll("source"))) {
-        const value = source.src || source.getAttribute("src") || "";
-        if (value) urls.push(value);
-      }
-    }
-    for (const entry of performance.getEntriesByType("resource")) {
-      const name = entry.name || "";
-      if (/douyinvod|mime_type=video|\\/aweme\\/v1\\/play\\//i.test(name)) urls.push(name);
-    }
-    return Array.from(new Set(urls)).filter((url) => /^https?:\\/\\//i.test(url));
-  };
-
-  for (let i = 0; i < 8; i += 1) {
-    const urls = collect();
-    if (urls.length) return urls;
-    const video = document.querySelector("video");
-    if (video) video.play().catch(() => undefined);
-    await sleep(1000);
-  }
-  return collect();
-})()
-`;
 
 export function getDouyinAwemeId(video: Pick<Video, "id" | "url" | "raw">) {
   return resolveDouyinAwemeId(video);
@@ -2199,189 +1224,6 @@ function douyinMediaUrlScore(url: string) {
   return score;
 }
 
-export async function hydrateBilibiliVideoStats(video: Video) {
-  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
-  if (!bvid) return video;
-
-  const metadata = await getBilibiliVideoFields(bvid);
-  return {
-    ...video,
-    coverUrl: String(metadata.thumbnail || video.coverUrl || ""),
-    duration: String(metadata.duration || video.duration || ""),
-    stats: {
-      views: toNumber(metadata.view ?? video.stats.views),
-      likes: toNumber(metadata.like ?? video.stats.likes),
-      comments: toNumber(metadata.reply ?? video.stats.comments),
-      favorites: toNumber(metadata.favorite ?? video.stats.favorites),
-      shares: toNumber(metadata.share ?? video.stats.shares)
-    },
-    raw: { ...(typeof video.raw === "object" && video.raw ? video.raw : {}), metadata },
-    updatedAt: nowIso()
-  };
-}
-
-export async function getBilibiliVideoStatsByUrl(
-  url: string,
-  options: VideoStatsTimingOptions = {}
-): Promise<BilibiliVideoStatsResult> {
-  const resolvedUrl = await timeOpenCliOperation(
-    options,
-    "bilibili.resolve-url",
-    () => resolveBilibiliVideoUrl(url),
-    { shortLink: /b23\.tv/i.test(url) }
-  );
-  const bvid = extractBvid(resolvedUrl);
-  if (!bvid) {
-    throw new Error("没有从链接里解析到 B 站 BV 号，请粘贴完整视频链接。");
-  }
-
-  const [opencliResult, publicResult] = await Promise.allSettled([
-    getBilibiliVideoFields(bvid, options),
-    getBilibiliPublicVideoFields(bvid, options)
-  ]);
-  const opencliFields = opencliResult.status === "fulfilled" ? opencliResult.value : {};
-  const publicFields = publicResult.status === "fulfilled" ? publicResult.value : {};
-  const stat = publicFields.stat && typeof publicFields.stat === "object" ? (publicFields.stat as Record<string, unknown>) : {};
-  const metadata = {
-    ...publicFields,
-    ...stat,
-    ...opencliFields
-  };
-  if (!hasBilibiliStatFields(metadata)) {
-    throw new Error(formatBilibiliStatsFetchError(bvid, opencliResult, publicResult));
-  }
-  const owner = metadata.owner && typeof metadata.owner === "object" ? (metadata.owner as Record<string, unknown>) : {};
-
-  return {
-    platform: "bilibili" as const,
-    title: stringField(metadata.title),
-    url: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`,
-    publishedAt: normalizeTimestamp(metadata.pubdate || metadata.publish_time || metadata.created_at || metadata.date),
-    authorName:
-      stringField(owner.name) ||
-      stringField(owner.uname) ||
-      stringField(metadata.owner_name) ||
-      stringField(metadata.author) ||
-      stringField(metadata.uname),
-    stats: {
-      play: firstNumber(metadata.view, metadata.views),
-      like: firstNumber(metadata.like, metadata.likes),
-      coin: firstNumber(metadata.coin),
-      favorite: firstNumber(metadata.favorite, metadata.favorites),
-      comment: firstNumber(metadata.reply, metadata.comments),
-      share: firstNumber(metadata.share, metadata.shares),
-      danmaku: firstNumber(metadata.danmaku)
-    }
-  };
-}
-
-async function resolveBilibiliVideoUrl(url: string) {
-  const directBvid = extractBvid(url);
-  if (directBvid) return url;
-  if (!/b23\.tv/i.test(url)) return url;
-
-  try {
-    const response = await fetch(url, {
-      redirect: "follow",
-      headers: {
-        "User-Agent": "Mozilla/5.0 style-library",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
-    });
-    const resolvedUrl = response.url || url;
-    if (extractBvid(resolvedUrl)) return resolvedUrl;
-
-    const text = await response.text().catch(() => "");
-    return extractBvid(text) ? text : resolvedUrl;
-  } catch {
-    return url;
-  }
-}
-
-async function normalizeBilibiliVideo(
-  row: unknown,
-  account: Account,
-  options: { hydrateDetails?: boolean } = {}
-): Promise<Video> {
-  const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
-  const title = String(object.title || object.name || "未命名视频");
-  const url = String(object.url || object.link || "");
-  const bvid = extractBvid(url) || String(object.bvid || object.BVID || object.aid || "");
-  const metadata: Record<string, unknown> =
-    options.hydrateDetails !== false && bvid ? await getBilibiliVideoFields(bvid).catch(() => ({})) : {};
-  const views = toNumber(object.plays ?? object.views ?? object.play ?? object.view ?? metadata.view);
-  const likes = toNumber(object.likes ?? object.like ?? metadata.like);
-  const comments = toNumber(object.comments ?? object.reply ?? object.replies ?? metadata.reply);
-  const favorites = toNumber(object.favorites ?? object.stow ?? object.collect ?? metadata.favorite);
-
-  return {
-    id: safeSegment(bvid || shortHash(`${title}-${url}`)),
-    platform: "bilibili",
-    accountId: account.id,
-    title,
-    url,
-    coverUrl: stringField(metadata.thumbnail) || stringField(object.thumbnail) || stringField(object.pic),
-    duration: String(metadata.duration || object.duration || ""),
-    publishedAt: String(object.date || object.pubdate || object.created_at || metadata.publish_time || ""),
-    stats: { views, likes, comments, favorites },
-    hotScore: 0,
-    relativeViewRate: 0,
-    transcriptStatus: "not_started",
-    raw: { ...(typeof row === "object" && row ? row : { value: row }), metadata },
-    updatedAt: nowIso()
-  };
-}
-
-async function getBilibiliVideoFields(bvid: string, options: VideoStatsTimingOptions = {}) {
-  const stdout = await runOpenCli(["bilibili", "video", bvid, "-f", "json"], {
-    timingStage: "bilibili.opencli.video",
-    onTiming: options.onTiming,
-    timingMeta: mergeTimingMeta(options.timingMeta, { bvid })
-  });
-  const raw = parseJsonish(stdout);
-  if (Array.isArray(raw)) {
-    return Object.fromEntries(
-      raw
-        .map((item) => {
-          if (!item || typeof item !== "object") return null;
-          const object = item as Record<string, unknown>;
-          return [String(object.field || ""), object.value] as const;
-        })
-        .filter((entry): entry is readonly [string, unknown] => Boolean(entry?.[0]))
-    ) as Record<string, unknown>;
-  }
-  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-}
-
-async function getBilibiliPublicVideoFields(bvid: string, options: VideoStatsTimingOptions = {}) {
-  const response = await timeOpenCliOperation(
-    options,
-    "bilibili.public.view",
-    () => fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 style-library",
-        Referer: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`
-      }
-    }),
-    { bvid }
-  );
-  if (!response.ok) {
-    throw new Error(`公开接口 HTTP ${response.status}`);
-  }
-  const payload = (await response.json()) as unknown;
-  const object = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const code = toNumber(object.code);
-  if (code !== 0) {
-    const message = stringField(object.message) || stringField(object.msg);
-    throw new Error(`公开接口返回 ${code}${message ? `：${message}` : ""}`);
-  }
-  const data = object.data && typeof object.data === "object" ? (object.data as Record<string, unknown>) : {};
-  if (!Object.keys(data).length) {
-    throw new Error("公开接口未返回视频数据");
-  }
-  return data;
-}
-
 function normalizeDouyinVideo(row: unknown, account: Account): Video {
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   const title = String(object.title || object.desc || object.caption || "未命名视频");
@@ -2456,216 +1298,4 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
     raw: row,
     updatedAt: nowIso()
   };
-}
-
-function firstNumber(...values: unknown[]) {
-  for (const value of values) {
-    const number = toNumber(value);
-    if (number > 0) return number;
-  }
-  return 0;
-}
-
-function hasBilibiliStatFields(metadata: Record<string, unknown>) {
-  return [
-    "view",
-    "views",
-    "play",
-    "plays",
-    "like",
-    "likes",
-    "coin",
-    "favorite",
-    "favorites",
-    "reply",
-    "comments",
-    "share",
-    "shares",
-    "danmaku"
-  ].some((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
-}
-
-function formatBilibiliStatsFetchError(
-  bvid: string,
-  opencliResult: PromiseSettledResult<Record<string, unknown>>,
-  publicResult: PromiseSettledResult<Record<string, unknown>>
-) {
-  const details = [
-    describeBilibiliStatsSource("opencli", opencliResult),
-    describeBilibiliStatsSource("公开接口", publicResult)
-  ].filter(Boolean);
-  return `B站视频 ${bvid} 当前数据抓取失败：${details.join("；") || "没有返回可用统计数据"}。请检查本机网络或稍后重试。`;
-}
-
-function describeBilibiliStatsSource(label: string, result: PromiseSettledResult<Record<string, unknown>>) {
-  if (result.status === "rejected") {
-    return `${label}：${formatErrorMessage(result.reason)}`;
-  }
-  if (!Object.keys(result.value).length) {
-    return `${label}：未返回可用数据`;
-  }
-  return "";
-}
-
-function formatErrorMessage(error: unknown) {
-  const message = error instanceof Error ? error.message.trim() : typeof error === "string" ? error.trim() : "";
-  if (/Failed to fetch|fetch failed/i.test(message)) return "网络请求失败（fetch failed）";
-  if (message) return message.replace(/\s+/g, " ").slice(0, 240);
-  return "未知错误";
-}
-
-function normalizeBilibiliComment(row: unknown, index: number): BilibiliCommentSample {
-  const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
-  return {
-    rank: toNumber(object.rank) || index + 1,
-    author: String(object.author || object.uname || ""),
-    text: normalizeCommentText(object.text || object.content || object.message),
-    likes: toNumber(object.likes || object.like),
-    replies: toNumber(object.replies || object.reply),
-    time: String(object.time || object.ctime || "")
-  };
-}
-
-function normalizeCommentText(value: unknown): string {
-  if (typeof value === "string") return value.replace(/\s+/g, " ").trim();
-  if (value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    for (const key of ["text", "content", "message", "comment", "reply"]) {
-      const text: string = normalizeCommentText(object[key]);
-      if (text) return text;
-    }
-    return JSON.stringify(value);
-  }
-  return "";
-}
-
-function uniqueStrings(values: string[]) {
-  return [...new Set(values.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean))];
-}
-
-function stringField(value: unknown) {
-  if (typeof value === "string") return value.trim();
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  return "";
-}
-
-function extractBilibiliCid(fields: Record<string, unknown>) {
-  const direct = stringField(fields.cid);
-  if (direct) return direct;
-
-  const pages = fields.pages || fields.parts || fields.videos;
-  if (Array.isArray(pages)) {
-    for (const page of pages) {
-      if (!page || typeof page !== "object") continue;
-      const cid = stringField((page as Record<string, unknown>).cid);
-      if (cid) return cid;
-    }
-  }
-  return "";
-}
-
-function findCoverUrlInRaw(raw: unknown): string {
-  if (!raw || typeof raw !== "object") return "";
-  const object = raw as Record<string, unknown>;
-  for (const key of ["thumbnail", "pic", "cover", "cover_url", "pic_url"]) {
-    const value = stringField(object[key]);
-    if (value) return value;
-  }
-  const metadata = object.metadata && typeof object.metadata === "object" ? (object.metadata as Record<string, unknown>) : {};
-  for (const key of ["thumbnail", "pic", "cover"]) {
-    const value = stringField(metadata[key]);
-    if (value) return value;
-  }
-  return "";
-}
-
-function normalizeTimestamp(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const milliseconds = value > 10_000_000_000 ? value : value * 1000;
-    return new Date(milliseconds).toISOString();
-  }
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (/^\d+$/.test(trimmed)) return normalizeTimestamp(Number(trimmed));
-    return trimmed;
-  }
-
-  return "";
-}
-
-function extractSubtitleText(raw: unknown): string {
-  if (!raw) return "";
-  if (typeof raw === "string") return raw;
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => {
-        if (typeof item === "string") return item;
-        if (item && typeof item === "object") {
-          const object = item as Record<string, unknown>;
-          return String(object.content || object.text || object.body || "").trim();
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  if (typeof raw === "object") {
-    const object = raw as Record<string, unknown>;
-    for (const key of ["text", "subtitle", "content", "body"]) {
-      if (typeof object[key] === "string") return object[key] as string;
-    }
-    for (const key of ["data", "items", "body", "subtitles"]) {
-      const nested = extractSubtitleText(object[key]);
-      if (nested) return nested;
-    }
-  }
-
-  return "";
-}
-
-function isUsableBilibiliSubtitle(text: string, video: Video) {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-
-  const title = String(video.title || "");
-  const expectedChinese = hasCjkText(title);
-  if (!expectedChinese) return true;
-
-  const cjkCount = countMatches(trimmed, /[\u3400-\u9fff]/gu);
-  const latinWordCount = countMatches(trimmed, /[A-Za-z]{2,}/g);
-  const totalSignal = cjkCount + latinWordCount;
-  if (!totalSignal) return true;
-
-  const cjkRatio = cjkCount / totalSignal;
-  return cjkCount >= 20 || cjkRatio >= 0.15;
-}
-
-function hasCjkText(text: string) {
-  return /[\u3400-\u9fff]/u.test(text);
-}
-
-function countMatches(text: string, pattern: RegExp) {
-  return Array.from(text.matchAll(pattern)).length;
-}
-
-async function collectMediaFiles(root: string) {
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  const mediaFiles: string[] = [];
-
-  for (const entry of entries) {
-    const target = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      mediaFiles.push(...(await collectMediaFiles(target)));
-      continue;
-    }
-
-    if (!entry.isFile()) continue;
-    if (/\.(mp4|m4a|mp3|wav|aac|flac|ogg|webm|mov|mkv)$/i.test(entry.name)) {
-      mediaFiles.push(target);
-    }
-  }
-
-  return mediaFiles;
 }

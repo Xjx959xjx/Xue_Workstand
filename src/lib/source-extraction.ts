@@ -1,4 +1,4 @@
-import { extractLinksFromInput } from "./link-input";
+import { extractLinksFromInput } from "./platform-links";
 
 export const DEFAULT_REWRITE_PROMPT = "按当前选中的账号/项目风格改写，保留素材核心信息和话题角度。";
 

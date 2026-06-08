@@ -61,11 +61,11 @@ export async function PATCH(request: Request) {
     const parsed = saveAndGenerateSchema.safeParse(body);
 
     if (parsed.success && "name" in body) {
-      return saveAndGenerateProjectStyleProfile(parsed.data);
+      return saveAndGenerateProjectStyleProfile(parsed.data, { signal: request.signal });
     }
 
     const input = legacySchema.parse(body);
-    return generateProjectStyleProfile(input.projectId);
+    return generateProjectStyleProfile(input.projectId, { signal: request.signal });
   }, {
     fallbackMessage: "自动总结项目风格失败"
   });

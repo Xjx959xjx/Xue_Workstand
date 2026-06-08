@@ -13,7 +13,10 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  return apiJson(async () => runBatchTranscribe(await parseJsonBody(request, schema)), {
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, schema);
+    return runBatchTranscribe(input, { signal: request.signal });
+  }, {
     fallbackMessage: "批量转写失败"
   });
 }

@@ -5,7 +5,7 @@ import type { KeyboardEvent } from "react";
 import { Check, ClipboardPaste, X } from "lucide-react";
 import { isBackdropEvent } from "@/components/dialog-events";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { detectVideoPlatform, extractVideoUrl } from "@/lib/video-links";
+import { detectVideoPlatform, extractVideoUrl } from "@/lib/platform-links";
 import type { GrossMarginPriceTable, GrossMarginServiceKind } from "@/lib/types";
 
 type PlatformKey = GrossMarginPriceTable["platform"];

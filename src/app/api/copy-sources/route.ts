@@ -10,7 +10,7 @@ import {
 } from "@/lib/storage";
 import { resolveLinkSourceMedia, transcribeLinkSource } from "@/lib/transcription";
 import { analyzeCopySourceMaterial } from "@/lib/material-analysis";
-import { createUrlPreprocessor } from "@/lib/link-input";
+import { createUrlPreprocessor } from "@/lib/platform-links";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,7 +78,8 @@ export async function POST(request: Request) {
     const result = await transcribeLinkSource({
       url: input.url,
       titleHint: input.titleHint,
-      analyzeVideo: Boolean(input.analyzeVideo)
+      analyzeVideo: Boolean(input.analyzeVideo),
+      signal: request.signal
     });
     const materialAnalysis = input.analyzeVideo
       ? await analyzeCopySourceMaterial({

@@ -16,14 +16,28 @@ import {
   refreshDouyinVideoDownloadUrl,
   resolveOpenCliCommand
 } from "./opencli";
+import {
+  browserUserAgent,
+  buildRemoteAssetRequestHeaders,
+  detectPlatformFromLink,
+  extractBvid,
+  inferRemoteContentType,
+  inferRemoteFileExtension,
+  isLikelyAudioMediaUrl,
+  normalizeRemoteMediaUrl,
+  sortRemoteAudioMediaUrls,
+  videoMediaUrlScore
+} from "./platform-links";
 import { getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
-import { extractBvid } from "./utils";
 
 const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 type Timing = { stage: string; ms: number };
+type AbortableOptions = {
+  signal?: AbortSignal;
+};
 
 function openCliExecArgs(args: string[]) {
   const runtime = resolveOpenCliCommand();
@@ -112,7 +126,9 @@ export async function transcribeVideo(input: {
   mediaUrl?: string;
   douyinMediaUrl?: string;
   allowRemoteDownload?: boolean;
+  signal?: AbortSignal;
 }) {
+  throwIfAborted(input.signal);
   const timings: Timing[] = [];
   const totalStartedAt = Date.now();
   const { account, video } = await getVideo(input.platform, input.accountId, input.videoId);
@@ -122,6 +138,7 @@ export async function transcribeVideo(input: {
 
   if (input.platform === "bilibili") {
     const subtitle = await getBilibiliSubtitle(video).catch(() => "");
+    throwIfAborted(input.signal);
     if (subtitle.trim()) {
       hadBilibiliSubtitle = true;
       const cleaned = await cleanTranscriptText({
@@ -129,6 +146,7 @@ export async function transcribeVideo(input: {
         title: video.title,
         text: subtitle
       });
+      throwIfAborted(input.signal);
       return {
         ...(await saveTranscript({
           platform: input.platform,
@@ -151,25 +169,30 @@ export async function transcribeVideo(input: {
   let mediaError = "";
 
   try {
+    throwIfAborted(input.signal);
     const shouldDownloadRemote =
       input.allowRemoteDownload || (input.platform === "douyin" && Boolean(input.douyinMediaUrl));
     if (!mediaPath && shouldDownloadRemote) {
       if (input.platform === "bilibili") {
         try {
-          const prepared = await downloadBilibiliAudio(video);
+          const prepared = await downloadBilibiliAudio(video, { signal: input.signal });
           mediaPath = prepared.mediaPath;
           timings.push(...prepared.timings);
           cleanupTargets.push(...prepared.cleanupTargets);
         } catch (error) {
+          if (isAbortError(error)) throw error;
           mediaError = error instanceof Error ? error.message : "B站音频提取失败";
         }
       } else {
         try {
-          const prepared = await downloadDouyinAudio(account, video, input.douyinMediaUrl);
+          const prepared = await downloadDouyinAudio(account, video, input.douyinMediaUrl, {
+            signal: input.signal
+          });
           mediaPath = prepared.mediaPath;
           timings.push(...prepared.timings);
           cleanupTargets.push(mediaPath);
         } catch (error) {
+          if (isAbortError(error)) throw error;
           mediaError = error instanceof Error ? error.message : "下载音频失败";
         }
       }
@@ -177,11 +200,15 @@ export async function transcribeVideo(input: {
 
     if (!mediaPath && input.mediaUrl) {
       try {
-        const prepared = await downloadRemoteAudio(input.mediaUrl, `${input.videoId}.mp3`);
+        throwIfAborted(input.signal);
+        const prepared = await downloadRemoteAudio(input.mediaUrl, `${input.videoId}.mp3`, {
+          signal: input.signal
+        });
         mediaPath = prepared.mediaPath;
         timings.push({ stage: "download-media-url-audio", ms: prepared.ms });
         cleanupTargets.push(mediaPath);
       } catch (error) {
+        if (isAbortError(error)) throw error;
         mediaError = error instanceof Error ? error.message : "下载音频失败";
       }
     }
@@ -208,14 +235,16 @@ export async function transcribeVideo(input: {
     }
 
     try {
+      throwIfAborted(input.signal);
       const transcribeStartedAt = Date.now();
-      const preparedForAsr = await prepareAudioForVolcengine(mediaPath);
+      const preparedForAsr = await prepareAudioForVolcengine(mediaPath, { signal: input.signal });
       if (preparedForAsr.cleanupPath) cleanupTargets.push(preparedForAsr.cleanupPath);
       timings.push(...preparedForAsr.timings);
-      const volcengine = await transcribeWithVolcengine(preparedForAsr.mediaPath);
+      const volcengine = await transcribeWithVolcengine(preparedForAsr.mediaPath, { signal: input.signal });
       const text = volcengine.text;
       timings.push(...volcengine.timings);
       timings.push({ stage: "volcengine-transcribe", ms: Date.now() - transcribeStartedAt });
+      throwIfAborted(input.signal);
       const cleanStartedAt = Date.now();
       const cleaned = await cleanTranscriptText({
         platform: input.platform,
@@ -224,6 +253,7 @@ export async function transcribeVideo(input: {
       });
       timings.push({ stage: "clean-transcript", ms: Date.now() - cleanStartedAt });
       const saveStartedAt = Date.now();
+      throwIfAborted(input.signal);
       const saved = await saveTranscript({
         platform: input.platform,
         accountId: input.accountId,
@@ -243,6 +273,7 @@ export async function transcribeVideo(input: {
         }
       };
     } catch (error) {
+      if (isAbortError(error)) throw error;
       const reason = buildProviderErrorReason(input.platform, error);
       await markTranscriptFailed(input.platform, input.accountId, input.videoId, reason);
       throw new Error(reason);
@@ -260,10 +291,12 @@ export async function transcribeLinkSource(input: {
   url: string;
   titleHint?: string;
   analyzeVideo?: boolean;
+  signal?: AbortSignal;
 }): Promise<LinkTranscriptionResult> {
+  throwIfAborted(input.signal);
   const startedAt = Date.now();
   const resolvedUrl = await resolveShareUrl(input.url).catch(() => input.url);
-  const platform = detectLinkPlatform(resolvedUrl || input.url);
+  const platform = detectPlatformFromLink(resolvedUrl || input.url);
   let subtitleResult: LinkTranscriptionResult | null = null;
 
   if (platform === "bilibili") {
@@ -336,14 +369,17 @@ export async function transcribeLinkSource(input: {
 
   const cleanupTargets: string[] = [];
   try {
+    throwIfAborted(input.signal);
     const downloaded = await downloadFirstAvailableRemoteAudio(
       media.mediaUrls,
-      `${safeFileName(media.mediaId || "link-video")}.mp3`
+      `${safeFileName(media.mediaId || "link-video")}.mp3`,
+      { signal: input.signal }
     );
     cleanupTargets.push(downloaded.mediaPath);
-    const preparedForAsr = await prepareAudioForVolcengine(downloaded.mediaPath);
+    const preparedForAsr = await prepareAudioForVolcengine(downloaded.mediaPath, { signal: input.signal });
     if (preparedForAsr.cleanupPath) cleanupTargets.push(preparedForAsr.cleanupPath);
-    const volcengine = await transcribeWithVolcengine(preparedForAsr.mediaPath);
+    const volcengine = await transcribeWithVolcengine(preparedForAsr.mediaPath, { signal: input.signal });
+    throwIfAborted(input.signal);
     const cleaned = await cleanTranscriptText({
       platform,
       title: media.title || input.titleHint,
@@ -378,7 +414,7 @@ export async function resolveLinkSourceAccountName(url: string) {
   const inputUrl = url.trim();
   if (!inputUrl) return "";
   const resolvedUrl = await resolveShareUrl(inputUrl).catch(() => inputUrl);
-  const platform = detectLinkPlatform(resolvedUrl || inputUrl);
+  const platform = detectPlatformFromLink(resolvedUrl || inputUrl);
   if (platform !== "douyin" && platform !== "bilibili") return "";
   const metadata = await resolveLinkStatsMetadata(resolvedUrl || inputUrl, platform);
   if (metadata.sourceAccountName) return metadata.sourceAccountName;
@@ -391,7 +427,7 @@ export async function resolveLinkSourceAccountName(url: string) {
 }
 
 export function isSupportedVideoSourceLink(url: string) {
-  return detectLinkPlatform(url) !== "unknown";
+  return detectPlatformFromLink(url) !== "unknown";
 }
 
 export async function resolveLinkSourceMedia(input: {
@@ -402,7 +438,7 @@ export async function resolveLinkSourceMedia(input: {
   const resolvedUrl = input.resolvedUrl || (await resolveShareUrl(input.url).catch(() => input.url));
   const platform = input.platform && input.platform !== "unknown"
     ? input.platform
-    : detectLinkPlatform(resolvedUrl || input.url);
+    : detectPlatformFromLink(resolvedUrl || input.url);
   if (platform !== "douyin" && platform !== "bilibili") {
     return {
       url: input.url,
@@ -502,7 +538,11 @@ export async function prepareLinkSourceDownload(input: {
   };
 }
 
-async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: string; timings: Timing[] }> {
+async function transcribeWithVolcengine(
+  mediaPath: string,
+  options: AbortableOptions = {}
+): Promise<{ text: string; timings: Timing[] }> {
+  throwIfAborted(options.signal);
   const config = transcriptionConfig();
   if (!config.apiKey && (!config.appKey || !config.accessKey)) {
     throw new Error("未配置 VOLCENGINE_ASR_API_KEY，无法调用火山引擎录音文件识别 2.0");
@@ -549,7 +589,8 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
           headers,
           body: JSON.stringify(body)
         },
-        config.timeoutMs
+        config.timeoutMs,
+        options.signal
       );
       await assertVolcengineResponse(submitResponse, "提交火山引擎转写任务", ["20000000"]);
       timings.push({ stage: `${attemptPrefix}volcengine-submit`, ms: Date.now() - submitStartedAt });
@@ -558,9 +599,10 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
       let pollWaitMs = 0;
       let queryRequestMs = 0;
       for (let pollAttempt = 0; pollAttempt < config.maxPollAttempts; pollAttempt += 1) {
+        throwIfAborted(options.signal);
         if (pollAttempt > 0) {
           const waitStartedAt = Date.now();
-          await sleep(config.pollIntervalMs);
+          await sleep(config.pollIntervalMs, options.signal);
           pollWaitMs += Date.now() - waitStartedAt;
         }
         const queryRequestStartedAt = Date.now();
@@ -571,7 +613,8 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
             headers,
             body: "{}"
           },
-          config.timeoutMs
+          config.timeoutMs,
+          options.signal
         );
         queryRequestMs += Date.now() - queryRequestStartedAt;
         const statusCode = getVolcengineHeader(queryResponse, "X-Api-Status-Code");
@@ -590,13 +633,14 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
 
       throw new Error("火山引擎转写任务查询超时，请稍后重试。");
     } catch (error) {
+      if (isAbortError(error)) throw error;
       lastError = error;
       if (!shouldRetryVolcengineError(error) || attempt >= config.retryCount) {
         break;
       }
       const backoffMs = 1200 * (attempt + 1);
       timings.push({ stage: `${attemptPrefix}volcengine-retry-wait`, ms: backoffMs });
-      await sleep(backoffMs);
+      await sleep(backoffMs, options.signal);
       attempt += 1;
     }
   }
@@ -605,18 +649,19 @@ async function transcribeWithVolcengine(mediaPath: string): Promise<{ text: stri
   throw lastError instanceof Error ? lastError : new Error("火山引擎转写失败");
 }
 
-async function prepareAudioForVolcengine(mediaPath: string): Promise<{
+async function prepareAudioForVolcengine(mediaPath: string, options: AbortableOptions = {}): Promise<{
   mediaPath: string;
   cleanupPath?: string;
   timings: Timing[];
 }> {
+  throwIfAborted(options.signal);
   if (isVolcengineSupportedAudio(mediaPath)) {
     return { mediaPath, timings: [] };
   }
 
   const startedAt = Date.now();
   const fileName = `${path.basename(mediaPath).replace(/[^\w.-]+/g, "-") || "media"}.mp3`;
-  const converted = await extractLocalAudio(mediaPath, fileName);
+  const converted = await extractLocalAudio(mediaPath, fileName, options);
   return {
     mediaPath: converted.mediaPath,
     cleanupPath: converted.mediaPath,
@@ -704,18 +749,23 @@ function extractUtteranceText(value: unknown) {
     .join("\n");
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
   const controller = new AbortController();
+  const abort = () => controller.abort();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  signal?.addEventListener("abort", abort, { once: true });
   try {
+    throwIfAborted(signal);
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
+    if (signal?.aborted) throw createAbortError();
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`火山引擎请求超时：${url}`);
     }
     throw error;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
   }
 }
 
@@ -724,8 +774,38 @@ function shouldRetryVolcengineError(error: unknown) {
   return /fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR|超时|timeout|503|502|504|socket/i.test(message);
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timeout);
+      cleanup();
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
+}
+
+function createAbortError() {
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  return error;
 }
 
 async function resolveShareUrl(url: string) {
@@ -746,18 +826,6 @@ async function resolveShareUrl(url: string) {
   } finally {
     clearTimeout(timeout);
   }
-}
-
-function detectLinkPlatform(url: string): Platform | "unknown" {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname.includes("bilibili.com") || hostname === "b23.tv") return "bilibili";
-    if (hostname.includes("douyin.com") || hostname.includes("iesdouyin.com")) return "douyin";
-  } catch {
-    if (/bilibili|b23\.tv/i.test(url)) return "bilibili";
-    if (/douyin|iesdouyin/i.test(url)) return "douyin";
-  }
-  return "unknown";
 }
 
 async function resolveLinkMediaUrl(input: {
@@ -935,17 +1003,23 @@ async function resolveGenericLinkMedia(url: string) {
   };
 }
 
-async function downloadFirstAvailableRemoteAudio(urls: string[], fileName: string) {
+async function downloadFirstAvailableRemoteAudio(
+  urls: string[],
+  fileName: string,
+  options: AbortableOptions = {}
+) {
   const attempts: Array<{ url: string; error?: string; ms?: number }> = [];
   const uniqueUrls = [...new Set(urls.filter(Boolean))];
   let lastError: unknown;
 
   for (const [index, url] of uniqueUrls.entries()) {
     try {
-      const downloaded = await downloadRemoteAudio(url, `${index + 1}-${fileName}`);
+      throwIfAborted(options.signal);
+      const downloaded = await downloadRemoteAudio(url, `${index + 1}-${fileName}`, options);
       attempts.push({ url, ms: downloaded.ms });
       return { ...downloaded, attempts };
     } catch (error) {
+      if (isAbortError(error)) throw error;
       lastError = error;
       attempts.push({ url, error: error instanceof Error ? error.message : "音频提取失败" });
       if (!isNoAudioStreamError(error)) break;
@@ -1247,61 +1321,7 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
 `;
 
 function sortLinkMediaUrls(urls: string[]) {
-  const unique = [
-    ...new Set(
-      urls
-        .map((url) => normalizeRemoteMediaUrl(url))
-        .filter((url) => url && isSupportedRemoteMediaUrl(url))
-    )
-  ];
-  return unique.sort((a, b) => linkMediaUrlScore(b) - linkMediaUrlScore(a));
-}
-
-function linkMediaUrlScore(url: string) {
-  let score = 0;
-  try {
-    const parsed = new URL(url);
-    const text = `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase();
-    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
-    if (mimeType.startsWith("audio_")) score += 1000;
-    if (/\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(parsed.pathname)) score += 900;
-    if (/audio|30216|30232|30280|30250/.test(text)) score += 700;
-    if (/douyinvod|audio|music|playwm|play_addr|download_addr/.test(text)) score += 160;
-    if (/bilivideo|upgcxcode|mime_type=audio|\.m4s/.test(text)) score += 140;
-    if (mimeType === "video_mp4" || /\.(mp4|webm|mov)(\?|$)/i.test(parsed.pathname)) score += 80;
-  } catch {
-    if (/\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(url)) score += 900;
-    if (/audio|30216|30232|30280|30250/i.test(url)) score += 700;
-    if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) score += 80;
-  }
-  return score;
-}
-
-function normalizeRemoteMediaUrl(input: string) {
-  const cleaned = String(input || "")
-    .trim()
-    .replaceAll("\\/", "/")
-    .split(/[\s|<>]/)[0]
-    .replace(/,https?:\/\/.+$/i, "")
-    .trim();
-  return cleaned.startsWith("//") ? `https:${cleaned}` : cleaned;
-}
-
-function isSupportedRemoteMediaUrl(input: string) {
-  try {
-    const parsed = new URL(input);
-    const host = parsed.hostname.toLowerCase();
-    const path = parsed.pathname.toLowerCase();
-    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
-
-    if (host === "data.bilibili.com" || path.includes("/log/")) return false;
-    if (mimeType.startsWith("audio_") || mimeType.startsWith("video_")) return true;
-    if (/douyinvod|bilivideo|akamaized/i.test(host)) return true;
-    if (/\/aweme\/v1\/play\/|\/upgcxcode\/|\/bfs\/archive\//i.test(path)) return true;
-    return /\.(m4s|mp4|m4a|mp3|aac|wav|flac|ogg|webm|mov)$/i.test(path);
-  } catch {
-    return false;
-  }
+  return sortRemoteAudioMediaUrls(urls);
 }
 
 function extractHtmlTitle(html: string) {
@@ -1328,10 +1348,6 @@ function safeFileName(input: string) {
   return input.replace(/[^\w.-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "video";
 }
 
-function browserUserAgent() {
-  return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
-}
-
 function makeLinkSourceFileBaseName(media: LinkSourceResolvedMedia) {
   const title = media.title || media.sourceAccountName || media.resolvedUrl || media.url || "single-video";
   return safeFileName(normalizeTitle(title)).slice(0, 64) || "single-video";
@@ -1344,80 +1360,6 @@ function selectVideoMediaUrl(urls: string[]) {
     .filter((url) => !isLikelyAudioMediaUrl(url))
     .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
   return candidates[0] || "";
-}
-
-function isLikelyAudioMediaUrl(url: string) {
-  try {
-    const parsed = new URL(url);
-    const text = `${parsed.pathname} ${parsed.search}`.toLowerCase();
-    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
-    return mimeType.startsWith("audio_") || /\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(parsed.pathname) || /audio|30216|30232|30280|30250/.test(text);
-  } catch {
-    return /\.(m4a|mp3|aac|wav|flac|ogg)(\?|$)/i.test(url) || /audio|30216|30232|30280|30250/i.test(url);
-  }
-}
-
-function videoMediaUrlScore(url: string) {
-  try {
-    const parsed = new URL(url);
-    const text = `${parsed.hostname} ${parsed.pathname} ${parsed.search}`.toLowerCase();
-    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
-    let score = 0;
-    if (mimeType.startsWith("video_")) score += 1000;
-    if (/\.(mp4|webm|mov|mkv)(\?|$)/i.test(parsed.pathname)) score += 900;
-    if (/douyinvod|play_addr|download_addr|mime_type=video|video_mp4/.test(text)) score += 700;
-    if (/bilivideo|upgcxcode|mime_type=video|\.m4s/.test(text)) score += 300;
-    return score;
-  } catch {
-    if (/\.(mp4|webm|mov|mkv)(\?|$)/i.test(url)) return 900;
-    if (/mime_type=video|video_mp4|douyinvod|bilivideo|upgcxcode/i.test(url)) return 700;
-  }
-  return 0;
-}
-
-function buildRemoteAssetRequestHeaders(url: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    "User-Agent": browserUserAgent(),
-    Accept: "*/*"
-  };
-  if (/bilibili|bilivideo|akamaized|upgcxcode/i.test(url)) {
-    headers.Referer = "https://www.bilibili.com/";
-    headers.Origin = "https://www.bilibili.com";
-  }
-  if (/douyin|douyinvod/i.test(url)) {
-    headers.Referer = "https://www.douyin.com/";
-    headers.Origin = "https://www.douyin.com";
-  }
-  return headers;
-}
-
-function inferRemoteFileExtension(url: string, family: "video" | "image") {
-  try {
-    const parsed = new URL(url);
-    const pathName = parsed.pathname.toLowerCase();
-    const mimeType = (parsed.searchParams.get("mime_type") || "").toLowerCase();
-    const match = pathName.match(/\.(mp4|m4s|webm|mov|mkv|jpe?g|png|webp|gif)$/i);
-    if (match?.[0]) return match[0].toLowerCase();
-    if (mimeType.includes("webp")) return ".webp";
-    if (mimeType.includes("png")) return ".png";
-    if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return ".jpg";
-    if (mimeType.includes("webm")) return ".webm";
-    if (mimeType.includes("video")) return ".mp4";
-  } catch {
-    const match = url.match(/\.(mp4|m4s|webm|mov|mkv|jpe?g|png|webp|gif)(?:\?|$)/i);
-    if (match?.[0]) return match[0].replace(/\?$/, "").toLowerCase();
-  }
-  return family === "image" ? ".jpg" : ".mp4";
-}
-
-function inferRemoteContentType(url: string, family: "video" | "image") {
-  const extension = inferRemoteFileExtension(url, family);
-  if (extension === ".png") return "image/png";
-  if (extension === ".webp") return "image/webp";
-  if (extension === ".gif") return "image/gif";
-  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
-  if (extension === ".webm") return "video/webm";
-  return family === "image" ? "image/jpeg" : "video/mp4";
 }
 
 function inferLocalFileExtension(filePath: string, fallback: string) {
@@ -1470,9 +1412,17 @@ function inferVolcengineAudioFormat(mediaPathOrUrl: string) {
   return "mp3";
 }
 
-async function downloadDouyinAudio(account: Account, video: Video, prefetchedMediaUrl?: string) {
+async function downloadDouyinAudio(
+  account: Account,
+  video: Video,
+  prefetchedMediaUrl?: string,
+  options: AbortableOptions = {}
+) {
   const mediaUrlStartedAt = Date.now();
-  const mediaUrl = prefetchedMediaUrl || video.downloadUrl || (await refreshDouyinVideoDownloadUrl(account, video));
+  const mediaUrl =
+    prefetchedMediaUrl ||
+    video.downloadUrl ||
+    (await refreshDouyinVideoDownloadUrl(account, video, { signal: options.signal }));
   const mediaUrlMs = Date.now() - mediaUrlStartedAt;
   if (!mediaUrl) {
     throw new Error("没有取得当前抖音视频的可转写媒体地址。请确认 opencli 已登录抖音、视频链接仍可访问，或重新采集账号后再试。");
@@ -1486,29 +1436,37 @@ async function downloadDouyinAudio(account: Account, video: Video, prefetchedMed
   ];
   let extracted: { mediaPath: string; ms: number };
   try {
-    extracted = await downloadRemoteAudio(mediaUrl, `${video.id}.mp3`);
+    throwIfAborted(options.signal);
+    extracted = await downloadRemoteAudio(mediaUrl, `${video.id}.mp3`, options);
   } catch (error) {
+    if (isAbortError(error)) throw error;
     if (!isNoAudioStreamError(error) && (prefetchedMediaUrl || !video.downloadUrl)) throw error;
 
+    throwIfAborted(options.signal);
     const fallbackStartedAt = Date.now();
     const fallbackUrl = await refreshDouyinVideoDownloadUrl(account, video, {
       preferBrowser: !video.downloadUrl,
-      excludeUrls: [mediaUrl]
+      excludeUrls: [mediaUrl],
+      signal: options.signal
     });
     timings.push({ stage: "douyin-media-url-audio-fallback", ms: Date.now() - fallbackStartedAt });
     if (!fallbackUrl || fallbackUrl === mediaUrl) throw error;
     try {
-      extracted = await downloadRemoteAudio(fallbackUrl, `${video.id}.mp3`);
+      throwIfAborted(options.signal);
+      extracted = await downloadRemoteAudio(fallbackUrl, `${video.id}.mp3`, options);
     } catch (fallbackError) {
+      if (isAbortError(fallbackError)) throw fallbackError;
       if (!isNoAudioStreamError(fallbackError)) throw fallbackError;
+      throwIfAborted(options.signal);
       const browserStartedAt = Date.now();
       const browserUrl = await refreshDouyinVideoDownloadUrl(account, video, {
         preferBrowser: true,
-        excludeUrls: [mediaUrl, fallbackUrl]
+        excludeUrls: [mediaUrl, fallbackUrl],
+        signal: options.signal
       });
       timings.push({ stage: "douyin-media-url-browser-fallback", ms: Date.now() - browserStartedAt });
       if (!browserUrl || browserUrl === mediaUrl || browserUrl === fallbackUrl) throw fallbackError;
-      extracted = await downloadRemoteAudio(browserUrl, `${video.id}.mp3`);
+      extracted = await downloadRemoteAudio(browserUrl, `${video.id}.mp3`, options);
     }
   }
 
@@ -1521,7 +1479,7 @@ async function downloadDouyinAudio(account: Account, video: Video, prefetchedMed
   };
 }
 
-async function downloadBilibiliAudio(video: Video) {
+async function downloadBilibiliAudio(video: Video, options: AbortableOptions = {}) {
   const mediaUrlStartedAt = Date.now();
   const pageUrl = video.url || (extractBvid(video.id) ? `https://www.bilibili.com/video/${extractBvid(video.id)}` : "");
   if (!pageUrl) {
@@ -1536,7 +1494,8 @@ async function downloadBilibiliAudio(video: Video) {
 
   const downloaded = await downloadFirstAvailableRemoteAudio(
     media.mediaUrls,
-    `${safeFileName(media.mediaId || video.id || "bilibili-video")}.mp3`
+    `${safeFileName(media.mediaId || video.id || "bilibili-video")}.mp3`,
+    options
   );
 
   return {
@@ -1550,7 +1509,7 @@ async function downloadBilibiliAudio(video: Video) {
   };
 }
 
-async function downloadRemoteAudio(url: string, fileName: string) {
+async function downloadRemoteAudio(url: string, fileName: string, options: AbortableOptions = {}) {
   const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
   const args = [
     "-hide_banner",
@@ -1578,20 +1537,22 @@ async function downloadRemoteAudio(url: string, fileName: string) {
   ];
 
   try {
+    throwIfAborted(options.signal);
     const startedAt = Date.now();
-    await execFileAsync(ffmpegBin(), args, {
+    await execFileAbortable(ffmpegBin(), args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 4,
       timeout: 10 * 60 * 1000
-    });
+    }, options.signal);
     return { mediaPath: target, ms: Date.now() - startedAt };
   } catch (error) {
     await fs.rm(target, { force: true }).catch(() => undefined);
+    if (isAbortError(error)) throw error;
     throw new Error(`音频提取失败：${describeFfmpegError(error)}`);
   }
 }
 
-async function extractLocalAudio(mediaPath: string, fileName: string) {
+async function extractLocalAudio(mediaPath: string, fileName: string, options: AbortableOptions = {}) {
   const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
   const args = [
     "-hide_banner",
@@ -1616,17 +1577,44 @@ async function extractLocalAudio(mediaPath: string, fileName: string) {
   ];
 
   try {
+    throwIfAborted(options.signal);
     const startedAt = Date.now();
-    await execFileAsync(ffmpegBin(), args, {
+    await execFileAbortable(ffmpegBin(), args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 4,
       timeout: 10 * 60 * 1000
-    });
+    }, options.signal);
     return { mediaPath: target, ms: Date.now() - startedAt };
   } catch (error) {
     await fs.rm(target, { force: true }).catch(() => undefined);
+    if (isAbortError(error)) throw error;
     throw new Error(`音频提取失败：${describeFfmpegError(error)}`);
   }
+}
+
+function execFileAbortable(
+  command: string,
+  args: string[],
+  options: Parameters<typeof execFile>[2],
+  signal?: AbortSignal
+) {
+  return new Promise<void>((resolve, reject) => {
+    throwIfAborted(signal);
+    const child = execFile(command, args, options, (error) => {
+      signal?.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+    const abort = () => {
+      child.kill("SIGTERM");
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
 }
 
 function ffmpegBin() {

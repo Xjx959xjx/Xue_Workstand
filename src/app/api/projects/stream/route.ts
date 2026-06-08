@@ -17,18 +17,18 @@ export async function POST(request: Request) {
   try {
     const input = await parseJsonBody(request, schema);
 
-    const stream = createNdjsonStream(async (emit) => {
+    const stream = createNdjsonStream(async (emit, signal) => {
       emit({ type: "stage", stage: "validate", message: "正在校验项目配置", progress: 15 });
       if (!input.sourceAccountIds.length && !input.sourceMaterialIds?.length) {
         throw new Error("先加案例或账号");
       }
 
       emit({ type: "stage", stage: "generate", message: "正在保存项目并读取参考样本", progress: 45 });
-      const result = await saveAndGenerateProjectStyleProfile(input);
+      const result = await saveAndGenerateProjectStyleProfile(input, { signal });
 
       emit({ type: "stage", stage: "finalize", message: "正在写入项目风格卡", progress: 92 });
       emit({ type: "result", data: result });
-    });
+    }, { signal: request.signal });
 
     return new Response(stream, {
       headers: {

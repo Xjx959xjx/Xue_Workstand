@@ -10,26 +10,49 @@ function encodeEvent(event: StreamEvent) {
 }
 
 export function createNdjsonStream(
-  handler: (emit: (event: StreamEvent) => void) => Promise<void>
+  handler: (emit: (event: StreamEvent) => void, signal: AbortSignal) => Promise<void>,
+  options: { signal?: AbortSignal } = {}
 ) {
+  const abortController = new AbortController();
+  const abortFromRequest = () => abortController.abort();
+
+  if (options.signal?.aborted) {
+    abortController.abort();
+  } else {
+    options.signal?.addEventListener("abort", abortFromRequest, { once: true });
+  }
+
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const emit = (event: StreamEvent) => {
+        if (abortController.signal.aborted) return;
         controller.enqueue(encodeEvent(event));
       };
 
       try {
-        await handler(emit);
-        emit({ type: "done" });
+        await handler(emit, abortController.signal);
+        if (!abortController.signal.aborted) {
+          emit({ type: "done" });
+        }
       } catch (error) {
-        emit({
-          type: "error",
-          message: error instanceof Error ? error.message : "请求处理失败"
-        });
+        if (!abortController.signal.aborted) {
+          emit({
+            type: "error",
+            message: error instanceof Error ? error.message : "请求处理失败"
+          });
+        }
       } finally {
-        controller.close();
+        options.signal?.removeEventListener("abort", abortFromRequest);
+        try {
+          controller.close();
+        } catch {
+          // The consumer may have already cancelled the stream.
+        }
       }
+    },
+    cancel() {
+      abortController.abort();
+      options.signal?.removeEventListener("abort", abortFromRequest);
     }
   });
 }
-

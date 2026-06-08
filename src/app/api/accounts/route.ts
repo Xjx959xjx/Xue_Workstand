@@ -3,7 +3,7 @@ import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteAccounts, findAccountByName, getAccountDetail, getAccountSummary, upsertAccount } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 import { resolveAccountUid } from "@/lib/opencli";
-import { normalizeLinkInput } from "@/lib/link-input";
+import { normalizeLinkInput } from "@/lib/platform-links";
 
 export const runtime = "nodejs";
 

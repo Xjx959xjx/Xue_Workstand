@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Calculator, Copy, FileText, RefreshCw, Save, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { bulkSaveGrossMarginMonitorRecords, getGrossMarginLibrary, saveGrossMarginMonitorRecord, saveGrossMarginPriceTable } from "@/lib/client";
-import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/video-links";
+import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/platform-links";
 import { GrossMarginBulkMonitorModal } from "./_components/GrossMarginBulkMonitorModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
 import { GrossMarginTemplateModal } from "./_components/GrossMarginTemplateModal";

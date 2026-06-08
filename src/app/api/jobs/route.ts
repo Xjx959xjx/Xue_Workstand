@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { createJob, listJobSummaries } from "@/lib/jobs";
-import { createUrlPreprocessor } from "@/lib/link-input";
+import { createUrlPreprocessor } from "@/lib/platform-links";
 import { platforms } from "@/lib/types";
 import { writeCopyInputSchema } from "@/lib/write-validation";
 
@@ -55,7 +55,6 @@ const transcribeVideoSchema = z.object({
     platform: z.enum(platforms),
     accountId: z.string().min(1),
     videoId: z.string().min(1),
-    mediaPath: z.string().optional(),
     mediaUrl: urlSchema.optional(),
     allowRemoteDownload: z.boolean().optional()
   })

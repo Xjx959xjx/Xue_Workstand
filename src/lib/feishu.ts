@@ -1,6 +1,6 @@
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
-import { extractLinksFromInput } from "./link-input";
+import { extractLinksFromInput } from "./platform-links";
 import { resolveOpenCliCommand } from "./opencli";
 import { clampText } from "./utils";
 

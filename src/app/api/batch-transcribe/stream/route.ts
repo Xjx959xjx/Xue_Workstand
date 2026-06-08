@@ -17,8 +17,9 @@ export async function POST(request: Request) {
   try {
     const input = await parseJsonBody(request, schema);
 
-    const stream = createNdjsonStream(async (emit) => {
+    const stream = createNdjsonStream(async (emit, signal) => {
       const result = await runBatchTranscribe(input, {
+        signal,
         onPrepare() {
           emit({ type: "stage", stage: "prepare", message: "正在读取账号和候选视频", progress: 8 });
         },
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
         }
       });
       emit({ type: "result", data: result });
-    });
+    }, { signal: request.signal });
 
     return new Response(stream, {
       headers: {

@@ -1,6 +1,6 @@
 import { formatDateWithYear } from "@/components/Formatters";
+import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } from "@/lib/platform-links";
 import type { Platform, Video, VideoListItem } from "@/lib/types";
-import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } from "@/lib/utils";
 
 export type BatchLimit = 3 | 5 | 10 | "all";
 export type VideoSortMode = "hot" | "views" | "likes" | "comments" | "favorites" | "latest";

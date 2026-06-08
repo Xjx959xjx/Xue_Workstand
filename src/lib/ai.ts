@@ -254,6 +254,7 @@ export async function streamResponseText(input: {
   signal?: AbortSignal;
   onDelta: (delta: string) => void;
 }) {
+  throwIfAborted(input.signal);
   const config = chatConfig();
   if (!config.apiKey || !config.model) {
     return fallbackChatCompletion(config.model || "local-fallback");
@@ -266,6 +267,7 @@ export async function streamResponseText(input: {
   try {
     return await streamResponseApi(config, input);
   } catch (error) {
+    if (isAbortError(error)) throw error;
     if (
       !(error instanceof StreamResponseTextError) &&
       !input.tools?.length &&
@@ -454,9 +456,11 @@ export async function streamResponseTextWithFallback(input: {
   signal?: AbortSignal;
   onDelta: (delta: string) => void;
 }) {
+  throwIfAborted(input.signal);
   try {
     return await streamResponseText(input);
   } catch (error) {
+    if (isAbortError(error)) throw error;
     if (error instanceof StreamResponseTextError && error.partialText.trim()) {
       return {
         text: error.partialText.trim(),
@@ -470,6 +474,7 @@ export async function streamResponseTextWithFallback(input: {
         signal: input.signal
       });
     } catch (retryError) {
+      if (isAbortError(retryError)) throw retryError;
       return fallbackChatCompletion("local-fallback", retryError);
     }
   }
@@ -853,18 +858,33 @@ async function chatCompleteWithFallback(
   try {
     return await chatCompleteWithEffort(messages, reasoningEffort, tools);
   } catch (error) {
+    if (isAbortError(error)) throw error;
     return fallbackChatCompletion("local-fallback", error);
   }
 }
 
-function completeStyleGeneration(messages: ChatMessage[]) {
+function completeStyleGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
   return streamResponseTextWithFallback({
     messages,
     maxOutputTokens: STYLE_MAX_OUTPUT_TOKENS,
+    signal: options.signal,
     onDelta() {
       // Keep the request streaming so upstream proxies do not close long style-generation calls.
     }
   });
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isAbortError(error: unknown) {
+  if (error instanceof StreamResponseTextError) return isAbortError(error.originalError);
+  if (!(error instanceof Error)) return false;
+  return error.name === "AbortError" || /任务已停止|aborted/i.test(error.message);
 }
 
 function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
@@ -1312,24 +1332,34 @@ export async function completePreparedAccountStyle(
   context: PreparedAccountStyleContext,
   result: ChatCompletionResult
 ): Promise<AccountStyleGenerationResult> {
-  const style = result.text || context.fallback;
-  await saveStyle(context.platform, context.accountId, style);
-  await saveAccountStyleMeta(context.platform, context.accountId, {
-    sampleHash: context.sampleHash,
-    sampleFingerprints: context.sampleFingerprints,
-    sampleVideoIds: context.sampleVideoIds,
-    sampleCount: context.sampleVideoIds.length,
-    generationMode: context.generationMode,
-    usedModel: result.model
-  });
+  const generatedStyle = result.text.trim();
+  const style = generatedStyle || context.fallback;
+  const shouldUpdateSampleCache = Boolean(generatedStyle) || context.generationMode === "full";
+  const shouldSaveStyle = Boolean(style.trim());
+
+  if (shouldSaveStyle) {
+    await saveStyle(context.platform, context.accountId, style);
+  }
+
+  if (shouldUpdateSampleCache) {
+    await saveAccountStyleMeta(context.platform, context.accountId, {
+      sampleHash: context.sampleHash,
+      sampleFingerprints: context.sampleFingerprints,
+      sampleVideoIds: context.sampleVideoIds,
+      sampleCount: context.sampleVideoIds.length,
+      generationMode: context.generationMode,
+      usedModel: result.model
+    });
+  }
+
   return {
     style,
-    fallback: result.fallback,
+    fallback: result.fallback || !generatedStyle,
     usedModel: result.model,
     fallbackReason: result.fallbackReason,
     cached: false,
     generationMode: context.generationMode,
-    sampleHash: context.sampleHash
+    sampleHash: shouldUpdateSampleCache ? context.sampleHash : undefined
   };
 }
 
@@ -1345,15 +1375,19 @@ export function completeCachedAccountStyle(context: PreparedAccountStyleContext)
   };
 }
 
-export async function generateStyleProfile(platform: Platform, accountId: string): Promise<AccountStyleGenerationResult> {
+export async function generateStyleProfile(
+  platform: Platform,
+  accountId: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<AccountStyleGenerationResult> {
   const context = await prepareAccountStyleContext(platform, accountId);
   const cached = completeCachedAccountStyle(context);
   if (cached) return cached;
-  const result = await completeStyleGeneration(context.messages);
+  const result = await completeStyleGeneration(context.messages, options);
   return completePreparedAccountStyle(context, result);
 }
 
-export async function generateProjectStyleProfile(projectId: string) {
+export async function generateProjectStyleProfile(projectId: string, options: { signal?: AbortSignal } = {}) {
   const project = await resolveProject(projectId);
   if (!project.sourceAccountIds.length && !project.sourceMaterialIds?.length) {
     throw new Error("先加案例或账号");
@@ -1403,7 +1437,7 @@ export async function generateProjectStyleProfile(projectId: string) {
       role: "user",
       content: `项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n参考素材：\n${corpus}`
     }
-  ]);
+  ], options);
 
   const style = result.text || fallback;
   await saveProjectStyle(projectId, style);
@@ -1411,7 +1445,8 @@ export async function generateProjectStyleProfile(projectId: string) {
 }
 
 export async function saveAndGenerateProjectStyleProfile(
-  input: SaveAndGenerateProjectStyleInput
+  input: SaveAndGenerateProjectStyleInput,
+  options: { signal?: AbortSignal } = {}
 ): Promise<ProjectStyleGenerationResult> {
   if (!input.sourceAccountIds.length && !input.sourceMaterialIds?.length) {
     throw new Error("先加案例或账号");
@@ -1421,7 +1456,7 @@ export async function saveAndGenerateProjectStyleProfile(
     await assertProjectSourceAccountsExist(input.sourceAccountIds);
   }
   const project = await upsertProject(input);
-  const result = await generateProjectStyleProfile(project.id);
+  const result = await generateProjectStyleProfile(project.id, options);
   const summary = await getProjectSummary(project);
 
   return {
@@ -1768,7 +1803,12 @@ async function buildAccountWritingBrief(input: {
     ]
   );
 
-  return requireWriteBriefResult(result);
+  return requireWriteBriefResult(result, () =>
+    buildLocalAccountWritingBrief({
+      ...input,
+      userTask
+    })
+  );
 }
 
 async function buildProjectWritingBrief(input: {
@@ -1826,7 +1866,12 @@ async function buildProjectWritingBrief(input: {
     ]
   );
 
-  return requireWriteBriefResult(result);
+  return requireWriteBriefResult(result, () =>
+    buildLocalProjectWritingBrief({
+      ...input,
+      userTask
+    })
+  );
 }
 
 function completeWriteBriefGeneration(messages: ChatMessage[]) {
@@ -1840,11 +1885,115 @@ function completeWriteBriefGeneration(messages: ChatMessage[]) {
   });
 }
 
-function requireWriteBriefResult(result: ChatCompletionResult) {
+function requireWriteBriefResult(result: ChatCompletionResult, buildLocalBrief?: () => string) {
   const text = result.text.trim();
   if (text) return { ...result, text };
 
+  if (buildLocalBrief) {
+    return {
+      ...result,
+      text: buildLocalBrief(),
+      fallback: true,
+      fallbackReason: result.fallbackReason || "模型没有返回可用写作 Brief，已使用本地结构整理。"
+    };
+  }
+
   throw new Error(result.fallbackReason || "对话模型没有返回可用写作 Brief，请稍后重试或检查模型配置。");
+}
+
+function buildLocalAccountWritingBrief(input: {
+  accountName: string;
+  platform: Platform;
+  style: string;
+  sampleContext: string;
+  input: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+  userTask: string;
+}) {
+  return buildLocalWritingBrief({
+    targetLabel: `参考账号：${input.accountName}｜${input.platform}`,
+    angleHeading: "账号化切入",
+    style: input.style,
+    referenceContext: input.sampleContext,
+    copyInput: input.input,
+    supportDocContext: input.supportDocContext,
+    webContext: input.webContext,
+    userTask: input.userTask
+  });
+}
+
+function buildLocalProjectWritingBrief(input: {
+  projectName: string;
+  projectDescription?: string;
+  style: string;
+  referenceContext: string;
+  input: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+  userTask: string;
+}) {
+  return buildLocalWritingBrief({
+    targetLabel: `参考项目：${input.projectName}${input.projectDescription ? `｜${input.projectDescription}` : ""}`,
+    angleHeading: "项目化切入",
+    style: input.style,
+    referenceContext: input.referenceContext,
+    copyInput: input.input,
+    supportDocContext: input.supportDocContext,
+    webContext: input.webContext,
+    userTask: input.userTask
+  });
+}
+
+function buildLocalWritingBrief(input: {
+  targetLabel: string;
+  angleHeading: string;
+  style: string;
+  referenceContext: string;
+  copyInput: WriteCopyInput;
+  supportDocContext: string;
+  webContext: string;
+  userTask: string;
+}) {
+  const prompt = input.copyInput.prompt.trim();
+  const sourceText = input.copyInput.sourceText?.trim();
+  const coreEvent = input.copyInput.mode === "topic" ? prompt : sourceText || prompt;
+  const reference = input.referenceContext.trim() || input.style.trim();
+  const externalContext = [input.supportDocContext, input.webContext]
+    .filter((section) => section && !/^未(提供|启用)/.test(section.trim()))
+    .join("\n\n");
+
+  return [
+    "## 核心事件",
+    clampText(coreEvent || input.userTask, 700),
+    "## 可见画面/具体细节",
+    [
+      sourceText ? `- 原文线索：${clampText(sourceText, 520)}` : "- 暂无原文素材，围绕主题提取可口播的具体场景。",
+      reference ? `- 参考样本/风格线索：${clampText(reference, 520)}` : "- 样本不足时，只使用用户输入里的事实和场景。"
+    ].join("\n"),
+    `## ${input.angleHeading}`,
+    [
+      `- ${input.targetLabel}`,
+      "- 开头先给明确判断、反差或问题，避免背景铺垫。",
+      "- 句子短，口播感强，每段只推进一个信息点。"
+    ].join("\n"),
+    "## 梗和映射",
+    "- 优先保留用户输入中的梗、原话、场景、数字和事实线索；没有来源支持的事实不要新增。",
+    "## 成稿路线",
+    [
+      "1. 钩子：一句话点出冲突、反差或判断。",
+      "2. 展开：用具体场景或原文线索解释为什么成立。",
+      "3. 转折：补一层反常识或观众容易忽略的点。",
+      "4. 收束：给出清晰态度、行动建议或评论区问题。"
+    ].join("\n"),
+    "## 避坑",
+    [
+      "- 不编造人物、数据、产品信息或最新事实。",
+      "- 不照抄样本文案和原文表达。",
+      "- 不输出空泛鸡汤、抽象形容词堆叠或解释创作过程。",
+      externalContext ? `- 外部资料只采用已提供内容：${clampText(externalContext, 360)}` : "- 未提供外部资料时，不写需要外部事实支撑的结论。"
+    ].join("\n")
+  ].join("\n\n");
 }
 
 function buildWriteSourceDigest(input: WriteCopyInput): WriteSourceDigest {

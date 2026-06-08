@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { generateEngagement } from "@/lib/engagement";
-import { createUrlPreprocessor } from "@/lib/link-input";
+import { createUrlPreprocessor } from "@/lib/platform-links";
 import { deleteEngagementRecords } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,10 @@ const deleteSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  return apiJson(async () => generateEngagement(await parseJsonBody(request, schema)), {
+  return apiJson(async () => {
+    const input = await parseJsonBody(request, schema);
+    return generateEngagement(input, { signal: request.signal });
+  }, {
     fallbackMessage: "生成评论失败"
   });
 }

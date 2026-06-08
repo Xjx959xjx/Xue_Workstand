@@ -15,15 +15,16 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const input = await parseJsonBody(request, schema);
-    const stream = createNdjsonStream(async (emit) => {
+    const stream = createNdjsonStream(async (emit, signal) => {
       const result = await generateDraftCover({
         ...input,
+        signal,
         onStage(stage) {
           emit({ type: "stage", ...stage });
         }
       });
       emit({ type: "result", data: result });
-    });
+    }, { signal: request.signal });
 
     return new Response(stream, {
       headers: {

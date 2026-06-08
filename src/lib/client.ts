@@ -416,7 +416,6 @@ export function transcribeVideo(input: {
   platform: Platform;
   accountId: string;
   videoId: string;
-  mediaPath?: string;
   mediaUrl?: string;
   allowRemoteDownload?: boolean;
 }) {

@@ -2,7 +2,7 @@
 
 import { memo, type RefObject } from "react";
 import { Plus } from "lucide-react";
-import { normalizeLinkInput } from "@/lib/link-input";
+import { normalizeLinkInput } from "@/lib/platform-links";
 import type { Platform } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
 

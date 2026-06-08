@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { extractFirstLinkFromInput, normalizeLinkInput } from "@/lib/link-input";
+import { extractFirstLinkFromInput, normalizeLinkInput } from "@/lib/platform-links";
 import type { EngagementRecord, JobRecord, JobStartInput } from "@/lib/types";
 import type { BusyState } from "../_components/asset-view-utils";
 

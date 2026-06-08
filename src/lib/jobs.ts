@@ -501,7 +501,7 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
     message: "正在保存项目并读取参考样本",
     progress: 45
   });
-  const result = await saveAndGenerateProjectStyleProfile(start.input);
+  const result = await saveAndGenerateProjectStyleProfile(start.input, { signal: getJobAbortSignal(jobId) });
   throwIfCancelled(jobId);
 
   await patchJob(jobId, {
@@ -534,7 +534,10 @@ async function runTranscribeVideoJob(jobId: string, start: Extract<JobStartInput
     message: "正在转写视频",
     progress: 35
   });
-  const result = await transcribeVideo(start.input);
+  const result = await transcribeVideo({
+    ...start.input,
+    signal: getJobAbortSignal(jobId)
+  });
   throwIfCancelled(jobId);
 
   await patchJob(jobId, {

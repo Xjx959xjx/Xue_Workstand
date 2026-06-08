@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 import { analyzeMaterialFrames } from "./ai";
+import { browserUserAgent } from "./platform-links";
 import type { CopySource, Platform } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -193,10 +194,6 @@ function buildFfmpegHeaderArgs(url: string) {
       ""
     ].join("\r\n")
   ];
-}
-
-function browserUserAgent() {
-  return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 }
 
 function describeFfmpegError(error: unknown) {

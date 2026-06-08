@@ -3,7 +3,7 @@ import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { collectVideos, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
 import { collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
-import { normalizeLinkInput } from "@/lib/link-input";
+import { normalizeLinkInput } from "@/lib/platform-links";
 import { nowIso } from "@/lib/utils";
 
 export const runtime = "nodejs";

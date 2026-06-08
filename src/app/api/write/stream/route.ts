@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   try {
     const input = await parseJsonBody(request, writeCopyInputSchema);
 
-    const stream = createNdjsonStream(async (emit) => {
+    const stream = createNdjsonStream(async (emit, signal) => {
       emit({ type: "stage", stage: "prepare", message: "正在读取风格卡和代表样本", progress: 10 });
       if (input.mode === "rewrite" && /https?:\/\//i.test(input.sourceText || "")) {
         emit({ type: "stage", stage: "transcribe-links", message: "正在转写链接里的视频文稿", progress: 18 });
@@ -36,6 +36,7 @@ export async function POST(request: Request) {
       emit({ type: "stage", stage: "generate", message: "正在生成文案", progress: 55 });
       const result = await streamResponseTextWithFallback({
         messages: prepared.messages,
+        signal,
         onDelta(delta) {
           emit({ type: "delta", delta });
         }
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
 
       emit({ type: "stage", stage: "finalize", message: "正在整理最终结果", progress: 95 });
       emit({ type: "result", data: finalResult });
-    });
+    }, { signal: request.signal });
 
     return new Response(stream, {
       headers: {

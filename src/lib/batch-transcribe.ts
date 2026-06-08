@@ -77,13 +77,14 @@ export async function runBatchTranscribe(
     throwIfAborted(hooks.signal);
     hooks.onStyleStart?.();
     try {
-      const styleResult = await generateStyleProfile(input.platform, input.accountId);
+      const styleResult = await generateStyleProfile(input.platform, input.accountId, { signal: hooks.signal });
       result.style = styleResult.style;
       result.styleUpdated = true;
       result.fallback = styleResult.fallback;
       result.fallbackReason = styleResult.fallbackReason;
       result.usedModel = styleResult.usedModel;
     } catch (error) {
+      if (isAbortError(error)) throw error;
       result.styleUpdated = false;
       result.styleError = error instanceof Error ? error.message : "风格卡更新失败";
     }
@@ -109,7 +110,7 @@ async function processVideos(
   if (input.platform === "douyin") {
     const pendingCount = candidates.filter((video) => !videoHasTranscript(video)).length;
     if (pendingCount) hooks.onMediaPreloadStart?.({ total: pendingCount });
-    douyinMediaUrls = await preloadDouyinMediaUrls(account, candidates, result);
+  douyinMediaUrls = await preloadDouyinMediaUrls(account, candidates, result, hooks.signal);
   }
   let nextIndex = 0;
 
@@ -126,7 +127,12 @@ async function processVideos(
   await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker));
 }
 
-async function preloadDouyinMediaUrls(account: Account, candidates: Video[], result: BatchTranscribeResult) {
+async function preloadDouyinMediaUrls(
+  account: Account,
+  candidates: Video[],
+  result: BatchTranscribeResult,
+  signal?: AbortSignal
+) {
   const pendingVideos = candidates.filter((video) => !videoHasTranscript(video));
   const urls = new Map<string, string>();
   if (!pendingVideos.length) return urls;
@@ -134,14 +140,15 @@ async function preloadDouyinMediaUrls(account: Account, candidates: Video[], res
   const startedAt = Date.now();
   try {
     const lookupLimit = getDouyinVideoDownloadLookupLimit(pendingVideos);
-    const mediaUrlsByAwemeId = await getDouyinVideoDownloadUrls(account, { limit: lookupLimit });
+    const mediaUrlsByAwemeId = await getDouyinVideoDownloadUrls(account, { limit: lookupLimit, signal });
     for (const video of pendingVideos) {
       const awemeId = getDouyinAwemeId(video);
       const mediaUrl = awemeId ? mediaUrlsByAwemeId.get(awemeId) : "";
       if (mediaUrl) urls.set(video.id, mediaUrl);
     }
     result.timings?.push({ stage: "douyin-preload-media", ms: Date.now() - startedAt });
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     result.timings?.push({ stage: "douyin-preload-media-failed", ms: Date.now() - startedAt });
   }
 
@@ -180,7 +187,8 @@ async function processVideo(
       accountId: input.accountId,
       videoId: video.id,
       douyinMediaUrl,
-      allowRemoteDownload: true
+      allowRemoteDownload: true,
+      signal: hooks.signal
     });
     const timings = "timings" in transcribed ? transcribed.timings : undefined;
     result.completed += 1;
@@ -193,6 +201,7 @@ async function processVideo(
     appendVideoResult(result, event);
     hooks.onVideoResult?.(event);
   } catch (error) {
+    if (isAbortError(error)) throw error;
     result.failed += 1;
     const message = error instanceof Error ? error.message : "转写失败";
     if (input.platform === "douyin") {
@@ -210,8 +219,18 @@ async function processVideo(
 
 function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
-    throw new Error("任务已停止");
+    throw createAbortError();
   }
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
+}
+
+function createAbortError() {
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  return error;
 }
 
 function appendVideoResult(result: BatchTranscribeResult, event: BatchTranscribeVideoEvent) {

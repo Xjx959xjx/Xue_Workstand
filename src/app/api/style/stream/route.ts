@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   try {
     const input = await parseJsonBody(request, schema);
 
-    const stream = createNdjsonStream(async (emit) => {
+    const stream = createNdjsonStream(async (emit, signal) => {
       emit({ type: "stage", stage: "prepare", message: "正在读取账号转写样本", progress: 12 });
       const context = await prepareAccountStyleContext(input.platform, input.accountId);
       const cached = completeCachedAccountStyle(context);
@@ -41,6 +41,7 @@ export async function POST(request: Request) {
       const result = await streamResponseTextWithFallback({
         messages: context.messages,
         maxOutputTokens: 3200,
+        signal,
         onDelta(delta) {
           generated += delta;
           emit({ type: "delta", delta });
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
       emit({ type: "stage", stage: "save", message: "正在写入账号风格卡", progress: 90 });
       const saved = await completePreparedAccountStyle(context, result);
       emit({ type: "result", data: saved });
-    });
+    }, { signal: request.signal });
 
     return new Response(stream, {
       headers: {

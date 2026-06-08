@@ -1,8 +1,7 @@
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
+import { extractBvid, extractDouyinAwemeId, getVideoComparableKey } from "./platform-links";
 import { getGrossMarginMonitorRecords, resolveEngagementRecord } from "./storage";
 import { resolveLinkSourceAccountName } from "./transcription";
-import { extractBvid, extractDouyinAwemeId } from "./utils";
-import { getVideoComparableKey } from "./video-links";
 
 export type EngagementExport = {
   buffer: Buffer;
