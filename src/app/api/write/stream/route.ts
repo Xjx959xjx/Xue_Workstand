@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       if (hasFeishuDocLink(input.supportDocLinks)) {
         emit({ type: "stage", stage: "fetch-support-docs", message: "正在读取商单支持文档", progress: 24 });
       }
-      const prepared = await prepareWriteCopyContext(input);
+      const prepared = await prepareWriteCopyContext(input, { signal });
 
       if (input.useWebResearch) {
         const researchUnavailable = prepared.research?.startsWith("联网资料：模型联网暂时不可用");
@@ -53,7 +53,8 @@ export async function POST(request: Request) {
       const finalResult = await completePreparedWriteCopy({
         prepared,
         result,
-        save: input.save
+        save: input.save,
+        signal
       });
 
       emit({ type: "stage", stage: "finalize", message: "正在整理最终结果", progress: 95 });

@@ -689,12 +689,23 @@ export type JobEvent = {
   progress: number;
 };
 
+export type JobScope = {
+  targetType?: "account" | "project" | "draft" | "url" | "text";
+  platform?: Platform;
+  accountId?: string;
+  projectId?: string;
+  videoId?: string;
+  draftId?: string;
+  sourceKey?: string;
+};
+
 export type JobRecord = {
   id: string;
   kind: JobKind;
   status: JobStatus;
   title: string;
   inputSummary?: string;
+  scope?: JobScope;
   stage?: string;
   message: string;
   progress: number;

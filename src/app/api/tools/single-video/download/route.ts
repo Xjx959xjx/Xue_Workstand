@@ -24,10 +24,10 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const input = await parseJsonBody(request, schema);
-    const asset = await prepareLinkSourceDownload(input);
+    const asset = await prepareLinkSourceDownload(input, { signal: request.signal });
 
     if (asset.remoteUrl) {
-      return await proxyRemoteAsset(asset);
+      return await proxyRemoteAsset(asset, request.signal);
     }
 
     if (asset.filePath) {
@@ -42,9 +42,9 @@ export async function POST(request: Request) {
   }
 }
 
-async function proxyRemoteAsset(asset: LinkSourceDownloadAsset) {
+async function proxyRemoteAsset(asset: LinkSourceDownloadAsset, signal?: AbortSignal) {
   if (!asset.remoteUrl) throw new Error("缺少远程文件地址。");
-  const timeout = createDownloadIdleTimeout();
+  const timeout = createDownloadIdleTimeout(signal);
   let response: Response;
 
   try {
@@ -55,7 +55,10 @@ async function proxyRemoteAsset(asset: LinkSourceDownloadAsset) {
     });
   } catch (error) {
     timeout.clear();
-    if (timeout.aborted) {
+    if (timeout.abortReason === "request") {
+      throw new Error("下载已取消。");
+    }
+    if (timeout.abortReason === "idle") {
       throw new Error(`远程文件下载超时：连续 ${Math.round(REMOTE_DOWNLOAD_IDLE_TIMEOUT_MS / 1000)} 秒没有响应数据。`);
     }
     throw error;
@@ -136,16 +139,30 @@ function assertDownloadSize(asset: LinkSourceDownloadAsset, size: number | null)
   }
 }
 
-function createDownloadIdleTimeout() {
+function createDownloadIdleTimeout(parentSignal?: AbortSignal) {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abortReason: "idle" | "request" | undefined;
+  const abortFromRequest = () => {
+    abortReason = "request";
+    controller.abort();
+  };
   const clear = () => {
     if (timeout) clearTimeout(timeout);
     timeout = undefined;
+    parentSignal?.removeEventListener("abort", abortFromRequest);
   };
   const reset = () => {
     clear();
-    timeout = setTimeout(() => controller.abort(), REMOTE_DOWNLOAD_IDLE_TIMEOUT_MS);
+    parentSignal?.addEventListener("abort", abortFromRequest, { once: true });
+    if (parentSignal?.aborted) {
+      abortFromRequest();
+      return;
+    }
+    timeout = setTimeout(() => {
+      abortReason = "idle";
+      controller.abort();
+    }, REMOTE_DOWNLOAD_IDLE_TIMEOUT_MS);
   };
   reset();
   return {
@@ -154,6 +171,9 @@ function createDownloadIdleTimeout() {
     clear,
     get aborted() {
       return controller.signal.aborted;
+    },
+    get abortReason() {
+      return abortReason;
     }
   };
 }
@@ -198,7 +218,10 @@ function limitDownloadStream(
 }
 
 function formatDownloadStreamError(error: unknown, timeout: ReturnType<typeof createDownloadIdleTimeout>) {
-  if (timeout.aborted) {
+  if (timeout.abortReason === "request") {
+    return new Error("下载已取消。");
+  }
+  if (timeout.abortReason === "idle") {
     return new Error(`远程文件下载超时：连续 ${Math.round(REMOTE_DOWNLOAD_IDLE_TIMEOUT_MS / 1000)} 秒没有响应数据。`);
   }
   return error;

@@ -208,6 +208,31 @@ export function normalizeRemoteMediaUrl(input: string) {
   return cleaned.startsWith("//") ? `https:${cleaned}` : cleaned;
 }
 
+export function normalizeRemoteImageUrl(input: string) {
+  const normalized = normalizeRemoteMediaUrl(input);
+  if (!normalized) return "";
+
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    if (isBilibiliImageHost(host)) {
+      parsed.protocol = "https:";
+      parsed.pathname = stripBilibiliImageResizeSuffix(parsed.pathname);
+      if (/^\?imageView2\//i.test(parsed.search)) {
+        parsed.search = "";
+      } else {
+        parsed.searchParams.delete("x-bce-process");
+        parsed.searchParams.delete("x-image-process");
+        parsed.searchParams.delete("imageView2");
+      }
+      return parsed.toString();
+    }
+    return parsed.toString();
+  } catch {
+    return stripBilibiliImageResizeSuffix(normalized);
+  }
+}
+
 export function isLikelyDirectMediaUrl(url: string) {
   if (!/^https?:\/\//i.test(url)) return false;
 
@@ -268,6 +293,15 @@ export function sortRemoteAudioMediaUrls(urls: string[]) {
     )
   ];
   return unique.sort((a, b) => audioMediaUrlScore(b) - audioMediaUrlScore(a));
+}
+
+export function selectRemoteVideoMediaUrl(urls: string[]) {
+  const candidates = urls
+    .map((url) => normalizeRemoteMediaUrl(url))
+    .filter(Boolean)
+    .filter((url) => !isLikelyAudioMediaUrl(url))
+    .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
+  return candidates[0] || "";
 }
 
 export function audioMediaUrlScore(url: string) {
@@ -351,6 +385,14 @@ export function inferRemoteContentType(url: string, family: RemoteAssetFamily) {
   if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
   if (extension === ".webm") return "video/webm";
   return family === "image" ? "image/jpeg" : "video/mp4";
+}
+
+function isBilibiliImageHost(host: string) {
+  return /(?:^|\.)hdslb\.com$|(?:^|\.)biliimg\.com$/.test(host);
+}
+
+function stripBilibiliImageResizeSuffix(url: string) {
+  return url.replace(/(\.(?:jpe?g|png|webp|gif))(?:@[^?#/]+)(?=([?#]|$))/i, "$1");
 }
 
 function collectPatternLinks(text: string, pattern: RegExp, options: LinkInputOptions, skipEmbeddedUrl = false) {

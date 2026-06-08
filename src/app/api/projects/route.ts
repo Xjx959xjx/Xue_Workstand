@@ -53,14 +53,14 @@ export async function PUT(request: Request) {
 
 export async function PATCH(request: Request) {
   return apiJson(async () => {
-    const body = await request.json();
+    const body = await parseJsonBody(request, z.unknown());
     const saveAndGenerateSchema = baseSchema.extend({
       sourceAccountIds: z.array(z.string().min(1)).default([])
     });
     const legacySchema = z.object({ projectId: z.string().min(1) });
     const parsed = saveAndGenerateSchema.safeParse(body);
 
-    if (parsed.success && "name" in body) {
+    if (parsed.success && hasObjectKey(body, "name")) {
       return saveAndGenerateProjectStyleProfile(parsed.data, { signal: request.signal });
     }
 
@@ -69,6 +69,10 @@ export async function PATCH(request: Request) {
   }, {
     fallbackMessage: "自动总结项目风格失败"
   });
+}
+
+function hasObjectKey(value: unknown, key: string) {
+  return typeof value === "object" && value !== null && key in value;
 }
 
 export async function DELETE(request: Request) {

@@ -123,34 +123,40 @@ export function normalizeAccountInput(platform: Platform, uidOrUrl: string) {
   return platform === "bilibili" ? extractBilibiliUid(uidOrUrl) : extractDouyinSecUid(uidOrUrl);
 }
 
-export async function resolveAccountUid(platform: Platform, name: string, uidOrUrl?: string) {
+export async function resolveAccountUid(
+  platform: Platform,
+  name: string,
+  uidOrUrl?: string,
+  options: { signal?: AbortSignal } = {}
+) {
   const explicit = uidOrUrl?.trim();
   if (explicit) return normalizeAccountInput(platform, explicit);
 
   if (platform === "bilibili") {
-    return searchBilibiliUserUid(name);
+    return searchBilibiliUserUid(name, { signal: options.signal });
   }
 
-  return searchDouyinUserSecUid(name);
+  return searchDouyinUserSecUid(name, { signal: options.signal });
 }
 
-async function searchDouyinUserSecUid(name: string) {
-  return searchDouyinUserSecUidWithBrowser(name);
+async function searchDouyinUserSecUid(name: string, options: { signal?: AbortSignal } = {}) {
+  return searchDouyinUserSecUidWithBrowser(name, options);
 }
 
-async function searchDouyinUserSecUidWithBrowser(name: string) {
+async function searchDouyinUserSecUidWithBrowser(name: string, options: { signal?: AbortSignal } = {}) {
   const workspace = `douyin-search-${process.pid}-${Date.now()}-${shortHash(name)}`;
   const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(name)}?type=user`;
 
   try {
     const openResult = parseJsonish(
       await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
-        timeout: 30_000
+        timeout: 30_000,
+        signal: options.signal
       })
     );
     const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
     const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_SEARCH_EXTRACT_JS], tab ? { tab } : {});
-    const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000 })));
+    const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000, signal: options.signal })));
     return selectDouyinSecUidFromRows(rows, name);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -221,14 +227,27 @@ function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | 
 }
 
 function selectDouyinSecUidFromRows(rows: unknown[], name: string) {
-  const normalizedName = name.trim().toLowerCase();
+  const normalizedName = normalizeDouyinUserSearchText(name);
   const candidates = rows
     .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
     .filter(Boolean) as Array<Record<string, unknown>>;
-  const matched = candidates.sort((a, b) => douyinUserSearchRank(b, normalizedName) - douyinUserSearchRank(a, normalizedName))[0];
+  const ranked = candidates
+    .map((row) => ({
+      row,
+      matchScore: douyinUserSearchMatchScore(row, normalizedName),
+      rank: douyinUserSearchRank(row)
+    }))
+    .filter((candidate) => candidate.matchScore > 0)
+    .sort((a, b) => b.matchScore - a.matchScore || b.rank - a.rank);
+  const matched = ranked[0]?.row;
 
-  if (!matched) {
+  if (!candidates.length) {
     throw new Error(`没有搜索到抖音账号：${name}`);
+  }
+  if (!matched) {
+    throw new Error(
+      `抖音搜索返回了账号候选，但没有昵称匹配「${name}」的结果${formatDouyinSearchCandidateHint(candidates)}。请粘贴该账号主页链接或 sec_uid 再采集。`
+    );
   }
 
   const secUid = extractSecUidFromSearchRow(matched);
@@ -239,13 +258,53 @@ function selectDouyinSecUidFromRows(rows: unknown[], name: string) {
   return secUid;
 }
 
-function douyinUserSearchRank(row: Record<string, unknown>, normalizedName: string) {
+function douyinUserSearchMatchScore(row: Record<string, unknown>, normalizedName: string) {
+  if (!normalizedName) return 0;
+  const names = getDouyinUserSearchNames(row).map(normalizeDouyinUserSearchText).filter(Boolean);
+  if (names.some((name) => name === normalizedName)) return 3;
+  if (normalizedName.length >= 2 && names.some((name) => name.includes(normalizedName))) return 2;
+  if (names.some((name) => name.length >= 2 && normalizedName.includes(name))) return 1;
+  return 0;
+}
+
+function getDouyinUserSearchNames(row: Record<string, unknown>) {
   const userInfo = row.user_info && typeof row.user_info === "object" ? (row.user_info as Record<string, unknown>) : {};
-  const nickname = String(row.nickname || row.name || row.title || userInfo.nickname || "").trim().toLowerCase();
-  const exactName = nickname === normalizedName ? 10_000 : 0;
-  const containsName = nickname && (nickname.includes(normalizedName) || normalizedName.includes(nickname)) ? 3_000 : 0;
+  return [
+    row.nickname,
+    row.name,
+    row.title,
+    row.unique_id,
+    row.short_id,
+    userInfo.nickname,
+    userInfo.name,
+    userInfo.unique_id,
+    userInfo.short_id
+  ].map((value) => String(value || "").trim());
+}
+
+function normalizeDouyinUserSearchText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "")
+    .replace(/\s+/g, "")
+    .replace(/[，。、《》“”"':：_\-·.]/g, "");
+}
+
+function douyinUserSearchRank(row: Record<string, unknown>) {
+  const userInfo = row.user_info && typeof row.user_info === "object" ? (row.user_info as Record<string, unknown>) : {};
   const rankPenalty = toNumber(row.rank) ? Math.max(0, 500 - toNumber(row.rank)) : 0;
-  return exactName + containsName + rankPenalty + toNumber(row.follower_count ?? userInfo.follower_count ?? row.followers);
+  return rankPenalty + toNumber(row.follower_count ?? userInfo.follower_count ?? row.followers);
+}
+
+function formatDouyinSearchCandidateHint(candidates: Array<Record<string, unknown>>) {
+  const labels = candidates
+    .flatMap(getDouyinUserSearchNames)
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .filter((name, index, list) => list.indexOf(name) === index)
+    .slice(0, 5);
+  return labels.length ? `（候选：${labels.join("、")}）` : "";
 }
 
 function extractSecUidFromSearchRow(row: Record<string, unknown>) {
@@ -262,6 +321,7 @@ export async function collectVideos(input: {
   hydrateDetails?: boolean;
   fromDate?: string;
   toDate?: string;
+  signal?: AbortSignal;
 }) {
   if (input.platform === "bilibili") {
     return collectBilibiliVideos({
@@ -269,7 +329,8 @@ export async function collectVideos(input: {
       limit: input.limit,
       order: input.order,
       page: input.page,
-      hydrateDetails: input.hydrateDetails
+      hydrateDetails: input.hydrateDetails,
+      signal: input.signal
     });
   }
 
@@ -287,10 +348,12 @@ export async function collectVideos(input: {
     rows = await scanDouyinPostVideoRows(input.account, {
       limit: input.limit,
       fromDate: input.fromDate,
-      toDate: input.toDate
+      toDate: input.toDate,
+      signal: input.signal
     });
   } catch {
-    rows = await getDouyinVideoRows(input.account, { limit: input.limit });
+    if (input.signal?.aborted) throw createAbortError();
+    rows = await getDouyinVideoRows(input.account, { limit: input.limit, signal: input.signal });
   }
 
   return {
@@ -307,6 +370,7 @@ async function scanDouyinPostVideoRows(
     limit: number;
     fromDate?: string;
     toDate?: string;
+    signal?: AbortSignal;
   }
 ) {
   const workspace = `douyin-post-${process.pid}-${Date.now()}-${shortHash(account.uid)}`;
@@ -315,9 +379,12 @@ async function scanDouyinPostVideoRows(
 
   try {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
-      timeout: 30_000
+      timeout: 30_000,
+      signal: options.signal
     });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), { timeout: 10_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), { timeout: 10_000, signal: options.signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+    });
     const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [
       buildDouyinPostExtractJs({
         secUid: account.uid,
@@ -326,7 +393,7 @@ async function scanDouyinPostVideoRows(
         toDate: options.toDate
       })
     ]);
-    return asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 90_000 })));
+    return asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 90_000, signal: options.signal })));
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
@@ -496,7 +563,7 @@ export async function getDouyinVideoStatsBatchByUrl(
       "douyin.batch.resolve-share-url",
       () => Promise.all(
         normalizedUrls.map(async (url, index) => {
-          const resolvedShareUrl = await resolveDouyinShareVideoUrl(url).catch(() => "");
+          const resolvedShareUrl = await resolveDouyinShareVideoUrl(url, options).catch(ignoreAbortToEmptyString);
           const awemeId = extractDouyinAwemeId(url) || extractDouyinAwemeId(resolvedShareUrl);
           return {
             index,
@@ -556,7 +623,8 @@ async function ensureDouyinStatsBrowser(options: VideoStatsTimingOptions = {}) {
     timeout: 30_000,
     timingStage: "douyin.browser.ensure-open",
     onTiming: options.onTiming,
-    timingMeta: options.timingMeta
+    timingMeta: options.timingMeta,
+    signal: options.signal
   });
   douyinStatsBrowserReady = true;
 }
@@ -570,7 +638,7 @@ async function getDouyinVideoStatsByUrlInWorkspace(
   const resolvedShareUrl = await timeOpenCliOperation(
     options,
     "douyin.resolve-share-url",
-    () => resolveDouyinShareVideoUrl(inputUrl).catch(() => ""),
+    () => resolveDouyinShareVideoUrl(inputUrl, options).catch(ignoreAbortToEmptyString),
     { shortLink: /v\.douyin\.com/i.test(inputUrl) }
   );
   const initialAwemeId = extractDouyinAwemeId(inputUrl) || extractDouyinAwemeId(resolvedShareUrl);
@@ -578,7 +646,7 @@ async function getDouyinVideoStatsByUrlInWorkspace(
 
   try {
     if (initialAwemeId) {
-      const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId, options).catch(() => null);
+      const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId, options).catch(ignoreAbortToNull);
       if (fastDetail) {
         return formatDouyinVideoStatsResult(fastDetail, buildDouyinVideoUrl(initialAwemeId) || pageUrl);
       }
@@ -588,7 +656,8 @@ async function getDouyinVideoStatsByUrlInWorkspace(
       timeout: 30_000,
       timingStage: "douyin.browser.open-video",
       onTiming: options.onTiming,
-      timingMeta: options.timingMeta
+      timingMeta: options.timingMeta,
+      signal: options.signal
     });
     const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId, options);
     const awemeId = resolved.awemeId;
@@ -717,7 +786,8 @@ async function getDouyinVideoDetailFromNetwork(
         timeout: 20_000,
         timingStage: "douyin.browser.network.detail",
         onTiming: options.onTiming,
-        timingMeta: mergeTimingMeta(options.timingMeta, { awemeId })
+        timingMeta: mergeTimingMeta(options.timingMeta, { awemeId }),
+        signal: options.signal
       })
     );
     const snapshot = extractDouyinStatsSnapshotFromNetworkDetail(detail, awemeId);
@@ -727,11 +797,14 @@ async function getDouyinVideoDetailFromNetwork(
   return null;
 }
 
-async function resolveDouyinShareVideoUrl(url: string) {
+async function resolveDouyinShareVideoUrl(url: string, options: VideoStatsTimingOptions = {}) {
   if (!/v\.douyin\.com/i.test(url)) return "";
   const controller = new AbortController();
+  const abort = () => controller.abort();
   const timeout = setTimeout(() => controller.abort(), 4_000);
+  options.signal?.addEventListener("abort", abort, { once: true });
   try {
+    if (options.signal?.aborted) throw createAbortError();
     const response = await fetch(url, {
       method: "GET",
       redirect: "follow",
@@ -743,9 +816,12 @@ async function resolveDouyinShareVideoUrl(url: string) {
     });
     const resolvedUrl = response.url || "";
     return extractDouyinAwemeId(resolvedUrl) ? resolvedUrl : "";
-  } catch {
+  } catch (error) {
+    if (options.signal?.aborted) throw createAbortError();
+    if (isAbortError(error)) throw error;
     return "";
   } finally {
+    options.signal?.removeEventListener("abort", abort);
     clearTimeout(timeout);
   }
 }
@@ -760,16 +836,16 @@ async function waitForDouyinVideoStats(
 
   while (Date.now() < deadline) {
     lastDetail =
-      (await getDouyinVideoDetailSnapshot(workspace, awemeId, options).catch(() => null)) ||
-      (await getDouyinVideoDetailFromNetwork(workspace, awemeId, options).catch(() => null));
+      (await getDouyinVideoDetailSnapshot(workspace, awemeId, options).catch(ignoreAbortToNull)) ||
+      (await getDouyinVideoDetailFromNetwork(workspace, awemeId, options).catch(ignoreAbortToNull));
     if (lastDetail) return lastDetail;
-    await wait(700);
+    await wait(700, options.signal);
   }
 
   return (
     lastDetail ||
-    (await getDouyinVideoDetailFromNetwork(workspace, awemeId, options).catch(() => null)) ||
-    (await getDouyinVideoDetailSnapshot(workspace, awemeId, options).catch(() => null))
+    (await getDouyinVideoDetailFromNetwork(workspace, awemeId, options).catch(ignoreAbortToNull)) ||
+    (await getDouyinVideoDetailSnapshot(workspace, awemeId, options).catch(ignoreAbortToNull))
   );
 }
 
@@ -791,8 +867,23 @@ function formatDouyinVideoStatsResult(detail: DouyinVideoStatsSnapshot, url: str
   };
 }
 
-function wait(durationMs: number) {
-  return new Promise((resolve) => setTimeout(resolve, durationMs));
+function wait(durationMs: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, durationMs);
+    const abort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function mapWithLocalConcurrency<T, R>(
@@ -821,6 +912,22 @@ function isAbortError(error: unknown) {
   return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
 }
 
+function createAbortError() {
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  return error;
+}
+
+function ignoreAbortToNull(error: unknown) {
+  if (isAbortError(error)) throw error;
+  return null;
+}
+
+function ignoreAbortToEmptyString(error: unknown) {
+  if (isAbortError(error)) throw error;
+  return "";
+}
+
 async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTimingOptions = {}) {
   const filtered = await runOpenCli(
     buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s", "--filter", "aweme_detail,statistics"]),
@@ -828,9 +935,10 @@ async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTi
       timeout: 12_000,
       timingStage: "douyin.browser.network.preview-filtered",
       onTiming: options.onTiming,
-      timingMeta: options.timingMeta
+      timingMeta: options.timingMeta,
+      signal: options.signal
     }
-  ).catch(() => "");
+  ).catch(ignoreAbortToEmptyString);
   const parsedFiltered = parseJsonish(filtered);
   if (getOpenCliNetworkEntries(parsedFiltered).length) return parsedFiltered;
 
@@ -838,8 +946,9 @@ async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTi
     timeout: 12_000,
     timingStage: "douyin.browser.network.preview-all",
     onTiming: options.onTiming,
-    timingMeta: options.timingMeta
-  }).catch(() => "");
+    timingMeta: options.timingMeta,
+    signal: options.signal
+  }).catch(ignoreAbortToEmptyString);
   return parseJsonish(all);
 }
 

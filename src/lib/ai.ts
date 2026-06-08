@@ -118,6 +118,8 @@ export type PreparedAccountStyleContext = {
   sampleVideoIds: string[];
   generationMode: "full" | "incremental";
   cachedStyle?: string;
+  cachedFallback?: boolean;
+  cachedFallbackReason?: string;
 };
 
 export type AccountStyleGenerationResult = {
@@ -196,9 +198,10 @@ export function getChatRuntimeConfig() {
 
 export async function chatComplete(
   messages: ChatMessage[],
-  reasoningEffort?: ChatReasoningEffort
+  reasoningEffort?: ChatReasoningEffort,
+  options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
-  return chatCompleteWithFallback(messages, reasoningEffort);
+  return chatCompleteWithFallback(messages, reasoningEffort, undefined, options);
 }
 
 export async function analyzeMaterialFrames(input: {
@@ -853,10 +856,11 @@ function bestSummarySentence(summary: string, pattern: RegExp) {
 async function chatCompleteWithFallback(
   messages: ChatMessage[],
   reasoningEffort?: ChatReasoningEffort,
-  tools?: ChatTool[]
+  tools?: ChatTool[],
+  options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
   try {
-    return await chatCompleteWithEffort(messages, reasoningEffort, tools);
+    return await chatCompleteWithEffort(messages, reasoningEffort, tools, options);
   } catch (error) {
     if (isAbortError(error)) throw error;
     return fallbackChatCompletion("local-fallback", error);
@@ -1094,10 +1098,15 @@ function extractResponseErrorMessage(data: unknown) {
   return "";
 }
 
-async function buildWebResearchContext(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+async function buildWebResearchContext(
+  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  options: { signal?: AbortSignal } = {}
+) {
+  throwIfAborted(options.signal);
   try {
-    return await buildNativeWebResearchContext(input);
+    return await buildNativeWebResearchContext(input, options);
   } catch (error) {
+    if (options.signal?.aborted) throw error;
     console.warn("[ai] web research failed:", describeErrorForLog(error));
     return buildWebResearchFailureContext(error);
   }
@@ -1134,7 +1143,10 @@ function summarizeWebResearchFailure(error: unknown) {
   return "";
 }
 
-async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+async function buildNativeWebResearchContext(
+  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  options: { signal?: AbortSignal } = {}
+) {
   const researchTask =
     input.mode === "topic"
       ? `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${input.prompt}`
@@ -1152,17 +1164,19 @@ async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; promp
     }
   ];
 
-  const result = await withWebResearchTimeout((signal) =>
-    streamResponseText({
-      messages,
-      reasoningEffort: "medium",
-      tools: [{ type: "web_search" }],
-      maxOutputTokens: WEB_RESEARCH_MAX_OUTPUT_TOKENS,
-      signal,
-      onDelta() {
-        // Consume the Responses stream so long web searches do not sit behind an idle proxy connection.
-      }
-    })
+  const result = await withWebResearchTimeout(
+    (signal) =>
+      streamResponseText({
+        messages,
+        reasoningEffort: "medium",
+        tools: [{ type: "web_search" }],
+        maxOutputTokens: WEB_RESEARCH_MAX_OUTPUT_TOKENS,
+        signal,
+        onDelta() {
+          // Consume the Responses stream so long web searches do not sit behind an idle proxy connection.
+        }
+      }),
+    options.signal
   );
 
   if (result.fallback || !result.text.trim()) {
@@ -1172,18 +1186,23 @@ async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; promp
   return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${result.text.trim()}`;
 }
 
-async function withWebResearchTimeout<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+async function withWebResearchTimeout<T>(run: (signal: AbortSignal) => Promise<T>, parentSignal?: AbortSignal): Promise<T> {
+  throwIfAborted(parentSignal);
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  parentSignal?.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(() => controller.abort(), WEB_RESEARCH_TIMEOUT_MS);
 
   try {
     return await run(controller.signal);
   } catch (error) {
-    if (controller.signal.aborted && !(error instanceof StreamResponseTextError && error.partialText.trim())) {
+    if (parentSignal?.aborted) throw error;
+    if (controller.signal.aborted) {
       throw new Error(`模型联网搜索超时（超过 ${Math.round(WEB_RESEARCH_TIMEOUT_MS / 1000)} 秒）`);
     }
     throw error;
   } finally {
+    parentSignal?.removeEventListener("abort", abort);
     clearTimeout(timeout);
   }
 }
@@ -1263,7 +1282,7 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
     readStyle(platform, accountId)
   ]);
   const currentStyle = existingStyle.trim();
-  if (styleMeta?.sampleHash === sampleState.sampleHash && currentStyle) {
+  if (styleMeta?.sampleHash === sampleState.sampleHash && currentStyle && !styleMeta.fallback) {
     return {
       platform,
       accountId,
@@ -1272,7 +1291,9 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
       fallback: currentStyle,
       ...sampleState,
       generationMode: "full",
-      cachedStyle: currentStyle
+      cachedStyle: currentStyle,
+      cachedFallback: styleMeta.fallback,
+      cachedFallbackReason: styleMeta.fallbackReason
     };
   }
 
@@ -1334,7 +1355,8 @@ export async function completePreparedAccountStyle(
 ): Promise<AccountStyleGenerationResult> {
   const generatedStyle = result.text.trim();
   const style = generatedStyle || context.fallback;
-  const shouldUpdateSampleCache = Boolean(generatedStyle) || context.generationMode === "full";
+  const isFallbackResult = result.fallback || !generatedStyle;
+  const shouldUpdateSampleCache = Boolean(generatedStyle) && !isFallbackResult;
   const shouldSaveStyle = Boolean(style.trim());
 
   if (shouldSaveStyle) {
@@ -1348,13 +1370,17 @@ export async function completePreparedAccountStyle(
       sampleVideoIds: context.sampleVideoIds,
       sampleCount: context.sampleVideoIds.length,
       generationMode: context.generationMode,
-      usedModel: result.model
+      usedModel: result.model,
+      fallback: isFallbackResult,
+      fallbackReason: isFallbackResult
+        ? result.fallbackReason || "模型没有返回完整可用内容，已保存降级风格卡。"
+        : undefined
     });
   }
 
   return {
     style,
-    fallback: result.fallback || !generatedStyle,
+    fallback: isFallbackResult,
     usedModel: result.model,
     fallbackReason: result.fallbackReason,
     cached: false,
@@ -1367,8 +1393,9 @@ export function completeCachedAccountStyle(context: PreparedAccountStyleContext)
   if (!context.cachedStyle) return null;
   return {
     style: context.cachedStyle,
-    fallback: false,
+    fallback: Boolean(context.cachedFallback),
     usedModel: "style-cache",
+    fallbackReason: context.cachedFallbackReason,
     cached: true,
     generationMode: "cached",
     sampleHash: context.sampleHash
@@ -1468,9 +1495,10 @@ export async function saveAndGenerateProjectStyleProfile(
   };
 }
 
-export async function writeCopy(input: WriteCopyInput): Promise<WriteResult> {
-  const prepared = await prepareWriteCopyContext(input);
-  const result = await chatCompleteWithFallback(prepared.messages);
+export async function writeCopy(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteResult> {
+  const prepared = await prepareWriteCopyContext(input, options);
+  const result = await chatCompleteWithFallback(prepared.messages, undefined, undefined, { signal: options.signal });
+  throwIfAborted(options.signal);
   const content = result.text || buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
   const draft = await savePreparedDraft(input, prepared, content);
 
@@ -1490,7 +1518,9 @@ export async function completePreparedWriteCopy(input: {
   prepared: PreparedWriteContext;
   result: ChatCompletionResult;
   save?: boolean;
+  signal?: AbortSignal;
 }): Promise<WriteResult> {
+  throwIfAborted(input.signal);
   const content =
     input.result.text ||
     buildFallbackCopy(
@@ -1514,8 +1544,8 @@ export async function completePreparedWriteCopy(input: {
   };
 }
 
-export async function prepareWriteBrief(input: WriteCopyInput): Promise<WriteBriefResult> {
-  const prepared = await prepareWriteCopyContext(input);
+export async function prepareWriteBrief(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteBriefResult> {
+  const prepared = await prepareWriteCopyContext(input, options);
   return {
     brief: prepared.brief,
     research: prepared.research,
@@ -1527,11 +1557,13 @@ export async function prepareWriteBrief(input: WriteCopyInput): Promise<WriteBri
   };
 }
 
-export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<PreparedWriteContext> {
-  const normalizedInput = await normalizeWriteCopyInput(input);
+export async function prepareWriteCopyContext(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<PreparedWriteContext> {
+  throwIfAborted(options.signal);
+  const normalizedInput = await normalizeWriteCopyInput(input, options);
+  throwIfAborted(options.signal);
 
   if (normalizedInput.targetType === "project" || normalizedInput.projectId) {
-    return prepareProjectWriteContext(normalizedInput);
+    return prepareProjectWriteContext(normalizedInput, options);
   }
 
   if (!normalizedInput.platform || !normalizedInput.accountId) {
@@ -1549,8 +1581,8 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
     normalizedInput.mode === "topic"
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
       : `请按账号风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
-  const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks);
-  const webContext = normalizedInput.useWebResearch ? await buildWebResearchContext(normalizedInput) : "未启用联网检索。";
+  const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
+  const webContext = normalizedInput.useWebResearch ? await buildWebResearchContext(normalizedInput, options) : "未启用联网检索。";
   const research = buildReferenceSummary({
     supportDocLinks: normalizedInput.supportDocLinks,
     supportDocContext,
@@ -1565,7 +1597,8 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
     sampleContext,
     input: normalizedInput,
     supportDocContext,
-    webContext
+    webContext,
+    signal: options.signal
   });
   const writingBrief = briefResult.text.trim();
 
@@ -1629,7 +1662,8 @@ export async function prepareWriteCopyContext(input: WriteCopyInput): Promise<Pr
   };
 }
 
-async function prepareProjectWriteContext(input: WriteCopyInput): Promise<PreparedWriteContext> {
+async function prepareProjectWriteContext(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<PreparedWriteContext> {
+  throwIfAborted(options.signal);
   if (!input.projectId) {
     throw new Error("请选择参考项目");
   }
@@ -1664,8 +1698,8 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
     input.mode === "topic"
       ? `请基于这个主题生成文案：\n${input.prompt}`
       : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文素材：\n${input.sourceText || ""}`;
-  const supportDocContext = await buildSupportDocumentContext(input.supportDocLinks);
-  const webContext = input.useWebResearch ? await buildWebResearchContext(input) : "未启用联网检索。";
+  const supportDocContext = await buildSupportDocumentContext(input.supportDocLinks, options);
+  const webContext = input.useWebResearch ? await buildWebResearchContext(input, options) : "未启用联网检索。";
   const research = buildReferenceSummary({
     supportDocLinks: input.supportDocLinks,
     supportDocContext,
@@ -1680,7 +1714,8 @@ async function prepareProjectWriteContext(input: WriteCopyInput): Promise<Prepar
     referenceContext,
     input,
     supportDocContext,
-    webContext
+    webContext,
+    signal: options.signal
   });
   const writingBrief = briefResult.text.trim();
 
@@ -1756,7 +1791,9 @@ async function buildAccountWritingBrief(input: {
   input: WriteCopyInput;
   supportDocContext: string;
   webContext: string;
+  signal?: AbortSignal;
 }) {
+  throwIfAborted(input.signal);
   const manualBrief = input.input.brief?.trim();
   if (manualBrief) {
     return {
@@ -1800,7 +1837,8 @@ async function buildAccountWritingBrief(input: {
           ].join("\n")
         ].join("\n\n")
       }
-    ]
+    ],
+    { signal: input.signal }
   );
 
   return requireWriteBriefResult(result, () =>
@@ -1819,7 +1857,9 @@ async function buildProjectWritingBrief(input: {
   input: WriteCopyInput;
   supportDocContext: string;
   webContext: string;
+  signal?: AbortSignal;
 }) {
+  throwIfAborted(input.signal);
   const manualBrief = input.input.brief?.trim();
   if (manualBrief) {
     return {
@@ -1863,7 +1903,8 @@ async function buildProjectWritingBrief(input: {
           ].join("\n")
         ].join("\n\n")
       }
-    ]
+    ],
+    { signal: input.signal }
   );
 
   return requireWriteBriefResult(result, () =>
@@ -1874,11 +1915,12 @@ async function buildProjectWritingBrief(input: {
   );
 }
 
-function completeWriteBriefGeneration(messages: ChatMessage[]) {
+function completeWriteBriefGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
   return streamResponseText({
     messages,
     reasoningEffort: "low",
     maxOutputTokens: WRITE_BRIEF_MAX_OUTPUT_TOKENS,
+    signal: options.signal,
     onDelta() {
       // Keep the brief bounded without surfacing intermediate planning text to the UI.
     }
@@ -2010,7 +2052,8 @@ function buildWriteSourceDigest(input: WriteCopyInput): WriteSourceDigest {
   };
 }
 
-async function buildSupportDocumentContext(input?: string) {
+async function buildSupportDocumentContext(input?: string, options: { signal?: AbortSignal } = {}) {
+  throwIfAborted(options.signal);
   const trimmed = input?.trim() || "";
   if (!trimmed) return "未提供支持文档。";
 
@@ -2018,7 +2061,7 @@ async function buildSupportDocumentContext(input?: string) {
     return `用户粘贴的支持资料：\n${clampText(trimmed, 5000)}`;
   }
 
-  const documents = await fetchFeishuSupportDocuments(trimmed);
+  const documents = await fetchFeishuSupportDocuments(trimmed, { signal: options.signal });
   if (!documents.length) {
     return `用户粘贴的支持资料：\n${clampText(trimmed, 5000)}`;
   }
@@ -2092,8 +2135,9 @@ async function buildProjectCopySourceContext(sourceIds: string[]) {
     .join("\n\n");
 }
 
-async function normalizeWriteCopyInput(input: WriteCopyInput): Promise<WriteCopyInput> {
+async function normalizeWriteCopyInput(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteCopyInput> {
   const prompt = normalizeRewritePrompt(input.mode, input.prompt, input.sourceText);
+  throwIfAborted(options.signal);
 
   if (input.mode !== "rewrite") {
     return {
@@ -2102,7 +2146,7 @@ async function normalizeWriteCopyInput(input: WriteCopyInput): Promise<WriteCopy
     };
   }
 
-  const sourceText = await normalizeRewriteSourceText(input.sourceText || "");
+  const sourceText = await normalizeRewriteSourceText(input.sourceText || "", options);
 
   return {
     ...input,
@@ -2111,10 +2155,10 @@ async function normalizeWriteCopyInput(input: WriteCopyInput): Promise<WriteCopy
   };
 }
 
-async function normalizeRewriteSourceText(sourceText: string) {
+async function normalizeRewriteSourceText(sourceText: string, options: { signal?: AbortSignal } = {}) {
   const trimmed = sourceText.trim();
   if (!trimmed || isNormalizedMaterialText(trimmed)) return trimmed;
-  return (await resolveRewriteSourceMaterial(trimmed)).normalizedText || trimmed;
+  return (await resolveRewriteSourceMaterial(trimmed, { signal: options.signal })).normalizedText || trimmed;
 }
 
 function isNormalizedMaterialText(sourceText: string) {

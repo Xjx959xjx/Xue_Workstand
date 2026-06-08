@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { randomUUID } from "crypto";
 import path from "path";
 
 export async function fileExists(target: string) {
@@ -28,10 +29,28 @@ export async function readJsonFile<T>(target: string): Promise<T | null> {
 }
 
 export async function writeJsonFile(target: string, value: unknown) {
+  return writeTextFileAtomic(target, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function writeTextFileAtomic(target: string, value: string) {
+  return writeFileAtomic(target, value, "utf8");
+}
+
+export async function writeFileAtomic(target: string, value: string | Uint8Array, encoding?: BufferEncoding) {
   await fs.mkdir(path.dirname(target), { recursive: true });
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
-  await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await fs.rename(temp, target);
+  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+
+  try {
+    if (encoding) {
+      await fs.writeFile(temp, value, encoding);
+    } else {
+      await fs.writeFile(temp, value);
+    }
+    await fs.rename(temp, target);
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function isMissingFileError(error: unknown) {

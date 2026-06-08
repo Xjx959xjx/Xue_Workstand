@@ -29,6 +29,9 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   const grossMarginMode = appMode === "gross-margin";
   const visibleNavItems = grossMarginMode ? grossMarginNavItems : navItems;
   const brandHref = grossMarginMode ? "/gross-margin" : "/library";
+  const activeHref = visibleNavItems
+    .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
+    .sort((left, right) => right.href.length - left.href.length)[0]?.href;
 
   return (
     <aside className="sidebar">
@@ -43,7 +46,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
       </Link>
       <nav className="nav-list" aria-label="主导航">
         {visibleNavItems.map((item) => {
-          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const active = item.href === activeHref;
           const Icon = item.icon;
           return (
             <div className="nav-group" key={item.href}>

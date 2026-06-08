@@ -12,6 +12,7 @@ type UseLibraryTaskEffectsInput = {
   activeJobs: JobRecord[];
   recentJobs: JobRecord[];
   reloadSelectedAccountDetail: ReloadAccountDetail;
+  selectedAccount: AccountDetail | null;
   selectedVideo: VideoListItem | null;
   setAccountDetail: Dispatch<SetStateAction<AccountDetail | null>>;
   setMessage: Dispatch<SetStateAction<string>>;
@@ -24,6 +25,7 @@ export function useLibraryTaskEffects({
   activeJobs,
   recentJobs,
   reloadSelectedAccountDetail,
+  selectedAccount,
   selectedVideo,
   setAccountDetail,
   setMessage,
@@ -43,17 +45,56 @@ export function useLibraryTaskEffects({
 
   const trackedJobs = useMemo(() => [...activeJobs, ...recentJobs], [activeJobs, recentJobs]);
   const accountStyleJob = useMemo(
-    () => findTaskJob(trackedJobs, activeStyleJobId, "account-style"),
-    [activeStyleJobId, trackedJobs]
+    () => findTaskJob(trackedJobs, activeStyleJobId, "account-style", (job) => job.scope?.accountId === selectedAccount?.id),
+    [activeStyleJobId, selectedAccount?.id, trackedJobs]
+  );
+  const accountStyleJobIdMismatch = useMemo(
+    () => hasMismatchedTrackedJob(trackedJobs, activeStyleJobId, "account-style", (job) => job.scope?.accountId === selectedAccount?.id),
+    [activeStyleJobId, selectedAccount?.id, trackedJobs]
   );
   const transcribeJob = useMemo(
-    () => findTaskJob(trackedJobs, activeTranscribeJobId, "transcribe-video"),
-    [activeTranscribeJobId, trackedJobs]
+    () =>
+      findTaskJob(
+        trackedJobs,
+        activeTranscribeJobId,
+        "transcribe-video",
+        (job) => job.scope?.accountId === selectedAccount?.id && job.scope?.videoId === selectedVideo?.id
+      ),
+    [activeTranscribeJobId, selectedAccount?.id, selectedVideo?.id, trackedJobs]
+  );
+  const transcribeJobIdMismatch = useMemo(
+    () =>
+      hasMismatchedTrackedJob(
+        trackedJobs,
+        activeTranscribeJobId,
+        "transcribe-video",
+        (job) => job.scope?.accountId === selectedAccount?.id && job.scope?.videoId === selectedVideo?.id
+      ),
+    [activeTranscribeJobId, selectedAccount?.id, selectedVideo?.id, trackedJobs]
   );
   const batchJob = useMemo(
-    () => findTaskJob(trackedJobs, activeBatchJobId, "batch-transcribe"),
-    [activeBatchJobId, trackedJobs]
+    () => findTaskJob(trackedJobs, activeBatchJobId, "batch-transcribe", (job) => job.scope?.accountId === selectedAccount?.id),
+    [activeBatchJobId, selectedAccount?.id, trackedJobs]
   );
+  const batchJobIdMismatch = useMemo(
+    () => hasMismatchedTrackedJob(trackedJobs, activeBatchJobId, "batch-transcribe", (job) => job.scope?.accountId === selectedAccount?.id),
+    [activeBatchJobId, selectedAccount?.id, trackedJobs]
+  );
+
+  useEffect(() => {
+    if (busy === "style" && accountStyleJobIdMismatch) {
+      setActiveStyleJobId("");
+      setBusy("");
+    }
+    if (busy === "transcribe" && transcribeJobIdMismatch) {
+      setActiveTranscribeJobId("");
+      setBusy("");
+    }
+    if ((busy === "batch" || busy === "batch-style") && batchJobIdMismatch) {
+      setActiveBatchJobId("");
+      setBusy("");
+    }
+  }, [accountStyleJobIdMismatch, batchJobIdMismatch, busy, transcribeJobIdMismatch]);
 
   useEffect(() => {
     if (!accountStyleJob) return;
@@ -226,6 +267,31 @@ function formatDuration(ms: number) {
   return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
 }
 
-function findTaskJob(jobs: JobRecord[], jobId: string, kind: JobRecord["kind"]) {
-  return jobs.find((job) => job.id === jobId && job.kind === kind) || jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) || null;
+function findTaskJob(
+  jobs: JobRecord[],
+  jobId: string,
+  kind: JobRecord["kind"],
+  matchesScope: (job: JobRecord) => boolean
+) {
+  if (jobId) {
+    const tracked = jobs.find((job) => job.id === jobId && job.kind === kind);
+    if (tracked && matchesScope(tracked)) return tracked;
+  }
+
+  return jobs.find((job) => job.kind === kind && isActiveJob(job) && matchesScope(job)) || null;
+}
+
+function hasMismatchedTrackedJob(
+  jobs: JobRecord[],
+  jobId: string,
+  kind: JobRecord["kind"],
+  matchesScope: (job: JobRecord) => boolean
+) {
+  if (!jobId) return false;
+  const tracked = jobs.find((job) => job.id === jobId && job.kind === kind);
+  return Boolean(tracked && !matchesScope(tracked));
+}
+
+function isActiveJob(job: JobRecord) {
+  return job.status === "queued" || job.status === "running";
 }

@@ -63,6 +63,10 @@ export function useLibraryTaskActions({
       setStyleProgress(job.progress);
       setMessage("账号风格卡已在后台开始生成，可以切换到其他模块。");
     } catch (err) {
+      setActiveStyleJobId("");
+      setStyleStage("任务启动失败");
+      setStyleProgress(0);
+      setBusy("");
       setMessage(err instanceof Error ? err.message : "自动总结失败");
     }
   }, [selectedAccount, setActiveStyleJobId, setBusy, setMessage, setStyleProgress, setStyleStage, startTask]);
@@ -91,9 +95,18 @@ export function useLibraryTaskActions({
       setTranscribeProgress(job.progress);
       setMessage("转写稿已在后台开始生成，可以切换到其他模块。");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "转写失败");
-      await refresh();
-      await reloadSelectedAccountDetail({ force: true });
+      const message = err instanceof Error ? err.message : "转写失败";
+      setActiveTranscribeJobId("");
+      setTranscribeStage("任务启动失败");
+      setTranscribeProgress(0);
+      setBusy("");
+      setMessage(message);
+      try {
+        await refresh();
+        await reloadSelectedAccountDetail({ force: true });
+      } catch (refreshErr) {
+        setMessage(`${message}；刷新页面状态失败：${refreshErr instanceof Error ? refreshErr.message : "请手动刷新后再试。"}`);
+      }
     }
   }, [
     refresh,
@@ -132,9 +145,18 @@ export function useLibraryTaskActions({
       setTranscribeProgress(job.progress);
       setMessage("批量转写已在后台开始，可以切换到其他模块。");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "批量转写失败");
-      await refresh();
-      await reloadSelectedAccountDetail({ force: true });
+      const message = err instanceof Error ? err.message : "批量转写失败";
+      setActiveBatchJobId("");
+      setTranscribeStage("任务启动失败");
+      setTranscribeProgress(0);
+      setBusy("");
+      setMessage(message);
+      try {
+        await refresh();
+        await reloadSelectedAccountDetail({ force: true });
+      } catch (refreshErr) {
+        setMessage(`${message}；刷新页面状态失败：${refreshErr instanceof Error ? refreshErr.message : "请手动刷新后再试。"}`);
+      }
     }
   }, [
     batchLimit,

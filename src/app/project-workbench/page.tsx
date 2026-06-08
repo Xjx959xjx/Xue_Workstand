@@ -101,11 +101,21 @@ export default function ProjectWorkbenchPage() {
     () => accounts.filter((account) => sourceAccountIds.includes(account.id)),
     [accounts, sourceAccountIds]
   );
+  const currentProjectScopeId = selectedProject?.id || selectedProjectMeta?.id || selectedProjectId;
   const activeStyleJob = useMemo(() => {
-    const trackedJob = [...activeJobs, ...recentJobs].find((job) => job.id === styleJobId);
-    if (trackedJob) return trackedJob;
-    return activeJobs.find((job) => job.kind === "project-style" && job.inputSummary === projectName);
-  }, [activeJobs, projectName, recentJobs, styleJobId]);
+    const matchesProject = (job: (typeof activeJobs)[number]) =>
+      job.kind === "project-style" && Boolean(currentProjectScopeId) && job.scope?.projectId === currentProjectScopeId;
+    if (styleJobId) {
+      const trackedJob = [...activeJobs, ...recentJobs].find((job) => job.id === styleJobId);
+      if (trackedJob && matchesProject(trackedJob)) return trackedJob;
+    }
+    return activeJobs.find(matchesProject) || null;
+  }, [activeJobs, currentProjectScopeId, recentJobs, styleJobId]);
+  const styleJobIdMismatch = useMemo(() => {
+    if (!styleJobId) return false;
+    const trackedJob = [...activeJobs, ...recentJobs].find((job) => job.id === styleJobId && job.kind === "project-style");
+    return Boolean(trackedJob && (!currentProjectScopeId || trackedJob.scope?.projectId !== currentProjectScopeId));
+  }, [activeJobs, currentProjectScopeId, recentJobs, styleJobId]);
   const currentSnapshot = useMemo(
     () =>
       createSnapshot({
@@ -142,9 +152,13 @@ export default function ProjectWorkbenchPage() {
 
   useEffect(() => {
     if (loading || pickedInitialProject || selectedProjectId || !projects.length) return;
+    if (isDirty) {
+      setPickedInitialProject(true);
+      return;
+    }
     setPickedInitialProject(true);
     setSelectedProjectId(projects[0].id);
-  }, [loading, pickedInitialProject, projects, selectedProjectId]);
+  }, [isDirty, loading, pickedInitialProject, projects, selectedProjectId]);
 
   useEffect(() => {
     let ignore = false;
@@ -265,6 +279,12 @@ export default function ProjectWorkbenchPage() {
   }, [activeStyleJob, handledJobIds, refresh]);
 
   useEffect(() => {
+    if (!styleJobIdMismatch || busy !== "style") return;
+    setStyleJobId("");
+    setBusy("");
+  }, [busy, styleJobIdMismatch]);
+
+  useEffect(() => {
     if (!message || isTaskProgressMessage(message)) return;
     notify({
       tone: message.includes("失败") || message.includes("先") ? "error" : "success",
@@ -273,6 +293,7 @@ export default function ProjectWorkbenchPage() {
   }, [message, notify]);
 
   function resetProjectForm() {
+    if (!confirmDiscardUnsavedChanges()) return;
     setPickedInitialProject(true);
     setSelectedProjectId("");
     setProjectDetail(null);
@@ -283,6 +304,11 @@ export default function ProjectWorkbenchPage() {
     setStyleDraft("");
     setSavedSnapshot(null);
     setMessage("");
+  }
+
+  function confirmDiscardUnsavedChanges() {
+    if (!isDirty) return true;
+    return window.confirm("当前项目有未保存修改，继续会丢弃这些修改。确定继续吗？");
   }
 
   function toggleAccount(accountId: string) {
@@ -470,11 +496,17 @@ export default function ProjectWorkbenchPage() {
   }
 
   function handleSelectProject(projectId: string) {
+    if (projectId === currentProjectScopeId) {
+      setProjectModalOpen(false);
+      return;
+    }
+    if (!confirmDiscardUnsavedChanges()) return;
     setSelectedProjectId(projectId);
     setProjectModalOpen(false);
   }
 
   async function handleRefresh() {
+    if (!confirmDiscardUnsavedChanges()) return;
     try {
       const [sourceResult] = await Promise.all([refreshCopySources(), refresh()]);
       setFullCopySources(sourceResult.sources);
@@ -603,7 +635,7 @@ export default function ProjectWorkbenchPage() {
             />
 
             <ProjectStylePanel
-              activeStyleJob={activeStyleJob}
+              activeStyleJob={activeStyleJob ?? undefined}
               busy={busy}
               canSaveWorkspace={canSaveWorkspace}
               canWrite={canWrite}

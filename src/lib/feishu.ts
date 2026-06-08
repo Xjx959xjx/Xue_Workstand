@@ -42,6 +42,7 @@ export function getFeishuRuntimeConfig() {
 
 export async function checkFeishuRuntime() {
   const config = feishuConfig();
+  const runtimeConfig = getFeishuRuntimeConfig();
   try {
     const runtime = resolveOpenCliCommand();
     const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, "lark-cli", "doctor", "--offline"], {
@@ -50,7 +51,9 @@ export async function checkFeishuRuntime() {
       timeout: 10000
     });
     return {
-      ...getFeishuRuntimeConfig(),
+      ...runtimeConfig,
+      configured: true,
+      available: true,
       doctor: {
         ok: true,
         message: (stdout || stderr).trim()
@@ -58,7 +61,9 @@ export async function checkFeishuRuntime() {
     };
   } catch (error) {
     return {
-      ...getFeishuRuntimeConfig(),
+      ...runtimeConfig,
+      configured: false,
+      available: false,
       doctor: {
         ok: false,
         message: error instanceof Error ? error.message : "lark-cli doctor 检查失败"
@@ -71,14 +76,16 @@ export async function publishFeishuDocument(input: { title: string; content: str
   return publishWithOpenCli(feishuConfig(), input);
 }
 
-export async function fetchFeishuSupportDocuments(input: string) {
+export async function fetchFeishuSupportDocuments(input: string, options: { signal?: AbortSignal } = {}) {
+  throwIfAborted(options.signal);
   const refs = uniqueFeishuDocRefs(input).slice(0, 4);
   if (!refs.length) return [];
 
   const config = feishuConfig();
   const documents: FeishuFetchedDocument[] = [];
   for (const ref of refs) {
-    documents.push(await fetchFeishuDocument(config, ref));
+    throwIfAborted(options.signal);
+    documents.push(await fetchFeishuDocument(config, ref, options));
   }
   return documents;
 }
@@ -124,7 +131,11 @@ async function publishWithOpenCli(config: FeishuConfig, input: { title: string; 
   };
 }
 
-async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<FeishuFetchedDocument> {
+async function fetchFeishuDocument(
+  config: FeishuConfig,
+  url: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<FeishuFetchedDocument> {
   const args = [
     "lark-cli",
     "docs",
@@ -145,10 +156,12 @@ async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<F
   const runtime = resolveOpenCliCommand();
 
   try {
+    throwIfAborted(options.signal);
     const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, ...args], {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 20,
-      timeout: 60000
+      timeout: 60000,
+      signal: options.signal
     });
     const payload = parseJsonish(stdout.trim());
     const document = extractFetchedDocument(payload);
@@ -165,11 +178,24 @@ async function fetchFeishuDocument(config: FeishuConfig, url: string): Promise<F
       content: clampText(document.content.trim(), 5000)
     };
   } catch (error) {
+    if (isAbortError(error, options.signal)) throw error;
     return {
       url,
       error: summarizeFeishuFetchError(error)
     };
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true;
+  return error instanceof Error && (error.name === "AbortError" || /AbortError|aborted|任务已停止/i.test(error.message));
 }
 
 function spawnWithInput(command: string, args: string[], input: string, options: { maxBuffer: number; timeout: number }) {

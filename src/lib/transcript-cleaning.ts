@@ -16,7 +16,9 @@ export async function cleanTranscriptText(input: {
   title?: string;
   text: string;
   useModel?: boolean;
+  signal?: AbortSignal;
 }): Promise<TranscriptCleanResult> {
+  throwIfAborted(input.signal);
   const localCleaned = finalizeTranscriptText(input.text);
   if (!localCleaned) {
     return {
@@ -52,6 +54,7 @@ export async function cleanTranscriptText(input: {
     const cleanedChunks: string[] = [];
 
     for (const [index, chunk] of chunks.entries()) {
+      throwIfAborted(input.signal);
       const result = await chatComplete([
         {
           role: "system",
@@ -67,7 +70,8 @@ export async function cleanTranscriptText(input: {
             chunkCount: chunks.length
           })
         }
-      ]);
+      ], undefined, { signal: input.signal });
+      throwIfAborted(input.signal);
 
       const cleanedChunk = finalizeModelOutput(result.text);
       if (result.fallback || !cleanedChunk) {
@@ -98,6 +102,7 @@ export async function cleanTranscriptText(input: {
       fallback: false
     };
   } catch (error) {
+    if (isAbortError(error, input.signal)) throw error;
     return {
       text: localCleaned,
       usedModel: "local-cleaner",
@@ -105,6 +110,18 @@ export async function cleanTranscriptText(input: {
       fallbackReason: error instanceof Error ? `清洗模型失败：${error.message}` : "清洗模型失败，已回退到本地规则清洗。"
     };
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true;
+  return error instanceof Error && (error.name === "AbortError" || /AbortError|aborted|任务已停止/i.test(error.message));
 }
 
 function buildChunkPrompt(input: {

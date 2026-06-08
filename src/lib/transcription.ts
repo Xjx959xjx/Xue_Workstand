@@ -6,7 +6,6 @@ import path from "path";
 import { promisify } from "util";
 import {
   buildOpenCliBrowserArgs,
-  downloadBilibiliVideo,
   getBilibiliVideoStatsByUrl,
   getBilibiliVideoReference,
   checkDouyinVideoAvailability,
@@ -24,7 +23,8 @@ import {
   inferRemoteContentType,
   inferRemoteFileExtension,
   isLikelyAudioMediaUrl,
-  normalizeRemoteMediaUrl,
+  normalizeRemoteImageUrl,
+  selectRemoteVideoMediaUrl,
   sortRemoteAudioMediaUrls,
   videoMediaUrlScore
 } from "./platform-links";
@@ -57,6 +57,7 @@ export type LinkTranscriptionResult = {
   mediaUrls?: string[];
   text: string;
   source: "platform_subtitle" | "volcengine" | "metadata";
+  metadataTitle?: string;
   fallback?: boolean;
   fallbackReason?: string;
   timings?: Timing[];
@@ -135,16 +136,24 @@ export async function transcribeVideo(input: {
   timings.push({ stage: "load-video", ms: Date.now() - totalStartedAt });
   const cleanupTargets: string[] = [];
   let hadBilibiliSubtitle = false;
+  let bilibiliSubtitleError = "";
 
   if (input.platform === "bilibili") {
-    const subtitle = await getBilibiliSubtitle(video).catch(() => "");
+    let subtitle = "";
+    try {
+      subtitle = await getBilibiliSubtitle(video, { signal: input.signal });
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      bilibiliSubtitleError = formatErrorDetail(error);
+    }
     throwIfAborted(input.signal);
     if (subtitle.trim()) {
       hadBilibiliSubtitle = true;
       const cleaned = await cleanTranscriptText({
         platform: input.platform,
         title: video.title,
-        text: subtitle
+        text: subtitle,
+        signal: input.signal
       });
       throwIfAborted(input.signal);
       return {
@@ -228,7 +237,8 @@ export async function transcribeVideo(input: {
       const reason = buildMissingMediaReason({
         platform: input.platform,
         mediaError,
-        hadBilibiliSubtitle
+        hadBilibiliSubtitle,
+        bilibiliSubtitleError
       });
       await markTranscriptFailed(input.platform, input.accountId, input.videoId, reason);
       throw new Error(reason);
@@ -249,7 +259,8 @@ export async function transcribeVideo(input: {
       const cleaned = await cleanTranscriptText({
         platform: input.platform,
         title: video.title,
-        text
+        text,
+        signal: input.signal
       });
       timings.push({ stage: "clean-transcript", ms: Date.now() - cleanStartedAt });
       const saveStartedAt = Date.now();
@@ -274,7 +285,7 @@ export async function transcribeVideo(input: {
       };
     } catch (error) {
       if (isAbortError(error)) throw error;
-      const reason = buildProviderErrorReason(input.platform, error);
+      const reason = buildProviderErrorReason(input.platform, error, bilibiliSubtitleError);
       await markTranscriptFailed(input.platform, input.accountId, input.videoId, reason);
       throw new Error(reason);
     }
@@ -295,22 +306,33 @@ export async function transcribeLinkSource(input: {
 }): Promise<LinkTranscriptionResult> {
   throwIfAborted(input.signal);
   const startedAt = Date.now();
-  const resolvedUrl = await resolveShareUrl(input.url).catch(() => input.url);
+  const resolvedUrl = await resolveShareUrl(input.url, { signal: input.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return input.url;
+  });
   const platform = detectPlatformFromLink(resolvedUrl || input.url);
   let subtitleResult: LinkTranscriptionResult | null = null;
+  let bilibiliSubtitleError = "";
 
   if (platform === "bilibili") {
-    const subtitle = await getBilibiliSubtitle({
-      id: resolvedUrl,
-      url: resolvedUrl,
-      raw: resolvedUrl
-    } as Video).catch(() => "");
+    let subtitle = "";
+    try {
+      subtitle = await getBilibiliSubtitle({
+        id: resolvedUrl,
+        url: resolvedUrl,
+        raw: resolvedUrl
+      } as Video, { signal: input.signal });
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      bilibiliSubtitleError = formatErrorDetail(error);
+    }
     if (subtitle.trim()) {
-      const metadata = await resolveLinkStatsMetadata(resolvedUrl || input.url, platform);
+      const metadata = await resolveLinkStatsMetadata(resolvedUrl || input.url, platform, { signal: input.signal });
       const cleaned = await cleanTranscriptText({
         platform,
         title: input.titleHint || metadata.title,
-        text: subtitle
+        text: subtitle,
+        signal: input.signal
       });
       subtitleResult = {
         url: input.url,
@@ -336,7 +358,8 @@ export async function transcribeLinkSource(input: {
   const media = await resolveLinkMediaUrl({
     url: input.url,
     resolvedUrl,
-    platform
+    platform,
+    signal: input.signal
   });
   if (subtitleResult) {
     return {
@@ -350,6 +373,10 @@ export async function transcribeLinkSource(input: {
   }
   if (!media.mediaUrls.length) {
     if (media.title) {
+      const fallbackReason = buildLinkMetadataOnlyReason({
+        title: media.title,
+        bilibiliSubtitleError
+      });
       return {
         url: input.url,
         resolvedUrl,
@@ -358,13 +385,14 @@ export async function transcribeLinkSource(input: {
         sourceAccountName: media.sourceAccountName,
         coverUrl: media.coverUrl,
         mediaUrls: [],
-        text: media.title,
+        text: "",
         source: "metadata",
+        metadataTitle: media.title,
         fallback: true,
-        fallbackReason: "没有解析到可转写的媒体地址，已仅使用视频标题/描述。"
+        fallbackReason
       };
     }
-    throw new Error(`没有解析到可转写的媒体地址：${input.url}`);
+    throw new Error(buildLinkMissingMediaReason(input.url, bilibiliSubtitleError));
   }
 
   const cleanupTargets: string[] = [];
@@ -383,7 +411,8 @@ export async function transcribeLinkSource(input: {
     const cleaned = await cleanTranscriptText({
       platform,
       title: media.title || input.titleHint,
-      text: volcengine.text
+      text: volcengine.text,
+      signal: input.signal
     });
     return {
       url: input.url,
@@ -405,6 +434,12 @@ export async function transcribeLinkSource(input: {
         { stage: "total", ms: Date.now() - startedAt }
       ]
     };
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    if (platform === "bilibili" && bilibiliSubtitleError) {
+      throw new Error(`B站字幕抓取失败：${bilibiliSubtitleError}；音频转写也失败：${formatErrorDetail(error)}`);
+    }
+    throw error;
   } finally {
     await Promise.all(cleanupTargets.map((target) => fs.rm(target, { recursive: true, force: true }).catch(() => undefined)));
   }
@@ -434,8 +469,12 @@ export async function resolveLinkSourceMedia(input: {
   url: string;
   resolvedUrl?: string;
   platform?: Platform | "unknown";
+  signal?: AbortSignal;
 }): Promise<LinkSourceResolvedMedia> {
-  const resolvedUrl = input.resolvedUrl || (await resolveShareUrl(input.url).catch(() => input.url));
+  const resolvedUrl = input.resolvedUrl || (await resolveShareUrl(input.url, { signal: input.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return input.url;
+  }));
   const platform = input.platform && input.platform !== "unknown"
     ? input.platform
     : detectPlatformFromLink(resolvedUrl || input.url);
@@ -453,7 +492,8 @@ export async function resolveLinkSourceMedia(input: {
   const media = await resolveLinkMediaUrl({
     url: input.url,
     resolvedUrl,
-    platform
+    platform,
+    signal: input.signal
   });
   return {
     url: input.url,
@@ -469,8 +509,8 @@ export async function resolveLinkSourceMedia(input: {
 export async function prepareLinkSourceDownload(input: {
   url: string;
   kind: LinkSourceAssetKind;
-}): Promise<LinkSourceDownloadAsset> {
-  const media = await resolveLinkSourceMedia({ url: input.url });
+}, options: AbortableOptions = {}): Promise<LinkSourceDownloadAsset> {
+  const media = await resolveLinkSourceMedia({ url: input.url, signal: options.signal });
   if (media.platform !== "bilibili" && media.platform !== "douyin") {
     throw new Error("暂不支持下载这个链接，请粘贴 B站或抖音单条视频链接。");
   }
@@ -478,25 +518,28 @@ export async function prepareLinkSourceDownload(input: {
   const baseName = makeLinkSourceFileBaseName(media);
 
   if (input.kind === "cover") {
-    if (!media.coverUrl) {
+    const coverUrl = normalizeRemoteImageUrl(media.coverUrl || "");
+    if (!coverUrl) {
       throw new Error("没有解析到这条视频的封面地址。");
     }
     return {
       kind: input.kind,
-      fileName: `${baseName}${inferRemoteFileExtension(media.coverUrl, "image")}`,
-      contentType: inferRemoteContentType(media.coverUrl, "image"),
-      remoteUrl: media.coverUrl,
-      requestHeaders: buildRemoteAssetRequestHeaders(media.coverUrl)
+      fileName: `${baseName}${inferRemoteFileExtension(coverUrl, "image")}`,
+      contentType: inferRemoteContentType(coverUrl, "image"),
+      remoteUrl: coverUrl,
+      requestHeaders: buildRemoteAssetRequestHeaders(coverUrl)
     };
   }
 
   if (input.kind === "audio") {
-    if (!media.mediaUrls.length) {
+    const audioUrls = media.platform === "bilibili" ? selectRemoteAudioMediaUrls(media.mediaUrls) : media.mediaUrls;
+    if (!audioUrls.length) {
       throw new Error("没有解析到可提取音频的媒体地址。");
     }
     const downloaded = await downloadFirstAvailableRemoteAudio(
-      media.mediaUrls,
-      `${baseName}.mp3`
+      audioUrls,
+      `${baseName}.mp3`,
+      options
     );
     return {
       kind: input.kind,
@@ -508,23 +551,19 @@ export async function prepareLinkSourceDownload(input: {
   }
 
   if (media.platform === "bilibili") {
-    const filePath = await downloadBilibiliVideo({
-      id: media.resolvedUrl || media.url,
-      url: media.resolvedUrl || media.url,
-      title: media.title || baseName,
-      coverUrl: media.coverUrl,
-      raw: media.resolvedUrl || media.url
-    } as Video);
+    throwIfAborted(options.signal);
+    const downloaded = await downloadRemoteBilibiliVideo(media, `${baseName}.mp4`, options);
+    throwIfAborted(options.signal);
     return {
       kind: input.kind,
-      fileName: `${baseName}${inferLocalFileExtension(filePath, ".mp4")}`,
-      contentType: inferLocalContentType(filePath, "video/mp4"),
-      filePath,
-      cleanupTargets: [findTempRoot(filePath, "style-library-bilibili-") || path.dirname(filePath)]
+      fileName: `${baseName}.mp4`,
+      contentType: "video/mp4",
+      filePath: downloaded.filePath,
+      cleanupTargets: [downloaded.filePath]
     };
   }
 
-  const videoUrl = selectVideoMediaUrl(media.mediaUrls);
+  const videoUrl = selectRemoteVideoMediaUrl(media.mediaUrls);
   if (!videoUrl) {
     throw new Error("没有解析到可下载的视频地址。");
   }
@@ -802,16 +841,28 @@ function isAbortError(error: unknown) {
   return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
 }
 
+function ignoreNonAbortError(error: unknown) {
+  if (isAbortError(error)) throw error;
+}
+
 function createAbortError() {
   const error = new Error("任务已停止");
   error.name = "AbortError";
   return error;
 }
 
-async function resolveShareUrl(url: string) {
+function formatErrorDetail(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return message.replace(/\s+/g, " ").trim();
+}
+
+async function resolveShareUrl(url: string, options: AbortableOptions = {}) {
   const controller = new AbortController();
+  const abort = () => controller.abort();
   const timeout = setTimeout(() => controller.abort(), 20_000);
+  options.signal?.addEventListener("abort", abort, { once: true });
   try {
+    throwIfAborted(options.signal);
     const response = await fetch(url, {
       method: "GET",
       redirect: "follow",
@@ -822,8 +873,10 @@ async function resolveShareUrl(url: string) {
     });
     return response.url || url;
   } catch {
+    if (options.signal?.aborted) throw createAbortError();
     return url;
   } finally {
+    options.signal?.removeEventListener("abort", abort);
     clearTimeout(timeout);
   }
 }
@@ -832,50 +885,75 @@ async function resolveLinkMediaUrl(input: {
   url: string;
   resolvedUrl: string;
   platform: Platform;
+  signal?: AbortSignal;
 }): Promise<LinkMediaInfo> {
+  throwIfAborted(input.signal);
   if (input.platform === "douyin") {
-    const media = await resolveDouyinLinkMedia(input.resolvedUrl || input.url);
-    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform);
+    const media = await resolveDouyinLinkMedia(input.resolvedUrl || input.url, { signal: input.signal });
+    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform, { signal: input.signal });
   }
 
   if (input.platform === "bilibili") {
-    const media = await resolveBilibiliLinkMedia(input.resolvedUrl || input.url);
-    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform);
+    const media = await resolveBilibiliLinkMedia(input.resolvedUrl || input.url, { signal: input.signal });
+    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform, { signal: input.signal });
   }
 
-  return resolveGenericLinkMedia(input.resolvedUrl || input.url);
+  return resolveGenericLinkMedia(input.resolvedUrl || input.url, { signal: input.signal });
 }
 
-async function hydrateLinkMediaInfo(media: LinkMediaInfo, url: string, platform: Platform): Promise<LinkMediaInfo> {
-  if (media.title && media.sourceAccountName && media.coverUrl) return media;
-  const metadata = await resolveLinkStatsMetadata(url, platform);
+async function hydrateLinkMediaInfo(
+  media: LinkMediaInfo,
+  url: string,
+  platform: Platform,
+  options: AbortableOptions = {}
+): Promise<LinkMediaInfo> {
+  if (media.title && media.sourceAccountName && media.coverUrl) {
+    return { ...media, coverUrl: normalizeRemoteImageUrl(media.coverUrl) };
+  }
+  throwIfAborted(options.signal);
+  const metadata = await resolveLinkStatsMetadata(url, platform, { signal: options.signal });
+  throwIfAborted(options.signal);
   return {
     ...media,
     title: media.title || metadata.title,
     sourceAccountName: media.sourceAccountName || metadata.sourceAccountName,
-    coverUrl: media.coverUrl || metadata.coverUrl
+    coverUrl: normalizeRemoteImageUrl(media.coverUrl || metadata.coverUrl || "") || undefined
   };
 }
 
-async function resolveLinkStatsMetadata(url: string, platform: Platform): Promise<Pick<LinkMediaInfo, "title" | "sourceAccountName" | "coverUrl">> {
+async function resolveLinkStatsMetadata(
+  url: string,
+  platform: Platform,
+  options: AbortableOptions = {}
+): Promise<Pick<LinkMediaInfo, "title" | "sourceAccountName" | "coverUrl">> {
   if (!url.trim()) return {};
+  throwIfAborted(options.signal);
   if (platform === "bilibili") {
-    const stats = await getBilibiliVideoStatsByUrl(url).catch(() => null);
+    const stats = await getBilibiliVideoStatsByUrl(url, { signal: options.signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return null;
+    });
     const reference = await getBilibiliVideoReference({
       id: url,
       url,
       raw: url,
       title: stats?.title || "",
       coverUrl: ""
-    }).catch(() => null);
+    }, { signal: options.signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return null;
+    });
     return {
       title: stats?.title?.trim() || undefined,
       sourceAccountName: stats?.authorName?.trim() || undefined,
-      coverUrl: reference?.thumbnail?.trim() || undefined
+      coverUrl: normalizeRemoteImageUrl(reference?.thumbnail || "") || undefined
     };
   }
   if (platform === "douyin") {
-    const stats = await getDouyinVideoStatsByUrl(url).catch(() => null);
+    const stats = await getDouyinVideoStatsByUrl(url, { signal: options.signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return null;
+    });
     return {
       title: stats?.title?.trim() || undefined,
       sourceAccountName: stats?.authorName?.trim() || undefined,
@@ -885,24 +963,27 @@ async function resolveLinkStatsMetadata(url: string, platform: Platform): Promis
   return {};
 }
 
-async function resolveBilibiliLinkMedia(url: string) {
+async function resolveBilibiliLinkMedia(url: string, options: AbortableOptions = {}) {
   const workspace = `bilibili-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
 
   try {
+    throwIfAborted(options.signal);
     const openArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "open", [url], {
       window: "background"
     }));
     await execFileAsync(openArgs.command, openArgs.args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 8,
-      timeout: 30_000
+      timeout: 30_000,
+      signal: options.signal
     });
     const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]));
     await execFileAsync(waitArgs.command, waitArgs.args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
-      timeout: 12_000
-    }).catch(() => undefined);
+      timeout: 12_000,
+      signal: options.signal
+    }).catch(ignoreNonAbortError);
     const evalArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "eval", [BILIBILI_LINK_MEDIA_EXTRACT_JS]));
     const { stdout } = await execFileAsync(
       evalArgs.command,
@@ -910,7 +991,8 @@ async function resolveBilibiliLinkMedia(url: string) {
       {
         ...HIDDEN_CHILD_PROCESS_OPTIONS,
         maxBuffer: 1024 * 1024 * 20,
-        timeout: 30_000
+        timeout: 30_000,
+        signal: options.signal
       }
     );
     const data = parseOpenCliJsonish(stdout.trim());
@@ -920,8 +1002,8 @@ async function resolveBilibiliLinkMedia(url: string) {
       mediaId: String(object.bvid || extractBvid(url) || ""),
       title: normalizeTitle(String(object.title || object.description || "")),
       sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
-      coverUrl: normalizeRemoteMediaUrl(String(object.coverUrl || "")),
-      mediaUrls: sortLinkMediaUrls(mediaUrls)
+      coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
+      mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
     };
   } finally {
     const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
@@ -933,24 +1015,27 @@ async function resolveBilibiliLinkMedia(url: string) {
   }
 }
 
-async function resolveDouyinLinkMedia(url: string) {
+async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {}) {
   const workspace = `douyin-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
 
   try {
+    throwIfAborted(options.signal);
     const openArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "open", [url], {
       window: "background"
     }));
     await execFileAsync(openArgs.command, openArgs.args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 8,
-      timeout: 30_000
+      timeout: 30_000,
+      signal: options.signal
     });
     const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]));
     await execFileAsync(waitArgs.command, waitArgs.args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
-      timeout: 10_000
-    }).catch(() => undefined);
+      timeout: 10_000,
+      signal: options.signal
+    }).catch(ignoreNonAbortError);
     const evalArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]));
     const { stdout } = await execFileAsync(
       evalArgs.command,
@@ -958,7 +1043,8 @@ async function resolveDouyinLinkMedia(url: string) {
       {
         ...HIDDEN_CHILD_PROCESS_OPTIONS,
         maxBuffer: 1024 * 1024 * 20,
-        timeout: 30_000
+        timeout: 30_000,
+        signal: options.signal
       }
     );
     const data = parseOpenCliJsonish(stdout.trim());
@@ -968,8 +1054,8 @@ async function resolveDouyinLinkMedia(url: string) {
       mediaId: String(object.awemeId || ""),
       title: normalizeTitle(String(object.title || object.description || "")),
       sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
-      coverUrl: normalizeRemoteMediaUrl(String(object.coverUrl || "")),
-      mediaUrls: sortLinkMediaUrls(mediaUrls)
+      coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
+      mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
     };
   } finally {
     const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
@@ -981,9 +1067,11 @@ async function resolveDouyinLinkMedia(url: string) {
   }
 }
 
-async function resolveGenericLinkMedia(url: string) {
+async function resolveGenericLinkMedia(url: string, options: AbortableOptions = {}) {
+  throwIfAborted(options.signal);
   const response = await fetch(url, {
     redirect: "follow",
+    signal: options.signal,
     headers: {
       "User-Agent": browserUserAgent()
     }
@@ -998,8 +1086,8 @@ async function resolveGenericLinkMedia(url: string) {
     mediaId: response.url,
     title: normalizeTitle(extractHtmlTitle(html)),
     sourceAccountName: "",
-    coverUrl: normalizeRemoteMediaUrl(extractHtmlImage(html)),
-    mediaUrls: sortLinkMediaUrls(mediaUrls)
+    coverUrl: normalizeRemoteImageUrl(extractHtmlImage(html)),
+    mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
   };
 }
 
@@ -1022,7 +1110,6 @@ async function downloadFirstAvailableRemoteAudio(
       if (isAbortError(error)) throw error;
       lastError = error;
       attempts.push({ url, error: error instanceof Error ? error.message : "音频提取失败" });
-      if (!isNoAudioStreamError(error)) break;
     }
   }
 
@@ -1046,12 +1133,75 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
     if (url.startsWith("//")) return "https:" + url;
     return url;
   };
+  const trimCandidateUrl = (url) => (String(url || "").split(/[\\s|<>]/)[0] || "").replace(/,https?:\\/\\/.+$/i, "");
+  const isImageCandidate = (url) => {
+    try {
+      const parsed = new URL(normalizeUrl(trimCandidateUrl(url)));
+      const text = (parsed.hostname + " " + parsed.pathname + " " + parsed.search).toLowerCase();
+      return (
+        /douyinpic|pstatp|byteimg|tos-cn|image|img/.test(text) &&
+        !/avatar|profile|user|emoji|icon|logo/.test(text) &&
+        /(cover|poster|origin|image|img|tplv|tos-cn|\\.jpe?g|\\.png|\\.webp|\\.gif)/.test(text)
+      );
+    } catch {
+      return false;
+    }
+  };
+  const coverKeyWeight = (keyHint) => {
+    const key = String(keyHint || "").toLowerCase();
+    let score = 0;
+    if (/origin[_-]?cover|origincover/.test(key)) score += 90;
+    if (/cover|poster/.test(key)) score += 65;
+    if (/image|img/.test(key)) score += 25;
+    if (/thumb/.test(key)) score -= 10;
+    if (/avatar|author|user|profile|icon|logo/.test(key)) score -= 140;
+    return score;
+  };
+  const coverUrlScore = (url, keyHint = "", weight = 0) => {
+    const text = String(url || "").toLowerCase();
+    let score = weight + coverKeyWeight(keyHint);
+    if (/origin|orig|raw/.test(text)) score += 35;
+    if (/cover|poster/.test(text)) score += 30;
+    if (/douyinpic|pstatp|byteimg/.test(text)) score += 20;
+    if (/avatar|profile|user|emoji|icon|logo/.test(text)) score -= 160;
+    if (/resize|thumb|q\\d{2}|autoq|aq:|walign/.test(text)) score -= 15;
+    for (const match of text.matchAll(/(?:^|[^\\d])([1-9]\\d{2,4})(?:x|:|%3a|_)([1-9]\\d{2,4})(?:[^\\d]|$)/g)) {
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      if (Number.isFinite(width) && Number.isFinite(height)) score += Math.min(90, Math.max(width, height) / 20);
+    }
+    return score;
+  };
   const collect = () => {
     const urls = [];
+    const coverCandidates = [];
     let sourceAccountName = "";
     const pushUrl = (value) => {
       const normalized = normalizeUrl(String(value || ""));
       if (/^https?:\\/\\//i.test(normalized)) urls.push(normalized);
+    };
+    const pushCoverUrl = (value, keyHint = "", weight = 0) => {
+      const normalized = normalizeUrl(trimCandidateUrl(String(value || "").replaceAll("\\\\/", "/")));
+      if (!/^https?:\\/\\//i.test(normalized) || !isImageCandidate(normalized)) return;
+      coverCandidates.push({ url: normalized, score: coverUrlScore(normalized, keyHint, weight) });
+    };
+    const collectCoverDeep = (value, depth = 0, keyHint = "") => {
+      if (!value || depth > 8) return;
+      if (typeof value === "string") {
+        pushCoverUrl(value, keyHint);
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value.slice(0, 220)) collectCoverDeep(item, depth + 1, keyHint);
+        return;
+      }
+      if (typeof value !== "object") return;
+      for (const [key, item] of Object.entries(value)) {
+        const nextKey = keyHint ? keyHint + "." + key : key;
+        if (/cover|poster|image|img|url|uri|origin|thumb|video|aweme|detail|data/i.test(key)) {
+          collectCoverDeep(item, depth + 1, nextKey);
+        }
+      }
     };
     const collectAuthorDeep = (value, depth = 0) => {
       if (!value || sourceAccountName || depth > 8) return;
@@ -1118,17 +1268,23 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
       window.__NEXT_DATA__
     ];
     for (const value of stateValues) collectUrlsDeep(value);
+    for (const value of stateValues) collectCoverDeep(value);
     for (const value of stateValues) collectAuthorDeep(value);
     for (const script of Array.from(document.querySelectorAll("script"))) {
       const text = script.textContent || "";
-      if (!/aweme|play_addr|download_addr|douyinvod|url_list/.test(text)) continue;
+      if (!/aweme|play_addr|download_addr|douyinvod|url_list|douyinpic|origin_cover|cover/.test(text)) continue;
       const matches = text.match(/https?:\\\\?\\/\\\\?\\/[^"'<>\\\\]+/g) || [];
-      for (const match of matches) pushUrl(match.replaceAll("\\\\/", "/"));
+      for (const match of matches) {
+        const url = match.replaceAll("\\\\/", "/");
+        pushUrl(url);
+        pushCoverUrl(url, "script.url");
+      }
       const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
       if (jsonMatch && jsonMatch[0].length < 8_000_000) {
         try {
           const parsed = JSON.parse(jsonMatch[0]);
           collectUrlsDeep(parsed);
+          collectCoverDeep(parsed);
           collectAuthorDeep(parsed);
         } catch {}
       }
@@ -1145,12 +1301,10 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
       document.querySelector('[data-e2e="user-name"], [class*="author"], [class*="account"]')?.textContent ||
       ""
     );
-    const coverUrl = normalizeUrl(
-      metas["og:image"] ||
-      metas["twitter:image"] ||
-      document.querySelector("video")?.poster ||
-      ""
-    );
+    pushCoverUrl(metas["og:image"] || "", "meta.og:image", 40);
+    pushCoverUrl(metas["twitter:image"] || "", "meta.twitter:image", 35);
+    pushCoverUrl(document.querySelector("video")?.poster || "", "video.poster", 55);
+    const coverUrl = coverCandidates.sort((left, right) => right.score - left.score)[0]?.url || "";
     const awemeId = (location.href.match(/\\/video\\/(\\d{10,})/) || [])[1] || "";
     return {
       awemeId,
@@ -1320,10 +1474,6 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
 })()
 `;
 
-function sortLinkMediaUrls(urls: string[]) {
-  return sortRemoteAudioMediaUrls(urls);
-}
-
 function extractHtmlTitle(html: string) {
   const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1];
   const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1];
@@ -1351,41 +1501,6 @@ function safeFileName(input: string) {
 function makeLinkSourceFileBaseName(media: LinkSourceResolvedMedia) {
   const title = media.title || media.sourceAccountName || media.resolvedUrl || media.url || "single-video";
   return safeFileName(normalizeTitle(title)).slice(0, 64) || "single-video";
-}
-
-function selectVideoMediaUrl(urls: string[]) {
-  const candidates = urls
-    .map((url) => normalizeRemoteMediaUrl(url))
-    .filter(Boolean)
-    .filter((url) => !isLikelyAudioMediaUrl(url))
-    .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
-  return candidates[0] || "";
-}
-
-function inferLocalFileExtension(filePath: string, fallback: string) {
-  const extension = path.extname(filePath).toLowerCase();
-  return extension || fallback;
-}
-
-function inferLocalContentType(filePath: string, fallback: string) {
-  const extension = inferLocalFileExtension(filePath, "");
-  if (extension === ".webm") return "video/webm";
-  if (extension === ".mov") return "video/quicktime";
-  if (extension === ".mp3") return "audio/mpeg";
-  if (extension === ".m4a") return "audio/mp4";
-  return fallback;
-}
-
-function findTempRoot(filePath: string, prefix: string) {
-  const tmpRoot = os.tmpdir();
-  let current = path.dirname(filePath);
-  while (current && current.startsWith(tmpRoot)) {
-    if (path.basename(current).startsWith(prefix)) return current;
-    const next = path.dirname(current);
-    if (next === current) break;
-    current = next;
-  }
-  return "";
 }
 
 function normalizeVolcengineAudioFormat(value: string | undefined) {
@@ -1486,7 +1601,7 @@ async function downloadBilibiliAudio(video: Video, options: AbortableOptions = {
     throw new Error("无法解析 B站视频链接，不能提取远程音频");
   }
 
-  const media = await resolveBilibiliLinkMedia(pageUrl);
+  const media = await resolveBilibiliLinkMedia(pageUrl, { signal: options.signal });
   const timings: Timing[] = [{ stage: "bilibili-browser-media-url", ms: Date.now() - mediaUrlStartedAt }];
   if (!media.mediaUrls.length) {
     throw new Error("没有解析到可转写的 B站媒体地址");
@@ -1507,6 +1622,140 @@ async function downloadBilibiliAudio(video: Video, options: AbortableOptions = {
       ...(downloaded.attempts.length > 1 ? [{ stage: `bilibili-media-url-attempts-${downloaded.attempts.length}`, ms: 0 }] : [])
     ]
   };
+}
+
+async function downloadRemoteBilibiliVideo(
+  media: LinkSourceResolvedMedia,
+  fileName: string,
+  options: AbortableOptions = {}
+) {
+  const videoUrls = selectRemoteVideoMediaUrls(media.mediaUrls).slice(0, 4);
+  const audioUrls = selectRemoteAudioMediaUrls(media.mediaUrls).slice(0, 4);
+  if (!videoUrls.length) {
+    throw new Error("没有解析到可下载的 B站视频流。");
+  }
+
+  const attempts: string[] = [];
+  if (audioUrls.length) {
+    for (const videoUrl of videoUrls) {
+      for (const audioUrl of audioUrls) {
+        try {
+          throwIfAborted(options.signal);
+          return await mergeRemoteVideoAndAudio(videoUrl, audioUrl, fileName, options);
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          attempts.push(formatMediaAttemptError("视频音频合并", error));
+        }
+      }
+    }
+    throw new Error(`B站视频直连合并失败：${formatMediaAttempts(attempts)}`);
+  }
+
+  for (const videoUrl of videoUrls) {
+    try {
+      throwIfAborted(options.signal);
+      return await downloadRemoteMuxedVideo(videoUrl, fileName, options);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      attempts.push(formatMediaAttemptError("视频流下载", error));
+    }
+  }
+  throw new Error(`B站视频直连下载失败：${formatMediaAttempts(attempts)}`);
+}
+
+async function mergeRemoteVideoAndAudio(
+  videoUrl: string,
+  audioUrl: string,
+  fileName: string,
+  options: AbortableOptions = {}
+) {
+  const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-y",
+    "-rw_timeout",
+    "15000000",
+    ...buildFfmpegHeaderArgs(videoUrl),
+    "-i",
+    videoUrl,
+    ...buildFfmpegHeaderArgs(audioUrl),
+    "-i",
+    audioUrl,
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-c",
+    "copy",
+    "-movflags",
+    "+faststart",
+    target
+  ];
+  return runFfmpegDownload(args, target, options);
+}
+
+async function downloadRemoteMuxedVideo(url: string, fileName: string, options: AbortableOptions = {}) {
+  const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-y",
+    "-rw_timeout",
+    "15000000",
+    ...buildFfmpegHeaderArgs(url),
+    "-i",
+    url,
+    "-map",
+    "0:v:0",
+    "-map",
+    "0:a:0?",
+    "-c",
+    "copy",
+    "-movflags",
+    "+faststart",
+    target
+  ];
+  return runFfmpegDownload(args, target, options);
+}
+
+async function runFfmpegDownload(args: string[], target: string, options: AbortableOptions = {}) {
+  try {
+    throwIfAborted(options.signal);
+    const startedAt = Date.now();
+    await execFileAbortable(ffmpegBin(), args, {
+      ...HIDDEN_CHILD_PROCESS_OPTIONS,
+      maxBuffer: 1024 * 1024 * 8,
+      timeout: 20 * 60 * 1000
+    }, options.signal);
+    return { filePath: target, ms: Date.now() - startedAt };
+  } catch (error) {
+    await fs.rm(target, { force: true }).catch(() => undefined);
+    if (isAbortError(error)) throw error;
+    throw new Error(describeFfmpegError(error));
+  }
+}
+
+function selectRemoteVideoMediaUrls(urls: string[]) {
+  return [...new Set(urls.filter(Boolean))]
+    .filter((url) => !isLikelyAudioMediaUrl(url))
+    .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
+}
+
+function selectRemoteAudioMediaUrls(urls: string[]) {
+  return sortRemoteAudioMediaUrls(urls).filter((url) => isLikelyAudioMediaUrl(url));
+}
+
+function formatMediaAttemptError(stage: string, error: unknown) {
+  return `${stage}：${formatErrorDetail(error)}`;
+}
+
+function formatMediaAttempts(attempts: string[]) {
+  return attempts.length ? attempts.slice(0, 6).join("；") : "没有可用候选流。";
 }
 
 async function downloadRemoteAudio(url: string, fileName: string, options: AbortableOptions = {}) {
@@ -1677,7 +1926,15 @@ function buildMissingMediaReason(input: {
   platform: Platform;
   mediaError: string;
   hadBilibiliSubtitle: boolean;
+  bilibiliSubtitleError?: string;
 }) {
+  if (input.platform === "bilibili" && input.bilibiliSubtitleError) {
+    if (input.mediaError) {
+      return `B站字幕抓取失败：${input.bilibiliSubtitleError}。已改走远程媒体音频提取和火山转写，但音频提取失败：${input.mediaError}`;
+    }
+    return `B站字幕抓取失败：${input.bilibiliSubtitleError}，也没有解析到可转写的远程媒体音频地址。请检查 opencli、网络或登录状态。`;
+  }
+
   if (input.platform === "bilibili" && !input.hadBilibiliSubtitle) {
     if (input.mediaError) {
       return `此 B站视频的公开字幕接口没有返回外挂或智能字幕轨，已改走远程媒体音频提取和火山转写，但音频提取失败：${input.mediaError}`;
@@ -1692,8 +1949,26 @@ function buildMissingMediaReason(input: {
   return "没有平台字幕，也没有取得可转写的媒体地址或本地文件。";
 }
 
-function buildProviderErrorReason(platform: Platform, error: unknown) {
+function buildLinkMissingMediaReason(url: string, bilibiliSubtitleError?: string) {
+  if (bilibiliSubtitleError) {
+    return `B站字幕抓取失败：${bilibiliSubtitleError}，且没有解析到可转写的媒体地址：${url}`;
+  }
+  return `没有解析到可转写的媒体地址：${url}`;
+}
+
+function buildLinkMetadataOnlyReason(input: { title: string; bilibiliSubtitleError?: string }) {
+  const titleNote = `仅解析到视频标题「${input.title}」，没有取得可用视频文稿。`;
+  if (input.bilibiliSubtitleError) {
+    return `${titleNote}B站字幕抓取失败：${input.bilibiliSubtitleError}，且没有解析到可转写的媒体地址。`;
+  }
+  return `${titleNote}没有解析到可转写的媒体地址。`;
+}
+
+function buildProviderErrorReason(platform: Platform, error: unknown, bilibiliSubtitleError?: string) {
   const message = error instanceof Error ? error.message : "转写失败";
+  if (platform === "bilibili" && bilibiliSubtitleError) {
+    return `B站字幕抓取失败：${bilibiliSubtitleError}；音频转写也失败：${message}`;
+  }
   if (platform === "bilibili" && message.includes("VOLCENGINE_ASR_API_KEY")) {
     return "此 B站视频没有发现外挂或智能字幕，已回退到火山转写，但当前未配置 VOLCENGINE_ASR_API_KEY。";
   }

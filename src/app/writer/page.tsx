@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Copy, Eye, FileText, FileUp, Globe2, ListChecks, MessageSquarePlus, PenLine, RotateCcw, Send } from "lucide-react";
+import { CircleStop, Copy, Eye, FileText, FileUp, Globe2, ListChecks, MessageSquarePlus, PenLine, RotateCcw, Send } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -215,12 +215,14 @@ function WriterPageContent() {
 
   const {
     canGenerate,
+    canStopGenerate,
     clearDraftResult,
     copyLast,
     generateProgress,
     generateStage,
     handleGenerate,
     handleOpenAssets,
+    handleStopGenerate,
     lastContent,
     lastDraftBase,
     lastDraftId,
@@ -791,6 +793,12 @@ function WriterPageContent() {
                   <Send aria-hidden="true" size={16} />
                   {busy === "generate" ? "生成中" : "生成文案"}
                 </button>
+                {canStopGenerate ? (
+                  <button className="btn ghost" onClick={() => void handleStopGenerate()} type="button">
+                    <CircleStop aria-hidden="true" size={16} />
+                    停止
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -824,7 +832,15 @@ function WriterPageContent() {
                 <div className="project-progress" role="status" aria-live="polite" style={{ marginBottom: 16 }}>
                   <div className="project-progress-copy">
                     <span>{generateStage || "正在生成"}</span>
-                    <strong>{generateProgress}%</strong>
+                    <span className="button-row">
+                      <strong>{generateProgress}%</strong>
+                      {canStopGenerate ? (
+                        <button className="btn small ghost" onClick={() => void handleStopGenerate()} type="button">
+                          <CircleStop aria-hidden="true" size={14} />
+                          停止
+                        </button>
+                      ) : null}
+                    </span>
                   </div>
                   <div className="progress-track" aria-hidden="true">
                     <div className="progress-fill" style={{ width: `${generateProgress}%` }} />

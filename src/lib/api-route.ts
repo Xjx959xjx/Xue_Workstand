@@ -7,6 +7,13 @@ type ApiResponseOptions = {
   formatError?: (error: unknown, fallbackMessage: string) => string;
 };
 
+class ApiRouteError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiRouteError";
+  }
+}
+
 export async function apiJson<T>(
   run: () => Promise<T> | T,
   options: ApiResponseOptions
@@ -21,7 +28,7 @@ export async function apiJson<T>(
 export function apiError(error: unknown, options: ApiResponseOptions) {
   return NextResponse.json(
     { error: options.formatError?.(error, options.fallbackMessage) ?? formatApiError(error, options.fallbackMessage) },
-    { status: error instanceof z.ZodError ? 400 : options.status ?? 400 }
+    { status: getApiErrorStatus(error, options) }
   );
 }
 
@@ -29,7 +36,13 @@ export async function parseJsonBody<TSchema extends z.ZodTypeAny>(
   request: Request,
   schema: TSchema
 ): Promise<z.infer<TSchema>> {
-  return schema.parse(await request.json());
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    throw new ApiRouteError("请求 JSON 格式不正确。", 400);
+  }
+  return schema.parse(body);
 }
 
 export function formatApiError(error: unknown, fallbackMessage: string) {
@@ -40,7 +53,8 @@ export function formatApiError(error: unknown, fallbackMessage: string) {
 }
 
 function formatZodError(error: z.ZodError) {
-  const issue = error.issues[0];
+  const issues = flattenZodIssues(error.issues);
+  const issue = issues.find(hasCustomZodMessage) || issues.find((candidate) => candidate.path.length > 0) || issues[0];
   if (!issue) return "";
 
   const path = issue.path.join(".");
@@ -51,10 +65,30 @@ function formatZodError(error: z.ZodError) {
     return "链接格式不正确，请粘贴完整的 http(s) 地址。";
   }
   if (issue.code === "invalid_type") {
+    if (hasCustomZodMessage(issue)) {
+      return issue.message;
+    }
     return "请求参数不完整或格式不正确。";
   }
-  if (issue.message && !/^(Invalid|Required)\b/i.test(issue.message)) {
+  if (hasCustomZodMessage(issue)) {
     return issue.message;
   }
   return "请求参数不完整或格式不正确。";
+}
+
+function flattenZodIssues(issues: z.ZodIssue[]): z.ZodIssue[] {
+  return issues.flatMap((issue) => {
+    if (issue.code !== "invalid_union") return [issue];
+    return flattenZodIssues(issue.unionErrors.flatMap((unionError) => unionError.issues));
+  });
+}
+
+function hasCustomZodMessage(issue: z.ZodIssue) {
+  return Boolean(issue.message && !/^(Invalid|Required|Expected)\b/i.test(issue.message));
+}
+
+function getApiErrorStatus(error: unknown, options: ApiResponseOptions) {
+  if (error instanceof z.ZodError) return 400;
+  if (error instanceof ApiRouteError) return error.status;
+  return options.status ?? 500;
 }

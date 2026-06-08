@@ -106,6 +106,11 @@ export default function LibraryPage() {
     setSelectedAccountId,
     setSelectedVideoId
   });
+  const accountFilterHasNoMatch = Boolean(accountFilter.trim() && !filteredAccounts.length);
+  const visibleSelectedAccountMeta = accountFilterHasNoMatch ? null : selectedAccountMeta;
+  const visibleSelectedAccount = accountFilterHasNoMatch ? null : selectedAccount;
+  const visibleSelectedVideo = accountFilterHasNoMatch ? null : selectedVideo;
+  const visibleSortedVideos = accountFilterHasNoMatch ? [] : sortedVideos;
 
   const openTranscriptEditor = useCallback(() => setOpenModal("transcript"), []);
   const closeDeleteDialog = useCallback(() => setDeleteTarget(""), []);
@@ -152,6 +157,7 @@ export default function LibraryPage() {
     activeJobs,
     recentJobs,
     reloadSelectedAccountDetail,
+    selectedAccount,
     selectedVideo,
     setAccountDetail,
     setMessage,
@@ -203,9 +209,14 @@ export default function LibraryPage() {
     styleDraft
   });
 
-  const selectedVideoIdForTable = selectedVideo?.id || "";
+  const selectedVideoIdForTable = visibleSelectedVideo?.id || "";
   const styleLoaded = Boolean(selectedAccount && (typeof selectedAccount.style === "string" || styleDraft));
   const stylePreview = useMemo(() => makePreview(styleDraft || selectedAccount?.style || ""), [selectedAccount?.style, styleDraft]);
+  const visibleActiveTranscript = accountFilterHasNoMatch ? "" : activeTranscript;
+  const visibleSelectedVideoHasTranscript = accountFilterHasNoMatch ? false : selectedVideoHasTranscript;
+  const visibleTranscriptPreview = accountFilterHasNoMatch ? "" : transcriptPreview;
+  const visibleStyleLoaded = accountFilterHasNoMatch ? false : styleLoaded;
+  const visibleStylePreview = accountFilterHasNoMatch ? "" : stylePreview;
   const visibleMessage = message && message !== error ? message : "";
   const visibleMessageIsError = isErrorMessage(visibleMessage);
   const stats: LibraryStats = useMemo(() => {
@@ -451,7 +462,7 @@ export default function LibraryPage() {
           accounts={filteredAccounts}
           allAccountCount={accounts.length}
           busy={busy}
-          selectedAccountId={selectedAccountMeta?.id || ""}
+          selectedAccountId={visibleSelectedAccountMeta?.id || ""}
           selectedAccountIds={selectedAccountIds}
           totalTranscriptCount={totalTranscriptCount}
           onAccountFilterChange={setAccountFilter}
@@ -469,11 +480,11 @@ export default function LibraryPage() {
           effectiveSortMode={effectiveSortMode}
           maxPrimaryMetric={maxPrimaryMetric}
           pendingCount={pendingCount}
-          selectedAccount={selectedAccount}
-          selectedAccountMeta={selectedAccountMeta}
+          selectedAccount={visibleSelectedAccount}
+          selectedAccountMeta={visibleSelectedAccountMeta}
           selectedVideoId={selectedVideoIdForTable}
           selectedVideoIds={selectedVideoIds}
-          videos={sortedVideos}
+          videos={visibleSortedVideos}
           videoManageMode={videoManageMode}
           onRequestDeleteVideos={requestDeleteVideos}
           onSelectVideo={selectVideo}
@@ -482,17 +493,17 @@ export default function LibraryPage() {
         />
 
         <LibraryDetailPane
-          activeTranscript={activeTranscript}
+          activeTranscript={visibleActiveTranscript}
           busy={busy}
-          selectedAccount={selectedAccount}
-          selectedVideo={selectedVideo}
-          selectedVideoHasTranscript={selectedVideoHasTranscript}
+          selectedAccount={visibleSelectedAccount}
+          selectedVideo={visibleSelectedVideo}
+          selectedVideoHasTranscript={visibleSelectedVideoHasTranscript}
           selectedVideoOpenUrl={selectedVideoOpenUrl}
-          stylePreview={stylePreview}
-          styleLoaded={styleLoaded}
+          stylePreview={visibleStylePreview}
+          styleLoaded={visibleStyleLoaded}
           styleLoading={styleLoading}
           transcriptLoading={transcriptLoading}
-          transcriptPreview={transcriptPreview}
+          transcriptPreview={visibleTranscriptPreview}
           transcribeProgress={transcribeProgress}
           transcribeStage={transcribeStage}
           onExportTranscripts={handleExportTranscripts}

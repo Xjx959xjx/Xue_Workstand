@@ -17,6 +17,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "当前运行模式只开放数据维护接口。" }, { status: 403 });
+  }
+
   const target = request.nextUrl.clone();
   target.pathname = "/gross-margin";
   target.search = "";
@@ -29,6 +33,7 @@ function isAllowedGrossMarginPath(pathname: string) {
   if (grossMarginAllowedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
     return true;
   }
+  if (pathname.startsWith("/api/")) return false;
   if (/\.[a-z0-9]+$/i.test(pathname)) {
     return true;
   }

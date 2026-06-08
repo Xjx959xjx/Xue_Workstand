@@ -1,4 +1,6 @@
 import { execFile } from "child_process";
+import { promises as fs } from "fs";
+import path from "path";
 import { promisify } from "util";
 import { NextResponse } from "next/server";
 import { libraryRoot } from "@/lib/storage";
@@ -15,11 +17,9 @@ const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 export async function GET() {
   const runtime = resolveOpenCliCommand();
   const opencli = runtime.command;
-  const chat = getChatRuntimeConfig();
-  const image = getImageRuntimeConfig();
-  const feishu = await checkFeishuRuntime();
   let opencliOk = false;
   let opencliVersion = "";
+  let opencliError = "";
 
   try {
     const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], {
@@ -28,9 +28,30 @@ export async function GET() {
     });
     opencliOk = true;
     opencliVersion = stdout.trim();
-  } catch {
+  } catch (error) {
     opencliOk = false;
+    opencliError = error instanceof Error ? error.message : "opencli 不可用";
   }
+
+  if (process.env.APP_MODE === "gross-margin") {
+    const storage = await checkGrossMarginStorage();
+    const ready = opencliOk && storage.ok;
+    return NextResponse.json({
+      appMode: "gross-margin",
+      opencli: {
+        ok: opencliOk,
+        version: opencliVersion,
+        error: opencliError
+      },
+      storage
+    }, {
+      status: ready ? 200 : 503
+    });
+  }
+
+  const chat = getChatRuntimeConfig();
+  const image = getImageRuntimeConfig();
+  const feishu = await checkFeishuRuntime();
 
   return NextResponse.json({
     opencli: {
@@ -51,4 +72,21 @@ export async function GET() {
     feishuConfigured: feishu.configured,
     feishu
   });
+}
+
+async function checkGrossMarginStorage() {
+  const root = path.join(libraryRoot(), "gross-margin");
+  const probe = path.join(root, ".healthcheck");
+  try {
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(probe, `${Date.now()}`, "utf8");
+    await fs.rm(probe, { force: true });
+    return { ok: true, root };
+  } catch (error) {
+    return {
+      ok: false,
+      root,
+      error: error instanceof Error ? error.message : "毛利数据目录不可写"
+    };
+  }
 }

@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { engagementSourceKey } from "@/lib/job-scope";
 import { extractFirstLinkFromInput, normalizeLinkInput } from "@/lib/platform-links";
 import type { EngagementRecord, JobRecord, JobStartInput } from "@/lib/types";
 import type { BusyState } from "../_components/asset-view-utils";
+
+type EngagementJobInput = Extract<JobStartInput, { kind: "engagement" }>["input"];
 
 type UseEngagementGenerationInput = {
   activeJobs: JobRecord[];
@@ -37,10 +40,32 @@ export function useEngagementGeneration({
   const [handledEngagementJobIds, setHandledEngagementJobIds] = useState<string[]>([]);
   const trimmedSource = sourceInput.trim();
   const activeTitle = resultRecord?.title || trimmedSource.slice(0, 32) || "评论生成";
+  const currentInput = useMemo(
+    () =>
+      trimmedSource
+        ? buildEngagementJobInput(trimmedSource, {
+            includeComments,
+            commentCount,
+            includeDanmaku,
+            danmakuCount
+          })
+      : null,
+    [commentCount, danmakuCount, includeComments, includeDanmaku, trimmedSource]
+  );
+  const engagementJobCandidates = useMemo(
+    () => [...activeJobs, ...recentJobs].filter((job) => job.kind === "engagement"),
+    [activeJobs, recentJobs]
+  );
 
   const engagementJob = useMemo(
-    () => findTaskJob([...activeJobs, ...recentJobs], activeEngagementJobId, "engagement"),
-    [activeEngagementJobId, activeJobs, recentJobs]
+    () =>
+      findTaskJob(
+        engagementJobCandidates,
+        activeEngagementJobId,
+        "engagement",
+        currentInput ? (job) => matchesEngagementScope(job, currentInput) : () => false
+      ),
+    [activeEngagementJobId, currentInput, engagementJobCandidates]
   );
   const isGenerating = Boolean(engagementJob && (engagementJob.status === "queued" || engagementJob.status === "running"));
   const canGenerate = !busy && !isGenerating && (includeComments || includeDanmaku) && Boolean(trimmedSource);
@@ -82,29 +107,12 @@ export function useEngagementGeneration({
       return;
     }
 
-    const normalizedUrl = normalizeLinkInput(rawSource, { kind: "video" });
-    const extractedUrl = extractFirstLinkFromInput(rawSource, { kind: "video" });
-    const strippedSource = rawSource.replace(/[)\]}>，。！？、；;,.!?）】\]]+$/g, "").trim();
-    const strippedNoScheme = strippedSource.replace(/^https?:\/\//i, "");
-    const normalizedNoScheme = normalizedUrl.replace(/^https?:\/\//i, "");
-    const isUrl = Boolean(extractedUrl) && strippedNoScheme === normalizedNoScheme;
-    const input = isUrl
-      ? {
-          sourceType: "url" as const,
-          url: normalizedUrl,
-          includeComments,
-          commentCount,
-          includeDanmaku,
-          danmakuCount
-        }
-      : {
-          sourceType: "text" as const,
-          text: rawSource,
-          includeComments,
-          commentCount,
-          includeDanmaku,
-          danmakuCount
-        };
+    const input = buildEngagementJobInput(rawSource, {
+      includeComments,
+      commentCount,
+      includeDanmaku,
+      danmakuCount
+    });
 
     setBusy("generate");
     setNotice("");
@@ -112,7 +120,7 @@ export function useEngagementGeneration({
       const job = await startTask({
         kind: "engagement",
         title: "生成评论素材",
-        inputSummary: isUrl ? normalizedUrl : rawSource.slice(0, 48),
+        inputSummary: input.sourceType === "url" ? input.url : rawSource.slice(0, 48),
         href: "/assets",
         input
       });
@@ -149,10 +157,50 @@ function buildSuccessMessage(record: EngagementRecord) {
   return `已生成 ${danmakuCount} 条弹幕。`;
 }
 
-function findTaskJob(jobs: JobRecord[], jobId: string, kind: JobRecord["kind"]) {
-  return (
-    jobs.find((job) => job.id === jobId && job.kind === kind) ||
-    jobs.find((job) => job.kind === kind && (job.status === "queued" || job.status === "running")) ||
-    null
-  );
+function buildEngagementJobInput(
+  rawSource: string,
+  options: Pick<Extract<EngagementJobInput, { sourceType: "text" }>, "includeComments" | "commentCount" | "includeDanmaku" | "danmakuCount">
+): EngagementJobInput {
+  const normalizedUrl = normalizeLinkInput(rawSource, { kind: "video" });
+  const extractedUrl = extractFirstLinkFromInput(rawSource, { kind: "video" });
+  const strippedSource = rawSource.replace(/[)\]}>，。！？、；;,.!?）】\]]+$/g, "").trim();
+  const strippedNoScheme = strippedSource.replace(/^https?:\/\//i, "");
+  const normalizedNoScheme = normalizedUrl.replace(/^https?:\/\//i, "");
+  const isUrl = Boolean(extractedUrl) && strippedNoScheme === normalizedNoScheme;
+
+  if (isUrl) {
+    return {
+      sourceType: "url",
+      url: normalizedUrl,
+      ...options
+    };
+  }
+
+  return {
+    sourceType: "text",
+    text: rawSource,
+    ...options
+  };
+}
+
+function matchesEngagementScope(job: JobRecord, input: EngagementJobInput) {
+  if (input.sourceType === "draft") return Boolean(job.scope?.targetType === "draft" && job.scope.draftId === input.draftId);
+  return job.scope?.targetType === input.sourceType && job.scope.sourceKey === engagementSourceKey(input);
+}
+
+function findTaskJob(
+  jobs: JobRecord[],
+  jobId: string,
+  kind: JobRecord["kind"],
+  matchesScope: (job: JobRecord) => boolean
+) {
+  if (jobId) {
+    const tracked = jobs.find((job) => job.id === jobId && job.kind === kind);
+    if (tracked) return tracked;
+  }
+  return jobs.find((job) => job.kind === kind && isActiveJob(job) && matchesScope(job)) || null;
+}
+
+function isActiveJob(job: JobRecord) {
+  return job.status === "queued" || job.status === "running";
 }

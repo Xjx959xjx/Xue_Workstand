@@ -61,6 +61,33 @@ function normalizeGrossMarginMonitorRecordId(recordId: string) {
   return normalizeStorageSegment(recordId, "维护监控记录 ID");
 }
 
+function createGrossMarginMonitorRecordId(
+  platform: GrossMarginPriceTable["platform"],
+  videoKey: string,
+  projectId?: string
+) {
+  const videoSegment = safeSegment(videoKey, shortHash(videoKey));
+  const baseId = `${platform}-${videoSegment}`;
+  if (!projectId?.trim()) return normalizeGrossMarginMonitorRecordId(baseId);
+  const projectSegment = safeSegment(projectId, shortHash(projectId));
+  return normalizeGrossMarginMonitorRecordId(`${baseId}-${projectSegment}`);
+}
+
+async function resolveExistingGrossMarginMonitorRecordId(input: {
+  platform: GrossMarginPriceTable["platform"];
+  videoKey: string;
+  projectId?: string;
+}) {
+  const scopedId = createGrossMarginMonitorRecordId(input.platform, input.videoKey, input.projectId);
+  if (!input.projectId?.trim()) return scopedId;
+  if (await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(scopedId))) return scopedId;
+
+  const legacyId = createGrossMarginMonitorRecordId(input.platform, input.videoKey);
+  const legacy = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(legacyId));
+  if (legacy?.projectId?.trim() === input.projectId.trim()) return legacyId;
+  return scopedId;
+}
+
 export async function ensureGrossMarginDirs() {
   await fs.mkdir(libraryRoot(), { recursive: true });
   await Promise.all([
@@ -133,13 +160,14 @@ export async function upsertGrossMarginMonitorRecord(input: {
   const platform = normalizeGrossMarginPlatform(input.platform);
   const videoKey = input.videoKey.trim();
   if (!videoKey) throw new Error("监控记录缺少视频标识");
-  const id = normalizeGrossMarginMonitorRecordId(`${platform}-${safeSegment(videoKey, shortHash(videoKey))}`);
+  const projectId = input.projectId?.trim();
+  const id = await resolveExistingGrossMarginMonitorRecordId({ platform, videoKey, projectId });
   const existing = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
   const record = normalizeGrossMarginMonitorRecord({
     id,
     platform,
     accountName: input.accountName.trim() || existing?.accountName || "",
-    projectId: input.projectId?.trim() || existing?.projectId,
+    projectId: projectId || existing?.projectId,
     projectName: input.projectName?.trim() || existing?.projectName,
     videoUrl: input.videoUrl.trim(),
     videoKey,

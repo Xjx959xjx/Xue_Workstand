@@ -40,6 +40,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const pathnameRef = useRef(pathname);
   const previousStatusRef = useRef<Map<string, JobRecord["status"]>>(new Map());
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const hydrationErrorsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     notifiedRef.current = readNotifiedJobIds();
@@ -60,11 +61,17 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
           firstLoadRef.current,
           previousStatusRef.current,
           fullJobCacheRef.current,
+          hydrationErrorsRef.current,
           pathnameRef.current
         );
         pruneFullJobCache(fullJobCacheRef.current, summaries);
 
-        const mergedJobs = mergeJobSummaries(summaries, fullJobCacheRef.current, pathnameRef.current);
+        const mergedJobs = mergeJobSummaries(
+          summaries,
+          fullJobCacheRef.current,
+          hydrationErrorsRef.current,
+          pathnameRef.current
+        );
         setJobs(mergedJobs);
         setError("");
         handleJobNotifications(
@@ -97,7 +104,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     pathnameRef.current = pathname;
-    setJobs((current) => mergeJobSummaries(current, fullJobCacheRef.current, pathname));
+    setJobs((current) => mergeJobSummaries(current, fullJobCacheRef.current, hydrationErrorsRef.current, pathname));
     void refreshJobs();
   }, [pathname, refreshJobs]);
 
@@ -158,10 +165,16 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
   const startTask = useCallback(
     async (input: JobStartInput) => {
-      const result = await startJob(input);
-      emitTasksChanged();
-      await refreshJobs();
-      return result.job;
+      try {
+        const result = await startJob(input);
+        setError("");
+        emitTasksChanged();
+        await refreshJobs();
+        return result.job;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "启动后台任务失败");
+        throw err;
+      }
     },
     [refreshJobs]
   );
@@ -294,8 +307,10 @@ async function hydrateTrackedJobs(
   isFirstLoad: boolean,
   previousStatus: Map<string, JobRecord["status"]>,
   cache: Map<string, JobRecord>,
+  hydrationErrors: Map<string, string>,
   pathname: string
 ) {
+  const jobsById = new Map(jobs.map((job) => [job.id, job]));
   const jobIds = jobs
     .filter((job, index) => shouldHydrateJob(job, index, isFirstLoad, previousStatus, cache, pathname))
     .map((job) => job.id);
@@ -304,8 +319,14 @@ async function hydrateTrackedJobs(
   const fullJobs = await Promise.all(
     [...new Set(jobIds)].map(async (jobId) => {
       try {
-        return (await getJob(jobId)).job;
-      } catch {
+        const job = (await getJob(jobId)).job;
+        hydrationErrors.delete(jobId);
+        return job;
+      } catch (err) {
+        const summary = jobsById.get(jobId);
+        if (summary && shouldExposeHydrationError(summary)) {
+          hydrationErrors.set(jobId, formatHydrationError(err));
+        }
         return null;
       }
     })
@@ -338,6 +359,15 @@ function shouldHydrateJob(
   return index < 6 && isRecentJob(job);
 }
 
+function shouldExposeHydrationError(job: JobListItem) {
+  return job.status === "completed" && Boolean(job.hasResult);
+}
+
+function formatHydrationError(err: unknown) {
+  const message = err instanceof Error ? err.message : "";
+  return `任务已完成，但读取生成结果失败${message ? `：${formatJobErrorMessage(message)}。` : "。"}请刷新任务中心后重试。`;
+}
+
 function isJobRelevantToPath(job: JobListItem, pathname: string) {
   return isJobRelevantToHref(job, pathname);
 }
@@ -364,11 +394,23 @@ function defaultJobHref(kind: JobRecord["kind"]) {
   return "/library";
 }
 
-function mergeJobSummaries(jobs: JobListItem[], cache: Map<string, JobRecord>, pathname: string) {
+function mergeJobSummaries(
+  jobs: JobListItem[],
+  cache: Map<string, JobRecord>,
+  hydrationErrors: Map<string, string>,
+  pathname: string
+) {
   return jobs.map((job) => {
+    const hydrationError = hydrationErrors.get(job.id);
     const fullJob = cache.get(job.id);
-    if (fullJob) return { ...fullJob, ...job };
-    if (isJobRelevantToPath(job, pathname)) return job;
+    if (fullJob) {
+      const mergedJob = { ...fullJob, ...job };
+      return hydrationError ? { ...mergedJob, error: hydrationError, message: hydrationError } : mergedJob;
+    }
+    if (isJobRelevantToPath(job, pathname)) {
+      if (hydrationError) return { ...job, error: hydrationError, message: hydrationError };
+      return job;
+    }
     return { ...job, partialText: undefined, result: undefined };
   });
 }
@@ -382,10 +424,11 @@ function pruneFullJobCache(cache: Map<string, JobRecord>, jobs: JobListItem[]) {
 
 function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
   if (job.status === "cancelled") return;
-  const failed = job.status === "failed";
+  const hydrationFailed = job.status === "completed" && Boolean(job.error) && Boolean((job as { hasResult?: boolean }).hasResult);
+  const failed = job.status === "failed" || hydrationFailed;
   notify({
     tone: failed ? "error" : "success",
-    title: failed ? `${job.title}失败` : "任务完成",
+    title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : "任务完成",
     message: failed ? formatJobErrorMessage(job.error || job.message) : job.message,
     durationMs: failed ? 15000 : 5000,
     action:

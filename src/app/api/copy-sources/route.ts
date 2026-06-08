@@ -47,7 +47,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   return apiJson(async () => {
-    const body = await request.json();
+    const body = await parseJsonBody(request, z.unknown());
     const projectInput = projectSchema.safeParse(body);
     if (projectInput.success) {
       return {
@@ -61,14 +61,16 @@ export async function POST(request: Request) {
       const media = await resolveLinkSourceMedia({
         url: source.url,
         resolvedUrl: source.resolvedUrl,
-        platform: source.platform
+        platform: source.platform,
+        signal: request.signal
       });
       const materialAnalysis = await analyzeCopySourceMaterial({
         mediaUrls: media.mediaUrls,
         platform: media.platform,
         title: media.title || source.title,
         transcript: source.transcript,
-        url: media.resolvedUrl || source.resolvedUrl || source.url
+        url: media.resolvedUrl || source.resolvedUrl || source.url,
+        signal: request.signal
       });
       const updated = await updateCopySourceMaterialAnalysis(source.id, materialAnalysis);
       return { source: updated };
@@ -81,13 +83,17 @@ export async function POST(request: Request) {
       analyzeVideo: Boolean(input.analyzeVideo),
       signal: request.signal
     });
+    if (result.source === "metadata" || !result.text.trim()) {
+      throw new Error(result.fallbackReason || "只解析到视频标题，没有取得可用视频文稿，不能作为文案素材入库。");
+    }
     const materialAnalysis = input.analyzeVideo
       ? await analyzeCopySourceMaterial({
           mediaUrls: result.mediaUrls || [],
           platform: result.platform,
           title: result.title,
           transcript: result.text,
-          url: result.resolvedUrl || result.url
+          url: result.resolvedUrl || result.url,
+          signal: request.signal
         })
       : undefined;
     const source = await saveCopySource({

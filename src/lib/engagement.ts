@@ -148,7 +148,7 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
     throw new Error("请至少选择评论或弹幕。");
   }
 
-  const prepared = await prepareEngagementSource(input, options);
+  const prepared = await prepareEngagementSource(input, options, runOptions.signal);
   throwIfAborted(runOptions.signal);
   const commentsPromise = options.includeComments
     ? generateComments(prepared.content, prepared.contexts, options.commentCount, prepared.platform, runOptions.signal)
@@ -269,7 +269,7 @@ async function buildSourceContexts(draft: Draft, options: { includeDanmaku: bool
   return [await buildAccountSourceContext(draft.platform, draft.accountId, draft.accountName, draft.styleRef.videoIds || [], options)];
 }
 
-async function prepareEngagementSource(input: GenerateEngagementInput, options: EngagementRecord["options"]): Promise<{
+async function prepareEngagementSource(input: GenerateEngagementInput, options: EngagementRecord["options"], signal?: AbortSignal): Promise<{
   content: EngagementContent;
   contexts: SourceContext[];
   platform: Platform | "unknown";
@@ -280,6 +280,7 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
   fallback?: boolean;
   fallbackReason?: string;
 }> {
+  throwIfAborted(signal);
   if (input.sourceType === "draft") {
     const resolved = await resolveDraft(input.draftId);
     const draft = resolved.draft;
@@ -312,7 +313,10 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
   const url = input.url.trim();
   if (!url) throw new Error("请填写视频链接。");
   try {
-    const result = await transcribeLinkSource({ url });
+    const result = await transcribeLinkSource({ url, signal });
+    if (result.source === "metadata" || !result.text.trim()) {
+      throw new Error(result.fallbackReason || "只解析到视频标题，没有取得可用于评论生成的视频文稿。");
+    }
     const content = {
       id: `url-${shortHash(result.resolvedUrl || result.url || url)}`,
       title: normalizeKnownEngagementTerms(result.title || makeEngagementTitle(result.text || url, "视频链接")),
@@ -538,7 +542,8 @@ async function generateComments(
                 })
               }
             ],
-            "low"
+            "low",
+            { signal }
           );
           throwIfAborted(signal);
           if (result.fallback || !result.text.trim()) {
@@ -708,7 +713,8 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
         content: `文案：\n${clampText(source.content, 3000)}\n\n参考弹幕：\n${samples}\n\n请生成 ${count} 条弹幕，按正文节奏自然分布。`
       }
     ],
-    "low"
+    "low",
+    { signal }
   );
   throwIfAborted(signal);
   const parsed = parseDanmakuArray(result.text);
@@ -781,7 +787,8 @@ ${clampText(buildCommentBriefSourceText(source), 9000)}
 - 如果素材信息很少，就如实输出少量锚点，不要补常识。`
       }
     ],
-    "medium"
+    "medium",
+    { signal }
   );
   throwIfAborted(signal);
   if (result.fallback || !result.text.trim()) {
@@ -1432,7 +1439,8 @@ ${samples.slice(0, 80).map((comment) => `- ${comment}`).join("\n")}
 }`
       }
     ],
-    "low"
+    "low",
+    { signal }
   );
   throwIfAborted(signal);
   if (result.fallback || !result.text.trim()) {

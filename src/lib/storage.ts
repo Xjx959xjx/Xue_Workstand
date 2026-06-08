@@ -26,7 +26,7 @@ import {
   platforms
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
-import { fileExists, readJsonFile, writeJsonFile } from "./storage/fs";
+import { fileExists, readJsonFile, writeFileAtomic, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
 import { libraryRoot, normalizeStorageSegment } from "./storage/core";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
 export { libraryRoot } from "./storage/core";
@@ -79,6 +79,8 @@ export type AccountStyleMeta = {
   sampleCount: number;
   generationMode: "full" | "incremental";
   usedModel: string;
+  fallback?: boolean;
+  fallbackReason?: string;
   updatedAt: string;
 };
 
@@ -206,6 +208,18 @@ function normalizeCopySourceId(sourceId: string) {
   return normalizeStorageSegment(sourceId, "文案素材 ID");
 }
 
+function createStorageSlug(value: string, fallback: string, label: string) {
+  return normalizeStorageSegment(safeSegment(value, fallback), label);
+}
+
+function isFsErrorCode(error: unknown, code: string) {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === code);
+}
+
+function uniqueTrimmedStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
 function normalizeEngagementRecordId(recordId: string) {
   return normalizeStorageSegment(recordId, "互动素材 ID");
 }
@@ -249,7 +263,7 @@ async function ensureAccountDirs(platform: Platform, slug: string) {
 
   const style = stylePath(platform, slug);
   if (!(await exists(style))) {
-    await fs.writeFile(style, DEFAULT_STYLE, "utf8");
+    await writeTextFileAtomic(style, DEFAULT_STYLE);
   }
 }
 
@@ -258,7 +272,7 @@ async function ensureProjectDirs(slug: string) {
 
   const style = projectStylePath(slug);
   if (!(await exists(style))) {
-    await fs.writeFile(style, DEFAULT_STYLE, "utf8");
+    await writeTextFileAtomic(style, DEFAULT_STYLE);
   }
 }
 
@@ -322,7 +336,7 @@ export async function upsertAccount(input: {
 
   const existing = await findExistingAccount(input.platform, input.uid);
   const now = nowIso();
-  const slug = existing?.slug ?? safeSegment(input.name || input.uid, shortHash(input.uid));
+  const slug = existing?.slug ? normalizeAccountSlug(existing.slug) : createStorageSlug(input.name || input.uid, shortHash(input.uid), "账号 ID");
   await ensureAccountDirs(input.platform, slug);
 
   const account: Account = {
@@ -374,26 +388,33 @@ export async function upsertProject(input: {
 
   const existing = input.projectId ? await resolveProject(input.projectId).catch(() => null) : null;
   const now = nowIso();
-  const slug = existing?.slug ?? safeSegment(input.name, shortHash(input.name));
+  const slug = existing?.slug ? normalizeProjectSlug(existing.slug) : createStorageSlug(input.name, shortHash(input.name), "项目 ID");
   await ensureProjectDirs(slug);
+  if (input.sourceAccountIds) {
+    await assertAccountsExist(input.sourceAccountIds);
+  }
   if (input.sourceMaterialIds) {
     await assertCopySourcesExist(input.sourceMaterialIds);
   }
+  const sourceAccountIds = input.sourceAccountIds ? normalizeProjectAccountRefs(input.sourceAccountIds) : existing?.sourceAccountIds ?? [];
+  const sourceMaterialIds = input.sourceMaterialIds
+    ? uniqueTrimmedStrings(input.sourceMaterialIds).map(normalizeCopySourceId)
+    : existing?.sourceMaterialIds ?? [];
 
   const project: Project = {
     id: `project:${slug}`,
     slug,
     name: input.name || existing?.name || "未命名项目",
     description: input.description ?? existing?.description,
-    sourceAccountIds: input.sourceAccountIds ?? existing?.sourceAccountIds ?? [],
-    sourceMaterialIds: input.sourceMaterialIds ?? existing?.sourceMaterialIds ?? [],
+    sourceAccountIds,
+    sourceMaterialIds,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
 
   await writeJson(projectJsonPath(slug), project);
   if (input.sourceMaterialIds) {
-    await syncCopySourceProjectRefs(project.id, input.sourceMaterialIds);
+    await syncCopySourceProjectRefs(project.id, sourceMaterialIds);
   }
   return project;
 }
@@ -441,7 +462,7 @@ export async function saveCopySource(input: {
   );
   const transcriptFile = copySourceTranscriptPath(id);
 
-  await fs.writeFile(transcriptFile, transcript, "utf8");
+  await writeTextFileAtomic(transcriptFile, transcript);
 
   const source: CopySource = {
     id,
@@ -462,7 +483,12 @@ export async function saveCopySource(input: {
     updatedAt: now
   };
 
-  await writeJson(copySourceJsonPath(id), source);
+  try {
+    await writeJson(copySourceJsonPath(id), source);
+  } catch (error) {
+    await fs.rm(transcriptFile, { force: true }).catch(() => undefined);
+    throw error;
+  }
   return source;
 }
 
@@ -534,10 +560,13 @@ export async function deleteCopySources(sourceIds: string[]) {
 
   for (const sourceId of uniqueIds) {
     const jsonFile = copySourceJsonPath(sourceId);
-    if (!(await exists(jsonFile))) continue;
+    const transcriptFile = copySourceTranscriptPath(sourceId);
+    const hasJson = await exists(jsonFile);
+    const hasTranscript = await exists(transcriptFile);
+    if (!hasJson && !hasTranscript) continue;
     await Promise.all([
       fs.rm(jsonFile, { force: true }),
-      fs.rm(copySourceTranscriptPath(sourceId), { force: true })
+      fs.rm(transcriptFile, { force: true })
     ]);
     deleted.push(sourceId);
   }
@@ -716,7 +745,7 @@ export async function saveTranscript(input: {
   if (!video) throw new Error("找不到视频元数据");
 
   const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`);
-  await fs.writeFile(transcriptFile, input.text.trim(), "utf8");
+  await writeTextFileAtomic(transcriptFile, input.text.trim());
 
   const next: Video = {
     ...video,
@@ -759,8 +788,9 @@ export async function readTranscript(platform: Platform, accountId: string, vide
   const target = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
   try {
     return await fs.readFile(target, "utf8");
-  } catch {
-    return "";
+  } catch (error) {
+    if (isFsErrorCode(error, "ENOENT")) return "";
+    throw new Error(`读取转写稿失败：${target}，${error instanceof Error ? error.message : "文件系统异常"}`);
   }
 }
 
@@ -834,7 +864,7 @@ export async function deleteVideos(platform: Platform, accountId: string, videoI
 
 export async function saveStyle(platform: Platform, accountId: string, content: string) {
   const account = await resolveAccount(platform, accountId);
-  await fs.writeFile(stylePath(account.platform, account.slug), content.trimEnd() + "\n", "utf8");
+  await writeTextFileAtomic(stylePath(account.platform, account.slug), content.trimEnd() + "\n");
   return content.trimEnd();
 }
 
@@ -864,7 +894,7 @@ export async function saveAccountStyleMeta(platform: Platform, accountId: string
 export async function saveProjectStyle(projectId: string, content: string) {
   const project = await resolveProject(projectId);
   await ensureProjectDirs(project.slug);
-  await fs.writeFile(projectStylePath(project.slug), content.trimEnd() + "\n", "utf8");
+  await writeTextFileAtomic(projectStylePath(project.slug), content.trimEnd() + "\n");
   return content.trimEnd();
 }
 
@@ -991,7 +1021,7 @@ export async function saveUploadedDraftCoverReferences(input: {
     const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${file.name}-${file.data.length}-${references.length}`)}`;
     const filename = `${id}.${extension}`;
     const target = path.join(resolved.dir, filename);
-    await fs.writeFile(target, file.data);
+    await writeFileAtomic(target, file.data);
     references.push({
       id,
       source: "upload",
@@ -1028,7 +1058,7 @@ export async function saveGeneratedCoverImage(input: {
   const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.prompt}-${input.referenceIds.join(",")}`)}`;
   const filename = `${id}.${input.format === "jpeg" ? "jpg" : input.format}`;
   const target = path.join(resolved.dir, filename);
-  await fs.writeFile(target, input.bytes);
+  await writeFileAtomic(target, input.bytes);
 
   const image: DraftCoverImage = {
     id,
@@ -1487,6 +1517,31 @@ async function assertCopySourcesExist(sourceIds: string[]) {
   }
 
   return sources;
+}
+
+async function assertAccountsExist(accountIds: string[]) {
+  const uniqueIds = normalizeProjectAccountRefs(accountIds);
+  const accounts: Account[] = [];
+
+  for (const accountId of uniqueIds) {
+    const [platform, slug] = accountId.split(":") as [Platform, string];
+    if (!platforms.includes(platform) || !slug?.trim()) {
+      throw new Error(`账号引用不合法：${accountId}`);
+    }
+    accounts.push(await resolveAccount(platform, slug));
+  }
+
+  return accounts;
+}
+
+function normalizeProjectAccountRefs(accountIds: string[]) {
+  return uniqueTrimmedStrings(accountIds).map((accountId) => {
+    const [platform, slug] = accountId.split(":") as [Platform, string];
+    if (!platforms.includes(platform) || !slug?.trim()) {
+      throw new Error(`账号引用不合法：${accountId}`);
+    }
+    return `${platform}:${normalizeAccountSlug(slug)}`;
+  });
 }
 
 async function getProjectCopySources(sourceIds: string[]) {

@@ -111,28 +111,13 @@
     grid-row: 4;
   }
 
-  .tools-page {
-    grid-template-rows: auto auto minmax(0, 1fr);
-    height: var(--workspace-page-height);
-  }
-
-  .tools-page:has(> .notice),
-  .tools-page:has(> .error) {
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-  }
-
-  :is(.tools-page:has(> .notice), .tools-page:has(> .error)) > .tools-workbench {
-    grid-row: 4;
-  }
-
   .library-page > .panel.three-pane,
   .library-page > .panel.three-pane.library-workspace,
   .assets-page > :is(.panel.three-pane, .engagement-workbench),
   .projects-page > .project-workspace,
   .writer-page > .writer-workbench,
   .gross-margin-page > .gross-margin-workspace,
-  .project-workbench-page > .project-workbench-shell,
-  .tools-page > .tools-workbench {
+  .project-workbench-page > .project-workbench-shell {
     min-height: 0;
     height: 100%;
   }

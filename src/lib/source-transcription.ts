@@ -3,6 +3,7 @@ import { isSupportedVideoSourceLink, transcribeLinkSource, LinkTranscriptionResu
 
 type ResolveRewriteSourceMaterialOptions = {
   linkMode?: "all" | "video-only";
+  signal?: AbortSignal;
 };
 
 export async function resolveRewriteSourceMaterial(
@@ -19,14 +20,20 @@ export async function resolveRewriteSourceMaterial(
       const transcriptBlocks: string[] = [];
       const errors: string[] = [];
       for (const url of material.urls) {
+        throwIfAborted(options.signal);
         if (options.linkMode === "video-only" && !isSupportedVideoSourceLink(url)) continue;
         try {
           const result = await transcribeLinkSource({
             url,
-            titleHint: material.text
+            titleHint: material.text,
+            signal: options.signal
           });
+          if (result.source === "metadata" || !result.text.trim()) {
+            throw new Error(result.fallbackReason || "只解析到视频标题，没有取得可用视频文稿。");
+          }
           transcriptBlocks.push(formatLinkTranscript(result));
         } catch (error) {
+          if (isAbortError(error, options.signal)) throw error;
           errors.push(`${url}：${error instanceof Error ? error.message : "链接转写失败"}`);
         }
       }
@@ -56,6 +63,18 @@ export async function resolveRewriteSourceMaterial(
     normalizedText: buildResolvedSourceText(materials, input),
     textMaterialCount: materials.filter((material) => (material.transcribedText || material.text).trim()).length
   };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true;
+  return error instanceof Error && (error.name === "AbortError" || /任务已停止|aborted/i.test(error.message));
 }
 
 function buildResolvedSourceText(materials: SourceMaterial[], fallback: string) {

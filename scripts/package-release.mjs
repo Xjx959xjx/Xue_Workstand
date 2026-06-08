@@ -9,6 +9,7 @@ const rawArgs = process.argv.slice(2);
 const args = new Set(rawArgs);
 const preset = readOption("--preset") || "portable";
 const includeLibrary = args.has("--include-library");
+const allowEmptyGrossMargin = args.has("--allow-empty-gross-margin");
 const skipInstall = args.has("--skip-install");
 const skipArchive = args.has("--skip-archive");
 const skipZip = args.has("--skip-zip");
@@ -76,9 +77,12 @@ async function main() {
       console.log("已按参数跳过 .zip 压缩包。");
     } else if (await commandExists("zip")) {
       await run("zip", ["-qry", zipArchivePath, path.basename(releaseRoot)], { cwd: path.dirname(releaseRoot) });
+    } else if (isGrossMarginWindowsPreset() && presetConfig.archiveZip) {
+      throw new Error("gross-margin Windows 交付包必须生成 .zip，但当前环境未检测到 zip 命令。请安装 zip，或改用支持 zip 的构建环境。");
     } else if (presetConfig.archiveZip) {
       console.log("未检测到 zip 命令，已跳过 .zip 压缩包。");
     }
+    await verifyReleaseArchives();
   }
 
   if (presetConfig.installerExe && !skipArchive) {
@@ -160,7 +164,7 @@ function getPresetConfig(value) {
   return {
     preset: "portable",
     appMode: "workspace",
-    startPath: "/gross-margin",
+    startPath: "/library",
     includeLibraryMode: includeLibrary ? "all" : "empty",
     archiveTarGz: true,
     archiveZip: true,
@@ -246,12 +250,15 @@ async function copyReleaseLibrary() {
 
   if (presetConfig.includeLibraryMode === "gross-margin-only") {
     const sourceGrossMargin = await resolveGrossMarginLibrarySource();
-    if (await exists(sourceGrossMargin)) {
-      await fs.promises.cp(sourceGrossMargin, path.join(targetLibraryRoot, "gross-margin"), { recursive: true });
+    const targetGrossMargin = path.join(targetLibraryRoot, "gross-margin");
+    if (sourceGrossMargin) {
+      console.log(`复制毛利数据源：${sourceGrossMargin}`);
+      await fs.promises.cp(sourceGrossMargin, targetGrossMargin, { recursive: true });
     } else {
-      await fs.promises.mkdir(path.join(targetLibraryRoot, "gross-margin"), { recursive: true });
+      console.log("已按 --allow-empty-gross-margin 生成空毛利数据目录。");
+      await fs.promises.mkdir(targetGrossMargin, { recursive: true });
     }
-    await fs.promises.writeFile(path.join(targetLibraryRoot, "gross-margin", ".keep"), "", "utf8");
+    await fs.promises.writeFile(path.join(targetGrossMargin, ".keep"), "", "utf8");
     await fs.promises.writeFile(path.join(targetLibraryRoot, ".keep"), "", "utf8");
     return;
   }
@@ -260,18 +267,35 @@ async function copyReleaseLibrary() {
 }
 
 async function resolveGrossMarginLibrarySource() {
-  const candidates = [
-    process.env.GROSS_MARGIN_LIBRARY_SOURCE || "",
-    path.join(root, "style-library", "gross-margin"),
-    "/Users/xjx/Documents/New project 3/style-library/gross-margin",
-    "/Users/xjx/.codex/worktrees/6402/New project 3/style-library/gross-margin"
-  ].filter(Boolean);
+  const explicitSource = (process.env.GROSS_MARGIN_LIBRARY_SOURCE || "").trim();
+  const source = explicitSource
+    ? resolveInputPath(explicitSource)
+    : path.join(root, "style-library", "gross-margin");
 
-  for (const candidate of candidates) {
-    if (await exists(candidate)) return candidate;
+  if (await exists(source)) {
+    if (await isDirectory(source)) return source;
+    throw new Error(`毛利数据源不是目录：${source}`);
   }
 
-  return path.join(root, "style-library", "gross-margin");
+  if (allowEmptyGrossMargin) {
+    const sourceLabel = explicitSource ? `GROSS_MARGIN_LIBRARY_SOURCE=${source}` : source;
+    console.log(`未找到毛利数据源（${sourceLabel}）。`);
+    return "";
+  }
+
+  const sourceHint = explicitSource
+    ? `GROSS_MARGIN_LIBRARY_SOURCE 指向的目录不存在：${source}`
+    : `当前仓库没有毛利数据目录：${source}`;
+  throw new Error(
+    `${preset} 需要明确的毛利数据源，但 ${sourceHint}。\n` +
+    "请创建当前仓库 style-library/gross-margin，或设置 GROSS_MARGIN_LIBRARY_SOURCE 指向要交付的数据目录；如确实要生成空包，请追加 --allow-empty-gross-margin。"
+  );
+}
+
+function resolveInputPath(value) {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+  return path.isAbsolute(value) ? value : path.resolve(root, value);
 }
 
 async function bundleWindowsNode() {
@@ -508,6 +532,13 @@ async function verifyGrossMarginWindowsPackage() {
 
   if (missing.length) {
     throw new Error(`${preset} 包缺少必要文件：\n${missing.join("\n")}`);
+  }
+}
+
+async function verifyReleaseArchives() {
+  if (!isGrossMarginWindowsPreset() || skipZip) return;
+  if (!(await exists(zipArchivePath))) {
+    throw new Error(`gross-margin Windows 交付包缺少 .zip：${zipArchivePath}`);
   }
 }
 
@@ -1037,7 +1068,8 @@ begin
       'OPENCLI_WINDOW=background' + #13#10 +
       'FFMPEG_BIN=ffmpeg' + #13#10 +
       'STYLE_LIBRARY_DIR=' + ExpandConstant('${escapeInnoPascalString(dataStyleLibrary)}') + #13#10;
-    SaveStringToFile(EnvPath, EnvText, False);
+    if not FileExists(EnvPath) then
+      SaveStringToFile(EnvPath, EnvText, False);
   end;
 end;
 `;
@@ -1057,6 +1089,7 @@ function escapeInnoPascalString(value) {
 
 function runtimeScript() {
   return `import fs from "fs";
+import http from "http";
 import net from "net";
 import path from "path";
 import process from "process";
@@ -1075,20 +1108,22 @@ await main();
 async function main() {
   await ensureDefaultEnvFile();
   const fileEnv = readDotEnv(path.join(root, ".env"));
+  assertPresetInvariant(fileEnv, "APP_MODE", "${presetConfig.appMode}");
+  assertPresetInvariant(fileEnv, "APP_START_PATH", "${presetConfig.startPath}");
   const env = {
     ...fileEnv,
     ...process.env,
     NODE_ENV: "production",
-    PORT: process.env.PORT || fileEnv.PORT || "3000",
-    HOSTNAME: process.env.HOSTNAME || fileEnv.HOSTNAME || "127.0.0.1",
-    APP_MODE: process.env.APP_MODE || fileEnv.APP_MODE || "${presetConfig.appMode}",
-    APP_START_PATH: process.env.APP_START_PATH || fileEnv.APP_START_PATH || "${presetConfig.startPath}",
-    OPENCLI_BIN: process.env.OPENCLI_BIN || fileEnv.OPENCLI_BIN || bundledOpenCliCommand(),
-    OPENCLI_NODE_BIN: process.env.OPENCLI_NODE_BIN || fileEnv.OPENCLI_NODE_BIN || bundledOpenCliNode(),
-    OPENCLI_SCRIPT: process.env.OPENCLI_SCRIPT || fileEnv.OPENCLI_SCRIPT || bundledOpenCliScript(),
-    OPENCLI_BROWSER_CONNECT_TIMEOUT: process.env.OPENCLI_BROWSER_CONNECT_TIMEOUT || fileEnv.OPENCLI_BROWSER_CONNECT_TIMEOUT || "8",
-    OPENCLI_WINDOW: process.env.OPENCLI_WINDOW || fileEnv.OPENCLI_WINDOW || "background",
-    STYLE_LIBRARY_DIR: process.env.STYLE_LIBRARY_DIR || fileEnv.STYLE_LIBRARY_DIR || "./style-library"
+    PORT: envValue(fileEnv, "PORT", "3000"),
+    HOSTNAME: envValue(fileEnv, "HOSTNAME", "127.0.0.1"),
+    APP_MODE: "${presetConfig.appMode}",
+    APP_START_PATH: "${presetConfig.startPath}",
+    OPENCLI_BIN: envValue(fileEnv, "OPENCLI_BIN", bundledOpenCliCommand()),
+    OPENCLI_NODE_BIN: envValue(fileEnv, "OPENCLI_NODE_BIN", bundledOpenCliNode()),
+    OPENCLI_SCRIPT: envValue(fileEnv, "OPENCLI_SCRIPT", bundledOpenCliScript()),
+    OPENCLI_BROWSER_CONNECT_TIMEOUT: envValue(fileEnv, "OPENCLI_BROWSER_CONNECT_TIMEOUT", "8"),
+    OPENCLI_WINDOW: envValue(fileEnv, "OPENCLI_WINDOW", "background"),
+    STYLE_LIBRARY_DIR: envValue(fileEnv, "STYLE_LIBRARY_DIR", "./style-library")
   };
 
   await fs.promises.mkdir(stateDir, { recursive: true });
@@ -1146,13 +1181,20 @@ async function start(env) {
   fs.writeFileSync(pidFile, \`\${child.pid}\\n\`, "utf8");
   fs.closeSync(logFd);
 
-  const ready = await waitForPort(port, 20000);
+  const ready = await waitForHealth(port, 20000, child);
+  if (!ready) {
+    console.error("服务启动失败或健康检查未通过。请查看下面的日志片段。");
+    printLogTail();
+    signalProcess(child.pid, "SIGTERM");
+    fs.rmSync(pidFile, { force: true });
+    process.exit(1);
+  }
+
   console.log(\`已启动：pid=\${child.pid}\`);
   console.log(\`地址：\${url}\`);
   console.log(\`日志：\${logFile}\`);
   printToolWarnings(env);
   if (ready && openAfterStart) openBrowser(url);
-  if (!ready) console.log("服务仍在启动中；如果页面暂时打不开，请稍后再刷新。");
 }
 
 async function stop(options = {}) {
@@ -1244,6 +1286,30 @@ async function waitForPort(port, timeoutMs) {
   return false;
 }
 
+async function waitForHealth(port, timeoutMs, child) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (child.exitCode !== null) return false;
+    if (await requestHealth(port)) return true;
+    await delay(500);
+  }
+  return false;
+}
+
+function requestHealth(port) {
+  return new Promise((resolve) => {
+    const request = http.get({ hostname: "127.0.0.1", port, path: "/api/health", timeout: 3000 }, (response) => {
+      response.resume();
+      resolve(Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300));
+    });
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on("error", () => resolve(false));
+  });
+}
+
 function canConnect(port) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: "127.0.0.1", port });
@@ -1285,6 +1351,18 @@ function unquoteEnv(value) {
   return value;
 }
 
+function envValue(fileEnv, key, fallback) {
+  return fileEnv[key] || process.env[key] || fallback;
+}
+
+function assertPresetInvariant(fileEnv, key, expected) {
+  const actual = fileEnv[key];
+  if (!actual || actual === expected) return;
+  console.error(\`.env 中的 \${key}=\${actual} 与当前发布包要求的 \${key}=\${expected} 不一致。\`);
+  console.error("请还原 .env，或重新按目标 preset 打包。");
+  process.exit(1);
+}
+
 async function ensureDefaultEnvFile() {
   const target = path.join(root, ".env");
   if (fs.existsSync(target)) return;
@@ -1309,6 +1387,15 @@ function printToolWarnings(env) {
   if (!opencli) console.log("提示：未检测到 opencli，页面仍可使用，但 B站/抖音实时刷新不可用。可运行 install-deps 脚本安装。");
   if (opencli && env.APP_MODE === "gross-margin") console.log("提示：首次刷新 B站/抖音前，请先运行 setup-browser-bridge.cmd，确保 opencli Browser Bridge 已连接。");
   if (!ffmpeg) console.log("提示：未检测到 ffmpeg。只有需要无字幕视频转写时才需要它，可运行 install-deps 脚本安装。");
+}
+
+function printLogTail() {
+  if (!fs.existsSync(logFile)) {
+    console.error(\`日志文件尚未生成：\${logFile}\`);
+    return;
+  }
+  const lines = fs.readFileSync(logFile, "utf8").split(/\\r?\\n/).slice(-80).join("\\n");
+  console.error(lines);
 }
 
 async function openCliDoctor(env) {
@@ -1501,7 +1588,7 @@ function releaseReadme() {
 - Windows 内置 Node 运行时
 - 已内置可直接使用的 \`opencli\` 主程序
 - 数据维护 / 数据监控专用启动脚本
-- 默认会带上毛利账号库数据；当前优先复制 V1 文案工作台里的 \`style-library/gross-margin\`
+- 打包时只会从显式 \`GROSS_MARGIN_LIBRARY_SOURCE\` 或当前仓库 \`style-library/gross-margin\` 复制毛利数据
 
 ## 还需要你自己准备什么
 
@@ -1538,7 +1625,7 @@ function releaseReadme() {
 macOS：
 
 1. 首次使用先运行 \`install-deps.command\`，安装/检查 Node.js、opencli、ffmpeg。
-2. 双击 \`start.command\` 启动，会自动打开 \`http://localhost:3000/gross-margin\`。
+2. 双击 \`start.command\` 启动，会自动打开 \`http://localhost:3000${presetConfig.startPath}\`。
 3. 停止服务运行 \`stop.command\`，查看状态运行 \`status.command\`。
 
 终端：
@@ -1554,7 +1641,7 @@ Windows：
 
 1. 请使用 \`.zip\` 压缩包，并先完整解压，不要在压缩包预览窗口里直接双击。
 2. 首次使用运行 \`install-deps.cmd\`。
-3. 双击 \`start.cmd\` 启动；如果浏览器没有自动打开，访问 \`http://localhost:3000/gross-margin\`。
+3. 双击 \`start.cmd\` 启动；如果浏览器没有自动打开，访问 \`http://localhost:3000${presetConfig.startPath}\`。
 4. 用 \`stop.cmd\` 停止服务，\`status.cmd\` 查看状态。
 
 ## 数据和配置
@@ -1591,6 +1678,10 @@ function versionText() {
 
 function exists(target) {
   return fs.promises.access(target).then(() => true, () => false);
+}
+
+function isDirectory(target) {
+  return fs.promises.stat(target).then((stat) => stat.isDirectory(), () => false);
 }
 
 function isWindowsLauncher(fileName) {

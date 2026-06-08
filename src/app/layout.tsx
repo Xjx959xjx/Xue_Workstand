@@ -5,13 +5,16 @@ import { AppNav } from "@/components/AppNav";
 import { getAppMode } from "@/lib/app-mode";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "账号风格库",
-  description: "本地账号风格库与文案工作台",
-  icons: {
-    icon: "/favicon.svg"
-  }
-};
+export function generateMetadata(): Metadata {
+  const appMode = getAppMode();
+  return {
+    title: appMode === "gross-margin" ? "数据维护监控" : "账号风格库",
+    description: appMode === "gross-margin" ? "本地数据维护与监控工作台" : "本地账号风格库与文案工作台",
+    icons: {
+      icon: "/favicon.svg"
+    }
+  };
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const appMode = getAppMode();
@@ -22,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <a className="skip-link" href="#main-content">
           跳到主要内容
         </a>
-        <AppProviders>
+        <AppProviders appMode={appMode}>
           <AppModeGuard appMode={appMode} />
           <div className="app-shell">
             <AppNav appMode={appMode} />

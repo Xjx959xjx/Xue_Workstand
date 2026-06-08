@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { apiJson, parseJsonBody } from "@/lib/api-route";
+import { apiJson, formatApiError, parseJsonBody } from "@/lib/api-route";
 import {
   getBilibiliVideoStatsByUrl,
   getDouyinVideoStatsBatchByUrl,
@@ -158,16 +158,16 @@ export async function POST(request: Request) {
   });
 }
 
-function formatGrossMarginError(error: unknown) {
+function formatGrossMarginError(error: unknown, fallbackMessage: string) {
   if (error instanceof z.ZodError) {
-    return error.issues[0]?.message || "毛利单价表参数不完整或格式不正确。";
+    return formatApiError(error, fallbackMessage);
   }
 
   if (isMissingOpenCliError(error)) {
     return "未检测到 opencli。数据维护 / 数据监控页面可以继续使用，但刷新 B站/抖音数据前请先运行 install-deps.cmd 安装 opencli。";
   }
 
-  return error instanceof Error ? error.message : "保存毛利单价表失败";
+  return error instanceof Error ? error.message : fallbackMessage;
 }
 
 function isMissingOpenCliError(error: unknown) {

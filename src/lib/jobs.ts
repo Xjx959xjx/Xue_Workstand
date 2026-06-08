@@ -13,6 +13,7 @@ import { runBatchTranscribe } from "./batch-transcribe";
 import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
 import { hasFeishuDocLink } from "./feishu";
+import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
 import { libraryRoot } from "./storage";
 import { readJsonFile, writeJsonFile } from "./storage/fs";
 import { transcribeVideo } from "./transcription";
@@ -23,6 +24,7 @@ import {
   JobKind,
   JobListItem,
   JobRecord,
+  JobScope,
   JobStartInput,
   WriteResult
 } from "./types";
@@ -30,6 +32,7 @@ import { nowIso, safeSegment, shortHash } from "./utils";
 
 type JobRuntime = {
   initialized: boolean;
+  initializing?: Promise<void>;
   active: Map<string, Promise<void>>;
   abortControllers: Map<string, AbortController>;
   cancelRequests: Set<string>;
@@ -39,6 +42,7 @@ type JobRuntime = {
 
 type PatchJobOptions = {
   persist?: boolean;
+  beforePatch?: (current: JobRecord) => void;
 };
 
 const globalJobs = globalThis as typeof globalThis & {
@@ -108,6 +112,8 @@ async function patchJob(jobId: string, patch: Partial<JobRecord>, options: Patch
   return enqueueJobWrite(jobId, async () => {
     const current = runtime.records.get(jobId) || (await readJson<JobRecord>(jobJsonPath(jobId)));
     if (!current) throw new Error("找不到任务记录");
+    if (isTerminalJob(current)) return current;
+    options.beforePatch?.(current);
     const next: JobRecord = {
       ...current,
       ...patch,
@@ -153,13 +159,27 @@ async function enqueueJobWrite<T>(jobId: string, run: () => Promise<T>) {
 
 async function ensureInitialized() {
   if (runtime.initialized) return;
-  runtime.initialized = true;
+  if (runtime.initializing) return runtime.initializing;
+
+  runtime.initializing = initializeRuntimeJobs().finally(() => {
+    runtime.initializing = undefined;
+  });
+  return runtime.initializing;
+}
+
+async function initializeRuntimeJobs() {
   await ensureJobs();
 
   const jobs = await listJobsFromDisk();
-  runtime.records = new Map(jobs.map((job) => [job.id, job]));
+  const records = new Map(runtime.records);
+  for (const job of jobs) {
+    if (!records.has(job.id)) records.set(job.id, job);
+  }
+  runtime.records = records;
+
+  const interruptedAt = nowIso();
   await Promise.all(
-    jobs
+    [...runtime.records.values()]
       .filter((job) => (job.status === "running" || job.status === "queued") && !runtime.active.has(job.id))
       .map((job) =>
         writeJob({
@@ -168,11 +188,12 @@ async function ensureInitialized() {
           progress: job.progress || 0,
           message: "开发服务器重启后任务已中断，请重新发起。",
           error: "任务已中断，请重新发起。",
-          updatedAt: nowIso(),
-          completedAt: nowIso()
+          updatedAt: interruptedAt,
+          completedAt: interruptedAt
         })
       )
   );
+  runtime.initialized = true;
 }
 
 async function listJobsFromDisk() {
@@ -218,6 +239,7 @@ export async function createJob(input: JobStartInput) {
     status: "queued",
     title: input.title || defaultJobTitle(input),
     inputSummary: input.inputSummary || defaultInputSummary(input),
+    scope: defaultJobScope(input),
     stage: "queued",
     message: "任务已加入队列",
     progress: 0,
@@ -348,7 +370,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     });
   }
 
-  const prepared = await prepareWriteCopyContext(start.input);
+  const prepared = await prepareWriteCopyContext(start.input, { signal: getJobAbortSignal(jobId) });
   throwIfCancelled(jobId);
 
   if (start.input.useWebResearch) {
@@ -398,7 +420,8 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   const finalResult = await completePreparedWriteCopy({
     prepared,
     result,
-    save: start.input.save
+    save: start.input.save,
+    signal: getJobAbortSignal(jobId)
   });
   throwIfCancelled(jobId);
 
@@ -683,6 +706,10 @@ async function completeJob(
     stage: "done",
     progress: 100,
     completedAt: nowIso()
+  }, {
+    beforePatch() {
+      throwIfCancelled(jobId);
+    }
   });
   await pruneJobHistory();
 }
@@ -750,6 +777,69 @@ function defaultInputSummary(input: JobStartInput) {
   if (input.input.sourceType === "draft") return "从草稿生成";
   if (input.input.sourceType === "url") return "从链接生成";
   return input.input.title || "从粘贴文案生成";
+}
+
+function defaultJobScope(input: JobStartInput): JobScope {
+  if (input.kind === "write-copy") {
+    return compactJobScope({
+      targetType: input.input.targetType,
+      platform: input.input.platform,
+      accountId: input.input.accountId,
+      projectId: input.input.projectId,
+      sourceKey: writeCopySourceKey(input.input)
+    });
+  }
+  if (input.kind === "account-style") {
+    return compactJobScope({
+      targetType: "account",
+      platform: input.input.platform,
+      accountId: input.input.accountId
+    });
+  }
+  if (input.kind === "project-style") {
+    return compactJobScope({
+      targetType: "project",
+      projectId: input.input.projectId,
+      sourceKey: input.input.projectId ? undefined : shortHash(`${input.input.name}-${input.input.sourceAccountIds.join(",")}-${(input.input.sourceMaterialIds || []).join(",")}`)
+    });
+  }
+  if (input.kind === "transcribe-video") {
+    return compactJobScope({
+      targetType: "account",
+      platform: input.input.platform,
+      accountId: input.input.accountId,
+      videoId: input.input.videoId
+    });
+  }
+  if (input.kind === "batch-transcribe") {
+    return compactJobScope({
+      targetType: "account",
+      platform: input.input.platform,
+      accountId: input.input.accountId
+    });
+  }
+  if (input.input.sourceType === "draft") {
+    return compactJobScope({
+      targetType: "draft",
+      draftId: input.input.draftId
+    });
+  }
+  if (input.input.sourceType === "url") {
+    return compactJobScope({
+      targetType: "url",
+      sourceKey: engagementSourceKey(input.input)
+    });
+  }
+  return compactJobScope({
+    targetType: "text",
+    sourceKey: engagementSourceKey(input.input)
+  });
+}
+
+function compactJobScope(scope: JobScope): JobScope {
+  return Object.fromEntries(
+    Object.entries(scope).filter(([, value]) => typeof value === "string" && value.trim())
+  ) as JobScope;
 }
 
 function defaultHref(input: JobStartInput) {

@@ -283,6 +283,10 @@ export default function GrossMarginMonitorPage() {
             <RefreshCw aria-hidden="true" size={18} />
             <p>正在读取监控记录。</p>
           </div>
+        ) : hasActiveFilters && !sortedRecords.length ? (
+          <div className="gross-monitor-empty">
+            <p>没有符合当前筛选条件的监控记录，请调整账号、链接、平台、项目或日期范围。</p>
+          </div>
         ) : records.length ? (
           <div className="gross-monitor-card-grid" onWheel={handleHorizontalWheel}>
             {sortedRecords.map((record) => (
@@ -297,10 +301,6 @@ export default function GrossMarginMonitorPage() {
                 onUpdatePlayTarget={handleUpdatePlayTarget}
               />
             ))}
-          </div>
-        ) : hasActiveFilters ? (
-          <div className="gross-monitor-empty">
-            <p>没有符合当前筛选条件的监控记录，请调整账号、链接、平台、项目或日期范围。</p>
           </div>
         ) : (
           <div className="gross-monitor-empty">
@@ -326,7 +326,9 @@ export default function GrossMarginMonitorPage() {
 
 function handleHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
   if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-  event.currentTarget.scrollLeft += event.deltaY;
+  const target = event.currentTarget;
+  if (target.scrollWidth <= target.clientWidth) return;
+  target.scrollLeft += event.deltaY;
   event.preventDefault();
 }
 
@@ -364,6 +366,7 @@ function MonitorCard({
   const [playCurrentDraft, setPlayCurrentDraft] = useState(
     playMetric && typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
   );
+  const [playEditError, setPlayEditError] = useState("");
 
   useEffect(() => {
     if (!editingPlay && playMetric) {
@@ -371,11 +374,13 @@ function MonitorCard({
       setPlayCurrentDraft(
         typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
       );
+      setPlayEditError("");
     }
   }, [editingPlay, playMetric, record.platform]);
 
   async function submitPlayEdit() {
     if (!playMetric) return;
+    setPlayEditError("");
     const nextTarget = parseMetricInput(playTargetDraft);
     if (!nextTarget || nextTarget <= 0) {
       throw new Error("请输入有效的播放目标");
@@ -401,6 +406,21 @@ function MonitorCard({
       setEditingPlay(false);
       return;
     }
+    setEditingPlay(false);
+  }
+
+  async function handleSubmitPlayEdit() {
+    try {
+      await submitPlayEdit();
+    } catch (error) {
+      setPlayEditError(error instanceof Error ? error.message : "播放量保存失败");
+    }
+  }
+
+  function resetPlayEdit(metric: GrossMarginMonitorMetric) {
+    setPlayTargetDraft(formatEditableMetricValue(metric.target, record.platform));
+    setPlayCurrentDraft(typeof metric.current === "number" ? formatEditableMetricValue(metric.current, record.platform) : "");
+    setPlayEditError("");
     setEditingPlay(false);
   }
 
@@ -515,21 +535,20 @@ function MonitorCard({
                               disabled={busy === `play-current-${record.id}` || busy === `play-target-${record.id}`}
                               onBlur={(event) => {
                                 if (event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) return;
-                                void submitPlayEdit().catch(() => undefined);
+                                void handleSubmitPlayEdit();
                               }}
-                              onChange={(event) => setPlayCurrentDraft(event.target.value)}
+                              onChange={(event) => {
+                                setPlayCurrentDraft(event.target.value);
+                                setPlayEditError("");
+                              }}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") {
                                   event.preventDefault();
-                                  void submitPlayEdit().catch(() => undefined);
+                                  void handleSubmitPlayEdit();
                                 }
                                 if (event.key === "Escape") {
                                   event.preventDefault();
-                                  setPlayTargetDraft(formatEditableMetricValue(metric.target, record.platform));
-                                  setPlayCurrentDraft(
-                                    typeof metric.current === "number" ? formatEditableMetricValue(metric.current, record.platform) : ""
-                                  );
-                                  setEditingPlay(false);
+                                  resetPlayEdit(metric);
                                 }
                               }}
                               placeholder="当前"
@@ -544,27 +563,31 @@ function MonitorCard({
                             disabled={busy === `play-current-${record.id}` || busy === `play-target-${record.id}`}
                             onBlur={(event) => {
                               if (event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) return;
-                              void submitPlayEdit().catch(() => undefined);
+                              void handleSubmitPlayEdit();
                             }}
-                            onChange={(event) => setPlayTargetDraft(event.target.value)}
+                            onChange={(event) => {
+                              setPlayTargetDraft(event.target.value);
+                              setPlayEditError("");
+                            }}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
-                                void submitPlayEdit().catch(() => undefined);
+                                void handleSubmitPlayEdit();
                               }
                               if (event.key === "Escape") {
                                 event.preventDefault();
-                                setPlayTargetDraft(formatEditableMetricValue(metric.target, record.platform));
-                                setPlayCurrentDraft(
-                                  typeof metric.current === "number" ? formatEditableMetricValue(metric.current, record.platform) : ""
-                                );
-                                setEditingPlay(false);
+                                resetPlayEdit(metric);
                               }
                             }}
                             placeholder="目标"
                             type="text"
                             value={playTargetDraft}
                           />
+                          {playEditError ? (
+                            <span className="gross-monitor-play-error" role="alert">
+                              {playEditError}
+                            </span>
+                          ) : null}
                         </span>
                       ) : (
                         <>

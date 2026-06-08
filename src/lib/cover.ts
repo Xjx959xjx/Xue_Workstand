@@ -1,5 +1,6 @@
 import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
 import { getBilibiliVideoReference } from "./opencli";
+import { normalizeRemoteImageUrl } from "./platform-links";
 import {
   getAccountSummary,
   getDraftAssetFile,
@@ -310,9 +311,7 @@ function mergeReferences(references: DraftCoverReference[]) {
 }
 
 function normalizeImageUrl(url: string) {
-  if (url.startsWith("//")) return `https:${url}`;
-  if (url.startsWith("http://i") && url.includes("hdslb.com")) return url.replace(/^http:/, "https:");
-  return url;
+  return normalizeRemoteImageUrl(url);
 }
 
 function normalizeImageFormat(value?: string): "jpeg" | "png" | "webp" {

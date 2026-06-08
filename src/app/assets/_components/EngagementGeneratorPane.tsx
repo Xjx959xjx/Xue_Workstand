@@ -67,7 +67,7 @@ export function EngagementGeneratorPane({
                 min={1}
                 type="number"
                 value={commentCount}
-                onChange={(event) => onCommentCountChange(Number(event.target.value))}
+                onChange={(event) => updateBoundedNumber(event.target.value, 1, 200, onCommentCountChange)}
               />
             </label>
             <label className={`engagement-option ${includeDanmaku ? "active" : ""}`}>
@@ -83,7 +83,7 @@ export function EngagementGeneratorPane({
                 min={1}
                 type="number"
                 value={danmakuCount}
-                onChange={(event) => onDanmakuCountChange(Number(event.target.value))}
+                onChange={(event) => updateBoundedNumber(event.target.value, 1, 300, onDanmakuCountChange)}
               />
             </label>
           </div>
@@ -116,4 +116,11 @@ export function EngagementGeneratorPane({
       </div>
     </section>
   );
+}
+
+function updateBoundedNumber(value: string, min: number, max: number, onChange: (value: number) => void) {
+  if (!value.trim()) return;
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  onChange(Math.min(Math.max(Math.trunc(next), min), max));
 }

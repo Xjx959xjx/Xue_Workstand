@@ -109,7 +109,7 @@ npm run package:release -- --preset gross-margin-win-installer
 npm run package:release -- --include-library
 ```
 
-`--preset gross-margin-win` 固定只复制 `style-library/gross-margin`，不会把整个 `style-library` 打进包里，避免误发其他账号库、草稿和写作素材。当前会优先从你 V1 文案工作台的 `style-library/gross-margin` 复制毛利账号库数据。
+`--preset gross-margin-win` 固定只复制毛利数据，不会把整个 `style-library` 打进包里，避免误发其他账号库、草稿和写作素材。打包时只允许显式 `GROSS_MARGIN_LIBRARY_SOURCE` 或当前仓库 `style-library/gross-margin` 作为毛利数据源；找不到数据源会直接失败。如果确实要生成空毛利包，追加 `--allow-empty-gross-margin`。
 
 对方解压后：
 

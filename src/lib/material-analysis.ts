@@ -19,7 +19,9 @@ export async function analyzeCopySourceMaterial(input: {
   title?: string;
   transcript: string;
   url: string;
+  signal?: AbortSignal;
 }): Promise<CopySource["materialAnalysis"]> {
+  throwIfAborted(input.signal);
   if (!input.mediaUrls.length) {
     return {
       mode: "textual",
@@ -33,8 +35,9 @@ export async function analyzeCopySourceMaterial(input: {
   let frames: string[] = [];
   let frameError = "";
   try {
-    frames = await extractVideoFrames(input.mediaUrls);
+    frames = await extractVideoFrames(input.mediaUrls, { signal: input.signal });
   } catch (error) {
+    if (input.signal?.aborted) throw error;
     frameError = error instanceof Error ? error.message : "原视频抽帧失败";
   }
 
@@ -59,7 +62,8 @@ export async function analyzeCopySourceMaterial(input: {
           url: input.url,
           signal
         }),
-      MATERIAL_MODEL_TIMEOUT_MS
+      MATERIAL_MODEL_TIMEOUT_MS,
+      input.signal
     );
     return {
       mode: "multimodal",
@@ -69,6 +73,7 @@ export async function analyzeCopySourceMaterial(input: {
       ...analysis
     };
   } catch (error) {
+    if (input.signal?.aborted) throw error;
     return {
       mode: "multimodal",
       status: "failed",
@@ -81,13 +86,14 @@ export async function analyzeCopySourceMaterial(input: {
   }
 }
 
-async function extractVideoFrames(urls: string[]) {
+async function extractVideoFrames(urls: string[], options: { signal?: AbortSignal } = {}) {
   const uniqueUrls = [...new Set(urls.filter(Boolean))].slice(0, FRAME_EXTRACTION_URL_LIMIT);
   let lastError: unknown;
 
   for (const [index, url] of uniqueUrls.entries()) {
     const dir = path.join(os.tmpdir(), `style-library-frames-${process.pid}-${Date.now()}-${index}`);
     try {
+      throwIfAborted(options.signal);
       await fs.mkdir(dir, { recursive: true });
       const output = path.join(dir, "frame-%02d.jpg");
       await execFileAsync(ffmpegBin(), [
@@ -117,8 +123,10 @@ async function extractVideoFrames(urls: string[]) {
         ...HIDDEN_CHILD_PROCESS_OPTIONS,
         maxBuffer: 1024 * 1024 * 4,
         timeout: FRAME_EXTRACTION_TIMEOUT_MS,
-        killSignal: "SIGKILL"
+        killSignal: "SIGKILL",
+        signal: options.signal
       });
+      throwIfAborted(options.signal);
       const files = (await fs.readdir(dir)).filter((file) => /\.jpg$/i.test(file)).sort().slice(0, 4);
       const frames = await Promise.all(
         files.map(async (file) => {
@@ -129,6 +137,10 @@ async function extractVideoFrames(urls: string[]) {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
       if (frames.length) return frames;
     } catch (error) {
+      if (options.signal?.aborted) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
       lastError = error;
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -137,14 +149,25 @@ async function extractVideoFrames(urls: string[]) {
   throw new Error(describeFfmpegError(lastError));
 }
 
-async function withAbortTimeout<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs: number) {
+async function withAbortTimeout<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs: number, parentSignal?: AbortSignal) {
+  throwIfAborted(parentSignal);
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  parentSignal?.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await run(controller.signal);
   } finally {
+    parentSignal?.removeEventListener("abort", abort);
     clearTimeout(timeout);
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  throw error;
 }
 
 function buildTextualSummary(input: { title?: string; transcript: string }) {

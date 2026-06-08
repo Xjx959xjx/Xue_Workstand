@@ -196,13 +196,13 @@ function CollectControls({
         </div>
       </div>
       <div className="field library-account-name-field">
-        <label htmlFor="collect-account-name">账号名</label>
+        <label htmlFor="collect-account-name">账号名 / 主页链接</label>
         <input
           autoComplete="off"
           id="collect-account-name"
           name="accountName"
           onChange={(event) => onNameChange(event.target.value)}
-          placeholder={platform === "douyin" ? "例如：老青椒…" : "例如：某某UP主…"}
+          placeholder={platform === "douyin" ? "例如：老青椒、主页链接或 sec_uid…" : "例如：某某UP主、空间链接或 UID…"}
           value={name}
         />
       </div>
@@ -215,7 +215,7 @@ function CollectControls({
           max={50}
           min={1}
           name="limit"
-          onChange={(event) => onLimitChange(Number(event.target.value))}
+          onChange={(event) => updateBoundedNumber(event.target.value, 1, 50, onLimitChange)}
           type="number"
           value={limit}
         />
@@ -270,6 +270,13 @@ function CollectControls({
   );
 }
 
+function updateBoundedNumber(value: string, min: number, max: number, onChange: (value: number) => void) {
+  if (!value.trim()) return;
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  onChange(Math.min(Math.max(Math.trunc(next), min), max));
+}
+
 function EnvironmentModal({
   busy,
   health,
@@ -293,7 +300,20 @@ function EnvironmentModal({
     { value: stats.copySourceCount, label: "文案素材" },
     { value: stats.draftCount, label: "草稿" }
   ];
-  const healthItems = health
+  const healthItems = health?.appMode === "gross-margin"
+    ? [
+        {
+          label: "opencli",
+          detail: health.opencli.ok ? `可用 ${health.opencli.version}` : health.opencli.error || "不可用",
+          ok: health.opencli.ok
+        },
+        {
+          label: "毛利数据目录",
+          detail: health.storage.ok ? health.storage.root : health.storage.error || "不可写",
+          ok: health.storage.ok
+        }
+      ]
+    : health
     ? [
         {
           label: "opencli",

@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { saveDraft } from "@/lib/client";
+import { writeCopySourceKey } from "@/lib/job-scope";
 import type {
   AccountDraftInput,
   AccountListItem,
   Draft,
-  DraftInput,
   JobRecord,
   JobStartInput,
   ProjectDraftInput,
@@ -14,7 +14,8 @@ import type {
   WriteResult
 } from "@/lib/types";
 
-type DraftSaveBase = Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
+type DraftSaveBase = Omit<AccountDraftInput, "assets" | "content"> | Omit<ProjectDraftInput, "assets" | "content">;
+type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
 
 type UseWriterGenerationInput = {
   activeJobs: JobRecord[];
@@ -76,14 +77,61 @@ export function useWriterGeneration({
   const [generateProgress, setGenerateProgress] = useState(0);
   const [activeWriteJobId, setActiveWriteJobId] = useState("");
   const handledWriteJobsRef = useRef<Set<string>>(new Set());
+  const reportedHydrationErrorsRef = useRef<Set<string>>(new Set());
+  const writeJobSourceKey = useMemo(
+    () =>
+      writeCopySourceKey({
+        targetType,
+        platform: targetType === "account" ? selectedAccount?.platform : undefined,
+        accountId: targetType === "account" ? selectedAccount?.id : undefined,
+        projectId: targetType === "project" ? selectedProject?.id : undefined,
+        mode,
+        prompt: normalizedPrompt,
+        sourceText: preparedSourceText || normalizedSourceText,
+        supportDocLinks,
+        brief,
+        useWebResearch
+      }),
+    [
+      brief,
+      mode,
+      normalizedPrompt,
+      normalizedSourceText,
+      preparedSourceText,
+      selectedAccount?.id,
+      selectedAccount?.platform,
+      selectedProject?.id,
+      supportDocLinks,
+      targetType,
+      useWebResearch
+    ]
+  );
 
+  const writeJobCandidates = useMemo(
+    () => [...activeJobs, ...recentJobs].filter((job) => job.kind === "write-copy"),
+    [activeJobs, recentJobs]
+  );
   const activeWriteJob = useMemo(() => {
-    const candidates = [...activeJobs, ...recentJobs].filter((job) => job.kind === "write-copy");
-    return candidates.find((job) => job.id === activeWriteJobId) || activeJobs.find((job) => job.kind === "write-copy") || null;
-  }, [activeJobs, activeWriteJobId, recentJobs]);
+    const tracked = writeJobCandidates.find((job) => job.id === activeWriteJobId);
+    if (tracked && isCurrentWriteJob(tracked, targetType, selectedAccount?.id, selectedProject?.id)) return tracked;
+    return writeJobCandidates.find((job) =>
+      isActiveJob(job) && isCurrentWriteJob(job, targetType, selectedAccount?.id, selectedProject?.id, writeJobSourceKey)
+    ) || null;
+  }, [activeWriteJobId, selectedAccount?.id, selectedProject?.id, targetType, writeJobCandidates, writeJobSourceKey]);
+  const activeWriteJobIdMismatch = useMemo(() => {
+    if (!activeWriteJobId) return false;
+    const tracked = writeJobCandidates.find((job) => job.id === activeWriteJobId);
+    return Boolean(tracked && !isCurrentWriteJob(tracked, targetType, selectedAccount?.id, selectedProject?.id));
+  }, [activeWriteJobId, selectedAccount?.id, selectedProject?.id, targetType, writeJobCandidates]);
   const isGenerating = Boolean(activeWriteJob && (activeWriteJob.status === "queued" || activeWriteJob.status === "running"));
   const canGenerate = Boolean(hasTaskInput && !busy && !isGenerating && (targetType === "project" ? selectedProject : selectedAccount));
   const canStopGenerate = Boolean(activeWriteJobId && isGenerating);
+
+  useEffect(() => {
+    if (!activeWriteJobIdMismatch || busy !== "generate") return;
+    setActiveWriteJobId("");
+    setBusy("");
+  }, [activeWriteJobIdMismatch, busy, setBusy]);
 
   useEffect(() => {
     if (!activeWriteJob) return;
@@ -100,6 +148,16 @@ export function useWriterGeneration({
     const result = activeWriteJob.result as WriteResult | undefined;
     const isWaitingForHydratedResult = activeWriteJob.status === "completed" && !result && Boolean((activeWriteJob as { hasResult?: boolean }).hasResult);
     if (isWaitingForHydratedResult) {
+      if (activeWriteJob.error) {
+        setBusy("");
+        setGenerateStage("结果同步失败");
+        setGenerateProgress(100);
+        if (!reportedHydrationErrorsRef.current.has(activeWriteJob.id)) {
+          reportedHydrationErrorsRef.current.add(activeWriteJob.id);
+          setNotice(activeWriteJob.error);
+        }
+        return;
+      }
       setGenerateStage("正在同步生成结果");
       setGenerateProgress(100);
       return;
@@ -181,6 +239,10 @@ export function useWriterGeneration({
       setNotice("文案生成已在后台开始，可以切换到其他模块。");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "生成失败，请检查模型配置、代理或输入内容后重试。");
+      setGenerateStage("任务启动失败");
+      setGenerateProgress(0);
+      setActiveWriteJobId("");
+      setBusy("");
     }
   }, [
     activeTitle,
@@ -217,7 +279,7 @@ export function useWriterGeneration({
     try {
       let draftId = lastDraftId;
       if (!draftId || lastSavedContent !== lastContent) {
-        const payload: DraftInput =
+        const payload: DraftSaveInput =
           lastDraftBase.targetType === "project"
             ? {
                 ...lastDraftBase,
@@ -317,4 +379,21 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
     sourceDigest: draft.sourceDigest,
     styleRef: draft.styleRef
   };
+}
+
+function isCurrentWriteJob(
+  job: JobRecord,
+  targetType: "account" | "project",
+  accountId?: string,
+  projectId?: string,
+  sourceKey?: string
+) {
+  if (job.scope?.targetType !== targetType) return false;
+  if (sourceKey && job.scope.sourceKey !== sourceKey) return false;
+  if (targetType === "account") return Boolean(accountId && job.scope.accountId === accountId);
+  return Boolean(projectId && job.scope.projectId === projectId);
+}
+
+function isActiveJob(job: JobRecord) {
+  return job.status === "queued" || job.status === "running";
 }

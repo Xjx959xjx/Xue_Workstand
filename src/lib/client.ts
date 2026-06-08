@@ -1,4 +1,5 @@
 import {
+  AccountDraftInput,
   AccountSummary,
   AccountDetail,
   BatchTranscribeResult,
@@ -7,7 +8,6 @@ import {
   CopySource,
   Draft,
   DraftCoverReference,
-  DraftInput,
   EngagementRecord,
   GrossMarginLibrary,
   GrossMarginMonitorRecord,
@@ -19,17 +19,21 @@ import {
   LibraryOverviewResponse,
   LibraryState,
   Platform,
+  ProjectDraftInput,
   ProjectDetail,
   ProjectSummary,
   Video,
   WriteBriefResult,
   WriteResult
 } from "./types";
+import type { LinkTranscriptionResult } from "./transcription";
 
 let draftsCache: { drafts: Draft[] } | null = null;
 let draftsRequest: Promise<{ drafts: Draft[] }> | null = null;
 let copySourcesCache: { sources: CopySource[] } | null = null;
 let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
+
+type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -54,9 +58,23 @@ async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
+    throw new Error(formatApiErrorResponse(response, data));
   }
   return data as T;
+}
+
+async function readApiErrorResponse(response: Response) {
+  const fallbackResponse = response.clone();
+  const data = await response.json().catch(async () => {
+    const text = await fallbackResponse.text().catch(() => "");
+    return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+  });
+  return formatApiErrorResponse(response, data);
+}
+
+function formatApiErrorResponse(response: Response, data: unknown) {
+  const error = data && typeof data === "object" && "error" in data ? (data as { error?: unknown }).error : undefined;
+  return normalizeApiError(error) || summarizeHttpError(response.status);
 }
 
 function normalizeApiError(error: unknown) {
@@ -135,8 +153,7 @@ async function readNdjsonStream<TEvent extends { type: string }>(
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(summarizeHttpError(response.status, text, response.headers.get("content-type")));
+    throw new Error(await readApiErrorResponse(response));
   }
 
   const reader = response.body?.getReader();
@@ -144,6 +161,7 @@ async function readNdjsonStream<TEvent extends { type: string }>(
 
   const decoder = new TextDecoder();
   let buffer = "";
+  let sawDone = false;
 
   const handleLine = async (line: string) => {
     const trimmed = line.trim();
@@ -165,25 +183,39 @@ async function readNdjsonStream<TEvent extends { type: string }>(
       throw new Error(typeof message === "string" && message.trim() ? message : "请求处理失败");
     }
 
+    if (event.type === "done") {
+      sawDone = true;
+      return;
+    }
+
     await onEvent(event);
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-    for (const line of lines) {
-      await handleLine(line);
+      for (const line of lines) {
+        await handleLine(line);
+      }
     }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      await handleLine(buffer);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   }
 
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    await handleLine(buffer);
+  if (!sawDone) {
+    throw new Error("请求失败：流式响应提前结束，请重试。");
   }
 }
 
@@ -528,7 +560,7 @@ export function refreshCopySources() {
 }
 
 export function transcribeCopySource(input: { url: string; titleHint?: string; analyzeVideo?: boolean }) {
-  return requestJson<{ source: CopySource }>("/api/copy-sources", {
+  return requestJson<{ source: CopySource; result: LinkTranscriptionResult }>("/api/copy-sources", {
     method: "POST",
     body: JSON.stringify({ action: "transcribe", ...input })
   }).then((result) => {
@@ -549,6 +581,7 @@ export type SingleVideoTranscribeResult = {
   mediaUrls?: string[];
   text: string;
   source: "platform_subtitle" | "volcengine" | "metadata";
+  metadataTitle?: string;
   fallback?: boolean;
   fallbackReason?: string;
   timings?: { stage: string; ms: number }[];
@@ -584,7 +617,10 @@ export async function downloadSingleVideoAsset(input: { url: string; kind: Singl
 
   const fallbackName = input.kind === "cover" ? "视频封面.jpg" : input.kind === "audio" ? "视频音频.mp3" : "视频文件.mp4";
   const fileName = fileNameFromContentDisposition(response.headers.get("content-disposition")) || fallbackName;
-  downloadBlob(await response.blob(), fileName);
+  const blob = await response.blob().catch((error) => {
+    throw new Error(`下载中断：${error instanceof Error && error.message ? error.message : "服务传输过程中断，请重试。"}`);
+  });
+  downloadBlob(blob, fileName);
   return { fileName };
 }
 
@@ -847,7 +883,7 @@ export async function streamWriteCopy(
   );
 }
 
-export function saveDraft(input: DraftInput) {
+export function saveDraft(input: DraftSaveInput) {
   return requestJson<Draft>("/api/drafts", {
     method: "POST",
     body: JSON.stringify(input)
@@ -1082,30 +1118,75 @@ export function publishFeishuDocument(input: { title: string; content: string })
   });
 }
 
-export function getHealth() {
-  return requestJson<{
-    opencli: { ok: boolean; bin: string; version: string };
-    libraryRoot: string;
-    volcengineAsrConfigured: boolean;
-    chatConfigured: boolean;
-    chat: {
-      baseUrl: string;
-      model: string;
-      wireApi: "responses" | "chat_completions" | "auto";
-      reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh";
-      responsesUrlConfigured: boolean;
-      chatCompletionsUrlConfigured: boolean;
-      proxyConfigured: boolean;
-      configured: boolean;
-    };
-    feishuConfigured: boolean;
-    feishu: {
-      configured: boolean;
-      mode: "lark-cli";
-      opencliBin: string;
-      identity: string;
-      folderConfigured: boolean;
-      doctor: { ok: boolean; message: string };
-    };
-  }>("/api/health");
+export type WorkspaceHealthResponse = {
+  appMode?: "workspace";
+  opencli: { ok: boolean; bin: string; version: string };
+  libraryRoot: string;
+  volcengineAsrConfigured: boolean;
+  chatConfigured: boolean;
+  chat: {
+    baseUrl: string;
+    model: string;
+    wireApi: "responses" | "chat_completions" | "auto";
+    reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh";
+    responsesUrlConfigured: boolean;
+    chatCompletionsUrlConfigured: boolean;
+    proxyConfigured: boolean;
+    configured: boolean;
+  };
+  imageConfigured?: boolean;
+  image?: {
+    baseUrl: string;
+    model: string;
+    size: string;
+    quality: string;
+    proxyConfigured: boolean;
+    configured: boolean;
+  };
+  feishuConfigured: boolean;
+  feishu: {
+    configured: boolean;
+    mode: "lark-cli";
+    opencliBin: string;
+    identity: string;
+    folderConfigured: boolean;
+    doctor: { ok: boolean; message: string };
+  };
+};
+
+export type GrossMarginHealthResponse = {
+  appMode: "gross-margin";
+  opencli: { ok: boolean; version: string; error?: string };
+  storage: { ok: boolean; root: string; error?: string };
+};
+
+export type HealthResponse = WorkspaceHealthResponse | GrossMarginHealthResponse;
+
+export async function getHealth(): Promise<HealthResponse> {
+  const response = await fetch("/api/health", {
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+  const fallbackResponse = response.clone();
+  const data = await response.json().catch(async () => {
+    const text = await fallbackResponse.text().catch(() => "");
+    return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+  });
+
+  if (!response.ok && !isGrossMarginHealthResponse(data)) {
+    throw new Error(formatApiErrorResponse(response, data));
+  }
+  return data as HealthResponse;
+}
+
+function isGrossMarginHealthResponse(value: unknown): value is GrossMarginHealthResponse {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    (value as { appMode?: unknown }).appMode === "gross-margin" &&
+    typeof (value as { opencli?: unknown }).opencli === "object" &&
+    typeof (value as { storage?: unknown }).storage === "object"
+  );
 }

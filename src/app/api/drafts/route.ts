@@ -5,6 +5,10 @@ import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
 
+const disallowedDraftAssetsSchema = z.never({
+  invalid_type_error: "草稿资产只能通过评论、弹幕或封面资产接口维护。"
+}).optional();
+
 const accountDraftSchema = z.object({
   targetType: z.literal("account").optional(),
   platform: z.enum(platforms),
@@ -16,7 +20,7 @@ const accountDraftSchema = z.object({
   input: z.string().optional(),
   supportDocLinks: z.string().optional(),
   content: z.string().min(1),
-  assets: z.any().optional(),
+  assets: disallowedDraftAssetsSchema,
   styleRef: z.object({
     platform: z.enum(platforms),
     accountId: z.string(),
@@ -35,7 +39,7 @@ const projectDraftSchema = z.object({
   input: z.string().optional(),
   supportDocLinks: z.string().optional(),
   content: z.string().min(1),
-  assets: z.any().optional(),
+  assets: disallowedDraftAssetsSchema,
   styleRef: z.object({
     projectId: z.string().min(1),
     projectName: z.string().min(1),

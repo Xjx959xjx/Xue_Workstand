@@ -2,9 +2,9 @@ import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { collectVideos, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
-import { collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
-import { normalizeLinkInput } from "@/lib/platform-links";
-import { nowIso } from "@/lib/utils";
+import { Account, collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
+import { extractFirstLinkFromInput, normalizeLinkInput } from "@/lib/platform-links";
+import { nowIso, shortHash } from "@/lib/utils";
 
 export const runtime = "nodejs";
 const BILIBILI_CANDIDATE_LIMIT = 50;
@@ -29,44 +29,50 @@ const schema = z.object({
 export async function POST(request: Request) {
   return apiJson(async () => {
     const input = await parseJsonBody(request, schema);
-    const uidOrUrl = input.uidOrUrl ? normalizeLinkInput(input.uidOrUrl, { kind: "account" }) : "";
+    const target = resolveCollectTarget(input.platform, input.name, input.uidOrUrl);
     const order = normalizeCollectOrder(input.order);
     validateCollectOrder(input.platform, order);
-    const existing = !uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
-    const uid = existing?.uid || (await resolveAccountUid(input.platform, input.name, uidOrUrl));
-    const account = await upsertAccount({
-      platform: input.platform,
-      name: input.name,
-      uid,
-      sourceUrl: uidOrUrl || input.name
-    });
+    const existing = !target.uidOrUrl ? await findAccountByName(input.platform, target.lookupName) : null;
+    const uid =
+      existing?.uid ||
+      (await resolveAccountUid(input.platform, target.lookupName, target.uidOrUrl, { signal: request.signal }));
+    throwIfAborted(request.signal);
+    const collectAccount = existing || makeTransientAccount(input.platform, target.displayNameFallback, uid, target.sourceUrl);
 
     const collectPlan = makeCollectPlan(input.platform, input.limit, order, input.fromDate, input.toDate);
     const result = await collectVideos({
       platform: input.platform,
-      account,
+      account: collectAccount,
       limit: collectPlan.limit,
       order: collectPlan.order,
       hydrateDetails: collectPlan.hydrateDetails,
       fromDate: input.platform === "douyin" ? input.fromDate : undefined,
-      toDate: input.platform === "douyin" ? input.toDate : undefined
+      toDate: input.platform === "douyin" ? input.toDate : undefined,
+      signal: request.signal
     });
     if (collectPlan.pageByPubdate && input.platform === "bilibili") {
       result.videos = await collectDateWindowCandidates({
-        account,
+        account: collectAccount,
         fromDate: input.fromDate,
         toDate: input.toDate,
         firstPageVideos: result.videos,
-        hydrateDetails: collectPlan.hydrateDetails
+        hydrateDetails: collectPlan.hydrateDetails,
+        signal: request.signal
       });
       result.rawCount = result.videos.length;
     }
 
+    throwIfAborted(request.signal);
+    const accountName = inferAccountNameFromCollectedData(
+      input.platform,
+      result.raw,
+      target.displayNameFallback || existing?.name || uid
+    );
     const updatedAccount = await upsertAccount({
       platform: input.platform,
-      name: input.name,
+      name: accountName,
       uid,
-      sourceUrl: uidOrUrl || input.name,
+      sourceUrl: target.sourceUrl,
       lastCollectedAt: nowIso()
     });
 
@@ -76,6 +82,7 @@ export async function POST(request: Request) {
       limit: input.limit,
       order
     });
+    throwIfAborted(request.signal);
     const videos = sortVideos(await saveVideos(updatedAccount, filteredVideos), order);
 
     return {
@@ -89,6 +96,135 @@ export async function POST(request: Request) {
   }, {
     fallbackMessage: "采集失败"
   });
+}
+
+function resolveCollectTarget(platform: Platform, name: string, uidOrUrl?: string) {
+  const lookupName = name.trim();
+  const explicitField = uidOrUrl ? normalizeLinkInput(uidOrUrl, { kind: "account" }) : "";
+  const inlineReference = explicitField ? "" : extractInlineAccountReference(platform, lookupName);
+  const explicit = explicitField || inlineReference;
+  const inlineLabel = inlineReference ? removeInlineReferenceLabel(lookupName) : "";
+
+  return {
+    lookupName,
+    uidOrUrl: explicit,
+    sourceUrl: explicit || lookupName,
+    displayNameFallback: explicit
+      ? inlineLabel || (explicitField && lookupName ? lookupName : fallbackAccountName(platform, explicit))
+      : lookupName
+  };
+}
+
+function extractInlineAccountReference(platform: Platform, input: string) {
+  const link = extractFirstLinkFromInput(input, { kind: "account" });
+  if (link && isPlatformAccountProfileUrl(platform, link)) {
+    return normalizeLinkInput(link, { kind: "account" });
+  }
+
+  const token = input.trim();
+  if (platform === "bilibili" && /^\d{4,}$/.test(token)) return token;
+  if (platform === "douyin" && /^MS4wLjAB[0-9A-Za-z_.-]{20,}$/.test(token)) return token;
+  return "";
+}
+
+function isPlatformAccountProfileUrl(platform: Platform, input: string) {
+  try {
+    const parsed = new URL(addHttpScheme(input));
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname;
+
+    if (platform === "bilibili") {
+      return host.endsWith("bilibili.com") && /^\/\d+/.test(pathname);
+    }
+
+    return (
+      /(^|\.)douyin\.com$/.test(host) || /(^|\.)iesdouyin\.com$/.test(host)
+    ) && (/\/(?:user|share\/user)\//i.test(pathname) || parsed.searchParams.has("sec_uid"));
+  } catch {
+    return false;
+  }
+}
+
+function addHttpScheme(input: string) {
+  return /^https?:\/\//i.test(input) ? input : `https://${input}`;
+}
+
+function removeInlineReferenceLabel(input: string) {
+  const link = extractFirstLinkFromInput(input, { kind: "account" });
+  if (!link) return "";
+  return input
+    .replace(link, "")
+    .replace(/https?:\/\/\S+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fallbackAccountName(platform: Platform, uidOrUrl: string) {
+  return `${platform === "bilibili" ? "B站账号" : "抖音账号"} ${shortHash(uidOrUrl)}`;
+}
+
+function makeTransientAccount(platform: Platform, name: string, uid: string, sourceUrl: string): Account {
+  const slug = `${platform}-${shortHash(uid)}`;
+  const now = nowIso();
+  return {
+    id: `${platform}:${slug}`,
+    slug,
+    platform,
+    name,
+    uid,
+    sourceUrl,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function inferAccountNameFromCollectedData(platform: Platform, raw: unknown, fallback: string) {
+  const candidate = collectAuthorNameCandidates(raw)
+    .map(cleanAccountNameCandidate)
+    .find(Boolean);
+  return candidate || cleanAccountNameCandidate(fallback) || fallbackAccountName(platform, fallback);
+}
+
+function collectAuthorNameCandidates(value: unknown, depth = 0): string[] {
+  if (!value || depth > 4) return [];
+  if (typeof value === "string") return [];
+  if (Array.isArray(value)) {
+    return value.slice(0, 40).flatMap((item) => collectAuthorNameCandidates(item, depth + 1));
+  }
+  if (typeof value !== "object") return [];
+
+  const object = value as Record<string, unknown>;
+  const directKeys = [
+    "authorName",
+    "author_name",
+    "ownerName",
+    "owner_name",
+    "nickname",
+    "display_name",
+    "userName",
+    "user_name",
+    "uname",
+    "author",
+    ...(depth > 1 ? ["name"] : [])
+  ];
+  const nestedKeys = ["metadata", "author", "owner", "user", "user_info", "account"];
+  const direct = directKeys
+    .map((key) => object[key])
+    .filter((item): item is string => typeof item === "string");
+  const nested = nestedKeys.flatMap((key) => collectAuthorNameCandidates(object[key], depth + 1));
+  return [...direct, ...nested];
+}
+
+function cleanAccountNameCandidate(value: string) {
+  const cleaned = value
+    .replace(/\s*\((?:mid|uid)\s*:\s*\d+\)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned.length > 60) return "";
+  if (/^https?:\/\//i.test(cleaned) || cleaned.includes("/")) return "";
+  if (/^MS4wLjAB[0-9A-Za-z_.-]{20,}$/.test(cleaned)) return "";
+  if (cleaned === "未命名视频") return "";
+  return cleaned;
 }
 
 function normalizeCollectOrder(order: LegacyCollectOrder): CollectOrder {
@@ -144,6 +280,7 @@ async function collectDateWindowCandidates(input: {
   toDate?: string;
   firstPageVideos: Video[];
   hydrateDetails: boolean;
+  signal?: AbortSignal;
 }) {
   const from = parseBoundaryDate(input.fromDate, "start");
   const to = parseBoundaryDate(input.toDate, "end");
@@ -157,13 +294,21 @@ async function collectDateWindowCandidates(input: {
       limit: BILIBILI_CANDIDATE_LIMIT,
       order: "pubdate",
       page,
-      hydrateDetails: input.hydrateDetails
+      hydrateDetails: input.hydrateDetails,
+      signal: input.signal
     });
     if (!nextPage.videos.length) break;
     videos.push(...nextPage.videos);
   }
 
   return dedupeVideos(videos);
+}
+
+function throwIfAborted(signal: AbortSignal) {
+  if (!signal.aborted) return;
+  const error = new Error("请求已取消");
+  error.name = "AbortError";
+  throw error;
 }
 
 function selectVideosForSave(input: {

@@ -5,7 +5,7 @@ import { writeCopyInputSchema } from "@/lib/write-validation";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  return apiJson(async () => prepareWriteBrief(await parseJsonBody(request, writeCopyInputSchema)), {
+  return apiJson(async () => prepareWriteBrief(await parseJsonBody(request, writeCopyInputSchema), { signal: request.signal }), {
     fallbackMessage: "准备写作 brief 失败"
   });
 }

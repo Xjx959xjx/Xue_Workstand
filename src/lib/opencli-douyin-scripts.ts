@@ -244,6 +244,7 @@ export function buildDouyinPostExtractJs(options: {
       url: awemeId ? "https://www.douyin.com/video/" + awemeId : "",
       author_uid: String(author.uid || ""),
       sec_uid: String(author.sec_uid || secUid),
+      authorName: String(author.nickname || author.name || author.unique_id || ""),
       video_url: firstUrl(item.video && (item.video.play_addr || item.video.download_addr)),
       raw_statistics: stats,
       source: "douyin_aweme_post_api"

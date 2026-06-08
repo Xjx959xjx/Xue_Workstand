@@ -67,8 +67,19 @@ export type BilibiliVideoStatsResult = {
   };
 };
 
-export async function searchBilibiliUserUid(name: string) {
-  const stdout = await runOpenCli(["bilibili", "search", name, "--type", "user", "--limit", "8", "-f", "json"]);
+class BilibiliSubtitleFetchError extends Error {
+  constructor(bvid: string, errors: unknown[]) {
+    const detail = errors.map(formatErrorMessage).filter(Boolean).join("；");
+    super(`B站视频 ${bvid} 字幕抓取失败：${detail || "opencli 未返回可用字幕结果"}`);
+    this.name = "BilibiliSubtitleFetchError";
+  }
+}
+
+export async function searchBilibiliUserUid(name: string, options: { signal?: AbortSignal } = {}) {
+  const stdout = await runOpenCli(["bilibili", "search", name, "--type", "user", "--limit", "8", "-f", "json"], {
+    timeout: BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS,
+    signal: options.signal
+  });
   const rows = asArray(parseJsonish(stdout));
   const normalizedName = name.trim().toLowerCase();
   const candidates = rows
@@ -95,6 +106,7 @@ export async function collectBilibiliVideos(input: {
   order?: CollectOrder;
   page?: number;
   hydrateDetails?: boolean;
+  signal?: AbortSignal;
 }) {
   const args = [
     "bilibili",
@@ -109,13 +121,17 @@ export async function collectBilibiliVideos(input: {
     "-f",
     "json"
   ];
-  const stdout = await runOpenCli(args);
+  const stdout = await runOpenCli(args, {
+    timeout: BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS,
+    signal: input.signal
+  });
   const raw = parseJsonish(stdout);
   const rows = asArray(raw);
   const videos = await Promise.all(
     rows.map((row) =>
       normalizeBilibiliVideo(row, input.account, {
-        hydrateDetails: input.hydrateDetails ?? true
+        hydrateDetails: input.hydrateDetails ?? true,
+        signal: input.signal
       })
     )
   );
@@ -170,20 +186,23 @@ export async function getBilibiliRelatedTopicComments(
   };
 }
 
-export async function getBilibiliSubtitle(video: Video) {
+export async function getBilibiliSubtitle(video: Video, options: { signal?: AbortSignal } = {}) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) return "";
 
+  const errors: unknown[] = [];
   const preferredLangs = ["zh-CN", "ai-zh"];
   for (const lang of preferredLangs) {
-    const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "--lang", lang, "-f", "json"]).catch(() => "");
+    const stdout = await runBilibiliSubtitleCommand(["bilibili", "subtitle", bvid, "--lang", lang, "-f", "json"], errors, options);
     const text = extractSubtitleText(parseJsonish(stdout));
     if (isUsableBilibiliSubtitle(text, video)) return text;
   }
 
-  const stdout = await runOpenCli(["bilibili", "subtitle", bvid, "-f", "json"]).catch(() => "");
+  const stdout = await runBilibiliSubtitleCommand(["bilibili", "subtitle", bvid, "-f", "json"], errors, options);
   const text = extractSubtitleText(parseJsonish(stdout));
-  return isUsableBilibiliSubtitle(text, video) ? text : "";
+  if (isUsableBilibiliSubtitle(text, video)) return text;
+  if (errors.length) throw new BilibiliSubtitleFetchError(bvid, errors);
+  return "";
 }
 
 export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw">, limit = 50) {
@@ -204,15 +223,24 @@ export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw
     .filter((comment) => comment.text) as BilibiliCommentSample[];
 }
 
-export async function getBilibiliVideoReference(video: Pick<Video, "id" | "url" | "raw" | "title" | "coverUrl">) {
+export async function getBilibiliVideoReference(
+  video: Pick<Video, "id" | "url" | "raw" | "title" | "coverUrl">,
+  options: OpenCliTimingOptions = {}
+) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) return null;
 
-  const opencliFields: Record<string, unknown> = await getBilibiliVideoFields(bvid).catch(() => ({}));
+  const opencliFields: Record<string, unknown> = await getBilibiliVideoFields(bvid, options).catch((error) => {
+    if (isAbortError(error, options.signal)) throw error;
+    return {};
+  });
   const publicFields =
     extractBilibiliCid(opencliFields) && (stringField(opencliFields.thumbnail) || stringField(opencliFields.pic))
       ? {}
-      : await getBilibiliPublicVideoFields(bvid).catch(() => ({}));
+      : await getBilibiliPublicVideoFields(bvid, options).catch((error) => {
+          if (isAbortError(error, options.signal)) throw error;
+          return {};
+        });
   const fields: Record<string, unknown> = {
     ...publicFields,
     ...opencliFields
@@ -227,7 +255,7 @@ export async function getBilibiliVideoReference(video: Pick<Video, "id" | "url" 
   return reference;
 }
 
-export async function downloadBilibiliVideo(video: Video) {
+export async function downloadBilibiliVideo(video: Video, options: { signal?: AbortSignal } = {}) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) {
     throw new Error("无法解析 B站视频 BV 号，不能下载音视频文件");
@@ -237,7 +265,9 @@ export async function downloadBilibiliVideo(video: Video) {
   let completed = false;
 
   try {
-    const stdout = await runOpenCli(["bilibili", "download", bvid, "--output", outputDir, "-f", "json"]);
+    const stdout = await runOpenCli(["bilibili", "download", bvid, "--output", outputDir, "-f", "json"], {
+      signal: options.signal
+    });
     const raw = parseJsonish(stdout);
     const rows = asArray(raw);
     const failed = rows.find((row) => {
@@ -372,14 +402,19 @@ function getBilibiliOpenCliOrder(order: CollectOrder | undefined) {
 async function normalizeBilibiliVideo(
   row: unknown,
   account: Account,
-  options: { hydrateDetails?: boolean } = {}
+  options: { hydrateDetails?: boolean; signal?: AbortSignal } = {}
 ): Promise<Video> {
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   const title = String(object.title || object.name || "未命名视频");
   const url = String(object.url || object.link || "");
   const bvid = extractBvid(url) || String(object.bvid || object.BVID || object.aid || "");
   const metadata: Record<string, unknown> =
-    options.hydrateDetails !== false && bvid ? await getBilibiliVideoFields(bvid).catch(() => ({})) : {};
+    options.hydrateDetails !== false && bvid
+      ? await getBilibiliVideoFields(bvid, { signal: options.signal }).catch((error) => {
+          if (isAbortError(error, options.signal)) throw error;
+          return {};
+        })
+      : {};
   const views = toNumber(object.plays ?? object.views ?? object.play ?? object.view ?? metadata.view);
   const likes = toNumber(object.likes ?? object.like ?? metadata.like);
   const comments = toNumber(object.comments ?? object.reply ?? object.replies ?? metadata.reply);
@@ -554,6 +589,27 @@ function formatErrorMessage(error: unknown) {
   if (/Failed to fetch|fetch failed/i.test(message)) return "网络请求失败（fetch failed）";
   if (message) return message.replace(/\s+/g, " ").slice(0, 240);
   return "未知错误";
+}
+
+async function runBilibiliSubtitleCommand(args: string[], errors: unknown[], options: { signal?: AbortSignal } = {}) {
+  try {
+    return await runOpenCli(args, { signal: options.signal });
+  } catch (error) {
+    if (isAbortError(error, options.signal)) throw error;
+    if (isBilibiliSubtitleMissingError(error)) return "";
+    errors.push(error);
+    return "";
+  }
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true;
+  return error instanceof Error && (error.name === "AbortError" || /任务已停止|aborted/i.test(error.message));
+}
+
+function isBilibiliSubtitleMissingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /没有字幕|无字幕|字幕不存在|未找到字幕|暂无字幕|no subtitles?|subtitle not found|not found subtitle/i.test(message);
 }
 
 function normalizeBilibiliComment(row: unknown, index: number): BilibiliCommentSample {

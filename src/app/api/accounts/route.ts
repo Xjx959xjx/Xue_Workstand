@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     const existing = !uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
     if (existing) return getAccountSummary(existing);
 
-    const uid = await resolveAccountUid(input.platform, input.name, uidOrUrl);
+    const uid = await resolveAccountUid(input.platform, input.name, uidOrUrl, { signal: request.signal });
     const account = await upsertAccount({
       platform: input.platform,
       name: input.name,

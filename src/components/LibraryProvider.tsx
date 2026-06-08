@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { getLibraryOverview } from "@/lib/client";
 import type { LibraryOverview, LibraryOverviewResponse } from "@/lib/types";
 
@@ -14,21 +14,28 @@ type LibraryContextValue = {
 const LibraryContext = createContext<LibraryContextValue | null>(null);
 let libraryOverviewCache: LibraryOverviewResponse | null = null;
 let libraryOverviewRequest: Promise<LibraryOverviewResponse> | null = null;
+let libraryOverviewRequestSeq = 0;
 
 export function LibraryProvider({ children }: { children: React.ReactNode }) {
   const [library, setLibrary] = useState<LibraryOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async (options: { force?: boolean } = {}) => {
+    const refreshSeq = refreshSeqRef.current + 1;
+    refreshSeqRef.current = refreshSeq;
     setLoading(true);
     setError("");
     try {
-      setLibrary(buildLibraryOverview(await loadLibraryOverview(options.force ?? true)));
+      const overview = await loadLibraryOverview(options.force ?? true);
+      if (refreshSeq !== refreshSeqRef.current) return;
+      setLibrary(buildLibraryOverview(overview));
     } catch (err) {
+      if (refreshSeq !== refreshSeqRef.current) return;
       setError(err instanceof Error ? err.message : "读取本地风格库失败，请确认 style-library 目录可访问。");
     } finally {
-      setLoading(false);
+      if (refreshSeq === refreshSeqRef.current) setLoading(false);
     }
   }, []);
 
@@ -59,18 +66,21 @@ function buildLibraryOverview(library: LibraryOverviewResponse): LibraryOverview
 }
 
 function loadLibraryOverview(force: boolean) {
+  if (!force && libraryOverviewRequest) return libraryOverviewRequest;
   if (!force && libraryOverviewCache) return Promise.resolve(libraryOverviewCache);
-  if (libraryOverviewRequest) return libraryOverviewRequest;
 
-  libraryOverviewRequest = getLibraryOverview()
+  const requestSeq = libraryOverviewRequestSeq + 1;
+  libraryOverviewRequestSeq = requestSeq;
+  const request = getLibraryOverview()
     .then((library) => {
-      libraryOverviewCache = library;
+      if (requestSeq === libraryOverviewRequestSeq) libraryOverviewCache = library;
       return library;
     })
     .finally(() => {
-      libraryOverviewRequest = null;
+      if (libraryOverviewRequest === request) libraryOverviewRequest = null;
     });
-  return libraryOverviewRequest;
+  libraryOverviewRequest = request;
+  return request;
 }
 
 function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
