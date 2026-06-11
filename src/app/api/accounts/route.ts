@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
+import { resolveAccountProfile } from "@/lib/account-profile";
 import { deleteAccounts, findAccountByName, getAccountDetail, getAccountSummary, upsertAccount } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 import { resolveAccountUid } from "@/lib/opencli";
@@ -46,14 +47,20 @@ export async function POST(request: Request) {
     const uidOrUrl = normalizeAccountLinkInput(input.uidOrUrl);
     const sourceUrl = normalizeAccountLinkInput(input.sourceUrl);
     const existing = !uidOrUrl ? await findAccountByName(input.platform, input.name) : null;
-    if (existing) return getAccountSummary(existing);
-
-    const uid = await resolveAccountUid(input.platform, input.name, uidOrUrl, { signal: request.signal });
+    const uid = existing?.uid || await resolveAccountUid(input.platform, input.name, uidOrUrl, { signal: request.signal });
+    const profile = await resolveAccountProfile({
+      platform: input.platform,
+      uid,
+      fallbackName: existing?.name || input.name,
+      sourceUrl: sourceUrl || uidOrUrl || existing?.sourceUrl || input.name,
+      signal: request.signal
+    });
     const account = await upsertAccount({
       platform: input.platform,
-      name: input.name,
+      name: profile.name,
       uid,
-      sourceUrl: sourceUrl || uidOrUrl || input.name
+      sourceUrl: profile.sourceUrl,
+      avatarUrl: profile.avatarUrl
     });
 
     return getAccountSummary(account);

@@ -44,6 +44,10 @@ function files(dir, extension) {
   }
 }
 
+function isCopySourceJson(file) {
+  return file.endsWith(".json") && !file.endsWith(".style-analysis.json");
+}
+
 function pushIssue(type, file, detail) {
   issues.push({ type, file, detail });
 }
@@ -131,7 +135,9 @@ for (const platform of platforms) {
   }
 }
 
-for (const file of files(path.join(root, "copy-tools", "sources"), ".json")) {
+checkDouyinHotlistWatchlist();
+
+for (const file of files(path.join(root, "copy-tools", "sources"), ".json").filter(isCopySourceJson)) {
   const sourceFile = path.join(root, "copy-tools", "sources", file);
   const source = readJson(sourceFile);
   if (!source) continue;
@@ -236,6 +242,67 @@ for (const [projectId, sourceIds] of projectSourceRefs.entries()) {
 }
 
 checkGrossMarginLibrary();
+
+function checkDouyinHotlistWatchlist() {
+  const hotlistAccountIds = new Set();
+  for (const slug of dirs(path.join(root, "douyin-hotlist", "accounts"))) {
+    const base = path.join(root, "douyin-hotlist", "accounts", slug);
+    const accountFile = path.join(base, "account.json");
+    const account = readJson(accountFile);
+    if (!account) continue;
+
+    const expectedAccountId = `douyin-hotlist:${slug}`;
+    hotlistAccountIds.add(expectedAccountId);
+    if (account.id !== expectedAccountId) {
+      pushIssue("douyin-hotlist-account-id-slug-mismatch", accountFile, `id=${account.id}, expected=${expectedAccountId}`);
+    }
+    if (account.platform !== "douyin") {
+      pushIssue("douyin-hotlist-account-invalid-platform", accountFile, String(account.platform));
+    }
+
+    for (const file of files(path.join(base, "videos"), ".json")) {
+      const id = file.slice(0, -5);
+      const videoFile = path.join(base, "videos", file);
+      const video = readJson(videoFile);
+      if (!video) continue;
+      if (video.id !== id) {
+        pushIssue("douyin-hotlist-video-id-filename-mismatch", videoFile, `id=${video.id}, file=${id}`);
+      }
+      if (video.accountId !== account.id) {
+        pushIssue("douyin-hotlist-video-account-mismatch", videoFile, `video.accountId=${video.accountId}, account=${account.id}`);
+      }
+    }
+  }
+
+  const watchlistFile = path.join(root, "douyin-hotlist", "watchlist.json");
+  if (!exists(watchlistFile)) return;
+
+  const watchlist = readJson(watchlistFile);
+  if (!watchlist) return;
+  if (!Array.isArray(watchlist.accountIds)) {
+    pushIssue("douyin-hotlist-invalid-account-ids", watchlistFile, "accountIds must be an array");
+    return;
+  }
+
+  const seen = new Set();
+  for (const accountId of watchlist.accountIds) {
+    if (typeof accountId !== "string" || !accountId.trim()) {
+      pushIssue("douyin-hotlist-invalid-account-ref", watchlistFile, JSON.stringify(accountId));
+      continue;
+    }
+    if (seen.has(accountId)) {
+      pushIssue("douyin-hotlist-duplicate-account-ref", watchlistFile, accountId);
+    }
+    seen.add(accountId);
+    if (!accountId.startsWith("douyin-hotlist:")) {
+      pushIssue("douyin-hotlist-invalid-account-ref-scope", watchlistFile, accountId);
+      continue;
+    }
+    if (!hotlistAccountIds.has(accountId)) {
+      pushIssue("douyin-hotlist-missing-account-ref", watchlistFile, accountId);
+    }
+  }
+}
 
 function checkGrossMarginLibrary() {
   const grossMarginRoot = path.join(root, "gross-margin");

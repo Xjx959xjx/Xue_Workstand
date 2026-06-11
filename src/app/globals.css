@@ -1,23 +1,24 @@
 /*
-  CSS map: 00-03 hold global tokens, base shell, and structural primitives.
-  styles/primitives/* holds reusable controls, forms, feedback, interaction states, and workspaces.
-  Numbered page files should stay page-layout scoped; 11-responsive is only shell/global responsive.
+  CSS map: tokens/base/primitives establish shared behavior, 16-workbench-system
+  applies the common workbench skin, and page files loaded after it own route-specific
+  layout and density. Do not add a late global page-polish layer.
 */
 @import "./styles/00-tokens.css";
 @import "./styles/01-base.css";
-@import "./styles/02-shell.css";
 @import "./styles/03-primitives.css";
 @import "./styles/primitives/buttons.css";
 @import "./styles/primitives/forms.css";
 @import "./styles/primitives/feedback.css";
 @import "./styles/primitives/workspaces.css";
 @import "./styles/primitives/interactions.css";
+@import "./styles/16-workbench-system.css";
+@import "./styles/02-shell.css";
 @import "./styles/06-workspaces.css";
 @import "./styles/07-writer.css";
 @import "./styles/09-project-workbench.css";
 @import "./styles/10-documents-modals.css";
-@import "./styles/11-responsive.css";
 @import "./styles/12-assets.css";
 @import "./styles/13-gross-margin.css";
-@import "./styles/14-workbench-polish.css";
 @import "./styles/15-tools.css";
+@import "./styles/17-douyin-hotlist.css";
+@import "./styles/11-responsive.css";

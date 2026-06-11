@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { CheckSquare, Trash2, X } from "lucide-react";
+import { CheckCircle2, Search, Trash2, X } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountListItem } from "@/lib/types";
 
@@ -11,6 +11,7 @@ type AccountSidebarProps = {
   accounts: AccountListItem[];
   allAccountCount: number;
   busy: string;
+  loading: boolean;
   selectedAccountId: string;
   selectedAccountIds: string[];
   totalTranscriptCount: number;
@@ -27,6 +28,7 @@ export const AccountSidebar = memo(function AccountSidebar({
   accounts,
   allAccountCount,
   busy,
+  loading,
   selectedAccountId,
   selectedAccountIds,
   totalTranscriptCount,
@@ -42,7 +44,7 @@ export const AccountSidebar = memo(function AccountSidebar({
         <div>
           <h2>{accountManageMode ? "选择账号" : "账号"}</h2>
           <p className="pane-subtitle">
-            {accounts.length} / {allAccountCount} · {totalTranscriptCount} 转写
+            {loading ? "正在读取本地库" : `${accounts.length} / ${allAccountCount} · ${totalTranscriptCount} 转写`}
           </p>
         </div>
         <div className="account-manage-actions">
@@ -53,7 +55,7 @@ export const AccountSidebar = memo(function AccountSidebar({
             title={accountManageMode ? "退出选择" : "批量选择"}
             type="button"
           >
-            {accountManageMode ? <X aria-hidden="true" size={15} /> : <CheckSquare aria-hidden="true" size={15} />}
+            {accountManageMode ? <X aria-hidden="true" size={15} /> : <CheckCircle2 aria-hidden="true" size={15} />}
           </button>
         </div>
       </div>
@@ -74,7 +76,8 @@ export const AccountSidebar = memo(function AccountSidebar({
           </button>
         </div>
       ) : null}
-      <div className="pane-search">
+      <div className="pane-search search-control">
+        <Search aria-hidden="true" size={15} />
         <input
           aria-label="搜索账号"
           autoComplete="off"
@@ -88,7 +91,6 @@ export const AccountSidebar = memo(function AccountSidebar({
         {accounts.map((account) => {
           const selected = selectedAccountId === account.id;
           const managed = selectedAccountIds.includes(account.id);
-          const completion = account.videoCount ? Math.round((account.transcriptCount / account.videoCount) * 100) : 0;
           return (
             <button
               aria-current={!accountManageMode && selected ? "true" : undefined}
@@ -105,20 +107,41 @@ export const AccountSidebar = memo(function AccountSidebar({
               type="button"
             >
               {accountManageMode ? <span className={`check-dot ${managed ? "checked" : ""}`} aria-hidden="true" /> : null}
-              <span>
+              <span
+                className={`account-avatar tone-${getAvatarTone(account.id)} ${account.avatarUrl ? "has-image" : ""}`}
+                aria-hidden="true"
+              >
+                {/* Dynamic platform avatars need no-referrer; next/image cannot safely predeclare these hosts. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                {account.avatarUrl ? <img alt="" height={30} referrerPolicy="no-referrer" src={account.avatarUrl} width={30} /> : null}
+                {getAccountInitial(account.name)}
+              </span>
+              <span className="account-list-copy">
                 <span className="list-title">{account.name}</span>
                 <span className="list-meta">
                   {formatPlatform(account.platform)} · {account.videoCount} 条 · {account.transcriptCount} 转写
-                </span>
-                <span className="list-progress" aria-label={`转写覆盖 ${completion}%`}>
-                  <span style={{ width: `${completion}%` }} />
                 </span>
               </span>
             </button>
           );
         })}
-        {!accounts.length ? <p className="subtle">没有匹配的账号。</p> : null}
+        {loading ? (
+          <div className="library-loading-list" aria-hidden="true">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <span className="library-loading-row account" key={index} />
+            ))}
+          </div>
+        ) : null}
+        {!loading && !accounts.length ? <p className="subtle">没有匹配的账号。</p> : null}
       </div>
     </aside>
   );
 });
+
+function getAccountInitial(name: string) {
+  return Array.from(name.trim()).at(0)?.toLocaleUpperCase("zh-CN") || "账";
+}
+
+function getAvatarTone(id: string) {
+  return Array.from(id).reduce((sum, char) => sum + char.charCodeAt(0), 0) % 8;
+}

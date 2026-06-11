@@ -28,6 +28,7 @@ import {
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
 import { fileExists, readJsonFile, writeFileAtomic, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
 import { libraryRoot, normalizeStorageSegment } from "./storage/core";
+import { ensureDouyinHotlistDirs } from "./storage/douyin-hotlist";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
 export { libraryRoot } from "./storage/core";
 export {
@@ -84,6 +85,46 @@ export type AccountStyleMeta = {
   updatedAt: string;
 };
 
+export type ProjectStyleMeta = {
+  sampleHash: string;
+  sourceAccountIds: string[];
+  sourceMaterialIds: string[];
+  accountFingerprints: Array<{
+    accountId: string;
+    styleHash: string;
+    sampleFingerprints: Array<{
+      videoId: string;
+      hash: string;
+    }>;
+  }>;
+  materialFingerprints: Array<{
+    sourceId: string;
+    hash: string;
+  }>;
+  sampleCount: number;
+  materialCount: number;
+  usedModel: string;
+  fallback?: boolean;
+  fallbackReason?: string;
+  updatedAt: string;
+};
+
+export type StyleSampleAnalysisCache = {
+  version: 1;
+  cacheKey: string;
+  kind: "account-video" | "copy-source";
+  sourceId: string;
+  title: string;
+  inputChars: number;
+  analysis: string;
+  usedModel: string;
+  reasoningEffort: string;
+  requestedServiceTier?: string;
+  actualServiceTier?: string;
+  wireApi?: string;
+  generatedAt: string;
+};
+
 function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {
   return video.transcriptStatus === "completed" || Boolean(video.transcriptPath);
 }
@@ -122,6 +163,10 @@ function copySourceJsonPath(id: string) {
   return path.join(copySourcesPath(), `${id}.json`);
 }
 
+function copySourceStyleAnalysisPath(id: string) {
+  return path.join(copySourcesPath(), `${id}.style-analysis.json`);
+}
+
 function copySourceTranscriptPath(id: string) {
   return path.join(copySourcesPath(), `${id}.txt`);
 }
@@ -136,6 +181,10 @@ function projectJsonPath(slug: string) {
 
 function projectStylePath(slug: string) {
   return path.join(projectPath(slug), "style.md");
+}
+
+function projectStyleMetaPath(slug: string) {
+  return path.join(projectPath(slug), "style.meta.json");
 }
 
 function projectDraftsPath(slug: string) {
@@ -176,6 +225,14 @@ function stylePath(platform: Platform, slug: string) {
 
 function styleMetaPath(platform: Platform, slug: string) {
   return path.join(accountPath(platform, slug), "style.meta.json");
+}
+
+function accountStyleSamplesPath(platform: Platform, slug: string) {
+  return path.join(accountPath(platform, slug), "style-samples");
+}
+
+function accountStyleSampleAnalysisPath(platform: Platform, slug: string, videoId: string) {
+  return path.join(accountStyleSamplesPath(platform, slug), `${normalizeVideoId(videoId)}.json`);
 }
 
 function normalizeAccountSlug(accountIdOrSlug: string) {
@@ -283,6 +340,7 @@ export async function ensureLibrary() {
     fs.mkdir(projectsPath(), { recursive: true }),
     fs.mkdir(copySourcesPath(), { recursive: true }),
     fs.mkdir(engagementPath(), { recursive: true }),
+    ensureDouyinHotlistDirs(),
     ensureGrossMarginDirs()
   ]);
 }
@@ -310,6 +368,11 @@ async function findExistingAccount(platform: Platform, uid: string) {
   return null;
 }
 
+export async function findAccountByUid(platform: Platform, uid: string) {
+  await ensureLibrary();
+  return findExistingAccount(platform, uid);
+}
+
 export async function findAccountByName(platform: Platform, name: string) {
   await ensureLibrary();
   const base = platformPath(platform);
@@ -330,6 +393,7 @@ export async function upsertAccount(input: {
   name: string;
   uid: string;
   sourceUrl?: string;
+  avatarUrl?: string;
   lastCollectedAt?: string;
 }) {
   await ensureLibrary();
@@ -346,6 +410,7 @@ export async function upsertAccount(input: {
     name: input.name || existing?.name || input.uid,
     uid: input.uid,
     sourceUrl: input.sourceUrl || existing?.sourceUrl,
+    avatarUrl: input.avatarUrl || existing?.avatarUrl,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     lastCollectedAt: input.lastCollectedAt ?? existing?.lastCollectedAt
@@ -533,7 +598,7 @@ export async function getCopySources() {
   const sources = (
     await Promise.all(
       files
-        .filter((file) => file.endsWith(".json"))
+        .filter((file) => file.endsWith(".json") && !file.endsWith(".style-analysis.json"))
         .map((file) => readJson<CopySource>(path.join(copySourcesPath(), file)))
     )
   )
@@ -561,12 +626,15 @@ export async function deleteCopySources(sourceIds: string[]) {
   for (const sourceId of uniqueIds) {
     const jsonFile = copySourceJsonPath(sourceId);
     const transcriptFile = copySourceTranscriptPath(sourceId);
+    const styleAnalysisFile = copySourceStyleAnalysisPath(sourceId);
     const hasJson = await exists(jsonFile);
     const hasTranscript = await exists(transcriptFile);
-    if (!hasJson && !hasTranscript) continue;
+    const hasStyleAnalysis = await exists(styleAnalysisFile);
+    if (!hasJson && !hasTranscript && !hasStyleAnalysis) continue;
     await Promise.all([
       fs.rm(jsonFile, { force: true }),
-      fs.rm(transcriptFile, { force: true })
+      fs.rm(transcriptFile, { force: true }),
+      fs.rm(styleAnalysisFile, { force: true })
     ]);
     deleted.push(sourceId);
   }
@@ -799,10 +867,14 @@ export async function deleteTranscript(platform: Platform, accountId: string, vi
   const normalizedVideoId = normalizeVideoId(videoId);
   const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
   const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
+  const styleAnalysisFile = accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId);
   const video = await readJson<Video>(videoFile);
   if (!video) throw new Error("找不到视频元数据");
 
-  await fs.rm(transcriptFile, { force: true });
+  await Promise.all([
+    fs.rm(transcriptFile, { force: true }),
+    fs.rm(styleAnalysisFile, { force: true })
+  ]);
   const next: Video = {
     ...video,
     transcriptStatus: "not_started",
@@ -827,7 +899,8 @@ export async function deleteVideos(platform: Platform, accountId: string, videoI
 
     await Promise.all([
       fs.rm(videoFile, { force: true }),
-      fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true })
+      fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true }),
+      fs.rm(accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId), { force: true })
     ]);
     deleted.push(normalizedVideoId);
   }
@@ -891,11 +964,65 @@ export async function saveAccountStyleMeta(platform: Platform, accountId: string
   return next;
 }
 
+export async function readAccountStyleSampleAnalysis(platform: Platform, accountId: string, videoId: string) {
+  const account = await resolveAccount(platform, accountId);
+  await ensureAccountDirs(account.platform, account.slug);
+  return readJson<StyleSampleAnalysisCache>(accountStyleSampleAnalysisPath(account.platform, account.slug, videoId));
+}
+
+export async function saveAccountStyleSampleAnalysis(
+  platform: Platform,
+  accountId: string,
+  videoId: string,
+  cache: StyleSampleAnalysisCache
+) {
+  const account = await resolveAccount(platform, accountId);
+  await ensureAccountDirs(account.platform, account.slug);
+  await writeJson(accountStyleSampleAnalysisPath(account.platform, account.slug, videoId), cache);
+  return cache;
+}
+
 export async function saveProjectStyle(projectId: string, content: string) {
   const project = await resolveProject(projectId);
   await ensureProjectDirs(project.slug);
   await writeTextFileAtomic(projectStylePath(project.slug), content.trimEnd() + "\n");
   return content.trimEnd();
+}
+
+export async function readProjectStyle(projectId: string) {
+  const project = await resolveProject(projectId);
+  await ensureProjectDirs(project.slug);
+  return fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE);
+}
+
+export async function readProjectStyleMeta(projectId: string) {
+  const project = await resolveProject(projectId);
+  await ensureProjectDirs(project.slug);
+  return readJson<ProjectStyleMeta>(projectStyleMetaPath(project.slug));
+}
+
+export async function saveProjectStyleMeta(projectId: string, meta: Omit<ProjectStyleMeta, "updatedAt">) {
+  const project = await resolveProject(projectId);
+  await ensureProjectDirs(project.slug);
+  const next: ProjectStyleMeta = {
+    ...meta,
+    updatedAt: nowIso()
+  };
+  await writeJson(projectStyleMetaPath(project.slug), next);
+  return next;
+}
+
+export async function readCopySourceStyleAnalysis(sourceId: string) {
+  await ensureLibrary();
+  const id = normalizeCopySourceId(sourceId);
+  return readJson<StyleSampleAnalysisCache>(copySourceStyleAnalysisPath(id));
+}
+
+export async function saveCopySourceStyleAnalysis(sourceId: string, cache: StyleSampleAnalysisCache) {
+  await ensureLibrary();
+  const id = normalizeCopySourceId(sourceId);
+  await writeJson(copySourceStyleAnalysisPath(id), cache);
+  return cache;
 }
 
 export async function saveDraft(input: DraftInput) {
@@ -1414,16 +1541,28 @@ export async function getDrafts() {
   return [...accountDrafts, ...projectDrafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
 }
 
-export async function getLibraryOverview(): Promise<LibraryOverviewResponse> {
+export async function getLibraryOverview(options: { includeAuxiliary?: boolean } = {}): Promise<LibraryOverviewResponse> {
   await ensureLibrary();
-  const [accounts, copySources, engagementRecords, accountDrafts, projectDrafts] = await Promise.all([
-    getAllAccountListItems(),
+  const accounts = await getAllAccountListItems();
+  const projects = await getAllProjectListItems(accounts);
+
+  if (!options.includeAuxiliary) {
+    return {
+      root: libraryRoot(),
+      accounts,
+      projects,
+      copySources: [],
+      engagementRecords: [],
+      drafts: []
+    };
+  }
+
+  const [copySources, engagementRecords, accountDrafts, projectDrafts] = await Promise.all([
     getCopySources(),
     getEngagementRecords(),
     getAllAccountDrafts(),
     getAllProjectDrafts()
   ]);
-  const projects = await getAllProjectListItems(accounts);
   const drafts = [...accountDrafts, ...projectDrafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
 
   return {
@@ -1759,13 +1898,14 @@ function contentTypeFromExtension(file: string) {
   return "image/jpeg";
 }
 
-export async function getTopTranscriptSamples(platform: Platform, accountId: string, maxSamples = 8) {
+export async function getTopTranscriptSamples(platform: Platform, accountId: string, maxSamples: number | "all" = 8) {
   const account = await resolveAccount(platform, accountId);
   const summary = await getAccountSummary(account);
-  const completed = summary.videos.filter(videoHasTranscript).slice(0, maxSamples);
+  const completed = summary.videos.filter(videoHasTranscript);
+  const selected = maxSamples === "all" ? completed : completed.slice(0, maxSamples);
 
   const samples = await Promise.all(
-    completed.map(async (video) => ({
+    selected.map(async (video) => ({
       video,
       transcript: await readTranscript(platform, accountId, video.id)
     }))

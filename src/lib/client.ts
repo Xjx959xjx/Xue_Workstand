@@ -8,6 +8,8 @@ import {
   CopySource,
   Draft,
   DraftCoverReference,
+  DouyinHotlistRefreshResult,
+  DouyinHotlistResponse,
   EngagementRecord,
   GrossMarginLibrary,
   GrossMarginMonitorRecord,
@@ -27,11 +29,21 @@ import {
   WriteResult
 } from "./types";
 import type { LinkTranscriptionResult } from "./transcription";
+import type { PublishCopyInput, PublishCopyResult } from "./publish-copy-types";
 
 let draftsCache: { drafts: Draft[] } | null = null;
 let draftsRequest: Promise<{ drafts: Draft[] }> | null = null;
 let copySourcesCache: { sources: CopySource[] } | null = null;
 let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
+let engagementRecordsCache: { records: EngagementRecord[] } | null = null;
+let engagementRecordsRequest: Promise<{ records: EngagementRecord[] }> | null = null;
+let grossMarginLibraryCache: GrossMarginLibrary | null = null;
+let grossMarginLibraryRequest: Promise<GrossMarginLibrary> | null = null;
+const DEFAULT_DOUYIN_HOTLIST_WINDOW_DAYS = 3;
+const DEFAULT_DOUYIN_HOTLIST_WINDOW = "3d";
+const douyinHotlistCache = new Map<string, DouyinHotlistResponse>();
+const douyinHotlistRequests = new Map<string, Promise<DouyinHotlistResponse>>();
+let douyinHotlistCacheRevision = 0;
 
 type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
 
@@ -226,11 +238,55 @@ function rememberDrafts(drafts: Draft[]) {
   };
 }
 
+function rememberDraftFromJob(job: JobRecord) {
+  const result = job.result;
+  if (!result || typeof result !== "object") return;
+
+  const draft = (result as Partial<WriteResult>).draft;
+  if (!draft || typeof draft !== "object" || typeof draft.id !== "string") return;
+
+  rememberDrafts([draft as Draft]);
+}
+
 function rememberCopySources(sources: CopySource[]) {
   if (!sources.length || !copySourcesCache) return;
   copySourcesCache = {
     sources: mergeById(sources, copySourcesCache.sources, compareCreatedAtDesc)
   };
+}
+
+function rememberEngagementRecords(records: EngagementRecord[]) {
+  if (!records.length || !engagementRecordsCache) return;
+  engagementRecordsCache = {
+    records: mergeById(records, engagementRecordsCache.records, compareCreatedAtDesc)
+  };
+}
+
+function rememberGrossMarginLibrary(library: GrossMarginLibrary) {
+  grossMarginLibraryCache = library;
+}
+
+function getDouyinHotlistWindowDays(windowDays?: number) {
+  if (!Number.isFinite(windowDays)) return DEFAULT_DOUYIN_HOTLIST_WINDOW_DAYS;
+  return Math.max(1, Math.min(14, Math.trunc(windowDays || DEFAULT_DOUYIN_HOTLIST_WINDOW_DAYS)));
+}
+
+function getDouyinHotlistWindowKey(input: { windowDays?: number; window?: string } = {}) {
+  const window = input.window?.trim().toLowerCase();
+  if (window) return window;
+  const windowDays = getDouyinHotlistWindowDays(input.windowDays);
+  return windowDays === DEFAULT_DOUYIN_HOTLIST_WINDOW_DAYS ? DEFAULT_DOUYIN_HOTLIST_WINDOW : `${windowDays}d`;
+}
+
+function rememberDouyinHotlist(snapshot: DouyinHotlistResponse) {
+  douyinHotlistCache.set(snapshot.summary.windowKey || getDouyinHotlistWindowKey({ windowDays: snapshot.summary.windowDays }), snapshot);
+}
+
+function resetDouyinHotlistCache(snapshot?: DouyinHotlistResponse) {
+  douyinHotlistCacheRevision += 1;
+  douyinHotlistCache.clear();
+  douyinHotlistRequests.clear();
+  if (snapshot) rememberDouyinHotlist(snapshot);
 }
 
 function mergeById<T extends { id: string }>(
@@ -281,13 +337,27 @@ export function getLibraryOverview() {
 }
 
 export function getGrossMarginLibrary() {
-  return requestJson<GrossMarginLibrary>("/api/gross-margin");
+  if (grossMarginLibraryCache) return Promise.resolve(grossMarginLibraryCache);
+  if (grossMarginLibraryRequest) return grossMarginLibraryRequest;
+
+  grossMarginLibraryRequest = requestJson<GrossMarginLibrary>("/api/gross-margin")
+    .then((library) => {
+      rememberGrossMarginLibrary(library);
+      return library;
+    })
+    .finally(() => {
+      grossMarginLibraryRequest = null;
+    });
+  return grossMarginLibraryRequest;
 }
 
 export function saveGrossMarginPriceTable(input: Pick<GrossMarginPriceTable, "platform" | "items">) {
   return requestJson<{ table: GrossMarginPriceTable; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "savePriceTable", ...input })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -301,6 +371,9 @@ export function saveGrossMarginMonitorRecord(input: {
   return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "saveMonitorRecord", ...input })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -317,6 +390,9 @@ export function bulkSaveGrossMarginMonitorRecords(input: {
   }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "bulkSaveMonitorRecords", ...input })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -324,6 +400,9 @@ export function refreshGrossMarginMonitorRecord(recordId: string) {
   return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "refreshMonitorRecord", recordId })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -331,6 +410,9 @@ export function refreshGrossMarginMonitorRecords(recordIds?: string[]) {
   return requestJson<{ records: GrossMarginMonitorRecord[]; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "refreshMonitorRecords", recordIds })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -338,6 +420,9 @@ export function updateGrossMarginMonitorPlayTarget(recordId: string, target: num
   return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "updateMonitorPlayTarget", recordId, target })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -345,6 +430,9 @@ export function updateGrossMarginMonitorPlayCurrent(recordId: string, current: n
   return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "updateMonitorPlayCurrent", recordId, current })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -352,6 +440,9 @@ export function deleteGrossMarginMonitorRecord(recordId: string) {
   return requestJson<{ deleted: string; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "deleteMonitorRecord", recordId })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
   });
 }
 
@@ -398,7 +489,10 @@ export function getJobs() {
 }
 
 export function getJob(jobId: string) {
-  return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`);
+  return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`).then((result) => {
+    rememberDraftFromJob(result.job);
+    return result;
+  });
 }
 
 export function startJob(input: JobStartInput) {
@@ -427,6 +521,83 @@ export function collectAccount(input: {
   return requestJson<CollectResult>("/api/collect", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export function getDouyinHotlist(input: { windowDays?: number; window?: string } = {}) {
+  const windowKey = getDouyinHotlistWindowKey(input);
+  const cached = douyinHotlistCache.get(windowKey);
+  if (cached) return Promise.resolve(cached);
+
+  const inFlight = douyinHotlistRequests.get(windowKey);
+  if (inFlight) return inFlight;
+
+  const params = new URLSearchParams();
+  params.set("window", windowKey);
+  const cacheRevision = douyinHotlistCacheRevision;
+  const request = requestJson<DouyinHotlistResponse>(`/api/douyin-hotlist?${params.toString()}`)
+    .then((result) => {
+      if (cacheRevision === douyinHotlistCacheRevision) rememberDouyinHotlist(result);
+      return result;
+    })
+    .finally(() => {
+      if (douyinHotlistRequests.get(windowKey) === request) {
+        douyinHotlistRequests.delete(windowKey);
+      }
+    });
+  douyinHotlistRequests.set(windowKey, request);
+  return request;
+}
+
+export function getCachedDouyinHotlist(input: { windowDays?: number; window?: string } = {}) {
+  return douyinHotlistCache.get(getDouyinHotlistWindowKey(input)) || null;
+}
+
+export function prefetchWorkspaceRouteData(href: string): Promise<unknown> | undefined {
+  const pathname = href.split("?")[0];
+  if (pathname === "/douyin-hotlist") {
+    const queryString = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+    return getDouyinHotlist({ window: new URLSearchParams(queryString).get("window") || undefined });
+  }
+  if (pathname === "/project-workbench") return getCopySources();
+  if (pathname === "/writer") return getDrafts();
+  if (pathname === "/assets") return getEngagementRecords();
+  if (pathname === "/gross-margin" || pathname === "/gross-margin/monitor") return getGrossMarginLibrary();
+  return undefined;
+}
+
+export function addDouyinHotlistAccount(query: string) {
+  return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
+    method: "POST",
+    body: JSON.stringify({ action: "addAccount", query })
+  }).then((result) => {
+    resetDouyinHotlistCache(result);
+    return result;
+  });
+}
+
+export function removeDouyinHotlistAccount(accountId: string) {
+  return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
+    method: "POST",
+    body: JSON.stringify({ action: "removeAccount", accountId })
+  }).then((result) => {
+    resetDouyinHotlistCache(result);
+    return result;
+  });
+}
+
+export function refreshDouyinHotlist(input: {
+  accountIds?: string[];
+  limit?: number;
+  windowDays?: number;
+  window?: string;
+} = {}) {
+  return requestJson<DouyinHotlistRefreshResult>("/api/douyin-hotlist", {
+    method: "POST",
+    body: JSON.stringify({ action: "refresh", ...input })
+  }).then((result) => {
+    resetDouyinHotlistCache(result);
+    return result;
   });
 }
 
@@ -559,6 +730,31 @@ export function refreshCopySources() {
   return getCopySources();
 }
 
+export function getCachedEngagementRecords() {
+  return engagementRecordsCache;
+}
+
+export function getEngagementRecords() {
+  if (engagementRecordsCache) return Promise.resolve(engagementRecordsCache);
+  if (engagementRecordsRequest) return engagementRecordsRequest;
+
+  engagementRecordsRequest = requestJson<{ records: EngagementRecord[] }>("/api/engagement")
+    .then((result) => {
+      engagementRecordsCache = result;
+      return result;
+    })
+    .finally(() => {
+      engagementRecordsRequest = null;
+    });
+  return engagementRecordsRequest;
+}
+
+export function refreshEngagementRecords() {
+  engagementRecordsCache = null;
+  engagementRecordsRequest = null;
+  return getEngagementRecords();
+}
+
 export function transcribeCopySource(input: { url: string; titleHint?: string; analyzeVideo?: boolean }) {
   return requestJson<{ source: CopySource; result: LinkTranscriptionResult }>("/api/copy-sources", {
     method: "POST",
@@ -589,6 +785,13 @@ export type SingleVideoTranscribeResult = {
 
 export function transcribeSingleVideoLink(input: { url: string; titleHint?: string }) {
   return requestJson<{ result: SingleVideoTranscribeResult }>("/api/tools/single-video/transcribe", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function generatePublishCopy(input: PublishCopyInput) {
+  return requestJson<PublishCopyResult>("/api/tools/publish-copy", {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -672,6 +875,17 @@ export type StyleGenerationResponse = {
   cached?: boolean;
   generationMode?: "full" | "incremental" | "cached";
   sampleHash?: string;
+  analysisCount?: number;
+  analysisGeneratedCount?: number;
+  analysisCachedCount?: number;
+  analysisConcurrency?: number;
+  inputChars?: number;
+  firstDeltaMs?: number;
+  totalMs?: number;
+  wireApi?: string;
+  reasoningEffort?: string;
+  requestedServiceTier?: string;
+  actualServiceTier?: string;
 };
 
 export function generateStyle(platform: Platform, accountId: string) {
@@ -750,11 +964,13 @@ export async function streamGenerateProjectStyle(
   },
   handlers: {
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
+    onDelta?: (delta: string) => void;
     onResult?: (result: { project: ProjectSummary } & StyleGenerationResponse) => void;
   }
 ) {
   await readNdjsonStream<
     | { type: "stage"; stage: string; message: string; progress?: number }
+    | { type: "delta"; delta: string }
     | { type: "result"; data: { project: ProjectSummary } & StyleGenerationResponse }
     | { type: "error"; message: string }
     | { type: "done" }
@@ -767,6 +983,7 @@ export async function streamGenerateProjectStyle(
     },
     (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
+      if (event.type === "delta") handlers.onDelta?.(event.delta);
       if (event.type === "result") handlers.onResult?.(event.data);
     }
   );
@@ -924,6 +1141,10 @@ export function refreshDrafts() {
   return getDrafts();
 }
 
+export function getCachedDrafts() {
+  return draftsCache;
+}
+
 export function deleteDrafts(draftIds: string[]) {
   return requestJson<{ deleted: string[] }>("/api/drafts", {
     method: "DELETE",
@@ -943,6 +1164,14 @@ export function deleteEngagementRecords(recordIds: string[]) {
   return requestJson<{ deleted: string[] }>("/api/engagement", {
     method: "DELETE",
     body: JSON.stringify({ recordIds })
+  }).then((result) => {
+    if (engagementRecordsCache) {
+      const deleted = new Set(result.deleted);
+      engagementRecordsCache = {
+        records: engagementRecordsCache.records.filter((record) => !deleted.has(record.id))
+      };
+    }
+    return result;
   });
 }
 
@@ -1032,6 +1261,7 @@ export function generateEngagement(input:
     body: JSON.stringify(input)
   }).then((result) => {
     if (result.draft) rememberDrafts([result.draft]);
+    rememberEngagementRecords([result.record]);
     return result;
   });
 }
@@ -1124,15 +1354,58 @@ export type WorkspaceHealthResponse = {
   libraryRoot: string;
   volcengineAsrConfigured: boolean;
   chatConfigured: boolean;
+  chatReachable: boolean;
   chat: {
     baseUrl: string;
     model: string;
     wireApi: "responses" | "chat_completions" | "auto";
     reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh";
+    serviceTier: string;
     responsesUrlConfigured: boolean;
     chatCompletionsUrlConfigured: boolean;
     proxyConfigured: boolean;
     configured: boolean;
+    primary: {
+      baseUrl: string;
+      model: string;
+      wireApi: "responses" | "chat_completions" | "auto";
+      reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh";
+      serviceTier: string;
+      responsesUrlConfigured: boolean;
+      chatCompletionsUrlConfigured: boolean;
+      proxyConfigured: boolean;
+      configured: boolean;
+    };
+    fallback: {
+      baseUrl: string;
+      model: string;
+      wireApi: "responses" | "chat_completions" | "auto";
+      reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh";
+      serviceTier: string;
+      responsesUrlConfigured: boolean;
+      chatCompletionsUrlConfigured: boolean;
+      proxyConfigured: boolean;
+      configured: boolean;
+    };
+    fallbackEnabled: boolean;
+    fallbackConfigured: boolean;
+  };
+  chatProbe: {
+    ok: boolean;
+    configured: boolean;
+    source: "primary" | "fallback";
+    model: string;
+    wireApi: "responses" | "chat_completions" | "auto";
+    attemptedWireApi?: "responses" | "chat_completions";
+    endpoint?: string;
+    latencyMs?: number;
+    checkedAt: string;
+    errorKind?: "not_configured" | "auth" | "rate_limit" | "timeout" | "network" | "server" | "endpoint" | "parse" | "empty" | "unknown";
+    message?: string;
+    rawError?: string;
+    primaryErrorKind?: "not_configured" | "auth" | "rate_limit" | "timeout" | "network" | "server" | "endpoint" | "parse" | "empty" | "unknown";
+    primaryMessage?: string;
+    primaryRawError?: string;
   };
   imageConfigured?: boolean;
   image?: {

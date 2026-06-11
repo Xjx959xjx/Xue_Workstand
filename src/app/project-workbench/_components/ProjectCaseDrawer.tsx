@@ -108,7 +108,7 @@ export function ProjectCaseDrawer({
             <div className="project-drawer-pane" role="tabpanel">
               <label className="project-drawer-search">
                 <Search aria-hidden="true" size={15} />
-                <input autoComplete="off" value={sourceSearch} onChange={(event) => onSourceSearchChange(event.target.value)} placeholder="搜索标题、链接或转写" />
+                <input autoComplete="off" name="sourceSearch" value={sourceSearch} onChange={(event) => onSourceSearchChange(event.target.value)} placeholder="搜索标题、链接或转写…" />
               </label>
               <div className="project-workbench-pick-list">
                 {filteredSources.slice(0, 12).map((source) => (
@@ -132,13 +132,14 @@ export function ProjectCaseDrawer({
                   autoComplete="off"
                   className="project-workbench-linkbox"
                   disabled={locked}
+                  name="sourceLinks"
                   value={linkInput}
                   onChange={(event) => onLinkInputChange(event.target.value)}
-                  placeholder="每行一个 B站 / 抖音链接，也可以直接粘贴分享文案"
+                  placeholder="每行一个 B站 / 抖音链接，也可以直接粘贴分享文案…"
                 />
               </label>
               <label className={`source-analysis-option ${linkAnalyzeVideo ? "active" : ""}`}>
-                <input checked={linkAnalyzeVideo} disabled={locked} onChange={(event) => onLinkAnalyzeVideoChange(event.target.checked)} type="checkbox" />
+                <input checked={linkAnalyzeVideo} disabled={locked} name="sourceAnalyzeVideo" onChange={(event) => onLinkAnalyzeVideoChange(event.target.checked)} type="checkbox" />
                 <span>
                   <strong>生成画面描述</strong>
                   <small>转写后抽关键帧补充场景、字幕、UI 和动作；抽不到视频时只保存标题和转写。</small>
@@ -172,7 +173,7 @@ export function ProjectCaseDrawer({
                   const checked = sourceAccountIds.includes(account.id);
                   return (
                     <label className={`project-account-choice ${checked ? "selected" : ""}`} key={account.id}>
-                      <input checked={checked} onChange={() => onToggleAccount(account.id)} type="checkbox" />
+                      <input checked={checked} name="sourceAccountIds" onChange={() => onToggleAccount(account.id)} type="checkbox" />
                       <span className="project-account-choice-icon">
                         <UsersRound aria-hidden="true" size={15} />
                       </span>

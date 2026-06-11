@@ -14,9 +14,11 @@ export function TaskCenter() {
   const activeJobIds = new Set(activeJobs.map((job) => job.id));
   const recentJobs = tasks?.recentJobs.filter((job) => !activeJobIds.has(job.id)).slice(0, 4) ?? [];
   const activeCount = activeJobs.length;
-  const primaryJob = activeJobs[0] || recentJobs[0] || null;
+  const primaryJob = activeJobs[0] || null;
   const progress = clampProgress(primaryJob?.progress ?? 0);
-  const progressStyle = { "--task-progress": `${progress}%` } as CSSProperties;
+  const progressStyle = {
+    "--progress-scale": `${progress / 100}`
+  } as CSSProperties;
 
   useEffect(() => {
     if (!open) return;
@@ -172,7 +174,7 @@ function TaskRow({
       ) : null}
       {isActiveJob(job) ? (
         <span className="task-center-row-progress" aria-label={`任务进度 ${job.progress}%`}>
-          <span style={{ width: `${clampProgress(job.progress)}%` }} />
+          <span style={{ "--progress-scale": `${clampProgress(job.progress) / 100}` } as CSSProperties} />
         </span>
       ) : null}
       {job.status === "failed" && detail ? <span className="task-center-row-error">{detail}</span> : null}

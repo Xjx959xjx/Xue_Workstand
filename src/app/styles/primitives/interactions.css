@@ -1,69 +1,6 @@
-/* Shared interaction and motion states */
+/* Shared motion, focus, and reduced-motion behavior. Component colors and
+   surfaces live in their own primitive or page files. */
 @media (min-width: 781px) {
-  .brand,
-  .nav-link,
-  .btn,
-  .text-link,
-  .panel,
-  .list-button,
-  .copy-source-card,
-  .copy-project-row,
-  .check-card,
-  .detail-section,
-  .compact-card,
-  .style-summary-card,
-  .metric-item,
-  .status-pill,
-  .segmented button,
-  .source-tabs button,
-  .inline-sort-control select,
-  .field input,
-  .field select,
-  .field textarea,
-  .writer-ref-select,
-  .writer-textarea,
-  .project-style-textarea,
-  .account-filter-input,
-  .modal-editor textarea,
-  .pane-search input {
-    transition:
-      background-color var(--motion-fast) ease,
-      border-color var(--motion-fast) ease,
-      box-shadow var(--motion-fast) ease,
-      color var(--motion-fast) ease,
-      opacity var(--motion-fast) ease,
-      transform var(--motion-base) var(--ease-out);
-  }
-
-  .btn.primary::after {
-    transition:
-      opacity var(--motion-base) var(--ease-out),
-      transform var(--motion-base) var(--ease-out);
-  }
-
-  .panel {
-    box-shadow: var(--shadow-panel);
-  }
-
-  .brand:hover,
-  .nav-link:hover,
-  .list-button:hover,
-  .copy-source-card:hover,
-  .copy-project-row:hover,
-  .check-card:hover,
-  .btn:hover {
-    transform: none;
-  }
-
-  .btn:active,
-  .nav-link:active,
-  .list-button:active,
-  .copy-source-card:active,
-  .copy-project-row:active,
-  .check-card:active {
-    transform: translateY(0);
-  }
-
   .btn:focus-visible,
   .nav-link:focus-visible,
   .brand:focus-visible,
@@ -83,70 +20,17 @@
     color: var(--accent-strong);
   }
 
-  .field input:hover,
-  .field select:hover,
-  .field textarea:hover,
-  .inline-sort-control select:hover,
-  .writer-ref-select:hover,
-  .writer-textarea:hover,
-  .project-style-textarea:hover,
-  .account-filter-input:hover,
-  .modal-editor textarea:hover,
-  .pane-search input:hover {
-    border-color: var(--control-hover-border);
-    box-shadow: var(--control-field-hover-shadow);
-  }
-
-  .field input:focus,
-  .field select:focus,
-  .field textarea:focus,
-  .inline-sort-control select:focus,
-  .writer-ref-select:focus,
-  .writer-textarea:focus,
-  .project-style-textarea:focus,
-  .account-filter-input:focus,
-  .modal-editor textarea:focus,
-  .pane-search input:focus {
-    background: var(--panel);
-  }
-
-  .pane {
-    background: var(--surface-panel);
-  }
-
-  .pane-header,
-  .writer-refbar,
-  .selection-toolbar,
-  .modal-header {
-    box-shadow: var(--surface-inset-highlight);
-  }
-
-  .video-table tbody tr {
-    transition:
-      background-color 140ms ease,
-      box-shadow 140ms ease;
-  }
-
-  .video-table tbody tr:hover,
-  .video-table tbody tr.active,
-  .video-table tbody tr.checked {
-    box-shadow: var(--selected-row-shadow);
-  }
-
   .video-row-button:hover .video-title-line strong,
   .list-button:hover .list-title {
     color: var(--text-strong);
   }
 
-  .metric-item {
-    box-shadow: none;
-  }
-
   .metric-bar span,
   .list-progress span,
   .progress-fill,
-  .progress-button-fill {
-    transition: width var(--motion-base) ease;
+  .progress-button-fill,
+  .gross-monitor-metric-bar > span {
+    transition: transform var(--motion-flow) var(--ease-apple);
   }
 
   .copy-job-row .status-pill.pending::after,
@@ -159,11 +43,11 @@
   }
 
   .modal-backdrop {
-    animation: modal-fade-in 160ms ease-out both;
+    animation: modal-fade-in 160ms var(--ease-apple) both;
   }
 
   .modal-panel {
-    animation: modal-rise 190ms var(--ease-out) both;
+    animation: modal-rise 190ms var(--ease-apple) both;
   }
 
   .markdown-box,
@@ -180,6 +64,32 @@
   }
 }
 
+.btn,
+.nav-link,
+.brand,
+.list-button,
+.copy-source-card,
+.copy-project-row,
+.project-workbench-source,
+.task-center-row,
+.tools-candidate-card,
+.gross-monitor-card,
+.engagement-option,
+.workbench-toast {
+  transform-origin: center;
+}
+
+.btn:active,
+.list-button:active,
+.copy-source-card:active,
+.copy-project-row:active,
+.project-workbench-source:active,
+.tools-candidate-card:active {
+  transform: scale(0.985);
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-press);
+}
+
 @keyframes workbench-sheen {
   from {
     transform: translateX(-100%);
@@ -187,6 +97,13 @@
 
   to {
     transform: translateX(100%);
+  }
+}
+
+@keyframes workbench-flow-pulse {
+  from {
+    opacity: 0.72;
+    transform: translateY(3px) scale(0.992);
   }
 }
 

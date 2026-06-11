@@ -27,13 +27,13 @@ export function AssetTextList({
         <h3>{title}</h3>
         <div className="button-row">
           <button className="btn" disabled={!items.length} onClick={onCopy} type="button">
-            <Copy size={16} />
+            <Copy aria-hidden="true" size={16} />
             复制
           </button>
           {onPublish ? (
             <button className="btn" disabled={!items.length || publishDisabled} onClick={onPublish} type="button">
-              <FileUp size={16} />
-              {publishing ? "导出中..." : "飞书文档"}
+              <FileUp aria-hidden="true" size={16} />
+              {publishing ? "导出中…" : "飞书文档"}
             </button>
           ) : null}
         </div>

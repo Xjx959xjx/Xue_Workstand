@@ -45,7 +45,7 @@ export const AccountStyleEditorModal = memo(function AccountStyleEditorModal({
         />
         <div className="button-row">
           <button className="btn progress-button" disabled={busy === "style"} onClick={onGenerateStyle} type="button">
-            <span className="progress-button-fill" style={{ width: `${busy === "style" ? styleProgress : 0}%` }} />
+            <span className="progress-button-fill" style={{ transform: `scaleX(${busy === "style" ? styleProgress / 100 : 0})` }} />
             <span className="progress-button-content">
               <Sparkles aria-hidden="true" size={16} />
               {busy === "style" ? `自动总结中 ${styleProgress}%` : "自动总结"}

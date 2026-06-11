@@ -24,6 +24,7 @@ const TaskContext = createContext<TaskContextValue | null>(null);
 const NOTIFIED_STORAGE_KEY = "style-workbench-notified-jobs";
 const TASKS_CHANGED_EVENT = "style-workbench:tasks-changed";
 const ACTIVE_JOB_POLL_INTERVAL_MS = 1500;
+const INITIAL_TASK_REFRESH_DELAY_MS = 1600;
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -105,8 +106,14 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     pathnameRef.current = pathname;
     setJobs((current) => mergeJobSummaries(current, fullJobCacheRef.current, hydrationErrorsRef.current, pathname));
-    void refreshJobs();
-  }, [pathname, refreshJobs]);
+  }, [pathname]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void refreshJobs();
+    }, INITIAL_TASK_REFRESH_DELAY_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [refreshJobs]);
 
   useEffect(() => {
     const onTasksChanged = () => {
@@ -352,11 +359,11 @@ function shouldHydrateJob(
   if (!relevantToCurrentPage || !needsFullJob) return false;
   const cachedJob = cache.get(job.id);
   if (cachedJob && (!job.hasResult || typeof cachedJob.result !== "undefined")) return false;
-  if (isFirstLoad) return index < 3 && isRecentJob(job);
+  if (isFirstLoad) return false;
 
   const previous = previousStatus.get(job.id);
   if (previous && previous !== job.status) return true;
-  return index < 6 && isRecentJob(job);
+  return false;
 }
 
 function shouldExposeHydrationError(job: JobListItem) {

@@ -2,7 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 import { ExternalLink, FileText, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { formatDateWithYear, formatPlatform } from "@/components/Formatters";
 import type { CopySource, CopySourceMaterialAnalysis } from "@/lib/types";
 
@@ -19,13 +19,7 @@ export function CopySourcePreviewModal({ source, onClose }: CopySourcePreviewMod
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      onKeyDown={handleKeyDown}
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
       <div aria-labelledby="copy-source-preview-title" aria-modal="true" className="modal-panel copy-source-preview-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>
@@ -80,7 +74,7 @@ export function CopySourcePreviewModal({ source, onClose }: CopySourcePreviewMod
           )}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 
 type LibraryEditorModalProps = {
   children: ReactNode;
@@ -19,12 +19,7 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
   panelRef
 }: LibraryEditorModalProps) {
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose}>
       <div
         aria-labelledby={labelledBy}
         aria-modal="true"
@@ -36,7 +31,7 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
       >
         {children}
       </div>
-    </div>
+    </ModalBackdrop>
   );
 });
 

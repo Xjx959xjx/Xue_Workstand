@@ -15,7 +15,7 @@ import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { deleteDrafts, getDrafts, prepareWriteBrief, renameDraft } from "@/lib/client";
+import { deleteDrafts, getCachedDrafts, getDrafts, prepareWriteBrief, renameDraft } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import type { Draft, WriteResult } from "@/lib/types";
@@ -65,7 +65,7 @@ function WriterPageContent() {
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
-  const [fullDrafts, setFullDrafts] = useState<Draft[] | null>(null);
+  const [fullDrafts, setFullDrafts] = useState<Draft[] | null>(() => getCachedDrafts()?.drafts ?? null);
   const loadedDraftParamRef = useRef("");
   const appliedSearchParamRef = useRef("");
 
@@ -80,7 +80,7 @@ function WriterPageContent() {
   }, [library?.projects, projectId]);
 
   const allDrafts = useMemo(() => fullDrafts || [], [fullDrafts]);
-  const historyLoading = loading || (fullDrafts === null && Boolean(library?.drafts.length));
+  const historyLoading = loading || fullDrafts === null;
   const historyDrafts = useMemo(() => [...allDrafts].sort(compareCreatedAtDesc), [allDrafts]);
 
   const handleDraftSaved = useCallback(
@@ -90,7 +90,7 @@ function WriterPageContent() {
     []
   );
 
-  const { activeStyle, activeTitle } = useWriterReferenceDetails({
+  const { activeStyle, activeStyleLoading, activeTitle } = useWriterReferenceDetails({
     selectedAccount,
     selectedProject,
     setNotice,
@@ -289,17 +289,12 @@ function WriterPageContent() {
 
   useEffect(() => {
     let ignore = false;
-    if (loading) return;
-
-    if (!library?.drafts.length) {
-      setFullDrafts([]);
-      return;
-    }
+    if (loading || fullDrafts !== null) return;
 
     getDrafts()
       .then((result) => {
         if (ignore) return;
-        setFullDrafts((current) => mergeDraftLists(result.drafts, current || []));
+        setFullDrafts(result.drafts);
       })
       .catch((err) => {
         if (!ignore) setNotice(err instanceof Error ? err.message : "读取历史记录失败");
@@ -308,7 +303,7 @@ function WriterPageContent() {
     return () => {
       ignore = true;
     };
-  }, [library?.drafts.length, loading]);
+  }, [fullDrafts, loading]);
 
   useEffect(() => {
     const searchKey = searchParams.toString();
@@ -650,7 +645,7 @@ function WriterPageContent() {
               </select>
             )}
 
-            <button className="btn ghost writer-style-trigger" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
+            <button className="btn ghost writer-style-trigger" disabled={activeStyleLoading || !activeStyle} onClick={() => setStyleOpen(true)} type="button">
               <Eye aria-hidden="true" size={16} />
               风格卡
             </button>
@@ -675,7 +670,7 @@ function WriterPageContent() {
                   <FileText aria-hidden="true" size={14} />
                   {activeTitle || "未选择引用"}
                 </span>
-                <span>{activeStyle?.trim().length ? `${activeStyle.trim().length} 字风格卡` : "无风格卡"}</span>
+                <span>{activeStyleLoading ? "读取风格卡" : activeStyle?.trim().length ? `${activeStyle.trim().length} 字风格卡` : "无风格卡"}</span>
                 <span>
                   {targetType === "project" && selectedProject
                     ? `${selectedProject.sourceMaterialCount} 份案例 · ${selectedProject.sourceAccounts.length} 个账号`
@@ -744,7 +739,7 @@ function WriterPageContent() {
                   autoComplete="off"
                   className="writer-textarea brief"
                   name="brief"
-                  placeholder="先准备 brief，再生成成稿。"
+                  placeholder="先准备 brief，再生成成稿…"
                   value={brief}
                   onChange={(event) => setBrief(event.target.value)}
                 />
@@ -843,7 +838,7 @@ function WriterPageContent() {
                     </span>
                   </div>
                   <div className="progress-track" aria-hidden="true">
-                    <div className="progress-fill" style={{ width: `${generateProgress}%` }} />
+                    <div className="progress-fill" style={{ transform: `scaleX(${generateProgress / 100})` }} />
                   </div>
                 </div>
               ) : null}
@@ -851,18 +846,14 @@ function WriterPageContent() {
                 {busy === "generate" && !lastContent ? "等待内容。" : lastContent || "结果在这里。"}
               </div>
               {displayResearch ? (
-                <details className="style-reference" style={{ marginTop: 16 }}>
+                <details className="style-reference">
                   <summary>
                     <span className="style-reference-heading">
                       <span className="style-reference-title">参考资料</span>
                       <small>研究摘要</small>
                     </span>
                   </summary>
-                  <div>
-                    <pre className="result-box" style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                      {displayResearch}
-                    </pre>
-                  </div>
+                  <pre className="style-reference-body">{displayResearch}</pre>
                 </details>
               ) : null}
             </div>

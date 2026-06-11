@@ -49,38 +49,42 @@ export function EngagementGeneratorPane({
               <p className="subtle">评论默认开启，弹幕按需勾选。</p>
             </div>
             <button className="btn primary engagement-submit" disabled={!canGenerate} onClick={onGenerate} type="button">
-              <Send size={16} />
+              <Send aria-hidden="true" size={16} />
               {busy === "generate" ? "正在生成" : "生成"}
             </button>
           </div>
           <div className="engagement-option-grid">
             <label className={`engagement-option ${includeComments ? "active" : ""}`}>
-              <input checked={includeComments} type="checkbox" onChange={(event) => onIncludeCommentsChange(event.target.checked)} />
+              <input checked={includeComments} name="includeComments" type="checkbox" onChange={(event) => onIncludeCommentsChange(event.target.checked)} />
               <span>
                 <strong>评论</strong>
                 <small>默认生成评论</small>
               </span>
               <input
                 aria-label="评论条数"
+                autoComplete="off"
                 disabled={!includeComments}
                 max={200}
                 min={1}
+                name="commentCount"
                 type="number"
                 value={commentCount}
                 onChange={(event) => updateBoundedNumber(event.target.value, 1, 200, onCommentCountChange)}
               />
             </label>
             <label className={`engagement-option ${includeDanmaku ? "active" : ""}`}>
-              <input checked={includeDanmaku} type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
+              <input checked={includeDanmaku} name="includeDanmaku" type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
               <span>
                 <strong>弹幕</strong>
                 <small>按正文节奏生成时间点</small>
               </span>
               <input
                 aria-label="弹幕条数"
+                autoComplete="off"
                 disabled={!includeDanmaku}
                 max={300}
                 min={1}
+                name="danmakuCount"
                 type="number"
                 value={danmakuCount}
                 onChange={(event) => updateBoundedNumber(event.target.value, 1, 300, onDanmakuCountChange)}

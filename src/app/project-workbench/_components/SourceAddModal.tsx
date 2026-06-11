@@ -2,7 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 import { LinkIcon, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { formatJob, type LinkJob } from "./project-workbench-utils";
 
 type SourceAddModalProps = {
@@ -35,13 +35,7 @@ export function SourceAddModal({
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      onKeyDown={handleKeyDown}
-      onClick={(event) => {
-        if (!locked && isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop disabled={locked} onClose={onClose} onKeyDown={handleKeyDown}>
       <div aria-labelledby="source-add-title" aria-modal="true" className="modal-panel project-source-add-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>
@@ -60,14 +54,15 @@ export function SourceAddModal({
               autoComplete="off"
               className="project-workbench-linkbox source-add-linkbox"
               disabled={locked}
+              name="sourceLinks"
               value={linkInput}
               onChange={(event) => onLinkInputChange(event.target.value)}
-              placeholder="每行一个 B站 / 抖音链接，也可以直接粘贴分享文案"
+              placeholder="每行一个 B站 / 抖音链接，也可以直接粘贴分享文案…"
             />
           </label>
 
           <label className={`source-analysis-option ${linkAnalyzeVideo ? "active" : ""}`}>
-            <input checked={linkAnalyzeVideo} disabled={locked} onChange={(event) => onLinkAnalyzeVideoChange(event.target.checked)} type="checkbox" />
+            <input checked={linkAnalyzeVideo} disabled={locked} name="sourceAnalyzeVideo" onChange={(event) => onLinkAnalyzeVideoChange(event.target.checked)} type="checkbox" />
             <span>
               <strong>生成画面描述</strong>
               <small>转写后抽关键帧，按画面顺序补充场景、字幕、UI 和动作；抽不到视频时只保存标题和转写。</small>
@@ -85,7 +80,7 @@ export function SourceAddModal({
           {jobs.length ? <ProjectLinkJobList jobs={jobs} /> : null}
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

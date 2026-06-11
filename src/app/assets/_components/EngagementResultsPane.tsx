@@ -61,8 +61,8 @@ export function EngagementResultsPane({
             onClick={() => resultRecord ? onExportWord(resultRecord) : undefined}
             type="button"
           >
-            <Download size={16} />
-            {busy === "export-word" ? "导出中..." : "Word 文档"}
+            <Download aria-hidden="true" size={16} />
+            {busy === "export-word" ? "导出中…" : "Word 文档"}
           </button>
         </div>
         <AssetTextList

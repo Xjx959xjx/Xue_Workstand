@@ -20,12 +20,12 @@
   }
 
   .page-header {
-    min-height: auto;
-    padding: 0 0 8px;
+    min-height: 66px;
+    padding: 0 0 10px;
   }
 
   .page-header .subtle {
-    margin-top: 3px;
+    margin-top: 2px;
   }
 
   .panel-inner {
@@ -161,8 +161,8 @@
   }
 
   .page-title-mark {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
   }
 
   .page-header-meta {

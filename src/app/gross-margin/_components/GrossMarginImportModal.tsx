@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, ClipboardPaste, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { detectVideoPlatform, extractVideoUrl } from "@/lib/platform-links";
 import type { GrossMarginPriceTable, GrossMarginServiceKind } from "@/lib/types";
 
@@ -79,12 +79,7 @@ export function GrossMarginImportModal({
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose}>
       <div
         aria-labelledby="gross-import-modal-title"
         aria-modal="true"
@@ -108,11 +103,12 @@ export function GrossMarginImportModal({
           <label className="field gross-import-input">
             <span>模板内容</span>
             <textarea
-              autoFocus
+              autoComplete="off"
+              name="grossImportTemplate"
               rows={13}
               value={template}
               onChange={(event) => setTemplate(event.target.value)}
-              placeholder="把填好的维护模板粘贴到这里"
+              placeholder="把填好的维护模板粘贴到这里…"
             />
           </label>
 
@@ -156,7 +152,7 @@ export function GrossMarginImportModal({
           </button>
         </footer>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

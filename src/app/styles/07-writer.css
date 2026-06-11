@@ -19,32 +19,47 @@
 .writer-flow-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
+  gap: 8px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--line-subtle);
-  background: color-mix(in oklch, var(--panel-raised) 94%, var(--surface-soft));
+  border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 88%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 92%, var(--panel-soft)) 100%);
 }
 
 .writer-flow-step {
   display: grid;
   min-width: 0;
+  min-height: 48px;
   gap: 3px;
   padding: 8px 10px;
-  border: 1px solid var(--line-subtle);
-  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  border-radius: 15px;
   color: var(--muted);
-  background: var(--panel);
+  background: color-mix(in oklch, var(--panel-raised) 86%, var(--panel));
+  box-shadow: var(--surface-card-highlight);
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
+}
+
+.writer-flow-step:hover {
+  border-color: color-mix(in oklch, var(--accent) 18%, var(--line));
+  background: color-mix(in oklch, var(--panel-raised) 72%, var(--surface-hover));
+  transform: translateY(-1px);
 }
 
 .writer-flow-step.active,
 .writer-flow-step.pending {
   border-color: color-mix(in oklch, var(--accent) 24%, var(--line));
-  background: color-mix(in oklch, var(--accent-tint) 70%, var(--panel-raised));
+  background: color-mix(in oklch, var(--accent-tint) 42%, var(--panel-raised));
+  box-shadow: 0 10px 22px color-mix(in oklch, var(--accent-strong) 7%, transparent);
 }
 
 .writer-flow-step.done {
-  border-color: color-mix(in oklch, var(--green) 28%, var(--line));
-  background: color-mix(in oklch, var(--green-soft) 58%, var(--panel-raised));
+  border-color: color-mix(in oklch, var(--green) 26%, var(--line));
+  background: color-mix(in oklch, var(--green-soft) 34%, var(--panel-raised));
 }
 
 .writer-flow-label {
@@ -80,52 +95,18 @@
   border-radius: inherit;
   background: var(--accent-strong);
   transform-origin: left center;
-  transition: transform var(--motion-base) ease;
+  transition: transform var(--motion-flow) var(--ease-apple);
 }
 
 .writer-refbar {
   display: grid;
+  min-height: 58px;
   grid-template-columns: auto minmax(200px, 280px) minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line-subtle);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 62%, var(--surface-soft)) 0%, color-mix(in oklch, var(--panel-raised) 92%, white) 100%);
-}
-
-.segmented {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
-  border-radius: 12px;
-  background: var(--control-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
-}
-
-.segmented button {
-  min-height: 38px;
-  padding: 0 14px;
-  border: 0;
-  border-right: 1px solid var(--line);
-  color: var(--muted-strong);
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.segmented button:last-child {
-  border-right: 0;
-}
-
-.segmented button.active {
-  color: var(--control-active-text);
-  background: var(--control-active-bg);
-  box-shadow: var(--active-underline-shadow);
-}
-
-.segmented button:disabled {
-  opacity: 0.45;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
+  background: color-mix(in oklch, var(--panel-raised) 72%, transparent);
 }
 
 .writer-style-trigger {
@@ -148,10 +129,9 @@
 }
 
 .writer-task {
+  align-content: start;
   border-right: 1px solid var(--line-subtle);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-soft) 24%, transparent) 0%, transparent 34%),
-    transparent;
+  background: color-mix(in oklch, var(--panel-raised) 42%, transparent);
 }
 
 .writer-context-summary {
@@ -215,6 +195,11 @@
   border: 1px solid color-mix(in oklch, var(--line-strong) 72%, var(--line));
   border-radius: 12px;
   background: color-mix(in oklch, var(--panel-raised) 94%, var(--surface-soft));
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
 }
 
 .writer-brief-panel.ready {
@@ -225,6 +210,11 @@
 .writer-brief-panel.stale {
   border-color: color-mix(in oklch, var(--amber) 28%, var(--line));
   background: color-mix(in oklch, var(--amber-soft) 46%, var(--panel-raised));
+}
+
+.writer-brief-panel:focus-within {
+  border-color: color-mix(in oklch, var(--accent) 44%, var(--line));
+  box-shadow: 0 0 0 4px var(--focus);
 }
 
 .writer-brief-head {
@@ -290,6 +280,8 @@
 .writer-actionbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  align-self: start;
   justify-content: flex-end;
   gap: 10px;
   padding-top: 4px;
@@ -299,37 +291,42 @@
   margin-right: auto;
 }
 
-.result-box {
+.writer-actionbar > .btn {
+  align-self: center;
+}
+
+.writer-page .result-box {
   min-height: 420px;
   max-height: min(680px, calc(100vh - 332px));
   overflow: auto;
   padding: 18px;
-  border: 1px solid color-mix(in oklch, var(--accent) 12%, var(--line));
-  border-radius: 18px;
+  border: 1px solid color-mix(in oklch, var(--line-strong) 52%, var(--line));
   color: var(--text);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, white) 0%, color-mix(in oklch, var(--panel) 94%, var(--accent-soft)) 100%);
-  box-shadow: var(--shadow-sm);
+  background: color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.72;
+  transition:
+    background-color var(--motion-flow) var(--ease-apple),
+    border-color var(--motion-flow) var(--ease-apple),
+    box-shadow var(--motion-flow) var(--ease-apple),
+    transform var(--motion-flow) var(--ease-apple);
 }
 
-.result-box.empty {
+.writer-page .result-box.empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  color: var(--muted);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 58%, var(--panel-raised)) 0%, color-mix(in oklch, var(--surface-soft) 84%, var(--panel)) 100%);
+  color: var(--muted-strong);
   text-align: center;
 }
 
 .writer-result:has(.project-progress) .result-box.empty {
   border-color: color-mix(in oklch, var(--accent) 32%, transparent);
   background: color-mix(in oklch, var(--accent-tint) 82%, var(--panel-raised));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 12%, transparent);
 }
 
 .writer-page .progress-track {
@@ -346,22 +343,14 @@
   height: 100%;
   border-radius: inherit;
   transform-origin: left center;
-  transition:
-    width var(--motion-base) ease,
-    transform var(--motion-base) ease;
-}
-
-.result-box.empty::before {
-  width: 56px;
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent-strong) 0%, var(--blue) 100%);
-  content: "";
+  transition: transform var(--motion-flow) var(--ease-apple);
 }
 
 .style-reference {
   display: grid;
   gap: 10px;
+  margin-top: 16px;
+  min-height: 0;
 }
 
 .style-reference summary {
@@ -416,6 +405,46 @@
   margin-top: 2px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.style-reference-body {
+  max-height: min(360px, 42vh);
+  min-height: 120px;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  border: 1px solid color-mix(in oklch, var(--line-strong) 52%, var(--line));
+  border-radius: 16px;
+  color: var(--text);
+  background: color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
+  font: inherit;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+}
+
+.style-reference-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.style-reference-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.style-reference-body::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--line-strong) 82%, transparent);
+  background-clip: content-box;
+}
+
+.style-reference-body:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  background-clip: content-box;
 }
 
 .writer-history-panel {
@@ -562,6 +591,19 @@
   background: var(--surface-selected);
 }
 
+.writer-history-list .list-button {
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
+}
+
+.writer-history-list .list-button:hover {
+  box-shadow: 0 10px 22px color-mix(in oklch, var(--text-strong) 4%, transparent);
+  transform: translateY(-1px);
+}
+
 .writer-history-check {
   display: inline-grid;
   width: 16px;
@@ -669,7 +711,7 @@
     min-height: 132px;
   }
 
-  .result-box {
+  .writer-page .result-box {
     min-height: 0;
     max-height: none;
   }
@@ -721,7 +763,30 @@
     justify-content: center;
   }
 
-  .result-box {
+  .writer-page .result-box {
     max-height: 420px;
   }
+}
+
+/* Writer page layout */
+.writer-main {
+  overflow: hidden;
+}
+
+.writer-content-grid {
+  min-height: 0;
+}
+
+.writer-textarea,
+.writer-brief-panel,
+.writer-page .result-box {
+  border-radius: 16px;
+}
+
+.writer-history-header {
+  background: transparent;
+}
+
+.writer-history-body {
+  background: transparent;
 }

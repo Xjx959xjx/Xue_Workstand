@@ -1,7 +1,7 @@
 .stat-pill,
 .status-pill {
   display: inline-flex;
-  min-height: var(--status-pill-height);
+  min-height: 24px;
   align-items: center;
   justify-content: center;
   gap: var(--space-1);
@@ -12,29 +12,36 @@
   background: color-mix(in oklch, var(--status-neutral-bg) 92%, white);
   font-size: var(--text-caption);
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 720;
   white-space: nowrap;
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    color var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
 }
 
 .status-pill.done,
-.status-pill.completed {
-  border-color: var(--status-success-border);
-  color: var(--status-success-text);
-  background: var(--status-success-bg);
+.status-pill.completed,
+.status-pill.transcribed {
+  border-color: color-mix(in oklch, var(--green) 28%, transparent);
+  color: color-mix(in oklch, var(--green) 76%, var(--text-strong));
+  background: var(--green-soft);
 }
 
 .status-pill.pending,
 .status-pill.not_started,
 .status-pill.transcribing {
-  border-color: var(--status-warning-border);
-  color: var(--status-warning-text);
-  background: var(--status-warning-bg);
+  border-color: color-mix(in oklch, var(--amber) 30%, transparent);
+  color: color-mix(in oklch, var(--amber) 78%, var(--text-strong));
+  background: var(--amber-soft);
 }
 
-.status-pill.failed {
-  border-color: var(--status-danger-border);
-  color: var(--status-danger-text);
-  background: var(--status-danger-bg);
+.status-pill.failed,
+.status-pill.error {
+  border-color: color-mix(in oklch, var(--rose) 30%, transparent);
+  color: color-mix(in oklch, var(--rose) 82%, var(--text-strong));
+  background: var(--rose-soft);
 }
 
 .notice,
@@ -44,6 +51,7 @@
   padding: var(--card-pad-sm) var(--space-3);
   border: 1px solid;
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-notice);
   font-size: var(--text-meta);
   font-weight: 500;
 }
@@ -91,7 +99,8 @@
   border: 1px solid var(--toast-state-border);
   border-radius: var(--radius-lg);
   color: var(--text);
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, var(--panel-raised) 0%, var(--panel) 100%);
   box-shadow: var(--shadow-lift);
   pointer-events: auto;
   animation: task-toast-enter 210ms var(--ease-out) both;

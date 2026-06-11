@@ -126,6 +126,52 @@
   box-shadow: var(--selected-shadow);
 }
 
+.history-loading-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-placeholder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  min-height: 52px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklch, var(--line-subtle) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--surface-soft) 72%, transparent);
+}
+
+.history-placeholder-copy {
+  display: grid;
+  gap: 7px;
+}
+
+.history-placeholder-copy span,
+.history-placeholder-copy small,
+.history-placeholder-row em {
+  display: block;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 13%, transparent);
+}
+
+.history-placeholder-copy span {
+  width: min(76%, 190px);
+  height: 12px;
+}
+
+.history-placeholder-copy small {
+  width: min(48%, 128px);
+  height: 9px;
+}
+
+.history-placeholder-row em {
+  width: 38px;
+  height: 20px;
+  justify-self: end;
+}
+
 .selection-mode .list-button.active {
   border-color: transparent;
   background: transparent;
@@ -185,11 +231,11 @@
 }
 
 .history-context-menu-item.danger {
-  color: var(--danger, #b42318);
+  color: var(--danger);
 }
 
 .history-context-menu-item.danger:hover {
-  background: color-mix(in oklch, var(--danger, #b42318) 8%, var(--surface-soft));
+  background: color-mix(in oklch, var(--danger) 8%, var(--surface-soft));
 }
 
 .account-list-button {
@@ -229,9 +275,30 @@
   position: relative;
   overflow: hidden;
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
+  transform: scaleX(var(--progress-scale, 1));
+  transform-origin: left center;
+}
+
+.progress-track,
+.gross-monitor-metric-bar {
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--panel-muted) 78%, transparent);
+}
+
+.progress-fill,
+.gross-monitor-metric-bar > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--accent-strong) 84%, var(--accent));
+  transform: scaleX(var(--progress-scale, 1));
+  transform-origin: left center;
 }
 
 .list-progress span::after,
@@ -285,10 +352,10 @@
 .compact-card,
 .style-summary-card {
   display: grid;
-  gap: 10px;
-  padding: 11px;
+  gap: var(--space-3);
+  padding: var(--card-pad-md);
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--surface-raised);
 }
 
@@ -321,8 +388,10 @@
   position: absolute;
   overflow: hidden;
   inset: 0 auto 0 0;
-  width: 0;
+  width: 100%;
   background: var(--progress-button-bg);
+  transform: scaleX(var(--progress-scale, 0));
+  transform-origin: left center;
 }
 
 .progress-button-content {

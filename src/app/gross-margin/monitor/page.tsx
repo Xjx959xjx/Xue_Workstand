@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   CalendarClock,
@@ -36,14 +37,17 @@ import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRe
 
 export default function GrossMarginMonitorPage() {
   const { notify } = useFeedback();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [library, setLibrary] = useState<GrossMarginLibrary | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
-  const [accountFilter, setAccountFilter] = useState("");
-  const [platformFilter, setPlatformFilter] = useState<"all" | GrossMarginMonitorRecord["platform"]>("all");
-  const [projectFilter, setProjectFilter] = useState("all");
-  const [dateFromFilter, setDateFromFilter] = useState("");
-  const [dateToFilter, setDateToFilter] = useState("");
+  const [accountFilter, setAccountFilter] = useState(() => searchParams.get("q") || "");
+  const [platformFilter, setPlatformFilter] = useState<"all" | GrossMarginMonitorRecord["platform"]>(() => parsePlatformFilter(searchParams.get("platform")));
+  const [projectFilter, setProjectFilter] = useState(() => searchParams.get("project") || "all");
+  const [dateFromFilter, setDateFromFilter] = useState(() => parseDateFilter(searchParams.get("from")));
+  const [dateToFilter, setDateToFilter] = useState(() => parseDateFilter(searchParams.get("to")));
   const [deleteTarget, setDeleteTarget] = useState<GrossMarginMonitorRecord | null>(null);
 
   const records = useMemo(() => library?.monitorRecords || [], [library]);
@@ -98,6 +102,21 @@ export default function GrossMarginMonitorPage() {
       ignore = true;
     };
   }, [notify]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    setOptionalQueryParam(params, "q", accountFilter.trim());
+    setOptionalQueryParam(params, "platform", platformFilter === "all" ? "" : platformFilter);
+    setOptionalQueryParam(params, "project", projectFilter === "all" ? "" : projectFilter);
+    setOptionalQueryParam(params, "from", dateFromFilter);
+    setOptionalQueryParam(params, "to", dateToFilter);
+    const queryString = params.toString();
+    const nextHref = queryString ? `${pathname}?${queryString}` : pathname;
+    if (`${window.location.pathname}${window.location.search}` !== nextHref) {
+      router.replace(nextHref, { scroll: false });
+    }
+  }, [accountFilter, dateFromFilter, dateToFilter, pathname, platformFilter, projectFilter, router]);
 
   async function handleRefreshAll() {
     const targetRecordIds = sortedRecords.map((record) => record.id);
@@ -191,6 +210,7 @@ export default function GrossMarginMonitorPage() {
 
   return (
     <div className="page gross-margin-page gross-monitor-page">
+      <h1 className="sr-only">数据监控</h1>
       <div className="gross-monitor-topbar">
         <div className="page-header-meta">
           <span className="stat-pill">{hasActiveFilters ? `${sortedRecords.length} / ${records.length} 条记录` : `${records.length} 条记录`}</span>
@@ -203,8 +223,9 @@ export default function GrossMarginMonitorPage() {
               autoComplete="off"
               className="gross-monitor-inline-input"
               id="gross-monitor-account-filter"
+              name="grossMonitorAccountFilter"
               onChange={(event) => setAccountFilter(event.target.value)}
-              placeholder="账号 / 标题 / 链接"
+              placeholder="账号 / 标题 / 链接…"
               type="text"
               value={accountFilter}
             />
@@ -235,8 +256,10 @@ export default function GrossMarginMonitorPage() {
             </select>
             <input
               aria-label="开始日期"
+              autoComplete="off"
               className="gross-monitor-inline-date"
               id="gross-monitor-date-from"
+              name="grossMonitorDateFrom"
               onChange={(event) => setDateFromFilter(event.target.value)}
               type="date"
               value={dateFromFilter}
@@ -246,8 +269,10 @@ export default function GrossMarginMonitorPage() {
             </span>
             <input
               aria-label="结束日期"
+              autoComplete="off"
               className="gross-monitor-inline-date"
               id="gross-monitor-date-to"
+              name="grossMonitorDateTo"
               onChange={(event) => setDateToFilter(event.target.value)}
               type="date"
               value={dateToFilter}
@@ -332,6 +357,26 @@ function handleHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
   event.preventDefault();
 }
 
+function parsePlatformFilter(value: string | null): "all" | GrossMarginMonitorRecord["platform"] {
+  return value === "bilibili" || value === "douyin" ? value : "all";
+}
+
+function parseDateFilter(value: string | null) {
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+function setOptionalQueryParam(params: URLSearchParams, key: string, value: string) {
+  if (value) {
+    params.set(key, value);
+  } else {
+    params.delete(key);
+  }
+}
+
+function shouldFocusInlineEdit() {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
+}
+
 function MonitorCard({
   busy,
   record,
@@ -367,6 +412,8 @@ function MonitorCard({
     playMetric && typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
   );
   const [playEditError, setPlayEditError] = useState("");
+  const playCurrentInputRef = useRef<HTMLInputElement>(null);
+  const playTargetInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!editingPlay && playMetric) {
@@ -377,6 +424,13 @@ function MonitorCard({
       setPlayEditError("");
     }
   }, [editingPlay, playMetric, record.platform]);
+
+  useEffect(() => {
+    if (!editingPlay || !shouldFocusInlineEdit()) return;
+    const input = canEditPlayCurrent ? playCurrentInputRef.current : playTargetInputRef.current;
+    input?.focus();
+    input?.select();
+  }, [canEditPlayCurrent, editingPlay]);
 
   async function submitPlayEdit() {
     if (!playMetric) return;
@@ -515,7 +569,7 @@ function MonitorCard({
                 <b className={metric.highRisk ? "risk-text" : ""}>{formatMetricPercent(metric)}</b>
               </span>
               <span className="gross-monitor-metric-bar" aria-hidden="true">
-                <span style={{ width: `${getMetricProgress(metric)}%` }} />
+                <span style={{ transform: `scaleX(${getMetricProgress(metric) / 100})` }} />
               </span>
               <span className="gross-monitor-metric-cell-values">
                 <span className="gross-monitor-metric-cell-value-main">
@@ -530,9 +584,11 @@ function MonitorCard({
                           {canEditPlayCurrent ? (
                             <input
                               aria-label="当前播放量"
-                              autoFocus
+                              autoComplete="off"
                               className="gross-monitor-play-input"
                               disabled={busy === `play-current-${record.id}` || busy === `play-target-${record.id}`}
+                              name={`playCurrent-${record.id}`}
+                              ref={playCurrentInputRef}
                               onBlur={(event) => {
                                 if (event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) return;
                                 void handleSubmitPlayEdit();
@@ -551,16 +607,18 @@ function MonitorCard({
                                   resetPlayEdit(metric);
                                 }
                               }}
-                              placeholder="当前"
+                              placeholder="当前…"
                               type="text"
                               value={playCurrentDraft}
                             />
                           ) : null}
                           <input
                             aria-label="播放目标"
-                            autoFocus={!canEditPlayCurrent}
+                            autoComplete="off"
                             className="gross-monitor-play-input"
                             disabled={busy === `play-current-${record.id}` || busy === `play-target-${record.id}`}
+                            name={`playTarget-${record.id}`}
+                            ref={playTargetInputRef}
                             onBlur={(event) => {
                               if (event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) return;
                               void handleSubmitPlayEdit();
@@ -579,7 +637,7 @@ function MonitorCard({
                                 resetPlayEdit(metric);
                               }
                             }}
-                            placeholder="目标"
+                            placeholder="目标…"
                             type="text"
                             value={playTargetDraft}
                           />

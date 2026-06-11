@@ -2,7 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 import { Check, UsersRound, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountListItem } from "@/lib/types";
 
@@ -34,13 +34,7 @@ export function AccountPickerModal({
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      onKeyDown={handleKeyDown}
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
       <div aria-labelledby="account-picker-title" aria-modal="true" className="modal-panel account-picker-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>
@@ -68,7 +62,7 @@ export function AccountPickerModal({
               const checked = selectedAccountIds.includes(account.id);
               return (
                 <label className={`account-picker-row ${checked ? "selected" : ""}`} key={account.id}>
-                  <input checked={checked} onChange={() => onToggleAccount(account.id)} type="checkbox" />
+                  <input checked={checked} name="accountIds" onChange={() => onToggleAccount(account.id)} type="checkbox" />
                   <span>
                     <strong>{account.name}</strong>
                     <small>{formatPlatform(account.platform)} · {account.transcriptCount} 转写 · {account.videoCount} 视频</small>
@@ -89,6 +83,6 @@ export function AccountPickerModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

@@ -55,7 +55,6 @@ export function useLibraryAccountDetail({ selectedAccountMeta, setStyleDraft }: 
     cachedGetAccountDetail({
       platform: selectedAccountDetailPlatform,
       accountId: selectedAccountDetailId,
-      includeStyle: true,
       version: selectedAccountUpdatedAt
     })
       .then((detail) => {

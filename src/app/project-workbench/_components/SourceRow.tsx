@@ -37,7 +37,7 @@ export function SourceRow({
   if (managing) {
     return (
       <label className={`project-workbench-source ${selected ? "selected" : ""} ${compact ? "compact" : ""} manage-row`}>
-        <input checked={Boolean(manageSelected)} onChange={onManageToggle} type="checkbox" />
+        <input checked={Boolean(manageSelected)} name="sourceIds" onChange={onManageToggle} type="checkbox" />
         <span className="project-workbench-source-icon">
           <FileText aria-hidden="true" size={15} />
         </span>

@@ -7,6 +7,7 @@ import { libraryRoot } from "@/lib/storage";
 import { getChatRuntimeConfig } from "@/lib/ai";
 import { getImageRuntimeConfig } from "@/lib/cover";
 import { checkFeishuRuntime } from "@/lib/feishu";
+import { probeChatModel } from "@/lib/model-runtime";
 import { resolveOpenCliCommand } from "@/lib/opencli";
 
 export const runtime = "nodejs";
@@ -14,7 +15,7 @@ export const runtime = "nodejs";
 const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 
-export async function GET() {
+export async function GET(request: Request) {
   const runtime = resolveOpenCliCommand();
   const opencli = runtime.command;
   let opencliOk = false;
@@ -51,7 +52,10 @@ export async function GET() {
 
   const chat = getChatRuntimeConfig();
   const image = getImageRuntimeConfig();
-  const feishu = await checkFeishuRuntime();
+  const [chatProbe, feishu] = await Promise.all([
+    probeChatModel({ signal: request.signal }),
+    checkFeishuRuntime()
+  ]);
 
   return NextResponse.json({
     opencli: {
@@ -66,7 +70,9 @@ export async function GET() {
       (process.env.VOLCENGINE_ASR_APP_KEY && process.env.VOLCENGINE_ASR_ACCESS_KEY)
     ),
     chatConfigured: chat.configured,
+    chatReachable: chatProbe.ok,
     chat,
+    chatProbe,
     imageConfigured: image.configured,
     image,
     feishuConfigured: feishu.configured,

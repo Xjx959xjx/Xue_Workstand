@@ -36,6 +36,7 @@ export async function POST(request: Request) {
       emit({ type: "stage", stage: "generate", message: "正在生成文案", progress: 55 });
       const result = await streamResponseTextWithFallback({
         messages: prepared.messages,
+        reasoningEffort: "xhigh",
         signal,
         onDelta(delta) {
           emit({ type: "delta", delta });

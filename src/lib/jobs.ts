@@ -1,12 +1,16 @@
 import { promises as fs } from "fs";
 import path from "path";
 import {
+  buildSavedProjectStyleResult,
   completeCachedAccountStyle,
+  completeCachedProjectStyle,
   completePreparedAccountStyle,
+  completePreparedProjectStyle,
   completePreparedWriteCopy,
   prepareAccountStyleContext,
+  prepareSavedProjectStyleContext,
   prepareWriteCopyContext,
-  saveAndGenerateProjectStyleProfile,
+  streamStyleResponseTextWithFallback,
   streamResponseTextWithFallback
 } from "./ai";
 import { runBatchTranscribe } from "./batch-transcribe";
@@ -26,7 +30,8 @@ import {
   JobRecord,
   JobScope,
   JobStartInput,
-  WriteResult
+  WriteResult,
+  jobKinds
 } from "./types";
 import { nowIso, safeSegment, shortHash } from "./utils";
 
@@ -43,6 +48,16 @@ type JobRuntime = {
 type PatchJobOptions = {
   persist?: boolean;
   beforePatch?: (current: JobRecord) => void;
+};
+
+type JobSummaryRead = JobListItem & {
+  filePath: string;
+};
+
+type JobSummaryCache = {
+  fileCount: number;
+  mtimeMs: number;
+  jobs: JobSummaryRead[];
 };
 
 const globalJobs = globalThis as typeof globalThis & {
@@ -73,10 +88,20 @@ const runtime = (() => {
 })();
 
 const jobWriteQueues = new Map<string, Promise<unknown>>();
+let jobSummaryCache: JobSummaryCache | null = null;
 const PARTIAL_TEXT_PATCH_INTERVAL_MS = 250;
 const PARTIAL_TEXT_PATCH_CHARS = 160;
 const DEFAULT_MAX_ACTIVE_JOBS = 2;
 const DEFAULT_JOB_HISTORY_LIMIT = 200;
+const jobKindSet = new Set<JobKind>(jobKinds);
+const jobStatusSet = new Set<JobRecord["status"]>([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "interrupted",
+  "cancelled"
+]);
 
 function jobsPath() {
   return path.join(libraryRoot(), "jobs");
@@ -106,6 +131,7 @@ async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
   runtime.records.set(job.id, job);
   if (options.persist === false) return;
   await writeJson(jobJsonPath(job.id), job);
+  invalidateJobSummaryCache();
 }
 
 async function patchJob(jobId: string, patch: Partial<JobRecord>, options: PatchJobOptions = {}) {
@@ -170,29 +196,7 @@ async function ensureInitialized() {
 async function initializeRuntimeJobs() {
   await ensureJobs();
 
-  const jobs = await listJobsFromDisk();
-  const records = new Map(runtime.records);
-  for (const job of jobs) {
-    if (!records.has(job.id)) records.set(job.id, job);
-  }
-  runtime.records = records;
-
-  const interruptedAt = nowIso();
-  await Promise.all(
-    [...runtime.records.values()]
-      .filter((job) => (job.status === "running" || job.status === "queued") && !runtime.active.has(job.id))
-      .map((job) =>
-        writeJob({
-          ...job,
-          status: "interrupted",
-          progress: job.progress || 0,
-          message: "开发服务器重启后任务已中断，请重新发起。",
-          error: "任务已中断，请重新发起。",
-          updatedAt: interruptedAt,
-          completedAt: interruptedAt
-        })
-      )
-  );
+  await interruptStaleDiskJobs(await listJobSummariesFromDisk());
   runtime.initialized = true;
 }
 
@@ -209,14 +213,94 @@ async function listJobsFromDisk() {
     .sort(compareJobsByUpdatedAtDesc);
 }
 
+async function listJobSummariesFromDisk() {
+  await ensureJobs();
+  const files = await fs.readdir(jobsPath()).catch(() => []);
+  const stats = await fs.stat(jobsPath());
+  const jsonFileCount = files.filter((file) => file.endsWith(".json")).length;
+
+  if (
+    jobSummaryCache &&
+    jobSummaryCache.fileCount === jsonFileCount &&
+    jobSummaryCache.mtimeMs === stats.mtimeMs
+  ) {
+    return jobSummaryCache.jobs;
+  }
+
+  const summaries = await Promise.all(
+    files
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => readJobSummary(path.join(jobsPath(), file)))
+  );
+  const jobs = summaries
+    .filter((job): job is JobSummaryRead => Boolean(job))
+    .sort(compareJobsByUpdatedAtDesc);
+
+  jobSummaryCache = {
+    fileCount: jsonFileCount,
+    mtimeMs: stats.mtimeMs,
+    jobs
+  };
+  return jobs;
+}
+
+async function readJobSummary(target: string): Promise<JobSummaryRead | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(target, "utf8");
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    throw new Error(`读取 JSON 文件失败：${target}。${describeFsError(error)}`);
+  }
+
+  return parseJobSummaryJson(target, raw);
+}
+
+async function interruptStaleDiskJobs(jobs: JobSummaryRead[]) {
+  const staleJobs = jobs.filter((job) => (job.status === "running" || job.status === "queued") && !runtime.active.has(job.id));
+  if (!staleJobs.length) return;
+
+  const interruptedAt = nowIso();
+  await Promise.all(
+    staleJobs.map(async (summary) => {
+      const job = await readJson<JobRecord>(summary.filePath);
+      if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
+      await writeJob({
+        ...job,
+        status: "interrupted",
+        progress: job.progress || 0,
+        message: "开发服务器重启后任务已中断，请重新发起。",
+        error: "任务已中断，请重新发起。",
+        updatedAt: interruptedAt,
+        completedAt: interruptedAt
+      });
+    })
+  );
+}
+
+function stripSummaryFilePath({ filePath, ...job }: JobSummaryRead): JobListItem {
+  void filePath;
+  return job;
+}
+
 export async function listJobs() {
   await ensureInitialized();
-  return [...runtime.records.values()].sort(compareJobsByUpdatedAtDesc);
+  const jobs = new Map((await listJobsFromDisk()).map((job) => [job.id, job]));
+  for (const job of runtime.records.values()) {
+    jobs.set(job.id, job);
+  }
+  return [...jobs.values()].sort(compareJobsByUpdatedAtDesc);
 }
 
 export async function listJobSummaries() {
-  const jobs = await listJobs();
-  return jobs.map(toJobListItem);
+  await ensureInitialized();
+  const summaries = new Map(
+    (await listJobSummariesFromDisk()).map((job) => [job.id, stripSummaryFilePath(job)])
+  );
+  for (const job of runtime.records.values()) {
+    summaries.set(job.id, toJobListItem(job));
+  }
+  return [...summaries.values()].sort(compareJobsByUpdatedAtDesc);
 }
 
 export async function getJob(jobId: string) {
@@ -392,6 +476,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
 
   const result = await streamResponseTextWithFallback({
     messages: prepared.messages,
+    reasoningEffort: "xhigh",
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {
       partialText += delta;
@@ -435,7 +520,9 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
 
 async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, { kind: "account-style" }>) {
   throwIfCancelled(jobId);
+  const startedAt = Date.now();
   let partialText = "";
+  let firstDeltaMs: number | undefined;
   const partialUpdater = createPartialTextUpdater(jobId, {
     stage: "generate",
     message: "正在生成账号风格卡",
@@ -448,20 +535,33 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
     message: "正在读取账号转写样本",
     progress: 12
   });
-  const context = await prepareAccountStyleContext(start.input.platform, start.input.accountId);
+  const context = await prepareAccountStyleContext(start.input.platform, start.input.accountId, {
+    signal: getJobAbortSignal(jobId),
+    onAnalysisProgress(progress) {
+      const percent = progress.analysisCount
+        ? Math.floor((progress.completedCount / progress.analysisCount) * 25)
+        : 0;
+      void patchJob(jobId, {
+        stage: "analysis",
+        message: `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
+        progress: Math.min(34, 12 + percent)
+      });
+    }
+  });
   throwIfCancelled(jobId);
   const cached = completeCachedAccountStyle(context);
   if (cached) {
+    const cachedResult = { ...cached, totalMs: Date.now() - startedAt };
     await patchJob(jobId, {
       stage: "cache",
       message: "样本未变化，已复用现有风格卡",
       progress: 95,
-      partialText: cached.style
+      partialText: cachedResult.style
     });
     await completeJob(jobId, {
       message: "账号风格卡已复用",
-      result: cached,
-      partialText: cached.style,
+      result: cachedResult,
+      partialText: cachedResult.style,
       resultRef: {
         id: start.input.accountId,
         href: start.href || "/library",
@@ -476,15 +576,20 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
     message: context.generationMode === "incremental" ? "正在增量更新账号风格卡" : "正在生成账号风格卡",
     progress: 35
   });
-  const result = await streamResponseTextWithFallback({
+  const result = await streamStyleResponseTextWithFallback({
     messages: context.messages,
     maxOutputTokens: 3200,
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {
+      if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
       partialText += delta;
       partialUpdater.update(partialText);
     }
   });
+  if (!partialText.trim() && result.text) {
+    if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
+    partialText = result.text;
+  }
   await partialUpdater.flush(partialText);
   throwIfCancelled(jobId);
 
@@ -493,7 +598,10 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
     message: "正在写入账号风格卡",
     progress: 90
   });
-  const saved = await completePreparedAccountStyle(context, result);
+  const saved = await completePreparedAccountStyle(context, result, {
+    firstDeltaMs,
+    totalMs: Date.now() - startedAt
+  });
   throwIfCancelled(jobId);
   await completeJob(jobId, {
     message: "账号风格卡已生成",
@@ -509,6 +617,16 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
 
 async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, { kind: "project-style" }>) {
   throwIfCancelled(jobId);
+  const startedAt = Date.now();
+  let partialText = "";
+  let firstDeltaMs: number | undefined;
+  const partialUpdater = createPartialTextUpdater(jobId, {
+    stage: "generate",
+    message: "正在生成项目风格卡",
+    progress(text) {
+      return Math.min(90, 45 + Math.floor(text.length / 90));
+    }
+  });
   await patchJob(jobId, {
     stage: "validate",
     message: "正在校验项目配置",
@@ -520,11 +638,66 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
   throwIfCancelled(jobId);
 
   await patchJob(jobId, {
-    stage: "generate",
+    stage: "prepare",
     message: "正在保存项目并读取参考样本",
+    progress: 35
+  });
+  const prepared = await prepareSavedProjectStyleContext(start.input, {
+    signal: getJobAbortSignal(jobId),
+    onAnalysisProgress(progress) {
+      const percent = progress.analysisCount
+        ? Math.floor((progress.completedCount / progress.analysisCount) * 30)
+        : 0;
+      void patchJob(jobId, {
+        stage: "analysis",
+        message: `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
+        progress: Math.min(44, 15 + percent)
+      });
+    }
+  });
+  throwIfCancelled(jobId);
+  const cached = completeCachedProjectStyle(prepared.context);
+  if (cached) {
+    const result = await buildSavedProjectStyleResult(prepared, { ...cached, totalMs: Date.now() - startedAt });
+    await patchJob(jobId, {
+      stage: "cache",
+      message: "样本未变化，已复用现有项目风格卡",
+      progress: 95,
+      partialText: result.style
+    });
+    await completeJob(jobId, {
+      message: "项目风格卡已复用",
+      result,
+      partialText: result.style,
+      resultRef: {
+        id: result.project.id,
+        href: "/project-workbench",
+        label: "查看项目工作台"
+      }
+    });
+    return;
+  }
+
+  await patchJob(jobId, {
+    stage: "generate",
+    message: "正在生成项目风格卡",
     progress: 45
   });
-  const result = await saveAndGenerateProjectStyleProfile(start.input, { signal: getJobAbortSignal(jobId) });
+  const completion = await streamStyleResponseTextWithFallback({
+    messages: prepared.context.messages,
+    maxOutputTokens: 3200,
+    signal: getJobAbortSignal(jobId),
+    onDelta(delta) {
+      if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
+      partialText += delta;
+      partialUpdater.update(partialText);
+    }
+  });
+  if (!partialText.trim() && completion.text) {
+    if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
+    partialText = completion.text;
+  }
+  await partialUpdater.flush(partialText);
   throwIfCancelled(jobId);
 
   await patchJob(jobId, {
@@ -532,6 +705,11 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
     message: "正在写入项目风格卡",
     progress: 92
   });
+  const saved = await completePreparedProjectStyle(prepared.context, completion, {
+    firstDeltaMs,
+    totalMs: Date.now() - startedAt
+  });
+  const result = await buildSavedProjectStyleResult(prepared, saved);
   await completeJob(jobId, {
     message: "项目风格卡已更新",
     result,
@@ -894,7 +1072,7 @@ function jobHistoryLimit() {
 
 async function pruneJobHistory() {
   const limit = jobHistoryLimit();
-  const jobs = [...runtime.records.values()].sort(compareJobsByUpdatedAtDesc);
+  const jobs = await listJobSummariesFromDisk();
   const keep = new Set(jobs.slice(0, limit).map((job) => job.id));
   const removable = jobs.filter((job) => !keep.has(job.id) && isTerminalJob(job));
   if (!removable.length) return;
@@ -903,9 +1081,14 @@ async function pruneJobHistory() {
     removable.map(async (job) => {
       runtime.records.delete(job.id);
       runtime.pending.delete(job.id);
-      await fs.rm(jobJsonPath(job.id), { force: true }).catch(() => undefined);
+      await fs.rm(job.filePath, { force: true }).catch(() => undefined);
     })
   );
+  invalidateJobSummaryCache();
+}
+
+function invalidateJobSummaryCache() {
+  jobSummaryCache = null;
 }
 
 function isTerminalJob(job: Pick<JobRecord, "status">) {
@@ -957,6 +1140,189 @@ function isCancelledJobError(error: unknown, signal?: AbortSignal) {
   if (signal?.aborted) return true;
   if (!(error instanceof Error)) return false;
   return error.name === "AbortError" || /AbortError|aborted|任务已停止/i.test(error.message);
+}
+
+function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
+  const kind = readRequiredString(target, raw, "kind");
+  if (!jobKindSet.has(kind as JobKind)) {
+    throw new Error(`任务记录字段无效：${target} 的 kind 不是已知任务类型。`);
+  }
+
+  const status = readRequiredString(target, raw, "status");
+  if (!jobStatusSet.has(status as JobRecord["status"])) {
+    throw new Error(`任务记录字段无效：${target} 的 status 不是已知任务状态。`);
+  }
+
+  const inputSummary = readOptionalString(target, raw, "inputSummary");
+  const error = readOptionalString(target, raw, "error");
+  const scope = readOptionalObject<JobScope>(target, raw, "scope");
+  const stage = readOptionalString(target, raw, "stage");
+  const href = readOptionalString(target, raw, "href");
+  const resultRef = readOptionalObject<JobRecord["resultRef"]>(target, raw, "resultRef");
+  const events = readOptionalArray<JobEvent>(target, raw, "events");
+  const completedAt = readOptionalString(target, raw, "completedAt");
+
+  return {
+    id: readRequiredString(target, raw, "id"),
+    kind: kind as JobKind,
+    status: status as JobRecord["status"],
+    title: readRequiredString(target, raw, "title"),
+    ...(inputSummary ? { inputSummary: summarizeJobListText(inputSummary, 120) } : {}),
+    ...(scope ? { scope } : {}),
+    ...(stage ? { stage } : {}),
+    message: summarizeJobListText(readRequiredString(target, raw, "message"), 160),
+    progress: readRequiredNumber(target, raw, "progress"),
+    ...(href ? { href } : {}),
+    ...(resultRef ? { resultRef } : {}),
+    ...(events ? { events } : {}),
+    ...(error ? { error: summarizeJobListText(error, 240) } : {}),
+    createdAt: readRequiredString(target, raw, "createdAt"),
+    updatedAt: readRequiredString(target, raw, "updatedAt"),
+    ...(completedAt ? { completedAt } : {}),
+    hasPartialText: hasTopLevelProperty(raw, "partialText"),
+    hasResult: hasTopLevelProperty(raw, "result"),
+    filePath: target
+  };
+}
+
+function readRequiredString(target: string, raw: string, key: string) {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (value.found && typeof value.value === "string") return value.value;
+  throw new Error(`任务记录字段缺失或无效：${target} 缺少字符串字段 ${key}。`);
+}
+
+function readOptionalString(target: string, raw: string, key: string) {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (!value.found) return undefined;
+  if (typeof value.value === "string") return value.value;
+  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是字符串。`);
+}
+
+function readRequiredNumber(target: string, raw: string, key: string) {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (value.found && typeof value.value === "number" && Number.isFinite(value.value)) return value.value;
+  throw new Error(`任务记录字段缺失或无效：${target} 缺少数字字段 ${key}。`);
+}
+
+function readOptionalObject<T>(target: string, raw: string, key: string): T | undefined {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (!value.found) return undefined;
+  if (value.value && typeof value.value === "object" && !Array.isArray(value.value)) return value.value as T;
+  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是对象。`);
+}
+
+function readOptionalArray<T>(target: string, raw: string, key: string): T[] | undefined {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (!value.found) return undefined;
+  if (Array.isArray(value.value)) return value.value as T[];
+  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是数组。`);
+}
+
+function readOptionalTopLevelJsonValue(
+  target: string,
+  raw: string,
+  key: string
+): { found: false } | { found: true; value: unknown } {
+  const valueStart = topLevelValueStart(raw, key);
+  if (valueStart < 0) return { found: false };
+  const valueEnd = findJsonValueEnd(target, raw, valueStart);
+  const valueText = raw.slice(valueStart, valueEnd).trim();
+
+  try {
+    return { found: true, value: JSON.parse(valueText) as unknown };
+  } catch (error) {
+    throw new Error(`JSON 文件损坏，无法解析：${target}。${describeFsError(error)}`);
+  }
+}
+
+function hasTopLevelProperty(raw: string, key: string) {
+  return topLevelValueStart(raw, key) >= 0;
+}
+
+function topLevelValueStart(raw: string, key: string) {
+  const propertyIndex = raw.indexOf(`\n  "${key}":`);
+  if (propertyIndex < 0) return -1;
+  const colonIndex = raw.indexOf(":", propertyIndex);
+  if (colonIndex < 0) return -1;
+
+  let valueStart = colonIndex + 1;
+  while (valueStart < raw.length && /\s/.test(raw[valueStart])) valueStart += 1;
+  return valueStart < raw.length ? valueStart : -1;
+}
+
+function findJsonValueEnd(target: string, raw: string, start: number) {
+  const first = raw[start];
+  if (first === "\"") return findJsonStringEnd(target, raw, start);
+  if (first === "{" || first === "[") return findJsonStructuredValueEnd(target, raw, start);
+
+  let end = start;
+  while (end < raw.length && raw[end] !== "," && raw[end] !== "\n" && raw[end] !== "\r" && raw[end] !== "}") {
+    end += 1;
+  }
+  if (end === start) {
+    throw new Error(`JSON 文件损坏，无法解析：${target}。字段值为空。`);
+  }
+  return end;
+}
+
+function findJsonStringEnd(target: string, raw: string, start: number) {
+  let escaped = false;
+  for (let index = start + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") return index + 1;
+  }
+  throw new Error(`JSON 文件损坏，无法解析：${target}。字符串字段没有闭合。`);
+}
+
+function findJsonStructuredValueEnd(target: string, raw: string, start: number) {
+  const stack = [raw[start] === "{" ? "}" : "]"];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      stack.push("}");
+    } else if (char === "[") {
+      stack.push("]");
+    } else if (char === stack.at(-1)) {
+      stack.pop();
+      if (!stack.length) return index + 1;
+    } else if (char === "}" || char === "]") {
+      throw new Error(`JSON 文件损坏，无法解析：${target}。结构字段括号不匹配。`);
+    }
+  }
+
+  throw new Error(`JSON 文件损坏，无法解析：${target}。结构字段没有闭合。`);
+}
+
+function isMissingFileError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function describeFsError(error: unknown) {
+  return error instanceof Error && error.message ? error.message : "未知文件系统错误";
 }
 
 function toJobListItem(job: JobRecord): JobListItem {

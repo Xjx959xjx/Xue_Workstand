@@ -2,7 +2,7 @@ import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { generateEngagement } from "@/lib/engagement";
 import { createUrlPreprocessor } from "@/lib/platform-links";
-import { deleteEngagementRecords } from "@/lib/storage";
+import { deleteEngagementRecords, getEngagementRecords } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,6 +40,12 @@ const schema = z.discriminatedUnion("sourceType", [
 const deleteSchema = z.object({
   recordIds: z.array(z.string().min(1)).min(1)
 });
+
+export async function GET() {
+  return apiJson(async () => ({ records: await getEngagementRecords() }), {
+    fallbackMessage: "读取互动素材历史失败"
+  });
+}
 
 export async function POST(request: Request) {
   return apiJson(async () => {

@@ -79,13 +79,6 @@ export const LibraryAccountModal = memo(function LibraryAccountModal({
             value={newAccountUidOrUrl}
             onBlur={() => onNewAccountUidOrUrlChange(normalizeLinkInput(newAccountUidOrUrl, { kind: "account" }))}
             onChange={(event) => onNewAccountUidOrUrlChange(event.target.value)}
-            onPaste={(event) => {
-              const nextValue = normalizeLinkInput(event.clipboardData.getData("text"), { kind: "account" });
-              if (nextValue) {
-                event.preventDefault();
-                onNewAccountUidOrUrlChange(nextValue);
-              }
-            }}
             placeholder="可留空用 opencli 搜索；也可直接填写 UID / sec_uid / 主页链接…"
           />
         </div>

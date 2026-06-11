@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { RotateCcw, Save, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 
 export function GrossMarginTemplateModal({
   generatedValue,
@@ -32,12 +32,7 @@ export function GrossMarginTemplateModal({
   }, []);
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose}>
       <div
         aria-labelledby="gross-template-modal-title"
         aria-modal="true"
@@ -60,7 +55,8 @@ export function GrossMarginTemplateModal({
         <label className="field gross-template-editor">
           <span>内容</span>
           <textarea
-            autoFocus
+            autoComplete="off"
+            name="grossTemplateContent"
             rows={15}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -81,7 +77,7 @@ export function GrossMarginTemplateModal({
           </button>
         </footer>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

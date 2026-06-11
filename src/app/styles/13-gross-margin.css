@@ -1,6 +1,11 @@
 /* Gross margin calculator */
 .gross-margin-workspace {
-  grid-template-columns: 296px minmax(540px, 1fr) 272px;
+  grid-template-columns: minmax(250px, 272px) minmax(0, 1fr) minmax(286px, 300px);
+  min-height: calc(100vh - 96px);
+}
+
+.gross-margin-workspace .pane {
+  min-width: 0;
 }
 
 .gross-price-pane .pane-body,
@@ -9,9 +14,11 @@
 }
 
 .gross-result-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   max-width: 300px;
-  justify-self: start;
+  justify-self: flex-start;
 }
 
 .gross-result-pane .pane-body {
@@ -98,9 +105,13 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   color: var(--text);
-  background: var(--panel);
+  background: color-mix(in oklch, var(--panel-raised) 92%, var(--panel));
   outline: 2px solid transparent;
   outline-offset: 2px;
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple);
 }
 
 .gross-price-option input:focus,
@@ -111,7 +122,7 @@
 }
 
 .gross-price-pane .btn.primary {
-  justify-self: start;
+  justify-self: flex-start;
 }
 
 .gross-price-summary-form {
@@ -128,7 +139,7 @@
   display: grid;
   grid-template-columns: minmax(180px, 0.68fr) minmax(240px, 1fr);
   gap: 10px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .gross-rate-input {
@@ -203,8 +214,9 @@
   top: 0;
   z-index: 1;
   padding: 8px 9px;
-  color: var(--muted-strong);
-  background: var(--surface-soft);
+  border-bottom-color: color-mix(in oklch, var(--line) 76%, transparent);
+  color: var(--muted);
+  background: color-mix(in oklch, var(--panel-raised) 96%, var(--panel));
   font-size: 11px;
   font-weight: 600;
 }
@@ -231,7 +243,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   background: var(--panel);
-  justify-self: start;
+  justify-self: flex-start;
 }
 
 .gross-quantity-input small {
@@ -286,7 +298,7 @@
 }
 
 .gross-maintenance-table tbody tr:hover {
-  background: color-mix(in oklch, var(--accent-tint) 62%, var(--panel));
+  background: color-mix(in oklch, var(--accent-tint) 36%, transparent);
 }
 
 .gross-maintenance-table th:nth-child(1),
@@ -374,25 +386,19 @@
 .gross-export-row .btn.primary {
   width: 100%;
   min-width: 0;
-  min-height: 38px;
   padding: 0 14px;
-  font-size: 13px;
 }
 
 .gross-export-row .btn:not(.primary) {
   width: 100%;
   min-width: 0;
-  min-height: 36px;
   padding: 0 14px;
-  font-size: 13px;
 }
 
 .gross-export-row.secondary .btn {
   width: 100%;
   min-width: 0;
-  min-height: 36px;
   padding: 0 14px;
-  font-size: 13px;
 }
 
 .gross-result-grid {
@@ -404,10 +410,11 @@
 .gross-result-panel {
   display: grid;
   gap: 4px;
-  padding: 14px 16px;
+  padding: 13px 14px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: 16px;
   background: var(--surface-raised);
+  box-shadow: none;
 }
 
 .gross-result-panel span,
@@ -419,15 +426,15 @@
 
 .gross-result-panel strong {
   color: var(--text-strong);
-  font-size: 26px;
+  font-size: 24px;
   font-variant-numeric: tabular-nums;
   font-weight: 750;
   line-height: 1.05;
 }
 
 .gross-result-panel.maintenance {
-  border-color: color-mix(in oklch, var(--blue) 22%, transparent);
-  background: var(--blue-soft);
+  border-color: color-mix(in oklch, var(--blue) 16%, var(--line));
+  background: color-mix(in oklch, var(--blue-soft) 32%, var(--panel-raised));
 }
 
 .gross-result-panel.maintenance strong {
@@ -435,18 +442,18 @@
 }
 
 .gross-result-panel.positive {
-  border-color: color-mix(in oklch, var(--green) 24%, transparent);
-  background: var(--green-soft);
+  border-color: color-mix(in oklch, var(--green) 18%, var(--line));
+  background: color-mix(in oklch, var(--green-soft) 30%, var(--panel-raised));
 }
 
 .gross-result-panel.warning {
-  border-color: rgba(161, 92, 7, 0.28);
-  background: var(--amber-soft);
+  border-color: color-mix(in oklch, var(--amber) 20%, var(--line));
+  background: color-mix(in oklch, var(--amber-soft) 34%, var(--panel-raised));
 }
 
 .gross-result-panel.negative {
-  border-color: rgba(180, 35, 90, 0.26);
-  background: var(--rose-soft);
+  border-color: color-mix(in oklch, var(--rose) 18%, var(--line));
+  background: color-mix(in oklch, var(--rose-soft) 30%, var(--panel-raised));
 }
 
 .gross-result-panel.positive strong {
@@ -463,7 +470,7 @@
 
 .gross-result-tools {
   display: grid;
-  gap: 12px;
+  gap: 6px;
 }
 
 .gross-template-entry {
@@ -536,8 +543,12 @@
 }
 
 .gross-action-panel {
+  position: sticky;
+  bottom: 0;
   display: grid;
   gap: 12px;
+  padding-top: 6px;
+  background: linear-gradient(180deg, transparent 0%, var(--panel) 32%);
 }
 
 .gross-action-grid {
@@ -549,14 +560,11 @@
 .gross-action-grid .btn {
   width: 100%;
   min-width: 0;
-  min-height: 40px;
   padding: 0 12px;
-  font-size: 13px;
 }
 
 .gross-action-grid .gross-export-primary {
   grid-column: 1 / -1;
-  min-height: 38px;
 }
 
 .gross-import-modal {
@@ -662,7 +670,7 @@
 .gross-import-metrics {
   display: flex;
   flex-wrap: wrap;
-  align-content: start;
+  align-content: flex-start;
   gap: 6px;
   min-height: 0;
   overflow: auto;
@@ -837,7 +845,7 @@
 
 .gross-bulk-monitor-list {
   display: grid;
-  align-content: start;
+  align-content: flex-start;
   gap: 7px;
   min-height: 0;
   overflow: auto;
@@ -949,8 +957,9 @@
   border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
   border-radius: 999px;
   color: var(--text);
-  background: color-mix(in oklch, var(--panel-raised) 94%, white);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  background:
+    linear-gradient(180deg, var(--panel-raised) 0%, color-mix(in oklch, var(--panel) 92%, var(--panel-soft)) 100%);
+  box-shadow: var(--surface-inset-highlight);
   outline: 2px solid transparent;
   outline-offset: 2px;
   font: inherit;
@@ -996,14 +1005,14 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, 306px);
   gap: 16px;
-  align-content: start;
-  justify-content: start;
+  align-content: flex-start;
+  justify-content: flex-start;
   padding: 0;
 }
 
 .gross-monitor-card {
   display: grid;
-  align-content: start;
+  align-content: flex-start;
   gap: 8px;
   width: 306px;
   min-height: 0;
@@ -1012,6 +1021,17 @@
   border-radius: var(--radius-lg);
   background: color-mix(in oklch, var(--panel-raised) 96%, white);
   box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--motion-base) var(--ease-apple),
+    background-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
+}
+
+.gross-monitor-card:hover {
+  border-color: color-mix(in oklch, var(--accent) 24%, var(--line));
+  box-shadow: 0 18px 38px color-mix(in oklch, var(--text-strong) 7%, transparent);
+  transform: translateY(-2px);
 }
 
 .gross-monitor-card.high-risk {
@@ -1256,6 +1276,9 @@
   font-size: 11px;
   line-height: 1.35;
   font-variant-numeric: tabular-nums;
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple);
 }
 
 .gross-monitor-metric-cell.danger {
@@ -1295,9 +1318,11 @@
 
 .gross-monitor-metric-bar span {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
   background: color-mix(in oklch, var(--accent) 78%, white);
+  transform-origin: left center;
 }
 
 .gross-monitor-metric-cell.danger .gross-monitor-metric-bar span {

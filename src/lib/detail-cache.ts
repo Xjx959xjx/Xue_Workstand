@@ -70,6 +70,17 @@ export function cachedGetProjectDetail(projectId: string, options: DetailCacheOp
   return request;
 }
 
+export function getCachedAccountDetail(input: {
+  platform: Platform;
+  accountId: string;
+} & DetailCacheOptions) {
+  return accountDetailCache.get(accountDetailCacheKey(input.platform, input.accountId, input)) || null;
+}
+
+export function getCachedProjectDetail(projectId: string, options: DetailCacheOptions = {}) {
+  return projectDetailCache.get(projectDetailCacheKey(projectId, options)) || null;
+}
+
 export function invalidateAccountDetail(platform?: Platform, accountId?: string) {
   const prefix = platform && accountId ? accountDetailPrefix(platform, accountId) : "account|";
   deleteMatching(accountDetailCache, prefix);

@@ -1,20 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, CircleAlert, Play, RefreshCw, Settings2, X } from "lucide-react";
+import { CheckCircle2, CircleAlert, Play, RefreshCw, Search, Settings2, X } from "lucide-react";
 import type { getHealth } from "@/lib/client";
 import type { CollectOrder, Platform } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
 import { timeRangeOptions, type TimeRange } from "./library-collect-utils";
-
-export type LibraryStats = {
-  accountCount: number;
-  videoCount: number;
-  transcriptCount: number;
-  copySourceCount: number;
-  projectCount: number;
-  draftCount: number;
-};
 
 type LibraryQuickStartPanelProps = {
   activeOrderOptions: Array<{ value: CollectOrder; label: string }>;
@@ -27,7 +18,6 @@ type LibraryQuickStartPanelProps = {
   name: string;
   order: CollectOrder;
   platform: Platform;
-  stats: LibraryStats;
   timeRange: TimeRange;
   onCollect: () => void;
   onCustomFromDateChange: (value: string) => void;
@@ -51,7 +41,6 @@ export function LibraryQuickStartPanel({
   name,
   order,
   platform,
-  stats,
   timeRange,
   onCollect,
   onCustomFromDateChange,
@@ -80,7 +69,7 @@ export function LibraryQuickStartPanel({
 
   return (
     <>
-      <section className="panel library-quick-start" aria-label="账号采集">
+      <section className="panel library-quick-start workbench-leading-panel" aria-label="账号采集">
         <div className="library-quick-form">
           <div className="library-quick-fields">
             <CollectControls
@@ -100,11 +89,6 @@ export function LibraryQuickStartPanel({
               onPlatformChange={onPlatformChange}
               onTimeRangeChange={onTimeRangeChange}
             />
-          </div>
-          <div className="library-quick-meta" aria-label="账号库摘要">
-            <span className="stat-pill">{stats.accountCount} 个账号</span>
-            <span className="stat-pill">{stats.videoCount} 条视频</span>
-            <span className="stat-pill">{stats.transcriptCount} 份转写</span>
           </div>
           <div className="library-quick-actions">
             <button className="btn primary library-collect-submit" disabled={!canSubmit} onClick={onCollect} type="button">
@@ -129,7 +113,6 @@ export function LibraryQuickStartPanel({
           busy={busy}
           health={health}
           panelRef={environmentPanelRef}
-          stats={stats}
           onClose={() => setEnvironmentOpen(false)}
           onHealthCheck={onHealthCheck}
         />
@@ -197,14 +180,17 @@ function CollectControls({
       </div>
       <div className="field library-account-name-field">
         <label htmlFor="collect-account-name">账号名 / 主页链接</label>
-        <input
-          autoComplete="off"
-          id="collect-account-name"
-          name="accountName"
-          onChange={(event) => onNameChange(event.target.value)}
-          placeholder={platform === "douyin" ? "例如：老青椒、主页链接或 sec_uid…" : "例如：某某UP主、空间链接或 UID…"}
-          value={name}
-        />
+        <div className="input-with-icon">
+          <Search aria-hidden="true" size={16} />
+          <input
+            autoComplete="off"
+            id="collect-account-name"
+            name="accountName"
+            onChange={(event) => onNameChange(event.target.value)}
+            placeholder={platform === "douyin" ? "例如：老青椒、主页链接或 sec_uid…" : "例如：某某UP主、空间链接或 UID…"}
+            value={name}
+          />
+        </div>
       </div>
       <div className="field">
         <label htmlFor="collect-limit">数量</label>
@@ -281,25 +267,15 @@ function EnvironmentModal({
   busy,
   health,
   panelRef,
-  stats,
   onClose,
   onHealthCheck
 }: {
   busy: string;
   health: LibraryQuickStartPanelProps["health"];
   panelRef: React.RefObject<HTMLDivElement | null>;
-  stats: LibraryStats;
   onClose: () => void;
   onHealthCheck: () => void;
 }) {
-  const metricItems = [
-    { value: stats.accountCount, label: "账号" },
-    { value: stats.projectCount, label: "项目" },
-    { value: stats.videoCount, label: "视频" },
-    { value: stats.transcriptCount, label: "转写" },
-    { value: stats.copySourceCount, label: "文案素材" },
-    { value: stats.draftCount, label: "草稿" }
-  ];
   const healthItems = health?.appMode === "gross-margin"
     ? [
         {
@@ -327,8 +303,12 @@ function EnvironmentModal({
         },
         {
           label: "对话模型",
-          detail: health.chatConfigured ? `${health.chat.model} / ${health.chat.wireApi}` : `${health.chat.model} / ${health.chat.wireApi} / 未配置`,
-          ok: health.chatConfigured
+          detail: health.chatReachable
+            ? `${health.chatProbe.source === "fallback" ? "备用" : "主"} ${health.chatProbe.model} / ${health.chatProbe.attemptedWireApi || health.chatProbe.wireApi}${health.chat.serviceTier ? ` / ${health.chat.serviceTier}` : ""}${health.chatProbe.latencyMs ? ` / ${health.chatProbe.latencyMs}ms` : ""}`
+            : health.chatConfigured
+            ? `${health.chat.model} / ${health.chat.wireApi}${health.chat.serviceTier ? ` / ${health.chat.serviceTier}` : ""} / ${health.chatProbe.message || "探针失败"}`
+            : `${health.chat.model} / ${health.chat.wireApi} / 未配置`,
+          ok: health.chatReachable
         },
         {
           label: "模型代理",
@@ -361,14 +341,6 @@ function EnvironmentModal({
         </div>
       </div>
       <div className="environment-modal-body">
-        <div className="library-quick-metrics" aria-label="素材库状态">
-          {metricItems.map((item) => (
-            <span className="library-quick-metric" key={item.label}>
-              <strong>{item.value}</strong>
-              <span>{item.label}</span>
-            </span>
-          ))}
-        </div>
         <div className="environment-check-list">
           {healthItems.length ? (
             healthItems.map((item) => (

@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 
 type AssetsFeishuModalProps = {
   result: {
@@ -13,12 +13,7 @@ type AssetsFeishuModalProps = {
 
 export function AssetsFeishuModal({ result, onClose }: AssetsFeishuModalProps) {
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose}>
       <div aria-labelledby="assets-feishu-dialog-title" aria-modal="true" className="modal-panel feishu-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <h2 id="assets-feishu-dialog-title">飞书文档已创建</h2>
@@ -34,6 +29,6 @@ export function AssetsFeishuModal({ result, onClose }: AssetsFeishuModalProps) {
           </a>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

@@ -35,12 +35,14 @@ import {
   DOUYIN_SEARCH_EXTRACT_JS,
   DOUYIN_VIDEO_COMMENT_EXTRACT_JS,
   buildDouyinBatchStatsExtractJs,
+  buildDouyinBatchPostExtractJs,
   buildDouyinDetailExtractJs,
   buildDouyinPostExtractJs,
   buildDouyinStatsExtractJs
 } from "./opencli-douyin-scripts";
 
 const DOUYIN_BROWSER_VIDEO_SCAN_LIMIT = 500;
+const DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS = 300_000;
 const DOUYIN_RELATED_COMMENT_VIDEO_LIMIT = 6;
 const DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT = 20;
 
@@ -49,6 +51,15 @@ type DouyinMediaLookupOptions = {
   signal?: AbortSignal;
 };
 type VideoStatsTimingOptions = OpenCliTimingOptions;
+
+export type DouyinBatchVideoCollectResult = {
+  account: Account;
+  status: "completed" | "failed";
+  rawCount: number;
+  raw: unknown[];
+  videos: Video[];
+  error?: string;
+};
 
 export type { OpenCliTimingEntry, OpenCliTimingMeta, OpenCliTimingSink };
 export {
@@ -364,6 +375,54 @@ export async function collectVideos(input: {
   };
 }
 
+export async function collectDouyinPostVideosBatch(input: {
+  accounts: Account[];
+  concurrency: number;
+  limit: number;
+  fromDate?: string;
+  toDate?: string;
+  signal?: AbortSignal;
+}): Promise<DouyinBatchVideoCollectResult[]> {
+  if (!input.accounts.length) return [];
+
+  const workspace = `douyin-post-batch-${process.pid}-${Date.now()}-${shortHash(input.accounts.map((account) => account.uid).join("|"))}`;
+  const scanLimit = Math.min(Math.max(input.limit, 1), DOUYIN_BROWSER_VIDEO_SCAN_LIMIT);
+  const concurrency = Math.min(Math.max(input.concurrency, 1), input.accounts.length);
+
+  try {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
+      timeout: 30_000,
+      signal: input.signal
+    });
+    const stdout = await runOpenCli(
+      buildOpenCliBrowserArgs(workspace, "eval", [
+        buildDouyinBatchPostExtractJs({
+          accounts: input.accounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            uid: account.uid
+          })),
+          concurrency,
+          fromDate: input.fromDate,
+          limit: scanLimit,
+          toDate: input.toDate
+        })
+      ]),
+      {
+        timeout: DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS,
+        signal: input.signal
+      }
+    );
+    return normalizeDouyinBatchCollectResults(input.accounts, asArray(parseJsonish(stdout)));
+  } catch (error) {
+    if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
+    const message = error instanceof Error ? error.message : "抖音批量抓取失败";
+    return input.accounts.map((account) => makeFailedDouyinBatchCollectResult(account, `抖音批量抓取失败：${message}`));
+  } finally {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
 async function scanDouyinPostVideoRows(
   account: Account,
   options: {
@@ -374,16 +433,12 @@ async function scanDouyinPostVideoRows(
   }
 ) {
   const workspace = `douyin-post-${process.pid}-${Date.now()}-${shortHash(account.uid)}`;
-  const profileUrl = `https://www.douyin.com/user/${encodeURIComponent(account.uid)}`;
   const scanLimit = Math.min(Math.max(options.limit, 1), DOUYIN_BROWSER_VIDEO_SCAN_LIMIT);
 
   try {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
       timeout: 30_000,
       signal: options.signal
-    });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), { timeout: 10_000, signal: options.signal }).catch((error) => {
-      if (isAbortError(error)) throw error;
     });
     const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [
       buildDouyinPostExtractJs({
@@ -397,6 +452,52 @@ async function scanDouyinPostVideoRows(
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
+}
+
+function normalizeDouyinBatchCollectResults(
+  accounts: Account[],
+  rawResults: unknown[]
+): DouyinBatchVideoCollectResult[] {
+  const resultsByAccount = new Map<string, Record<string, unknown>>();
+  for (const raw of rawResults) {
+    if (!raw || typeof raw !== "object") continue;
+    const result = raw as Record<string, unknown>;
+    const accountId = stringField(result.accountId);
+    const uid = stringField(result.uid);
+    if (accountId) resultsByAccount.set(accountId, result);
+    if (uid) resultsByAccount.set(uid, result);
+  }
+
+  return accounts.map((account) => {
+    const result = resultsByAccount.get(account.id) || resultsByAccount.get(account.uid);
+    if (!result) {
+      return makeFailedDouyinBatchCollectResult(account, "抖音批量抓取没有返回这个账号的结果。");
+    }
+
+    if (result.status !== "completed") {
+      return makeFailedDouyinBatchCollectResult(account, stringField(result.error) || "抖音批量抓取账号失败。");
+    }
+
+    const rows = Array.isArray(result.rows) ? result.rows : [];
+    return {
+      account,
+      status: "completed",
+      raw: rows,
+      rawCount: rows.length,
+      videos: rows.map((row) => normalizeDouyinVideo(row, account))
+    };
+  });
+}
+
+function makeFailedDouyinBatchCollectResult(account: Account, error: string): DouyinBatchVideoCollectResult {
+  return {
+    account,
+    error,
+    raw: [],
+    rawCount: 0,
+    status: "failed",
+    videos: []
+  };
 }
 
 export async function refreshDouyinVideoDownloadUrl(

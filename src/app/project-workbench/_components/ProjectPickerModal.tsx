@@ -2,7 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 import { Plus, Save, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import type { ProjectListItem } from "@/lib/types";
 
 type ProjectPickerModalProps = {
@@ -39,13 +39,7 @@ export function ProjectPickerModal({
   }
 
   return (
-    <div
-      className="modal-backdrop"
-      onKeyDown={handleKeyDown}
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
       <div aria-labelledby="project-picker-title" aria-modal="true" className="modal-panel project-picker-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>
@@ -86,11 +80,11 @@ export function ProjectPickerModal({
             <h3>项目信息</h3>
             <label className="field">
               <span>名称</span>
-              <input autoComplete="off" value={projectName} onChange={(event) => onProjectNameChange(event.target.value)} placeholder="项目名" />
+              <input autoComplete="off" name="projectName" value={projectName} onChange={(event) => onProjectNameChange(event.target.value)} placeholder="项目名…" />
             </label>
             <label className="field">
               <span>说明</span>
-              <textarea autoComplete="off" value={projectDescription} onChange={(event) => onProjectDescriptionChange(event.target.value)} placeholder="用途、受众、方向" />
+              <textarea autoComplete="off" name="projectDescription" value={projectDescription} onChange={(event) => onProjectDescriptionChange(event.target.value)} placeholder="用途、受众、方向…" />
             </label>
             <button className="btn primary" disabled={!canSaveProject} onClick={onSaveProject} type="button">
               <Save aria-hidden="true" size={16} />
@@ -99,6 +93,6 @@ export function ProjectPickerModal({
           </div>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

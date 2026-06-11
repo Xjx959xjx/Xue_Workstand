@@ -66,10 +66,6 @@ export function useLibraryTranscriptActions({
     }
   }, [clearTranscript, selectedAccount, selectedVideo, setMessage, transcriptVideoId]);
 
-  useEffect(() => {
-    void loadSelectedTranscript();
-  }, [loadSelectedTranscript]);
-
   const openTranscriptModal = useCallback(async () => {
     if (!selectedVideo) return;
     if (selectedVideoHasTranscript) {

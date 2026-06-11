@@ -17,19 +17,23 @@ let libraryOverviewRequest: Promise<LibraryOverviewResponse> | null = null;
 let libraryOverviewRequestSeq = 0;
 
 export function LibraryProvider({ children }: { children: React.ReactNode }) {
-  const [library, setLibrary] = useState<LibraryOverview | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [library, setLibrary] = useState<LibraryOverview | null>(() =>
+    libraryOverviewCache ? buildLibraryOverview(libraryOverviewCache) : null
+  );
+  const [loading, setLoading] = useState(() => !libraryOverviewCache);
   const [error, setError] = useState("");
+  const hasLibraryRef = useRef(Boolean(libraryOverviewCache));
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async (options: { force?: boolean } = {}) => {
     const refreshSeq = refreshSeqRef.current + 1;
     refreshSeqRef.current = refreshSeq;
-    setLoading(true);
+    if (!hasLibraryRef.current) setLoading(true);
     setError("");
     try {
       const overview = await loadLibraryOverview(options.force ?? true);
       if (refreshSeq !== refreshSeqRef.current) return;
+      hasLibraryRef.current = true;
       setLibrary(buildLibraryOverview(overview));
     } catch (err) {
       if (refreshSeq !== refreshSeqRef.current) return;

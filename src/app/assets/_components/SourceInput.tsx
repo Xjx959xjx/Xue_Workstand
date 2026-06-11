@@ -11,8 +11,10 @@ export function SourceInput({ value, onChange }: SourceInputProps) {
       <label className="field">
         <span>链接或文案</span>
         <textarea
+          autoComplete="off"
           className="engagement-textarea engagement-source-input"
-          placeholder="粘贴视频链接或直接粘贴文案，链接会先转写，文案直接生成。"
+          name="engagementSource"
+          placeholder="粘贴视频链接或直接粘贴文案，链接会先转写，文案直接生成…"
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />

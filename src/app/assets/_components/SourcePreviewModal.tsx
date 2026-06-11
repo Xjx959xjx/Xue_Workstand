@@ -1,7 +1,7 @@
 "use client";
 
 import { formatDate, formatPlatform } from "@/components/Formatters";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import type { Draft } from "@/lib/types";
 import { getDraftReferenceLabel } from "./asset-view-utils";
 
@@ -12,12 +12,7 @@ type SourcePreviewModalProps = {
 
 export function SourcePreviewModal({ draft, onClose }: SourcePreviewModalProps) {
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose}>
       <div aria-labelledby="source-preview-title" aria-modal="true" className="modal-panel source-preview-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>
@@ -37,6 +32,6 @@ export function SourcePreviewModal({ draft, onClose }: SourcePreviewModalProps) 
           <article className="markdown-box draft-document">{draft.content}</article>
         </div>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }

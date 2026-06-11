@@ -92,7 +92,7 @@ export function ProjectStylePanel({
             <strong>{activeStyleJob.progress}%</strong>
           </div>
           <div className="progress-track" aria-hidden="true">
-            <div className="progress-fill" style={{ width: `${activeStyleJob.progress}%` }} />
+            <div className="progress-fill" style={{ transform: `scaleX(${activeStyleJob.progress / 100})` }} />
           </div>
         </div>
       ) : null}

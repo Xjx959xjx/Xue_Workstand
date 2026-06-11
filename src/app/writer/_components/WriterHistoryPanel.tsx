@@ -195,7 +195,7 @@ export function WriterHistoryPanel({
               <p className="pane-subtitle">全部账号和项目</p>
             </div>
             <div className="writer-history-header-actions">
-              <span className="stat-pill">{drafts.length} 条</span>
+              <span className="stat-pill">{loading ? "读取中" : `${drafts.length} 条`}</span>
               <button className="btn compact" disabled={!drafts.length || loading} onClick={toggleManageMode} type="button">
                 {manageMode ? "取消" : "批量"}
               </button>
@@ -221,7 +221,7 @@ export function WriterHistoryPanel({
             ) : null}
 
             {loading ? (
-              <p className="subtle">正在读取历史记录。</p>
+              <HistoryLoadingRows />
             ) : drafts.length ? (
               <div className="writer-history-list">
                 {drafts.map((draft) => {
@@ -236,6 +236,7 @@ export function WriterHistoryPanel({
                       <span className="writer-history-copy">
                         <input
                           aria-label="草稿名称"
+                          autoComplete="off"
                           className="writer-history-title-input"
                           disabled={renameBusy}
                           maxLength={40}
@@ -371,6 +372,22 @@ export function WriterHistoryPanel({
         />
       ) : null}
     </>
+  );
+}
+
+function HistoryLoadingRows() {
+  return (
+    <div className="history-loading-list" aria-busy="true" aria-label="正在读取历史记录">
+      {Array.from({ length: 5 }, (_, index) => (
+        <div className="history-placeholder-row" key={index}>
+          <span className="history-placeholder-copy">
+            <span />
+            <small />
+          </span>
+          <em />
+        </div>
+      ))}
+    </div>
   );
 }
 

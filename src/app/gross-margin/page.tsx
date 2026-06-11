@@ -727,7 +727,7 @@ function PriceGroup({
               type="number"
               value={priceInputs[item.id] ?? String(item.unitPrice)}
               onChange={(event) => onPriceChange(item.id, event.target.value)}
-              placeholder="0.00"
+              placeholder="例如 0.00…"
             />
             <small>{`元/${item.quantityUnit}`}</small>
           </span>
@@ -754,7 +754,7 @@ function PriceGroup({
                 type="number"
                 value={priceInputs[item.id] ?? String(item.unitPrice)}
                 onChange={(event) => onPriceChange(item.id, event.target.value)}
-                placeholder="0.00"
+                placeholder="例如 0.00…"
               />
               <small>{`元/${item.quantityUnit}`}</small>
             </span>

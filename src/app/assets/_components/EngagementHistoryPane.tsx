@@ -7,6 +7,7 @@ import type { EngagementRecord } from "@/lib/types";
 import { formatSourceType } from "./asset-view-utils";
 
 type EngagementHistoryPaneProps = {
+  loading: boolean;
   records: EngagementRecord[];
   resultRecord: EngagementRecord | null;
   onDeleteRecord: (record: EngagementRecord) => Promise<void>;
@@ -21,6 +22,7 @@ type RecordContextMenu = {
 };
 
 export function EngagementHistoryPane({
+  loading,
   records,
   resultRecord,
   onDeleteRecord,
@@ -89,10 +91,12 @@ export function EngagementHistoryPane({
         </div>
         <div className="pane-body">
           <div className="status-summary">
-            <span>{records.length} 条记录</span>
-            <span>点击查看结果</span>
+            <span>{loading ? "读取中" : `${records.length} 条记录`}</span>
+            <span>{loading ? "历史记录" : "点击查看结果"}</span>
           </div>
-          {records.length ? (
+          {loading ? (
+            <HistoryLoadingRows />
+          ) : records.length ? (
             records.map((record) => (
               <button
                 aria-current={resultRecord?.id === record.id ? "true" : undefined}
@@ -168,5 +172,21 @@ export function EngagementHistoryPane({
         />
       ) : null}
     </>
+  );
+}
+
+function HistoryLoadingRows() {
+  return (
+    <div className="history-loading-list" aria-busy="true" aria-label="正在读取历史记录">
+      {Array.from({ length: 5 }, (_, index) => (
+        <div className="history-placeholder-row" key={index}>
+          <span className="history-placeholder-copy">
+            <span />
+            <small />
+          </span>
+          <em />
+        </div>
+      ))}
+    </div>
   );
 }

@@ -3,7 +3,7 @@ import {
   completeCachedAccountStyle,
   completePreparedAccountStyle,
   prepareAccountStyleContext,
-  streamResponseTextWithFallback
+  streamStyleResponseTextWithFallback
 } from "@/lib/ai";
 import { apiError, parseJsonBody } from "@/lib/api-route";
 import { createNdjsonStream } from "@/lib/streaming";
@@ -21,39 +21,59 @@ export async function POST(request: Request) {
     const input = await parseJsonBody(request, schema);
 
     const stream = createNdjsonStream(async (emit, signal) => {
+      const startedAt = Date.now();
       emit({ type: "stage", stage: "prepare", message: "正在读取账号转写样本", progress: 12 });
-      const context = await prepareAccountStyleContext(input.platform, input.accountId);
+      const context = await prepareAccountStyleContext(input.platform, input.accountId, {
+        signal,
+        onAnalysisProgress(progress) {
+          const percent = progress.analysisCount
+            ? Math.floor((progress.completedCount / progress.analysisCount) * 25)
+            : 0;
+          emit({
+            type: "stage",
+            stage: "analysis",
+            message: `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
+            progress: Math.min(34, 12 + percent)
+          });
+        }
+      });
       const cached = completeCachedAccountStyle(context);
       if (cached) {
         emit({ type: "stage", stage: "cache", message: "样本未变化，已复用现有风格卡", progress: 100 });
         emit({ type: "delta", delta: cached.style });
-        emit({ type: "result", data: cached });
+        emit({ type: "result", data: { ...cached, totalMs: Date.now() - startedAt } });
         return;
       }
 
       let generated = "";
+      let firstDeltaMs: number | undefined;
       emit({
         type: "stage",
         stage: "generate",
         message: context.generationMode === "incremental" ? "正在增量更新账号风格卡" : "正在生成账号风格卡",
         progress: 35
       });
-      const result = await streamResponseTextWithFallback({
+      const result = await streamStyleResponseTextWithFallback({
         messages: context.messages,
         maxOutputTokens: 3200,
         signal,
         onDelta(delta) {
+          if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
           generated += delta;
           emit({ type: "delta", delta });
         }
       });
 
       if (!generated.trim() && result.text) {
+        if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
         emit({ type: "delta", delta: result.text });
       }
 
       emit({ type: "stage", stage: "save", message: "正在写入账号风格卡", progress: 90 });
-      const saved = await completePreparedAccountStyle(context, result);
+      const saved = await completePreparedAccountStyle(context, result, {
+        firstDeltaMs,
+        totalMs: Date.now() - startedAt
+      });
       emit({ type: "result", data: saved });
     }, { signal: request.signal });
 

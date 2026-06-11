@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 
 type WriterDialogModalProps = {
   children: ReactNode;
@@ -27,12 +27,7 @@ export function WriterDialogModal({
   }, []);
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event)) onClose();
-      }}
-    >
+    <ModalBackdrop onClose={onClose}>
       <div
         aria-labelledby={labelledBy}
         aria-modal="true"
@@ -44,7 +39,7 @@ export function WriterDialogModal({
       >
         {children}
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

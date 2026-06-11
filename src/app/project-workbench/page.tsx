@@ -66,7 +66,7 @@ export default function ProjectWorkbenchPage() {
 
   const projects = useMemo(() => library?.projects || [], [library?.projects]);
   const accounts = useMemo(() => library?.accounts || [], [library?.accounts]);
-  const copySources = useMemo(() => fullCopySources || library?.copySources || [], [fullCopySources, library?.copySources]);
+  const copySources = useMemo(() => fullCopySources || [], [fullCopySources]);
   const selectedProjectMeta = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) || null,
     [projects, selectedProjectId]
@@ -162,7 +162,7 @@ export default function ProjectWorkbenchPage() {
 
   useEffect(() => {
     let ignore = false;
-    if (loading) return;
+    if (fullCopySources !== null) return;
     getCopySources()
       .then((result) => {
         if (!ignore) setFullCopySources(result.sources);
@@ -173,7 +173,7 @@ export default function ProjectWorkbenchPage() {
     return () => {
       ignore = true;
     };
-  }, [loading, library?.copySources.length]);
+  }, [fullCopySources]);
 
   useEffect(() => {
     let ignore = false;
@@ -778,7 +778,6 @@ function ProjectWorkbenchFlow({
         />
       </div>
       <div className="project-flow-action">
-        <span>主操作</span>
         {!projectReady ? (
           <button className="btn primary" onClick={onOpenProjectModal} type="button">
             选择项目

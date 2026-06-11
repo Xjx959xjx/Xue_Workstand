@@ -1,10 +1,11 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit, type Response as UndiciResponse } from "undici";
+import type { Response as UndiciResponse } from "undici";
 import {
   AccountDraftInput,
   Draft,
   Platform,
+  CopySource,
   ProjectDraftInput,
   ProjectSummary,
   WriteBriefResult,
@@ -12,44 +13,80 @@ import {
   WriteSourceDigest,
   platforms
 } from "./types";
-import { clampText, makeTitleFromPrompt, shortHash } from "./utils";
+import { clampText, makeTitleFromPrompt, nowIso, shortHash } from "./utils";
 import { fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
+import { openCliRows, parseOpenCliJsonish, runOpenCli, stringField } from "./opencli-runtime";
 import {
   getTopTranscriptSamples,
   getProjectSummary,
   resolveCopySource,
   libraryRoot,
+  readAccountStyleSampleAnalysis,
   readAccountStyleMeta,
+  readCopySourceStyleAnalysis,
+  readProjectStyle,
+  readProjectStyleMeta,
   readStyle,
   resolveAccount,
   resolveProject,
   saveDraft,
+  saveAccountStyleSampleAnalysis,
   saveAccountStyleMeta,
+  saveCopySourceStyleAnalysis,
+  saveProjectStyleMeta,
   saveProjectStyle,
   saveStyle,
-  upsertProject
+  upsertProject,
+  type StyleSampleAnalysisCache
 } from "./storage";
 import { extractRewriteSourceMaterial, normalizeRewritePrompt } from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
+import {
+  buildChatFallbackReason,
+  chatCompletionPayload,
+  classifyModelFailure,
+  getConfiguredChatConfigs,
+  getChatConfig,
+  getChatRuntimeConfig as getModelRuntimeConfig,
+  postModelRequest,
+  responseReasoning,
+  shouldRetryResponsesAsChatCompletions,
+  summarizeChatErrorBody,
+  type ChatRuntimeConfig,
+  type ChatReasoningEffort,
+  type ChatTool,
+  type ModelErrorKind
+} from "./model-runtime";
 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
-export type ChatWireApi = "responses" | "chat_completions" | "auto";
-export type ChatReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
-type ChatTool = {
-  type: "web_search";
-};
+export type { ChatReasoningEffort, ChatWireApi, ModelErrorKind } from "./model-runtime";
 type ChatRequestOptions = {
   signal?: AbortSignal;
+  maxOutputTokens?: number;
+};
+
+type StyleSampleFingerprint = {
+  videoId: string;
+  hash: string;
 };
 export type ChatCompletionResult = {
   text: string;
   model: string;
   fallback: boolean;
   fallbackReason?: string;
+  ok: boolean;
+  wireApi?: string;
+  reasoningEffort?: string;
+  requestedServiceTier?: string;
+  actualServiceTier?: string;
+  errorKind?: ModelErrorKind;
+  userMessage?: string;
+  rawErrorMessage?: string;
+  usedTools?: string[];
 };
 
 export type WriteCopyInput = {
@@ -94,6 +131,20 @@ export type ProjectStyleGenerationResult = {
   fallback: boolean;
   usedModel: string;
   fallbackReason?: string;
+  cached?: boolean;
+  generationMode?: "full" | "cached";
+  sampleHash?: string;
+  analysisCount?: number;
+  analysisGeneratedCount?: number;
+  analysisCachedCount?: number;
+  analysisConcurrency?: number;
+  inputChars?: number;
+  firstDeltaMs?: number;
+  totalMs?: number;
+  wireApi?: string;
+  reasoningEffort?: string;
+  requestedServiceTier?: string;
+  actualServiceTier?: string;
 };
 
 export type MaterialFrameAnalysis = {
@@ -111,12 +162,10 @@ export type PreparedAccountStyleContext = {
   messages: ChatMessage[];
   fallback: string;
   sampleHash: string;
-  sampleFingerprints: Array<{
-    videoId: string;
-    hash: string;
-  }>;
+  sampleFingerprints: StyleSampleFingerprint[];
   sampleVideoIds: string[];
   generationMode: "full" | "incremental";
+  analysisStats: StyleAnalysisStats;
   cachedStyle?: string;
   cachedFallback?: boolean;
   cachedFallbackReason?: string;
@@ -130,14 +179,24 @@ export type AccountStyleGenerationResult = {
   cached?: boolean;
   generationMode?: "full" | "incremental" | "cached";
   sampleHash?: string;
-};
-
-type FetchInitWithDispatcher = UndiciRequestInit & {
-  dispatcher?: ProxyAgent;
+  analysisCount?: number;
+  analysisGeneratedCount?: number;
+  analysisCachedCount?: number;
+  analysisConcurrency?: number;
+  inputChars?: number;
+  firstDeltaMs?: number;
+  totalMs?: number;
+  wireApi?: string;
+  reasoningEffort?: string;
+  requestedServiceTier?: string;
+  actualServiceTier?: string;
 };
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
-const WRITE_BRIEF_MAX_OUTPUT_TOKENS = 1400;
+const STYLE_REASONING_EFFORT: ChatReasoningEffort = "xhigh";
+const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = 8;
+const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = 2;
+const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 1200;
 const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
 const WEB_RESEARCH_TIMEOUT_MS = 180_000;
 
@@ -153,47 +212,20 @@ class StreamResponseTextError extends Error {
   }
 }
 
-class ModelHttpError extends Error {
-  status: number;
-  body: string;
-  contentType?: string | null;
-
-  constructor(status: number, body: string, contentType?: string | null) {
-    super(describeChatHttpFailure(status, body, contentType));
-    this.name = "ModelHttpError";
-    this.status = status;
-    this.body = body;
-    this.contentType = contentType;
-  }
-}
-
 function chatConfig() {
-  const chatReasoningEffort = process.env.CHAT_REASONING_EFFORT;
-  return {
-    apiKey: process.env.CHAT_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl: (process.env.CHAT_BASE_URL || process.env.OPENAI_BASE_URL || "https://www.fhl.mom").replace(/\/$/, ""),
-    responsesUrl: process.env.CHAT_RESPONSES_URL || "",
-    chatCompletionsUrl: process.env.CHAT_COMPLETIONS_URL || "",
-    model: process.env.CHAT_MODEL || process.env.OPENAI_MODEL || "gpt-5.5",
-    wireApi: normalizeWireApi(process.env.CHAT_WIRE_API),
-    reasoningEffort: normalizeReasoningEffort(chatReasoningEffort),
-    chatCompletionReasoningEffort: chatReasoningEffort ? normalizeReasoningEffort(chatReasoningEffort) : "none",
-    proxyUrl: process.env.CHAT_PROXY_URL || ""
-  };
+  return getChatConfig();
 }
 
 export function getChatRuntimeConfig() {
-  const config = chatConfig();
-  return {
-    baseUrl: config.baseUrl,
-    model: config.model,
-    wireApi: config.wireApi,
-    reasoningEffort: config.reasoningEffort,
-    responsesUrlConfigured: Boolean(config.responsesUrl),
-    chatCompletionsUrlConfigured: Boolean(config.chatCompletionsUrl),
-    proxyConfigured: Boolean(config.proxyUrl),
-    configured: Boolean(config.apiKey && config.model)
-  };
+  return getModelRuntimeConfig();
+}
+
+function configuredChatConfigs() {
+  return getConfiguredChatConfigs();
+}
+
+function firstRunnableChatModel() {
+  return configuredChatConfigs()[0]?.model || chatConfig().model || "local-fallback";
 }
 
 export async function chatComplete(
@@ -212,8 +244,8 @@ export async function analyzeMaterialFrames(input: {
   url: string;
   signal?: AbortSignal;
 }): Promise<MaterialFrameAnalysis> {
-  const config = chatConfig();
-  if (!config.apiKey || !config.model) {
+  const configs = configuredChatConfigs();
+  if (!configs.length) {
     throw new Error("未配置对话模型，无法生成原视频画面描述。");
   }
 
@@ -232,21 +264,20 @@ export async function analyzeMaterialFrames(input: {
     `转写节选：${clampText(input.transcript, 900)}`
   ].join("\n");
 
-  let text: string;
-  if (config.wireApi === "chat_completions") {
-    text = await createVisionChatCompletion(config, prompt, input.frames, { signal: input.signal });
-  } else {
+  let lastError: unknown;
+  for (const config of configs) {
     try {
-      text = await createVisionResponse(config, prompt, input.frames, { signal: input.signal });
+      const text = config.wireApi === "chat_completions"
+        ? await createVisionChatCompletion(config, prompt, input.frames, { signal: input.signal })
+        : await createVisionWithResponseFallback(config, prompt, input.frames, { signal: input.signal });
+      return ensureMaterialFrameAnalysisFields(parseMaterialFrameAnalysis(text));
     } catch (error) {
-      if (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error)) {
-        text = await createVisionChatCompletion(config, prompt, input.frames, { signal: input.signal });
-      } else {
-        throw error;
-      }
+      if (isAbortError(error)) throw error;
+      lastError = error;
     }
   }
-  return ensureMaterialFrameAnalysisFields(parseMaterialFrameAnalysis(text));
+
+  throw lastError instanceof Error ? lastError : new Error("模型没有返回画面描述结果");
 }
 
 export async function streamResponseText(input: {
@@ -258,9 +289,37 @@ export async function streamResponseText(input: {
   onDelta: (delta: string) => void;
 }) {
   throwIfAborted(input.signal);
-  const config = chatConfig();
-  if (!config.apiKey || !config.model) {
-    return fallbackChatCompletion(config.model || "local-fallback");
+  const configs = configuredChatConfigs();
+  if (!configs.length) {
+    return fallbackChatCompletion(firstRunnableChatModel());
+  }
+
+  let lastError: unknown;
+  for (const config of configs) {
+    try {
+      return await streamResponseTextForConfig(config, input);
+    } catch (error) {
+      if (isAbortError(error) || error instanceof StreamResponseTextError) throw error;
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("对话模型暂时不可用");
+}
+
+async function streamResponseTextForConfig(
+  config: ChatRuntimeConfig,
+  input: {
+    messages: ChatMessage[];
+    reasoningEffort?: ChatReasoningEffort;
+    tools?: ChatTool[];
+    maxOutputTokens?: number;
+    signal?: AbortSignal;
+    onDelta: (delta: string) => void;
+  }
+) {
+  if (hasWebSearchTool(input.tools) && config.wireApi === "chat_completions" && !supportsChatCompletionWebSearch(config.model)) {
+    throw new Error("当前模型接口是 Chat Completions，不能使用 Responses web_search 工具");
   }
 
   if (config.wireApi === "chat_completions") {
@@ -283,7 +342,7 @@ export async function streamResponseText(input: {
 }
 
 async function streamResponseApi(
-  config: ReturnType<typeof chatConfig>,
+  config: ChatRuntimeConfig,
   input: {
     messages: ChatMessage[];
     reasoningEffort?: ChatReasoningEffort;
@@ -310,8 +369,10 @@ async function streamResponseApi(
     input: requestInput,
     stream: true,
     tools: input.tools,
-    tool_choice: input.tools?.length ? "auto" : undefined,
+    tool_choice: input.tools?.length ? "required" : undefined,
+    include: input.tools?.length ? ["web_search_call.action.sources"] : undefined,
     reasoning: responseReasoning(input.reasoningEffort || config.reasoningEffort),
+    service_tier: config.serviceTier || undefined,
     store: false
   }, input.signal);
 
@@ -324,6 +385,9 @@ async function streamResponseApi(
   let buffer = "";
   let aggregatedText = "";
   let streamFinished = false;
+  let actualServiceTier: string | undefined;
+  const usedTools = new Set<string>();
+  const requestedReasoningEffort = input.reasoningEffort || config.reasoningEffort;
 
   try {
     while (!streamFinished) {
@@ -349,6 +413,8 @@ async function streamResponseApi(
         } catch {
           continue;
         }
+        actualServiceTier = extractServiceTier(parsed) || actualServiceTier;
+        collectResponseToolTypes(parsed, usedTools);
 
         if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
           aggregatedText += parsed.delta;
@@ -363,6 +429,8 @@ async function streamResponseApi(
           aggregatedText = syncResponseText(aggregatedText, extractResponseText(parsed), input.onDelta);
         } else if (parsed.type === "response.completed") {
           aggregatedText = syncResponseText(aggregatedText, extractResponseText(parsed.response), input.onDelta);
+          actualServiceTier = extractServiceTier(parsed.response) || actualServiceTier;
+          collectResponseToolTypes(parsed.response, usedTools);
           streamFinished = true;
         } else if (parsed.type === "response.failed" || parsed.type === "response.incomplete") {
           const errorMessage =
@@ -384,25 +452,34 @@ async function streamResponseApi(
   return {
     text: aggregatedText.trim(),
     model: config.model,
-    fallback: false
+    fallback: false,
+    ok: true,
+    wireApi: config.wireApi === "auto" ? "responses" : config.wireApi,
+    reasoningEffort: requestedReasoningEffort,
+    requestedServiceTier: config.serviceTier || undefined,
+    actualServiceTier,
+    usedTools: [...usedTools]
   } satisfies ChatCompletionResult;
 }
 
 async function streamChatCompletion(
-  config: ReturnType<typeof chatConfig>,
+  config: ChatRuntimeConfig,
   input: {
     messages: ChatMessage[];
     reasoningEffort?: ChatReasoningEffort;
+    tools?: ChatTool[];
     maxOutputTokens?: number;
     signal?: AbortSignal;
     onDelta: (delta: string) => void;
   }
 ): Promise<ChatCompletionResult> {
+  const webSearch = hasWebSearchTool(input.tools);
   const response = await postModelRequest(config, "/chat/completions", chatCompletionPayload({
     config,
     messages: input.messages,
     reasoningEffort: input.reasoningEffort,
     maxOutputTokens: input.maxOutputTokens,
+    webSearch,
     stream: true
   }), input.signal);
 
@@ -414,6 +491,8 @@ async function streamChatCompletion(
   const decoder = new TextDecoder();
   let buffer = "";
   let aggregatedText = "";
+  let actualServiceTier: string | undefined;
+  const requestedReasoningEffort = input.reasoningEffort || config.chatCompletionReasoningEffort;
 
   try {
     while (true) {
@@ -424,18 +503,20 @@ async function streamChatCompletion(
       buffer = events.pop() || "";
 
       for (const rawEvent of events) {
-        const delta = parseChatCompletionStreamDelta(rawEvent);
-        if (delta) {
-          aggregatedText += delta;
-          input.onDelta(delta);
+        const event = parseChatCompletionStreamEvent(rawEvent);
+        actualServiceTier = event.serviceTier || actualServiceTier;
+        if (event.delta) {
+          aggregatedText += event.delta;
+          input.onDelta(event.delta);
         }
       }
     }
 
-    const remaining = parseChatCompletionStreamDelta(buffer);
-    if (remaining) {
-      aggregatedText += remaining;
-      input.onDelta(remaining);
+    const remaining = parseChatCompletionStreamEvent(buffer);
+    actualServiceTier = remaining.serviceTier || actualServiceTier;
+    if (remaining.delta) {
+      aggregatedText += remaining.delta;
+      input.onDelta(remaining.delta);
     }
   } catch (error) {
     if (aggregatedText.trim()) {
@@ -447,7 +528,13 @@ async function streamChatCompletion(
   return {
     text: aggregatedText.trim(),
     model: config.model,
-    fallback: false
+    fallback: false,
+    ok: true,
+    wireApi: "chat_completions",
+    reasoningEffort: requestedReasoningEffort,
+    requestedServiceTier: config.serviceTier || undefined,
+    actualServiceTier,
+    usedTools: webSearch ? ["web_search"] : undefined
   } satisfies ChatCompletionResult;
 }
 
@@ -465,11 +552,17 @@ export async function streamResponseTextWithFallback(input: {
   } catch (error) {
     if (isAbortError(error)) throw error;
     if (error instanceof StreamResponseTextError && error.partialText.trim()) {
+      const failure = classifyModelFailure(error);
       return {
         text: error.partialText.trim(),
-        model: chatConfig().model,
+        model: firstRunnableChatModel(),
         fallback: true,
-        fallbackReason: `${summarizeChatFailure(error)}，已保留模型已生成的内容，请检查后再使用。`
+        fallbackReason: `${failure.userMessage}，已保留模型已生成的内容，请检查后再使用。`,
+        ok: false,
+        reasoningEffort: input.reasoningEffort,
+        errorKind: failure.kind,
+        userMessage: failure.userMessage,
+        rawErrorMessage: failure.rawMessage
       };
     }
     try {
@@ -489,110 +582,85 @@ async function chatCompleteWithEffort(
   tools?: ChatTool[],
   options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
-  const config = chatConfig();
-  if (!config.apiKey || !config.model) {
-    return fallbackChatCompletion(config.model || "local-fallback");
+  const configs = configuredChatConfigs();
+  if (!configs.length) {
+    return fallbackChatCompletion(firstRunnableChatModel());
+  }
+
+  let lastError: unknown;
+  for (const config of configs) {
+    try {
+      return await chatCompleteWithConfig(config, messages, reasoningEffort, tools, options);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("对话模型暂时不可用");
+}
+
+async function chatCompleteWithConfig(
+  config: ChatRuntimeConfig,
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort,
+  tools?: ChatTool[],
+  options: ChatRequestOptions = {}
+): Promise<ChatCompletionResult> {
+  if (hasWebSearchTool(tools) && config.wireApi === "chat_completions" && !supportsChatCompletionWebSearch(config.model)) {
+    throw new Error("当前模型接口是 Chat Completions，不能使用 Responses web_search 工具");
   }
 
   if (config.wireApi === "chat_completions") {
-    return createChatCompletion(config, messages, reasoningEffort, options);
+    return createChatCompletion(config, messages, reasoningEffort, tools, options);
   }
 
   try {
     return await createResponse(config, messages, reasoningEffort, tools, options);
   } catch (error) {
     if (!tools?.length && (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error))) {
-      return createChatCompletion(config, messages, reasoningEffort, options);
+      return createChatCompletion(config, messages, reasoningEffort, tools, options);
     }
     throw error;
   }
 }
 
 async function createChatCompletion(
-  config: ReturnType<typeof chatConfig>,
+  config: ChatRuntimeConfig,
   messages: ChatMessage[],
   reasoningEffort?: ChatReasoningEffort,
+  tools?: ChatTool[],
   options: ChatRequestOptions = {}
 ): Promise<ChatCompletionResult> {
+  const webSearch = hasWebSearchTool(tools);
   const response = await postModelRequest(config, "/chat/completions", chatCompletionPayload({
     config,
     messages,
     reasoningEffort,
+    maxOutputTokens: options.maxOutputTokens,
+    webSearch,
     stream: false
   }), options.signal);
 
-  const text = await parseChatCompletionResponseBody(response);
+  const parsed = await parseChatCompletionResponseBodyWithMeta(response);
+  const requestedReasoningEffort = reasoningEffort || config.chatCompletionReasoningEffort;
 
   return {
-    text,
+    text: parsed.text,
     model: config.model,
-    fallback: false
+    fallback: false,
+    ok: true,
+    wireApi: "chat_completions",
+    reasoningEffort: requestedReasoningEffort,
+    requestedServiceTier: config.serviceTier || undefined,
+    actualServiceTier: parsed.serviceTier,
+    usedTools: webSearch ? ["web_search"] : undefined
   };
 }
 
-function chatCompletionPayload(input: {
-  config: ReturnType<typeof chatConfig>;
-  messages: ChatMessage[];
-  reasoningEffort?: ChatReasoningEffort;
-  maxOutputTokens?: number;
-  stream: boolean;
-}) {
-  const effort = input.reasoningEffort || input.config.chatCompletionReasoningEffort;
-  return {
-    model: input.config.model,
-    messages: input.messages,
-    temperature: 0.75,
-    stream: input.stream,
-    max_tokens: input.maxOutputTokens,
-    ...(effort === "none" ? {} : { reasoning_effort: effort })
-  };
-}
-
-async function postModelRequest(
-  config: ReturnType<typeof chatConfig>,
-  pathName: "/responses" | "/chat/completions",
-  payload: unknown,
-  signal?: AbortSignal
-) {
-  const init: FetchInitWithDispatcher = {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload),
-    dispatcher: chatDispatcher(config.proxyUrl),
-    signal
-  };
-  const response = await undiciFetch(modelEndpoint(config, pathName), init);
-  if (!response.ok) {
-    throw new ModelHttpError(response.status, await response.text(), response.headers.get("content-type"));
-  }
-  return response;
-}
-
-function modelEndpoint(config: ReturnType<typeof chatConfig>, pathName: "/responses" | "/chat/completions") {
-  const configured = pathName === "/responses" ? config.responsesUrl : config.chatCompletionsUrl;
-  if (configured) return configured;
-
-  if (config.baseUrl.endsWith(pathName)) {
-    return config.baseUrl;
-  }
-  if (config.baseUrl.endsWith("/responses")) {
-    return `${config.baseUrl.slice(0, -"/responses".length)}${pathName}`;
-  }
-  if (config.baseUrl.endsWith("/chat/completions")) {
-    return `${config.baseUrl.slice(0, -"/chat/completions".length)}${pathName}`;
-  }
-
-  return `${config.baseUrl}${pathName}`;
-}
-
-function responseReasoning(effort: ChatReasoningEffort) {
-  return effort === "none" ? undefined : { effort };
-}
-
-function parseChatCompletionStreamDelta(rawEvent: string) {
+function parseChatCompletionStreamEvent(rawEvent: string) {
+  let delta = "";
+  let serviceTier: string | undefined;
   const lines = rawEvent
     .split("\n")
     .map((line) => line.trim())
@@ -611,33 +679,46 @@ function parseChatCompletionStreamDelta(rawEvent: string) {
       continue;
     }
 
-    const delta = extractChatCompletionDelta(parsed);
-    if (delta) return delta;
+    serviceTier = extractServiceTier(parsed) || serviceTier;
+    delta += extractChatCompletionDelta(parsed);
   }
 
-  return "";
+  return { delta, serviceTier };
 }
 
 async function parseChatCompletionResponseBody(response: UndiciResponse) {
+  return (await parseChatCompletionResponseBodyWithMeta(response)).text;
+}
+
+async function parseChatCompletionResponseBodyWithMeta(response: UndiciResponse) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
   if (contentType?.includes("text/event-stream") || looksLikeEventStreamBody(body)) {
-    return parseChatCompletionEventStream(body);
+    return parseChatCompletionEventStreamWithMeta(body);
   }
 
-  return extractChatCompletionText(parseModelJsonBody(body, contentType));
+  const parsed = parseModelJsonBody(body, contentType);
+  return {
+    text: extractChatCompletionText(parsed),
+    serviceTier: extractServiceTier(parsed)
+  };
 }
 
-function parseChatCompletionEventStream(body: string) {
+function parseChatCompletionEventStreamWithMeta(body: string) {
   let aggregatedText = "";
+  let serviceTier: string | undefined;
 
   for (const rawEvent of body.split("\n\n")) {
-    const delta = parseChatCompletionStreamDelta(rawEvent);
-    if (delta) aggregatedText += delta;
+    const event = parseChatCompletionStreamEvent(rawEvent);
+    serviceTier = event.serviceTier || serviceTier;
+    if (event.delta) aggregatedText += event.delta;
   }
 
-  return aggregatedText.trim();
+  return {
+    text: aggregatedText.trim(),
+    serviceTier
+  };
 }
 
 function extractChatCompletionDelta(data: unknown) {
@@ -693,7 +774,7 @@ function stringFromChatContent(content: unknown): string {
 }
 
 async function createResponse(
-  config: ReturnType<typeof chatConfig>,
+  config: ChatRuntimeConfig,
   messages: ChatMessage[],
   reasoningEffort?: ChatReasoningEffort,
   tools?: ChatTool[],
@@ -716,21 +797,46 @@ async function createResponse(
     input,
     stream: false,
     tools,
-    tool_choice: tools?.length ? "auto" : undefined,
+    tool_choice: tools?.length ? "required" : undefined,
+    include: tools?.length ? ["web_search_call.action.sources"] : undefined,
     reasoning: responseReasoning(reasoningEffort || config.reasoningEffort),
+    max_output_tokens: options.maxOutputTokens,
+    service_tier: config.serviceTier || undefined,
     store: false
   }, options.signal);
 
-  const text = await parseResponseApiBody(response);
+  const parsed = await parseResponseApiBodyWithMeta(response);
   return {
-    text,
+    text: parsed.text,
     model: config.model,
-    fallback: false
+    fallback: false,
+    ok: true,
+    wireApi: config.wireApi === "auto" ? "responses" : config.wireApi,
+    reasoningEffort: reasoningEffort || config.reasoningEffort,
+    requestedServiceTier: config.serviceTier || undefined,
+    actualServiceTier: parsed.serviceTier,
+    usedTools: parsed.usedTools
   };
 }
 
+async function createVisionWithResponseFallback(
+  config: ChatRuntimeConfig,
+  prompt: string,
+  frames: string[],
+  options: ChatRequestOptions = {}
+) {
+  try {
+    return await createVisionResponse(config, prompt, frames, options);
+  } catch (error) {
+    if (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error)) {
+      return createVisionChatCompletion(config, prompt, frames, options);
+    }
+    throw error;
+  }
+}
+
 async function createVisionResponse(
-  config: ReturnType<typeof chatConfig>,
+  config: ChatRuntimeConfig,
   prompt: string,
   frames: string[],
   options: ChatRequestOptions = {}
@@ -748,13 +854,14 @@ async function createVisionResponse(
       }
     ],
     reasoning: responseReasoning("low"),
+    service_tier: config.serviceTier || undefined,
     store: false
   }, options.signal);
   return parseResponseApiBody(response);
 }
 
 async function createVisionChatCompletion(
-  config: ReturnType<typeof chatConfig>,
+  config: ChatRuntimeConfig,
   prompt: string,
   frames: string[],
   options: ChatRequestOptions = {}
@@ -779,24 +886,24 @@ async function createVisionChatCompletion(
   return parseChatCompletionResponseBody(response);
 }
 
-function normalizeWireApi(value?: string): ChatWireApi {
-  if (value === "chat_completions" || value === "chat-completions" || value === "chat") return "chat_completions";
-  if (value === "auto") return "auto";
-  return "responses";
-}
-
-function normalizeReasoningEffort(value?: string): ChatReasoningEffort {
-  return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh"
-    ? value
-    : "xhigh";
-}
-
 function fallbackChatCompletion(model = "local-fallback", error?: unknown): ChatCompletionResult {
+  const failure = error
+    ? classifyModelFailure(error)
+    : {
+        kind: "not_configured" as const,
+        userMessage: "未配置对话模型",
+        rawMessage: "CHAT_API_KEY / OPENAI_API_KEY is missing"
+      };
   return {
     text: "",
     model,
     fallback: true,
-    fallbackReason: error ? buildChatFallbackReason(error) : undefined
+    fallbackReason: error ? buildChatFallbackReason(error) : undefined,
+    ok: false,
+    reasoningEffort: undefined,
+    errorKind: failure.kind,
+    userMessage: failure.userMessage,
+    rawErrorMessage: failure.rawMessage
   };
 }
 
@@ -867,10 +974,24 @@ async function chatCompleteWithFallback(
   }
 }
 
-function completeStyleGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
+export function streamStyleResponseTextWithFallback(input: {
+  messages: ChatMessage[];
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
+  onDelta: (delta: string) => void;
+}) {
   return streamResponseTextWithFallback({
+    messages: input.messages,
+    reasoningEffort: STYLE_REASONING_EFFORT,
+    maxOutputTokens: input.maxOutputTokens ?? STYLE_MAX_OUTPUT_TOKENS,
+    signal: input.signal,
+    onDelta: input.onDelta
+  });
+}
+
+function completeStyleGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
+  return streamStyleResponseTextWithFallback({
     messages,
-    maxOutputTokens: STYLE_MAX_OUTPUT_TOKENS,
     signal: options.signal,
     onDelta() {
       // Keep the request streaming so upstream proxies do not close long style-generation calls.
@@ -891,83 +1012,26 @@ function isAbortError(error: unknown) {
   return error.name === "AbortError" || /任务已停止|aborted/i.test(error.message);
 }
 
-function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
-  return proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
-}
-
-function describeChatHttpFailure(status: number, body: string, contentType?: string | null) {
-  const detail = summarizeChatErrorBody(body, contentType);
-  return `对话模型调用失败：${status}${detail ? ` ${detail}` : ""}`;
-}
-
-function summarizeChatErrorBody(body: string, contentType?: string | null) {
-  const trimmed = body.trim();
-  if (!trimmed) return "";
-
-  const isHtml = Boolean(contentType?.includes("text/html")) || /^<!doctype html\b/i.test(trimmed) || /^<html\b/i.test(trimmed);
-  if (isHtml) {
-    if (/error code 524|a timeout occurred/i.test(trimmed)) {
-      return "模型服务响应超时";
-    }
-
-    const title = trimmed.match(/<title>([^<]+)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim();
-    return title ? `服务返回 HTML 错误页（${title}）` : "服务返回 HTML 错误页";
-  }
-
-  return trimmed.replace(/\s+/g, " ").slice(0, 240);
-}
-
-function shouldRetryResponsesAsChatCompletions(error: unknown) {
-  if (!(error instanceof ModelHttpError)) return false;
-  const detail = `${error.status} ${error.body}`.toLowerCase();
-  return (
-    error.status === 404 ||
-    error.status === 405 ||
-    /responses|response api|unknown endpoint|not found|unsupported|invalid url|no route|cannot post/.test(detail)
-  );
-}
-
-function buildChatFallbackReason(error: unknown) {
-  return `${summarizeChatFailure(error)}，已自动切换到本地模板，可先编辑后再重试。`;
-}
-
-function summarizeChatFailure(error: unknown) {
-  if (!(error instanceof Error)) return "对话模型暂时不可用";
-
-  const originalError = error instanceof StreamResponseTextError ? error.originalError : error;
-  const cause = originalError instanceof Error ? originalError.cause : undefined;
-  const causeMessage =
-    cause instanceof Error
-      ? `${cause.name} ${cause.message} ${(cause as { code?: string }).code || ""}`
-      : "";
-  const message = [
-    error.name,
-    error.message,
-    originalError instanceof Error ? originalError.message : "",
-    causeMessage
-  ].join(" ");
-
-  if (/524\b|响应超时|a timeout occurred|timeout|timed out|AbortError|TimeoutError|aborted|UND_ERR_HEADERS_TIMEOUT/i.test(message)) {
-    return "对话模型服务超时";
-  }
-  if (/429\b|rate limit/i.test(message)) return "对话模型服务限流";
-  if (/401\b|403\b|unauthorized|forbidden/i.test(message)) return "对话模型服务鉴权异常";
-  if (/ECONNREFUSED|ENOTFOUND|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
-    return "对话模型服务连接异常";
-  }
-  if (/5\d\d\b|对话模型调用失败：/i.test(message)) return "对话模型服务暂时异常";
-  return "对话模型暂时不可用";
-}
-
 async function parseResponseApiBody(response: UndiciResponse) {
+  return (await parseResponseApiBodyWithMeta(response)).text;
+}
+
+async function parseResponseApiBodyWithMeta(response: UndiciResponse) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
   if (contentType?.includes("text/event-stream") || looksLikeEventStreamBody(body)) {
-    return parseResponseEventStream(body);
+    return parseResponseEventStreamWithMeta(body);
   }
 
-  return extractResponseText(parseModelJsonBody(body, contentType));
+  const parsed = parseModelJsonBody(body, contentType);
+  const usedTools = new Set<string>();
+  collectResponseToolTypes(parsed, usedTools);
+  return {
+    text: extractResponseText(parsed),
+    serviceTier: extractServiceTier(parsed),
+    usedTools: [...usedTools]
+  };
 }
 
 function looksLikeEventStreamBody(body: string) {
@@ -975,8 +1039,10 @@ function looksLikeEventStreamBody(body: string) {
   return trimmed.startsWith("event:") || trimmed.startsWith("data:");
 }
 
-function parseResponseEventStream(body: string) {
+function parseResponseEventStreamWithMeta(body: string) {
   let aggregatedText = "";
+  let serviceTier: string | undefined;
+  const usedTools = new Set<string>();
 
   for (const rawEvent of body.split("\n\n")) {
     const lines = rawEvent
@@ -996,6 +1062,8 @@ function parseResponseEventStream(body: string) {
       } catch {
         continue;
       }
+      serviceTier = extractServiceTier(parsed) || serviceTier;
+      collectResponseToolTypes(parsed, usedTools);
 
       if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
         aggregatedText += parsed.delta;
@@ -1007,6 +1075,8 @@ function parseResponseEventStream(body: string) {
         aggregatedText = mergeResponseText(aggregatedText, extractResponseText(parsed));
       } else if (parsed.type === "response.completed") {
         aggregatedText = mergeResponseText(aggregatedText, extractResponseText(parsed.response));
+        serviceTier = extractServiceTier(parsed.response) || serviceTier;
+        collectResponseToolTypes(parsed.response, usedTools);
       } else if (parsed.type === "response.failed" || parsed.type === "response.incomplete") {
         const errorMessage =
           extractResponseErrorMessage(parsed.response) || extractResponseErrorMessage(parsed) || "模型输出失败";
@@ -1015,7 +1085,11 @@ function parseResponseEventStream(body: string) {
     }
   }
 
-  return aggregatedText.trim();
+  return {
+    text: aggregatedText.trim(),
+    serviceTier,
+    usedTools: [...usedTools]
+  };
 }
 
 function parseModelJsonBody(body: string, contentType?: string | null) {
@@ -1027,8 +1101,59 @@ function parseModelJsonBody(body: string, contentType?: string | null) {
   }
 }
 
+function hasWebSearchTool(tools?: ChatTool[]) {
+  return Boolean(tools?.some((tool) => tool.type === "web_search"));
+}
+
+function supportsChatCompletionWebSearch(model: string) {
+  return /(?:^|[-_])search(?:[-_]|$)|search-preview/i.test(model);
+}
+
+function collectResponseToolTypes(data: unknown, tools: Set<string>) {
+  if (!data || typeof data !== "object") return;
+  const object = data as Record<string, unknown>;
+  const type = typeof object.type === "string" ? object.type : "";
+  if (type === "web_search" || type === "web_search_preview" || type === "web_search_call") {
+    tools.add("web_search");
+  }
+  if (/response\.web_search_call\./.test(type)) {
+    tools.add("web_search");
+  }
+  if (object.response) collectResponseToolTypes(object.response, tools);
+  if (object.item) collectResponseToolTypes(object.item, tools);
+  if (object.part) collectResponseToolTypes(object.part, tools);
+  if (Array.isArray(object.output)) {
+    for (const item of object.output) collectResponseToolTypes(item, tools);
+  }
+  if (Array.isArray(object.content)) {
+    for (const item of object.content) collectResponseToolTypes(item, tools);
+  }
+}
+
 function extractResponseText(data: unknown): string {
   return extractResponseTextValue(data).trim();
+}
+
+function extractServiceTier(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const object = data as Record<string, unknown>;
+  if (typeof object.service_tier === "string") return object.service_tier;
+  if (object.response) return extractServiceTier(object.response);
+  if (object.item) return extractServiceTier(object.item);
+  if (object.part) return extractServiceTier(object.part);
+  if (Array.isArray(object.output)) {
+    for (const item of object.output) {
+      const serviceTier = extractServiceTier(item);
+      if (serviceTier) return serviceTier;
+    }
+  }
+  if (Array.isArray(object.choices)) {
+    for (const choice of object.choices) {
+      const serviceTier = extractServiceTier(choice);
+      if (serviceTier) return serviceTier;
+    }
+  }
+  return undefined;
 }
 
 function extractResponseTextValue(data: unknown): string {
@@ -1108,7 +1233,13 @@ async function buildWebResearchContext(
   } catch (error) {
     if (options.signal?.aborted) throw error;
     console.warn("[ai] web research failed:", describeErrorForLog(error));
-    return buildWebResearchFailureContext(error);
+    try {
+      return await buildOpenCliWebResearchContext(input, error, options);
+    } catch (openCliError) {
+      if (options.signal?.aborted) throw openCliError;
+      console.warn("[ai] opencli web research failed:", describeErrorForLog(openCliError));
+      return buildWebResearchFailureContext(openCliError);
+    }
   }
 }
 
@@ -1138,6 +1269,15 @@ function summarizeWebResearchFailure(error: unknown) {
   }
   if (/401\b|403\b|unauthorized|forbidden/i.test(message)) {
     return "模型联网搜索鉴权异常";
+  }
+  if (/没有获得可用联网搜索工具|没有联网搜索工具|未提供可用的联网搜索工具/i.test(message)) {
+    return "模型没有获得 web_search 工具";
+  }
+  if (/模型没有实际调用 web_search 工具/.test(message)) {
+    return "模型没有实际调用 web_search 工具";
+  }
+  if (/OpenCLI 本地搜索失败/i.test(message)) {
+    return "本地 opencli 搜索失败";
   }
   if (/原生联网搜索未返回可用结果/.test(message)) return "没有返回可用资料";
   return "";
@@ -1179,11 +1319,105 @@ async function buildNativeWebResearchContext(
     options.signal
   );
 
-  if (result.fallback || !result.text.trim()) {
+  const text = result.text.trim();
+  if (result.fallback || !text) {
     throw new Error(result.fallbackReason || "原生联网搜索未返回可用结果");
   }
 
-  return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${result.text.trim()}`;
+  if (!result.usedTools?.includes("web_search")) {
+    throw new Error("模型没有实际调用 web_search 工具");
+  }
+
+  if (isWebResearchToolUnavailableText(text)) {
+    throw new Error("模型没有获得可用联网搜索工具");
+  }
+
+  return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${text}`;
+}
+
+async function buildOpenCliWebResearchContext(
+  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  nativeError: unknown,
+  options: { signal?: AbortSignal } = {}
+) {
+  throwIfAborted(options.signal);
+  const query = buildOpenCliSearchQuery(input);
+  if (!query) throw new Error("OpenCLI 本地搜索失败：缺少可搜索关键词");
+
+  const stdout = await runOpenCli([
+    "duckduckgo",
+    "search",
+    query,
+    "--limit",
+    "8",
+    "--region",
+    "cn-zh",
+    "--window",
+    "background",
+    "-f",
+    "json"
+  ], {
+    signal: options.signal,
+    timeout: 60_000,
+    timingStage: "web-research-opencli"
+  });
+  const results = normalizeOpenCliSearchResults(openCliRows(parseOpenCliJsonish(stdout))).slice(0, 8);
+  if (!results.length) {
+    throw new Error("OpenCLI 本地搜索失败：没有返回可用搜索结果");
+  }
+
+  return [
+    `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
+    "检索方式：opencli duckduckgo search",
+    `原生 web_search 状态：不可用（${summarizeWebResearchFailure(nativeError) || describeShortError(nativeError)}）`,
+    `搜索词：${query}`,
+    "搜索结果：",
+    ...results.map((result, index) =>
+      [
+        `${index + 1}. ${result.title}`,
+        `来源：${result.displayUrl || result.url}`,
+        `链接：${result.url}`,
+        result.snippet ? `摘要：${result.snippet}` : ""
+      ].filter(Boolean).join("\n")
+    )
+  ].join("\n\n");
+}
+
+function buildOpenCliSearchQuery(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+  const source = input.mode === "topic"
+    ? input.prompt
+    : [input.prompt, input.sourceText].filter(Boolean).join("\n");
+  return clampText(source.replace(/https?:\/\/\S+/gi, " ").replace(/\s+/g, " ").trim(), 180);
+}
+
+function normalizeOpenCliSearchResults(rows: unknown[]) {
+  return rows
+    .map((row) => {
+      const object = row && typeof row === "object" ? row as Record<string, unknown> : {};
+      return {
+        title: stringField(object.title),
+        url: stringField(object.url),
+        snippet: stringField(object.snippet),
+        displayUrl: stringField(object.displayUrl)
+      };
+    })
+    .filter((result) => result.title && /^https?:\/\//i.test(result.url));
+}
+
+function describeShortError(error: unknown) {
+  if (error instanceof Error) return error.message.replace(/\s+/g, " ").slice(0, 180);
+  return String(error || "未知错误").replace(/\s+/g, " ").slice(0, 180);
+}
+
+function isWebResearchToolUnavailableText(text: string) {
+  const normalized = text.replace(/\s+/g, " ").slice(0, 1200);
+  return [
+    /当前对话环境未提供可用的联网搜索工具/,
+    /没有(?:可用的)?联网搜索工具/,
+    /无法(?:访问|连接)(?:互联网|外部网络|实时网络)/,
+    /不能(?:联网|浏览网页|访问网页|搜索网络)/,
+    /没有(?:浏览器|搜索|web_search|web search)(?:工具|权限|能力)/i
+  ].some((pattern) => pattern.test(normalized));
 }
 
 async function withWebResearchTimeout<T>(run: (signal: AbortSignal) => Promise<T>, parentSignal?: AbortSignal): Promise<T> {
@@ -1225,8 +1459,6 @@ function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
     hash: shortHash([
       video.id,
       video.title,
-      video.stats.views,
-      video.stats.likes,
       transcript
     ].join("\n"))
   }));
@@ -1238,16 +1470,337 @@ function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
   };
 }
 
-function formatAccountStyleSampleCorpus(samples: AccountStyleSample[]) {
-  return samples
+type StyleAnalysisStats = {
+  analysisCount: number;
+  analysisGeneratedCount: number;
+  analysisCachedCount: number;
+  analysisConcurrency: number;
+  inputChars: number;
+};
+
+export type StyleAnalysisProgress = StyleAnalysisStats & {
+  completedCount: number;
+  currentTitle?: string;
+};
+
+type StyleCompletionTimings = {
+  firstDeltaMs?: number;
+  totalMs?: number;
+};
+
+type StyleAnalysisEntry = {
+  kind: StyleSampleAnalysisCache["kind"];
+  sourceId: string;
+  title: string;
+  groupId?: string;
+  groupLabel?: string;
+  inputChars: number;
+  analysis: string;
+  cacheKey: string;
+};
+
+type StyleAnalysisTask = {
+  kind: StyleSampleAnalysisCache["kind"];
+  sourceId: string;
+  title: string;
+  groupId?: string;
+  groupLabel?: string;
+  inputChars: number;
+  cacheKey: string;
+  readCache: () => Promise<StyleSampleAnalysisCache | null>;
+  saveCache: (cache: StyleSampleAnalysisCache) => Promise<StyleSampleAnalysisCache>;
+  messages: () => ChatMessage[];
+};
+
+type StylePreparationOptions = {
+  signal?: AbortSignal;
+  onAnalysisProgress?: (progress: StyleAnalysisProgress) => void;
+};
+
+const emptyStyleAnalysisStats = (): StyleAnalysisStats => ({
+  analysisCount: 0,
+  analysisGeneratedCount: 0,
+  analysisCachedCount: 0,
+  analysisConcurrency: STYLE_SAMPLE_ANALYSIS_CONCURRENCY,
+  inputChars: 0
+});
+
+function accountStyleAnalysisCacheKey(sample: AccountStyleSample) {
+  return shortHash(JSON.stringify({
+    version: 1,
+    promptVersion: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION,
+    kind: "account-video",
+    videoId: sample.video.id,
+    title: sample.video.title,
+    stats: sample.video.stats,
+    transcript: sample.transcript
+  }));
+}
+
+function copySourceStyleAnalysisCacheKey(source: CopySource) {
+  return shortHash(JSON.stringify({
+    version: 1,
+    promptVersion: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION,
+    kind: "copy-source",
+    sourceId: source.id,
+    title: source.title,
+    platform: source.platform,
+    url: source.url,
+    resolvedUrl: source.resolvedUrl || "",
+    materialAnalysis: source.materialAnalysis || null,
+    transcript: source.transcript
+  }));
+}
+
+function buildAccountStyleAnalysisTasks(
+  platform: Platform,
+  accountId: string,
+  samples: AccountStyleSample[],
+  group?: { id: string; label: string }
+): StyleAnalysisTask[] {
+  return samples.map((sample) => ({
+    kind: "account-video" as const,
+    sourceId: sample.video.id,
+    title: sample.video.title,
+    groupId: group?.id,
+    groupLabel: group?.label,
+    inputChars: sample.transcript.length,
+    cacheKey: accountStyleAnalysisCacheKey(sample),
+    readCache: () => readAccountStyleSampleAnalysis(platform, accountId, sample.video.id),
+    saveCache: (cache) => saveAccountStyleSampleAnalysis(platform, accountId, sample.video.id, cache),
+    messages: () => buildAccountSampleAnalysisMessages(platform, sample)
+  }));
+}
+
+function buildCopySourceStyleAnalysisTasks(sources: CopySource[]): StyleAnalysisTask[] {
+  return sources.map((source) => ({
+    kind: "copy-source" as const,
+    sourceId: source.id,
+    title: source.title,
+    groupId: "project-materials",
+    groupLabel: "项目素材",
+    inputChars: source.transcript.length,
+    cacheKey: copySourceStyleAnalysisCacheKey(source),
+    readCache: () => readCopySourceStyleAnalysis(source.id),
+    saveCache: (cache) => saveCopySourceStyleAnalysis(source.id, cache),
+    messages: () => buildCopySourceSampleAnalysisMessages(source)
+  }));
+}
+
+function buildAccountSampleAnalysisMessages(platform: Platform, sample: AccountStyleSample): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "你是短视频中文文案风格分析师。你必须完整阅读用户提供的单条完整转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌、证据摘录、样本覆盖说明。只基于这条样本，不要泛泛套模板。"
+    },
+    {
+      role: "user",
+      content: [
+        `平台：${platform}`,
+        `标题：${sample.video.title}`,
+        `播放:${sample.video.stats.views} 点赞:${sample.video.stats.likes} 评论:${sample.video.stats.comments} 收藏:${sample.video.stats.favorites} 分享:${sample.video.stats.shares ?? 0}`,
+        `完整转写（${sample.transcript.length} 字）：`,
+        sample.transcript
+      ].join("\n")
+    }
+  ];
+}
+
+function buildCopySourceSampleAnalysisMessages(source: CopySource): ChatMessage[] {
+  const materialAnalysis = source.materialAnalysis
+    ? [
+        `素材底稿：${source.materialAnalysis.mode === "multimodal" ? "转写 + 画面描述" : "标题/转写线索"}`,
+        `状态：${source.materialAnalysis.status}`,
+        source.materialAnalysis.visualNotes ? `画面描述：${source.materialAnalysis.visualNotes}` : "",
+        source.materialAnalysis.structureNotes ? `镜头顺序：${source.materialAnalysis.structureNotes}` : "",
+        source.materialAnalysis.titleNotes ? `标题/封面线索：${source.materialAnalysis.titleNotes}` : "",
+        source.materialAnalysis.fallbackReason ? `说明：${source.materialAnalysis.fallbackReason}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "素材底稿：只有转写，未做原视频画面描述";
+  return [
+    {
+      role: "system",
+      content:
+        "你是项目级短视频素材风格分析师。你必须完整阅读用户提供的单条完整素材转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾 CTA、写作禁忌、证据摘录、样本覆盖说明。只基于这条素材，不要泛泛套模板。"
+    },
+    {
+      role: "user",
+      content: [
+        `标题：${source.title}`,
+        `平台：${source.platform}`,
+        `来源：${source.url}`,
+        materialAnalysis,
+        `完整转写（${source.transcript.length} 字）：`,
+        source.transcript
+      ].join("\n")
+    }
+  ];
+}
+
+async function resolveStyleSampleAnalyses(
+  tasks: StyleAnalysisTask[],
+  options: StylePreparationOptions = {}
+) {
+  const totalInputChars = tasks.reduce((total, task) => total + task.inputChars, 0);
+  let completedCount = 0;
+  let analysisGeneratedCount = 0;
+  let analysisCachedCount = 0;
+
+  const emitProgress = (task: StyleAnalysisTask) => {
+    completedCount += 1;
+    options.onAnalysisProgress?.({
+      analysisCount: tasks.length,
+      analysisGeneratedCount,
+      analysisCachedCount,
+      analysisConcurrency: STYLE_SAMPLE_ANALYSIS_CONCURRENCY,
+      inputChars: totalInputChars,
+      completedCount,
+      currentTitle: task.title
+    });
+  };
+
+  const entries = await mapWithConcurrency(tasks, STYLE_SAMPLE_ANALYSIS_CONCURRENCY, async (task) => {
+    throwIfAborted(options.signal);
+    const cached = await task.readCache();
+    if (isUsableStyleSampleAnalysisCache(cached, task.cacheKey)) {
+      analysisCachedCount += 1;
+      emitProgress(task);
+      return styleAnalysisEntryFromCache(task, cached);
+    }
+
+    const result = await chatCompleteWithEffort(task.messages(), STYLE_REASONING_EFFORT, undefined, {
+      signal: options.signal,
+      maxOutputTokens: STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS
+    });
+    const analysis = result.text.trim();
+    if (result.fallback || !analysis) {
+      throw new Error(
+        `样本「${task.title}」风格分析失败：${result.fallbackReason || result.userMessage || "模型没有返回可用分析"}`
+      );
+    }
+
+    const cache: StyleSampleAnalysisCache = {
+      version: 1,
+      cacheKey: task.cacheKey,
+      kind: task.kind,
+      sourceId: task.sourceId,
+      title: task.title,
+      inputChars: task.inputChars,
+      analysis,
+      usedModel: result.model,
+      reasoningEffort: STYLE_REASONING_EFFORT,
+      requestedServiceTier: result.requestedServiceTier,
+      actualServiceTier: result.actualServiceTier,
+      wireApi: result.wireApi,
+      generatedAt: nowIso()
+    };
+    await task.saveCache(cache);
+    analysisGeneratedCount += 1;
+    logStyleModelRequest("style-sample-analysis", result, {
+      title: task.title,
+      sourceId: task.sourceId,
+      inputChars: task.inputChars
+    });
+    emitProgress(task);
+    return styleAnalysisEntryFromCache(task, cache);
+  });
+
+  return {
+    entries,
+    stats: {
+      analysisCount: tasks.length,
+      analysisGeneratedCount,
+      analysisCachedCount,
+      analysisConcurrency: STYLE_SAMPLE_ANALYSIS_CONCURRENCY,
+      inputChars: totalInputChars
+    } satisfies StyleAnalysisStats
+  };
+}
+
+function isUsableStyleSampleAnalysisCache(
+  cache: StyleSampleAnalysisCache | null,
+  cacheKey: string
+): cache is StyleSampleAnalysisCache {
+  return Boolean(cache?.version === 1 && cache.cacheKey === cacheKey && cache.analysis.trim());
+}
+
+function styleAnalysisEntryFromCache(task: StyleAnalysisTask, cache: StyleSampleAnalysisCache): StyleAnalysisEntry {
+  return {
+    kind: task.kind,
+    sourceId: task.sourceId,
+    title: task.title,
+    groupId: task.groupId,
+    groupLabel: task.groupLabel,
+    inputChars: cache.inputChars,
+    analysis: cache.analysis,
+    cacheKey: cache.cacheKey
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  run: (item: T, index: number) => Promise<R>
+) {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await run(items[currentIndex], currentIndex);
+      }
+    })
+  );
+  return results;
+}
+
+function formatStyleAnalysisCorpus(entries: StyleAnalysisEntry[], label = "样本分析") {
+  return entries
     .map(
-      ({ video, transcript }, index) =>
-        `样本 ${index + 1}｜${video.title}\n播放:${video.stats.views} 点赞:${video.stats.likes}\n${clampText(
-          transcript,
-          2200
-        )}`
+      (entry, index) =>
+        `${label} ${index + 1}｜${entry.title}\n来源:${entry.sourceId} 原文完整字数:${entry.inputChars}\n${entry.analysis}`
     )
     .join("\n\n---\n\n");
+}
+
+function styleGenerationMetrics(
+  stats: StyleAnalysisStats,
+  result?: ChatCompletionResult,
+  timings: StyleCompletionTimings = {}
+) {
+  return {
+    analysisCount: stats.analysisCount,
+    analysisGeneratedCount: stats.analysisGeneratedCount,
+    analysisCachedCount: stats.analysisCachedCount,
+    analysisConcurrency: stats.analysisConcurrency,
+    inputChars: stats.inputChars,
+    firstDeltaMs: timings.firstDeltaMs,
+    totalMs: timings.totalMs,
+    wireApi: result?.wireApi,
+    reasoningEffort: result?.reasoningEffort || STYLE_REASONING_EFFORT,
+    requestedServiceTier: result?.requestedServiceTier,
+    actualServiceTier: result?.actualServiceTier
+  };
+}
+
+function logStyleModelRequest(scope: string, result: ChatCompletionResult, extra: Record<string, unknown> = {}) {
+  const payload = {
+    scope,
+    model: result.model,
+    wireApi: result.wireApi,
+    reasoningEffort: result.reasoningEffort || STYLE_REASONING_EFFORT,
+    requestedServiceTier: result.requestedServiceTier,
+    actualServiceTier: result.actualServiceTier,
+    fallback: result.fallback,
+    ...extra
+  };
+  console.info(`[style-model] ${JSON.stringify(payload)}`);
 }
 
 function selectIncrementalAccountStyleSamples(
@@ -1268,9 +1821,13 @@ function selectIncrementalAccountStyleSamples(
   };
 }
 
-export async function prepareAccountStyleContext(platform: Platform, accountId: string): Promise<PreparedAccountStyleContext> {
+export async function prepareAccountStyleContext(
+  platform: Platform,
+  accountId: string,
+  options: StylePreparationOptions = {}
+): Promise<PreparedAccountStyleContext> {
   const account = await resolveAccount(platform, accountId);
-  const samples = await getTopTranscriptSamples(platform, accountId, 8);
+  const samples = await getTopTranscriptSamples(platform, accountId, "all");
 
   if (!samples.length) {
     throw new Error("这个账号还没有可用于总结的转写稿");
@@ -1291,6 +1848,7 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
       fallback: currentStyle,
       ...sampleState,
       generationMode: "full",
+      analysisStats: emptyStyleAnalysisStats(),
       cachedStyle: currentStyle,
       cachedFallback: styleMeta.fallback,
       cachedFallbackReason: styleMeta.fallbackReason
@@ -1301,14 +1859,18 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
     ? selectIncrementalAccountStyleSamples(samples, sampleState.sampleFingerprints, styleMeta?.sampleFingerprints)
     : { samples, canIncremental: false };
   const generationMode = incremental.canIncremental ? "incremental" : "full";
-  const corpus = formatAccountStyleSampleCorpus(incremental.samples);
+  const analysis = await resolveStyleSampleAnalyses(
+    buildAccountStyleAnalysisTasks(platform, accountId, samples),
+    options
+  );
+  const corpus = formatStyleAnalysisCorpus(analysis.entries, "样本分析");
   const fallback = generationMode === "incremental" ? currentStyle : buildFallbackStyle(account.name, corpus);
   const messages: ChatMessage[] = generationMode === "incremental"
     ? [
         {
           role: "system",
           content:
-            "你是短视频账号风格分析师。请基于已有风格卡和新增/变化样本做增量更新，输出一份完整 Markdown 风格卡。保留仍然成立的洞察，只在新样本提供充分证据时修订；结论要具体贴合样本，不要输出泛泛模板。"
+            "你是短视频账号风格分析师。请基于已有风格卡和全量样本分析做增量更新，输出一份完整 Markdown 风格卡。每条样本分析都来自完整转写阅读结果；保留仍然成立的洞察，只在样本提供充分证据时修订；结论要具体贴合样本，不要输出泛泛模板。"
         },
         {
           role: "user",
@@ -1316,7 +1878,7 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
             `账号：${account.name}`,
             `平台：${platform}`,
             `已有风格卡：\n${currentStyle}`,
-            `新增/变化样本：\n${corpus}`,
+            `全量样本分析（每条分析均已读取对应完整转写；本次新增/变化样本数：${incremental.samples.length}）：\n${corpus}`,
             [
               "输出要求：",
               "1. 输出完整风格卡，不要只输出差异说明。",
@@ -1330,11 +1892,11 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
         {
           role: "system",
           content:
-            "你是短视频账号风格分析师。请根据爆款转写稿，提炼可复用的中文文案风格卡。输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
+            "你是短视频账号风格分析师。请根据全量样本分析提炼可复用的中文文案风格卡。每条样本分析都来自完整转写阅读结果；输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
         },
         {
           role: "user",
-          content: `账号：${account.name}\n平台：${platform}\n\n爆款样本：\n${corpus}`
+          content: `账号：${account.name}\n平台：${platform}\n\n全量样本分析（每条分析均已读取对应完整转写）：\n${corpus}`
         }
       ];
 
@@ -1345,13 +1907,15 @@ export async function prepareAccountStyleContext(platform: Platform, accountId: 
     messages,
     fallback,
     ...sampleState,
-    generationMode
+    generationMode,
+    analysisStats: analysis.stats
   };
 }
 
 export async function completePreparedAccountStyle(
   context: PreparedAccountStyleContext,
-  result: ChatCompletionResult
+  result: ChatCompletionResult,
+  timings: StyleCompletionTimings = {}
 ): Promise<AccountStyleGenerationResult> {
   const generatedStyle = result.text.trim();
   const style = generatedStyle || context.fallback;
@@ -1378,6 +1942,13 @@ export async function completePreparedAccountStyle(
     });
   }
 
+  const metrics = styleGenerationMetrics(context.analysisStats, result, timings);
+  logStyleModelRequest("account-style-final", result, {
+    accountId: context.accountId,
+    generationMode: context.generationMode,
+    ...metrics
+  });
+
   return {
     style,
     fallback: isFallbackResult,
@@ -1385,7 +1956,8 @@ export async function completePreparedAccountStyle(
     fallbackReason: result.fallbackReason,
     cached: false,
     generationMode: context.generationMode,
-    sampleHash: shouldUpdateSampleCache ? context.sampleHash : undefined
+    sampleHash: shouldUpdateSampleCache ? context.sampleHash : undefined,
+    ...metrics
   };
 }
 
@@ -1398,7 +1970,8 @@ export function completeCachedAccountStyle(context: PreparedAccountStyleContext)
     fallbackReason: context.cachedFallbackReason,
     cached: true,
     generationMode: "cached",
-    sampleHash: context.sampleHash
+    sampleHash: context.sampleHash,
+    ...styleGenerationMetrics(context.analysisStats)
   };
 }
 
@@ -1407,74 +1980,283 @@ export async function generateStyleProfile(
   accountId: string,
   options: { signal?: AbortSignal } = {}
 ): Promise<AccountStyleGenerationResult> {
-  const context = await prepareAccountStyleContext(platform, accountId);
+  const startedAt = Date.now();
+  const context = await prepareAccountStyleContext(platform, accountId, options);
   const cached = completeCachedAccountStyle(context);
-  if (cached) return cached;
+  if (cached) return { ...cached, totalMs: Date.now() - startedAt };
   const result = await completeStyleGeneration(context.messages, options);
-  return completePreparedAccountStyle(context, result);
+  return completePreparedAccountStyle(context, result, { totalMs: Date.now() - startedAt });
 }
 
-export async function generateProjectStyleProfile(projectId: string, options: { signal?: AbortSignal } = {}) {
+type ProjectStyleAccountContext = {
+  account: Awaited<ReturnType<typeof resolveAccount>>;
+  style: string;
+  samples: AccountStyleSample[];
+  sampleFingerprints: StyleSampleFingerprint[];
+  analyses: StyleAnalysisEntry[];
+};
+
+async function buildProjectStyleAccountContexts(sourceAccountIds: string[]): Promise<ProjectStyleAccountContext[]> {
+  return Promise.all(
+    sourceAccountIds.map(async (sourceAccountId) => {
+      const [platform] = sourceAccountId.split(":") as [Platform, string];
+      const account = await resolveAccount(platform, sourceAccountId);
+      const [style, samples] = await Promise.all([
+        readStyle(platform, sourceAccountId),
+        getTopTranscriptSamples(platform, sourceAccountId, "all")
+      ]);
+      return {
+        account,
+        style,
+        samples,
+        sampleFingerprints: buildAccountStyleSampleState(samples).sampleFingerprints,
+        analyses: []
+      };
+    })
+  );
+}
+
+function formatProjectStyleAccountCorpus(accountContexts: ProjectStyleAccountContext[]) {
+  return accountContexts
+    .map(({ account, style, analyses }) => {
+      const analysisBlock = formatStyleAnalysisCorpus(analyses, "账号样本分析");
+      return `参考账号：${account.name}｜${account.platform}\n\n账号风格卡：\n${style}\n\n爆款样本分析（每条分析均已读取对应完整转写）：\n${analysisBlock || "暂无转写样本"}`;
+    })
+    .join("\n\n---\n\n");
+}
+
+function formatProjectStyleCopySourceContext(sources: CopySource[], analyses: StyleAnalysisEntry[]) {
+  const analysisBySourceId = new Map(analyses.map((entry) => [entry.sourceId, entry]));
+  return sources
+    .map((source, index) => {
+      const analysis = analysisBySourceId.get(source.id);
+      const materialAnalysis = source.materialAnalysis
+        ? [
+            `素材底稿：${source.materialAnalysis.mode === "multimodal" ? "转写 + 画面描述" : "标题/转写线索"}`,
+            `状态：${source.materialAnalysis.status}`,
+            source.materialAnalysis.visualNotes ? `画面描述：${source.materialAnalysis.visualNotes}` : "",
+            source.materialAnalysis.structureNotes ? `镜头顺序：${source.materialAnalysis.structureNotes}` : "",
+            source.materialAnalysis.titleNotes ? `标题/封面线索：${source.materialAnalysis.titleNotes}` : "",
+            source.materialAnalysis.fallbackReason ? `说明：${source.materialAnalysis.fallbackReason}` : ""
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "素材底稿：只有转写，未做原视频画面描述";
+      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n素材样本分析（已读取完整转写 ${source.transcript.length} 字）：\n${analysis?.analysis || "暂无样本分析"}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+async function resolveProjectCopySourcesForStyle(sourceIds: string[]) {
+  return resolveProjectCopySources(sourceIds);
+}
+
+async function resolveProjectCopySources(sourceIds: string[], maxSources?: number) {
+  if (!sourceIds.length) return [];
+  const selectedIds = maxSources ? sourceIds.slice(0, maxSources) : sourceIds;
+  const sources = await Promise.all(selectedIds.map((sourceId) => resolveCopySource(sourceId).catch(() => null)));
+  return sources.filter(Boolean) as CopySource[];
+}
+
+function buildProjectStyleSampleState(
+  project: Awaited<ReturnType<typeof resolveProject>>,
+  accountContexts: ProjectStyleAccountContext[],
+  materialSources: CopySource[]
+) {
+  const sourceAccountIds = [...project.sourceAccountIds];
+  const sourceMaterialIds = [...(project.sourceMaterialIds || [])];
+  const accountFingerprints = accountContexts.map(({ account, style, sampleFingerprints }) => ({
+    accountId: account.id,
+    styleHash: shortHash(style),
+    sampleFingerprints
+  }));
+  const materialFingerprints = materialSources.map((source) => ({
+    sourceId: source.id,
+    hash: shortHash([
+      source.id,
+      source.title,
+      source.platform,
+      source.url,
+      source.resolvedUrl || "",
+      source.transcript,
+      JSON.stringify(source.materialAnalysis || {})
+    ].join("\n"))
+  }));
+  const sampleHash = shortHash(JSON.stringify({
+    project: {
+      name: project.name,
+      description: project.description || "",
+      sourceAccountIds,
+      sourceMaterialIds
+    },
+    accountFingerprints,
+    materialFingerprints
+  }));
+
+  return {
+    sampleHash,
+    sourceAccountIds,
+    sourceMaterialIds,
+    accountFingerprints,
+    materialFingerprints,
+    sampleCount: accountFingerprints.reduce((total, item) => total + item.sampleFingerprints.length, 0),
+    materialCount: materialFingerprints.length
+  };
+}
+
+type ProjectStyleSampleState = ReturnType<typeof buildProjectStyleSampleState>;
+type ProjectStyleProfileResult = Omit<ProjectStyleGenerationResult, "project">;
+
+export type PreparedProjectStyleContext = {
+  projectId: string;
+  projectName: string;
+  messages: ChatMessage[];
+  fallback: string;
+  sampleState: ProjectStyleSampleState;
+  analysisStats: StyleAnalysisStats;
+  cachedStyle?: string;
+};
+
+export type PreparedSavedProjectStyleContext = {
+  project: Awaited<ReturnType<typeof upsertProject>>;
+  context: PreparedProjectStyleContext;
+};
+
+export async function prepareProjectStyleContext(
+  projectId: string,
+  options: StylePreparationOptions = {}
+): Promise<PreparedProjectStyleContext> {
   const project = await resolveProject(projectId);
   if (!project.sourceAccountIds.length && !project.sourceMaterialIds?.length) {
     throw new Error("先加案例或账号");
   }
 
-  const accountContexts = await Promise.all(
-    project.sourceAccountIds.map(async (sourceAccountId) => {
-      const [platform] = sourceAccountId.split(":") as [Platform, string];
-      const account = await resolveAccount(platform, sourceAccountId);
-      const style = await fs
-        .readFile(path.join(libraryRoot(), platform, account.slug, "style.md"), "utf8")
-        .catch(() => "");
-      const samples = await getTopTranscriptSamples(platform, sourceAccountId, 3);
-      return {
-        account,
-        style,
-        samples
-      };
+  const [accountContexts, materialSources, currentStyle, styleMeta] = await Promise.all([
+    buildProjectStyleAccountContexts(project.sourceAccountIds),
+    resolveProjectCopySourcesForStyle(project.sourceMaterialIds || []),
+    readProjectStyle(project.id),
+    readProjectStyleMeta(project.id)
+  ]);
+  const sampleState = buildProjectStyleSampleState(project, accountContexts, materialSources);
+  const trimmedCurrentStyle = currentStyle.trim();
+  if (styleMeta?.sampleHash === sampleState.sampleHash && trimmedCurrentStyle && !styleMeta.fallback) {
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      messages: [],
+      fallback: trimmedCurrentStyle,
+      sampleState,
+      analysisStats: emptyStyleAnalysisStats(),
+      cachedStyle: trimmedCurrentStyle
+    };
+  }
+
+  const accountTasks = accountContexts.flatMap((context) =>
+    buildAccountStyleAnalysisTasks(context.account.platform, context.account.id, context.samples, {
+      id: context.account.id,
+      label: `${context.account.name}｜${context.account.platform}`
     })
   );
-
-  const accountCorpus = accountContexts
-    .map(({ account, style, samples }) => {
-      const transcriptBlock = samples
-        .map(
-          ({ video, transcript }, index) =>
-            `样本 ${index + 1}｜${video.title}\n${clampText(transcript, 1600)}`
-        )
-        .join("\n\n");
-      return `参考账号：${account.name}｜${account.platform}\n\n账号风格卡：\n${clampText(
-        style,
-        2200
-      )}\n\n爆款样本：\n${transcriptBlock || "暂无转写样本"}`;
-    })
-    .join("\n\n---\n\n");
-  const materialCorpus = await buildProjectCopySourceContext(project.sourceMaterialIds || []);
+  const materialTasks = buildCopySourceStyleAnalysisTasks(materialSources);
+  const analysis = await resolveStyleSampleAnalyses([...accountTasks, ...materialTasks], options);
+  const analysesByGroupId = new Map<string, StyleAnalysisEntry[]>();
+  for (const entry of analysis.entries) {
+    const groupId = entry.groupId || entry.sourceId;
+    analysesByGroupId.set(groupId, [...(analysesByGroupId.get(groupId) || []), entry]);
+  }
+  const accountContextsWithAnalyses = accountContexts.map((context) => ({
+    ...context,
+    analyses: analysesByGroupId.get(context.account.id) || []
+  }));
+  const materialAnalyses = analysis.entries.filter((entry) => entry.kind === "copy-source");
+  const accountCorpus = formatProjectStyleAccountCorpus(accountContextsWithAnalyses);
+  const materialCorpus = formatProjectStyleCopySourceContext(materialSources, materialAnalyses);
   const corpus = [accountCorpus, materialCorpus].filter(Boolean).join("\n\n---\n\n");
 
   const fallback = buildFallbackStyle(project.name, corpus);
-  const result = await completeStyleGeneration([
-    {
-      role: "system",
-      content:
-        "你是项目级中文短视频风格策略师。请把参考账号风格卡、爆款转写稿、项目案例素材，以及素材里已经保存的画面描述融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾 CTA、写作禁忌。只使用参考素材里已经存在的信息，不要假装看到了未提供的视频画面。结论要具体贴合参考素材，不要输出泛泛模板。"
-    },
-    {
-      role: "user",
-      content: `项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n参考素材：\n${corpus}`
-    }
-  ], options);
-
-  const style = result.text || fallback;
-  await saveProjectStyle(projectId, style);
-  return { style, fallback: result.fallback, usedModel: result.model, fallbackReason: result.fallbackReason };
+  return {
+    projectId: project.id,
+    projectName: project.name,
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是项目级中文短视频风格策略师。请把参考账号风格卡、全量样本分析、项目案例素材分析，以及素材里已经保存的画面描述融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾 CTA、写作禁忌。只使用参考素材里已经存在的信息，不要假装看到了未提供的视频画面。结论要具体贴合参考素材，不要输出泛泛模板。"
+      },
+      {
+        role: "user",
+        content: `项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n参考素材：\n${corpus}`
+      }
+    ],
+    fallback,
+    sampleState,
+    analysisStats: analysis.stats
+  };
 }
 
-export async function saveAndGenerateProjectStyleProfile(
+export function completeCachedProjectStyle(context: PreparedProjectStyleContext): ProjectStyleProfileResult | null {
+  if (!context.cachedStyle) return null;
+  return {
+    style: context.cachedStyle,
+    fallback: false,
+    usedModel: "style-cache",
+    cached: true,
+    generationMode: "cached" as const,
+    sampleHash: context.sampleState.sampleHash,
+    ...styleGenerationMetrics(context.analysisStats)
+  };
+}
+
+export async function completePreparedProjectStyle(
+  context: PreparedProjectStyleContext,
+  result: ChatCompletionResult,
+  timings: StyleCompletionTimings = {}
+): Promise<ProjectStyleProfileResult> {
+  const generatedStyle = result.text.trim();
+  const style = generatedStyle || context.fallback;
+  const isFallbackResult = result.fallback || !generatedStyle;
+  await saveProjectStyle(context.projectId, style);
+
+  if (!isFallbackResult) {
+    await saveProjectStyleMeta(context.projectId, {
+      ...context.sampleState,
+      usedModel: result.model,
+      fallback: false
+    });
+  }
+
+  const metrics = styleGenerationMetrics(context.analysisStats, result, timings);
+  logStyleModelRequest("project-style-final", result, {
+    projectId: context.projectId,
+    ...metrics
+  });
+
+  return {
+    style,
+    fallback: isFallbackResult,
+    usedModel: result.model,
+    fallbackReason: result.fallbackReason,
+    cached: false,
+    generationMode: "full" as const,
+    sampleHash: isFallbackResult ? undefined : context.sampleState.sampleHash,
+    ...metrics
+  };
+}
+
+export async function generateProjectStyleProfile(projectId: string, options: { signal?: AbortSignal } = {}) {
+  const startedAt = Date.now();
+  const context = await prepareProjectStyleContext(projectId, options);
+  const cached = completeCachedProjectStyle(context);
+  if (cached) return { ...cached, totalMs: Date.now() - startedAt };
+  const result = await completeStyleGeneration(context.messages, options);
+  return completePreparedProjectStyle(context, result, { totalMs: Date.now() - startedAt });
+}
+
+export async function prepareSavedProjectStyleContext(
   input: SaveAndGenerateProjectStyleInput,
-  options: { signal?: AbortSignal } = {}
-): Promise<ProjectStyleGenerationResult> {
+  options: StylePreparationOptions = {}
+): Promise<PreparedSavedProjectStyleContext> {
   if (!input.sourceAccountIds.length && !input.sourceMaterialIds?.length) {
     throw new Error("先加案例或账号");
   }
@@ -1482,22 +2264,60 @@ export async function saveAndGenerateProjectStyleProfile(
   if (input.sourceAccountIds.length) {
     await assertProjectSourceAccountsExist(input.sourceAccountIds);
   }
-  const project = await upsertProject(input);
-  const result = await generateProjectStyleProfile(project.id, options);
-  const summary = await getProjectSummary(project);
 
+  const project = await upsertProject(input);
+  const context = await prepareProjectStyleContext(project.id, options);
+  return { project, context };
+}
+
+export async function buildSavedProjectStyleResult(
+  prepared: PreparedSavedProjectStyleContext,
+  result: ProjectStyleProfileResult
+): Promise<ProjectStyleGenerationResult> {
+  const summary = await getProjectSummary(prepared.project);
   return {
     project: summary,
     style: result.style,
     fallback: result.fallback,
     usedModel: result.usedModel,
-    fallbackReason: result.fallbackReason
+    fallbackReason: result.fallbackReason,
+    cached: result.cached,
+    generationMode: result.generationMode,
+    sampleHash: result.sampleHash,
+    analysisCount: result.analysisCount,
+    analysisGeneratedCount: result.analysisGeneratedCount,
+    analysisCachedCount: result.analysisCachedCount,
+    analysisConcurrency: result.analysisConcurrency,
+    inputChars: result.inputChars,
+    firstDeltaMs: result.firstDeltaMs,
+    totalMs: result.totalMs,
+    wireApi: result.wireApi,
+    reasoningEffort: result.reasoningEffort,
+    requestedServiceTier: result.requestedServiceTier,
+    actualServiceTier: result.actualServiceTier
   };
+}
+
+export async function saveAndGenerateProjectStyleProfile(
+  input: SaveAndGenerateProjectStyleInput,
+  options: { signal?: AbortSignal } = {}
+): Promise<ProjectStyleGenerationResult> {
+  const startedAt = Date.now();
+  const prepared = await prepareSavedProjectStyleContext(input, options);
+  const cached = completeCachedProjectStyle(prepared.context);
+  const result = cached
+    ? { ...cached, totalMs: Date.now() - startedAt }
+    : await completePreparedProjectStyle(
+        prepared.context,
+        await completeStyleGeneration(prepared.context.messages, options),
+        { totalMs: Date.now() - startedAt }
+      );
+  return buildSavedProjectStyleResult(prepared, result);
 }
 
 export async function writeCopy(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteResult> {
   const prepared = await prepareWriteCopyContext(input, options);
-  const result = await chatCompleteWithFallback(prepared.messages, undefined, undefined, { signal: options.signal });
+  const result = await chatCompleteWithFallback(prepared.messages, "xhigh", undefined, { signal: options.signal });
   throwIfAborted(options.signal);
   const content = result.text || buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
   const draft = await savePreparedDraft(input, prepared, content);
@@ -1572,9 +2392,9 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
 
   const account = await resolveAccount(normalizedInput.platform, normalizedInput.accountId);
   const style = await fs.readFile(path.join(libraryRoot(), normalizedInput.platform, account.slug, "style.md"), "utf8");
-  const samples = await getTopTranscriptSamples(normalizedInput.platform, normalizedInput.accountId, 3);
+  const samples = await getTopTranscriptSamples(normalizedInput.platform, normalizedInput.accountId, "all");
   const sampleContext = samples
-    .map(({ video, transcript }) => `《${video.title}》\n${clampText(transcript, 1200)}`)
+    .map(({ video, transcript }) => `《${video.title}》\n${transcript}`)
     .join("\n\n---\n\n");
 
   const userTask =
@@ -1672,10 +2492,10 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
   const style = await fs.readFile(path.join(libraryRoot(), "projects", project.slug, "style.md"), "utf8");
 
   const accountContexts = await Promise.all(
-    project.sourceAccountIds.slice(0, 4).map(async (sourceAccountId) => {
+    project.sourceAccountIds.map(async (sourceAccountId) => {
       const [platform] = sourceAccountId.split(":") as [Platform, string];
       const account = await resolveAccount(platform, sourceAccountId);
-      const samples = await getTopTranscriptSamples(platform, sourceAccountId, 2);
+      const samples = await getTopTranscriptSamples(platform, sourceAccountId, "all");
       return {
         account,
         samples
@@ -1686,7 +2506,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
   const sampleContext = accountContexts
     .map(({ account, samples }) => {
       const block = samples
-        .map(({ video, transcript }) => `《${video.title}》\n${clampText(transcript, 900)}`)
+        .map(({ video, transcript }) => `《${video.title}》\n${transcript}`)
         .join("\n\n");
       return `参考账号：${account.name}\n${block || "暂无样本"}`;
     })
@@ -1799,7 +2619,8 @@ async function buildAccountWritingBrief(input: {
     return {
       text: manualBrief,
       model: "edited-brief",
-      fallback: false
+      fallback: false,
+      ok: true
     } satisfies ChatCompletionResult;
   }
 
@@ -1865,7 +2686,8 @@ async function buildProjectWritingBrief(input: {
     return {
       text: manualBrief,
       model: "edited-brief",
-      fallback: false
+      fallback: false,
+      ok: true
     } satisfies ChatCompletionResult;
   }
 
@@ -1918,8 +2740,7 @@ async function buildProjectWritingBrief(input: {
 function completeWriteBriefGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
   return streamResponseText({
     messages,
-    reasoningEffort: "low",
-    maxOutputTokens: WRITE_BRIEF_MAX_OUTPUT_TOKENS,
+    reasoningEffort: "high",
     signal: options.signal,
     onDelta() {
       // Keep the brief bounded without surfacing intermediate planning text to the UI.
@@ -1936,7 +2757,10 @@ function requireWriteBriefResult(result: ChatCompletionResult, buildLocalBrief?:
       ...result,
       text: buildLocalBrief(),
       fallback: true,
-      fallbackReason: result.fallbackReason || "模型没有返回可用写作 Brief，已使用本地结构整理。"
+      fallbackReason: result.fallbackReason || "模型没有返回可用写作 Brief，已使用本地结构整理。",
+      ok: false,
+      errorKind: result.errorKind || "empty",
+      userMessage: result.userMessage || "对话模型没有返回可用内容"
     };
   }
 
@@ -2007,11 +2831,11 @@ function buildLocalWritingBrief(input: {
 
   return [
     "## 核心事件",
-    clampText(coreEvent || input.userTask, 700),
+    coreEvent || input.userTask,
     "## 可见画面/具体细节",
     [
-      sourceText ? `- 原文线索：${clampText(sourceText, 520)}` : "- 暂无原文素材，围绕主题提取可口播的具体场景。",
-      reference ? `- 参考样本/风格线索：${clampText(reference, 520)}` : "- 样本不足时，只使用用户输入里的事实和场景。"
+      sourceText ? `- 原文线索：${sourceText}` : "- 暂无原文素材，围绕主题提取可口播的具体场景。",
+      reference ? `- 参考样本/风格线索：${reference}` : "- 样本不足时，只使用用户输入里的事实和场景。"
     ].join("\n"),
     `## ${input.angleHeading}`,
     [
@@ -2033,7 +2857,7 @@ function buildLocalWritingBrief(input: {
       "- 不编造人物、数据、产品信息或最新事实。",
       "- 不照抄样本文案和原文表达。",
       "- 不输出空泛鸡汤、抽象形容词堆叠或解释创作过程。",
-      externalContext ? `- 外部资料只采用已提供内容：${clampText(externalContext, 360)}` : "- 未提供外部资料时，不写需要外部事实支撑的结论。"
+      externalContext ? `- 外部资料只采用已提供内容：${externalContext}` : "- 未提供外部资料时，不写需要外部事实支撑的结论。"
     ].join("\n")
   ].join("\n\n");
 }
@@ -2058,23 +2882,23 @@ async function buildSupportDocumentContext(input?: string, options: { signal?: A
   if (!trimmed) return "未提供支持文档。";
 
   if (!hasFeishuDocLink(trimmed)) {
-    return `用户粘贴的支持资料：\n${clampText(trimmed, 5000)}`;
+    return `用户粘贴的支持资料：\n${trimmed}`;
   }
 
   const documents = await fetchFeishuSupportDocuments(trimmed, { signal: options.signal });
   if (!documents.length) {
-    return `用户粘贴的支持资料：\n${clampText(trimmed, 5000)}`;
+    return `用户粘贴的支持资料：\n${trimmed}`;
   }
 
   const blocks: string[] = [];
   if (hasPlainSupportText(trimmed)) {
-    blocks.push(`用户补充资料原文：\n${clampText(trimmed, 1800)}`);
+    blocks.push(`用户补充资料原文：\n${trimmed}`);
   }
 
   blocks.push(...documents.map((document, index) => {
     const title = document.title?.trim() || `文档 ${index + 1}`;
     if (document.content?.trim()) {
-      return `文档 ${index + 1}｜${title}\n来源：${document.url}\n${clampText(document.content, 3600)}`;
+      return `文档 ${index + 1}｜${title}\n来源：${document.url}\n${document.content}`;
     }
     return `文档 ${index + 1}｜${title}\n来源：${document.url}\n读取失败：${document.error || "没有返回可用正文"}`;
   }));
@@ -2110,13 +2934,12 @@ function buildReferenceSummary(input: {
 }
 
 async function buildProjectCopySourceContext(sourceIds: string[]) {
-  if (!sourceIds.length) return "";
-  const sources = await Promise.all(sourceIds.slice(0, 8).map((sourceId) => resolveCopySource(sourceId).catch(() => null)));
+  return formatProjectCopySourceContext(await resolveProjectCopySources(sourceIds));
+}
 
+function formatProjectCopySourceContext(sources: CopySource[]) {
   return sources
-    .filter(Boolean)
     .map((source, index) => {
-      if (!source) return "";
       const materialAnalysis = source.materialAnalysis
         ? [
             `素材底稿：${source.materialAnalysis.mode === "multimodal" ? "转写 + 画面描述" : "标题/转写线索"}`,
@@ -2129,7 +2952,7 @@ async function buildProjectCopySourceContext(sourceIds: string[]) {
             .filter(Boolean)
             .join("\n")
         : "素材底稿：只有转写，未做原视频画面描述";
-      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n转写：\n${clampText(source.transcript, 1400)}`;
+      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n转写：\n${source.transcript}`;
     })
     .filter(Boolean)
     .join("\n\n");

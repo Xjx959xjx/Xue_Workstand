@@ -189,18 +189,85 @@ export const DOUYIN_VIDEO_COMMENT_EXTRACT_JS = `
 })()
 `;
 
+export type DouyinBatchPostExtractAccount = {
+  id: string;
+  name: string;
+  uid: string;
+};
+
 export function buildDouyinPostExtractJs(options: {
   secUid: string;
   limit: number;
   fromDate?: string;
   toDate?: string;
 }) {
+  return buildDouyinPostExtractRuntimeJs({
+    accounts: [{ id: "", name: "", uid: options.secUid }],
+    concurrency: 1,
+    fromDate: options.fromDate,
+    limit: options.limit,
+    returnRowsOnly: true,
+    toDate: options.toDate
+  });
+}
+
+export function buildDouyinBatchPostExtractJs(options: {
+  accounts: DouyinBatchPostExtractAccount[];
+  concurrency: number;
+  limit: number;
+  fromDate?: string;
+  toDate?: string;
+}) {
+  return buildDouyinPostExtractRuntimeJs({
+    accounts: options.accounts,
+    concurrency: options.concurrency,
+    fromDate: options.fromDate,
+    limit: options.limit,
+    returnRowsOnly: false,
+    toDate: options.toDate
+  });
+}
+
+function buildDouyinPostExtractRuntimeJs(options: {
+  accounts: DouyinBatchPostExtractAccount[];
+  concurrency: number;
+  limit: number;
+  fromDate?: string;
+  returnRowsOnly: boolean;
+  toDate?: string;
+}) {
   const fromEpoch = boundaryDateToEpochSeconds(options.fromDate, "start");
   const toEpoch = boundaryDateToEpochSeconds(options.toDate, "end");
+  const accounts = options.accounts.map((account) => ({
+    id: String(account.id || ""),
+    name: String(account.name || ""),
+    uid: String(account.uid || "")
+  }));
+  const concurrency = clampPositiveInteger(options.concurrency, 1);
+  const limit = clampPositiveInteger(options.limit, 1);
+  const returnStatement = options.returnRowsOnly
+    ? `
+  const first = await fetchAccount(accounts[0]);
+  if (first.status === "completed") return first.rows;
+  throw new Error(first.error || "抖音账号抓取失败");`
+    : `
+  const results = new Array(accounts.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), accounts.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < accounts.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await fetchAccount(accounts[currentIndex]);
+    }
+  }));
+  return results;`;
+
   return `
 (async () => {
-  const secUid = ${JSON.stringify(options.secUid)};
-  const limit = ${options.limit};
+  const accounts = ${JSON.stringify(accounts)};
+  const limit = ${limit};
+  const concurrency = ${concurrency};
   const fromEpoch = ${fromEpoch ?? "null"};
   const toEpoch = ${toEpoch ?? "null"};
   const pageSize = ${DOUYIN_POST_PAGE_SIZE};
@@ -222,7 +289,7 @@ export function buildDouyinPostExtractJs(options: {
     if (Array.isArray(value.url_list)) return normalizeUrl(String(value.url_list[0] || ""));
     return "";
   };
-  const normalizeItem = (item, index) => {
+  const normalizeItem = (item, index, secUid) => {
     const awemeId = String(item.aweme_id || item.awemeId || item.id || "");
     const stats = item.statistics || {};
     const author = item.author || {};
@@ -245,18 +312,12 @@ export function buildDouyinPostExtractJs(options: {
       author_uid: String(author.uid || ""),
       sec_uid: String(author.sec_uid || secUid),
       authorName: String(author.nickname || author.name || author.unique_id || ""),
+      avatar_url: firstUrl(author.avatar_thumb || author.avatar_medium || author.avatar_larger),
       video_url: firstUrl(item.video && (item.video.play_addr || item.video.download_addr)),
       raw_statistics: stats,
       source: "douyin_aweme_post_api"
     };
   };
-
-  const rows = [];
-  const seen = new Set();
-  let cursor = 0;
-  let hasMore = true;
-  let page = 0;
-  let reachedBeforeFrom = false;
 
   const fetchPage = async (targetUrl) => {
     let lastError = "";
@@ -283,37 +344,67 @@ export function buildDouyinPostExtractJs(options: {
     throw new Error("aweme/post JSON parse failed: " + lastError);
   };
 
-  while (hasMore && !reachedBeforeFrom && rows.length < limit && page < 80) {
-    const url = new URL("https://www.douyin.com/aweme/v1/web/aweme/post/");
-    url.searchParams.set("sec_user_id", secUid);
-    url.searchParams.set("max_cursor", String(cursor));
-    url.searchParams.set("count", String(pageSize));
-    url.searchParams.set("aid", "6383");
-    const data = await fetchPage(url.toString());
-    const list = Array.isArray(data.aweme_list) ? data.aweme_list : [];
-    if (!list.length) break;
+  const fetchAccount = async (account) => {
+    const rows = [];
+    const seen = new Set();
+    let cursor = 0;
+    let hasMore = true;
+    let page = 0;
+    let reachedBeforeFrom = false;
 
-    for (const item of list) {
-      const createTime = toNumber(item.create_time || item.createTime);
-      if (fromEpoch && createTime && createTime < fromEpoch) {
-        reachedBeforeFrom = true;
-        continue;
+    try {
+      while (hasMore && !reachedBeforeFrom && rows.length < limit && page < 80) {
+        const url = new URL("https://www.douyin.com/aweme/v1/web/aweme/post/");
+        url.searchParams.set("sec_user_id", account.uid);
+        url.searchParams.set("max_cursor", String(cursor));
+        url.searchParams.set("count", String(pageSize));
+        url.searchParams.set("aid", "6383");
+        const data = await fetchPage(url.toString());
+        const list = Array.isArray(data.aweme_list) ? data.aweme_list : [];
+        if (!list.length) break;
+
+        for (const item of list) {
+          const createTime = toNumber(item.create_time || item.createTime);
+          if (fromEpoch && createTime && createTime < fromEpoch) {
+            reachedBeforeFrom = true;
+            continue;
+          }
+          if (toEpoch && createTime && createTime > toEpoch) continue;
+          const row = normalizeItem(item, rows.length + 1, account.uid);
+          if (!row.aweme_id || seen.has(row.aweme_id)) continue;
+          seen.add(row.aweme_id);
+          rows.push(row);
+          if (rows.length >= limit) break;
+        }
+
+        cursor = data.max_cursor || data.maxCursor || 0;
+        hasMore = !reachedBeforeFrom && Boolean(data.has_more || data.hasMore) && Boolean(cursor);
+        page += 1;
+        if (hasMore && rows.length < limit) await sleep(250);
       }
-      if (toEpoch && createTime && createTime > toEpoch) continue;
-      const row = normalizeItem(item, rows.length + 1);
-      if (!row.aweme_id || seen.has(row.aweme_id)) continue;
-      seen.add(row.aweme_id);
-      rows.push(row);
-      if (rows.length >= limit) break;
+
+      return {
+        accountId: account.id,
+        name: account.name,
+        uid: account.uid,
+        status: "completed",
+        rawCount: rows.length,
+        rows
+      };
+    } catch (error) {
+      return {
+        accountId: account.id,
+        name: account.name,
+        uid: account.uid,
+        status: "failed",
+        rawCount: 0,
+        rows: [],
+        error: error instanceof Error ? error.message : String(error)
+      };
     }
+  };
 
-    cursor = data.max_cursor || data.maxCursor || 0;
-    hasMore = !reachedBeforeFrom && Boolean(data.has_more || data.hasMore) && Boolean(cursor);
-    page += 1;
-    if (hasMore && rows.length < limit) await sleep(250);
-  }
-
-  return rows;
+${returnStatement}
 })()
 `;
 }
@@ -525,4 +616,8 @@ function boundaryDateToEpochSeconds(value: string | undefined, boundary: "start"
   if (!value) return null;
   const date = new Date(`${value}T${boundary === "start" ? "00:00:00" : "23:59:59"}+08:00`);
   return Number.isNaN(date.getTime()) ? null : Math.floor(date.getTime() / 1000);
+}
+
+function clampPositiveInteger(value: number, fallback: number) {
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback;
 }

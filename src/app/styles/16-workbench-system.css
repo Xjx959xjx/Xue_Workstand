@@ -1,0 +1,211 @@
+/*
+  System-wide workbench skin.
+  Tokens live in 00-tokens.css. This layer owns the shared workbench frame;
+  page CSS should only add route-specific density and business components.
+*/
+
+body {
+  background: var(--bg);
+}
+
+.page,
+.workbench-frame-page {
+  width: min(100%, var(--workbench-page-max-width));
+  align-content: start;
+  gap: var(--workbench-page-gap);
+}
+
+.page-header {
+  align-items: flex-start;
+  min-height: 66px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 56%, transparent);
+}
+
+.page-title-group {
+  gap: 5px;
+}
+
+.page-title-row {
+  align-items: flex-start;
+  gap: 0;
+}
+
+.page-title-eyebrow {
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: color-mix(in oklch, var(--muted) 88%, var(--text));
+  background: transparent;
+  font-size: 11px;
+  font-weight: 640;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-transform: none;
+}
+
+.page-title-mark {
+  display: none;
+}
+
+.page-title-copy h1 {
+  color: var(--text-strong);
+  font-size: 26px;
+  font-weight: 740;
+  letter-spacing: 0;
+  line-height: 1.08;
+}
+
+.page-header .subtle {
+  max-width: 58ch;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.page-header-meta {
+  gap: 8px;
+  padding-top: 18px;
+}
+
+.workbench-leading-panel {
+  min-height: var(--workbench-leading-panel-height);
+}
+
+@media (min-width: 1181px) {
+  .workbench-frame-page:has(> .workbench-leading-panel) {
+    grid-template-rows: auto var(--workbench-leading-panel-height) minmax(0, 1fr);
+    height: var(--workspace-page-height);
+  }
+
+  .workbench-frame-page:has(> .workbench-leading-panel):has(> :is(.notice, .error)) {
+    grid-template-rows: auto var(--workbench-leading-panel-height) auto minmax(0, 1fr);
+  }
+
+  .workbench-frame-page:has(> .workbench-leading-panel):has(> :is(.notice, .error)) > .workbench-frame-workspace {
+    grid-row: 4;
+  }
+
+  .workbench-frame-workspace {
+    min-height: 0;
+    height: 100%;
+  }
+}
+
+.panel,
+.pane {
+  border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 94%, white) 0%, var(--panel) 100%);
+  box-shadow: 0 18px 42px color-mix(in oklch, var(--text-strong) 4%, transparent);
+  transition:
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
+}
+
+.pane-header,
+.modal-header {
+  border-bottom-color: color-mix(in oklch, var(--line-subtle) 82%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, white) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
+}
+
+.detail-section,
+.compact-card,
+.style-summary-card {
+  border-color: color-mix(in oklch, var(--line) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--panel-raised) 86%, var(--panel));
+  box-shadow: none;
+  transition:
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
+}
+
+.empty-state-panel {
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 54%, var(--panel-raised)) 0%, var(--panel) 100%);
+}
+
+.modal-panel {
+  box-shadow: var(--shadow-lift);
+}
+
+.account-list-button,
+.video-table tbody tr,
+.writer-history-list > *,
+.engagement-history-pane .list-button,
+.douyin-hotlist-item,
+.gross-monitor-card {
+  content-visibility: auto;
+}
+
+.account-list-button,
+.engagement-history-pane .list-button {
+  contain-intrinsic-size: auto 64px;
+}
+
+.video-table tbody tr {
+  contain-intrinsic-size: auto 58px;
+}
+
+.writer-history-list > * {
+  contain-intrinsic-size: auto 72px;
+}
+
+.douyin-hotlist-item {
+  contain-intrinsic-size: auto 132px;
+}
+
+.gross-monitor-card {
+  contain-intrinsic-size: auto 220px;
+}
+
+@media (max-width: 780px) {
+  :root {
+    --page-pad: 12px;
+  }
+
+  .page {
+    width: 100%;
+  }
+
+  .page-header {
+    gap: 12px;
+  }
+
+  .page-header-meta {
+    padding-top: 0;
+  }
+
+  .workbench-leading-panel {
+    min-height: var(--workbench-leading-panel-height-mobile);
+  }
+
+  .panel,
+  .pane {
+    border-radius: var(--radius-lg);
+  }
+}
+
+@media (min-width: 781px) and (max-width: 1180px) {
+  .workbench-leading-panel {
+    min-height: var(--workbench-leading-panel-height-tablet);
+  }
+
+  .workbench-frame-workspace {
+    min-height: var(--workspace-default-height);
+  }
+}
+
+@media (max-width: 780px) {
+  .workbench-frame-workspace {
+    min-height: var(--workspace-default-height);
+  }
+}

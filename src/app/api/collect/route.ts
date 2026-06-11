@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
+import { inferAccountAvatarFromCollectedData, inferAccountNameFromCollectedData, resolveAccountProfile } from "@/lib/account-profile";
 import { collectVideos, resolveAccountUid } from "@/lib/opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "@/lib/storage";
 import { Account, collectOrders, CollectOrder, Platform, platforms, Video } from "@/lib/types";
@@ -68,11 +69,20 @@ export async function POST(request: Request) {
       result.raw,
       target.displayNameFallback || existing?.name || uid
     );
+    const inferredAvatarUrl = inferAccountAvatarFromCollectedData(result.videos, result.raw);
+    const profile = inferredAvatarUrl ? null : await resolveAccountProfile({
+      platform: input.platform,
+      uid,
+      fallbackName: accountName,
+      sourceUrl: target.sourceUrl,
+      signal: request.signal
+    });
     const updatedAccount = await upsertAccount({
       platform: input.platform,
-      name: accountName,
+      name: profile?.name || accountName,
       uid,
-      sourceUrl: target.sourceUrl,
+      sourceUrl: profile?.sourceUrl || target.sourceUrl,
+      avatarUrl: inferredAvatarUrl || profile?.avatarUrl,
       lastCollectedAt: nowIso()
     });
 
@@ -176,55 +186,6 @@ function makeTransientAccount(platform: Platform, name: string, uid: string, sou
     createdAt: now,
     updatedAt: now
   };
-}
-
-function inferAccountNameFromCollectedData(platform: Platform, raw: unknown, fallback: string) {
-  const candidate = collectAuthorNameCandidates(raw)
-    .map(cleanAccountNameCandidate)
-    .find(Boolean);
-  return candidate || cleanAccountNameCandidate(fallback) || fallbackAccountName(platform, fallback);
-}
-
-function collectAuthorNameCandidates(value: unknown, depth = 0): string[] {
-  if (!value || depth > 4) return [];
-  if (typeof value === "string") return [];
-  if (Array.isArray(value)) {
-    return value.slice(0, 40).flatMap((item) => collectAuthorNameCandidates(item, depth + 1));
-  }
-  if (typeof value !== "object") return [];
-
-  const object = value as Record<string, unknown>;
-  const directKeys = [
-    "authorName",
-    "author_name",
-    "ownerName",
-    "owner_name",
-    "nickname",
-    "display_name",
-    "userName",
-    "user_name",
-    "uname",
-    "author",
-    ...(depth > 1 ? ["name"] : [])
-  ];
-  const nestedKeys = ["metadata", "author", "owner", "user", "user_info", "account"];
-  const direct = directKeys
-    .map((key) => object[key])
-    .filter((item): item is string => typeof item === "string");
-  const nested = nestedKeys.flatMap((key) => collectAuthorNameCandidates(object[key], depth + 1));
-  return [...direct, ...nested];
-}
-
-function cleanAccountNameCandidate(value: string) {
-  const cleaned = value
-    .replace(/\s*\((?:mid|uid)\s*:\s*\d+\)\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned || cleaned.length > 60) return "";
-  if (/^https?:\/\//i.test(cleaned) || cleaned.includes("/")) return "";
-  if (/^MS4wLjAB[0-9A-Za-z_.-]{20,}$/.test(cleaned)) return "";
-  if (cleaned === "未命名视频") return "";
-  return cleaned;
 }
 
 function normalizeCollectOrder(order: LegacyCollectOrder): CollectOrder {

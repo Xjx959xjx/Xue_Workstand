@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { CheckSquare, Trash2, X } from "lucide-react";
+import { CheckCircle2, Trash2, X } from "lucide-react";
 import { formatNumber } from "@/components/Formatters";
 import { StatusPill } from "@/components/StatusPill";
 import type { AccountDetail, AccountListItem, VideoListItem } from "@/lib/types";
@@ -18,6 +18,7 @@ type VideoTableProps = {
   busy: string;
   completedCount: number;
   effectiveSortMode: VideoSortMode;
+  loading: boolean;
   maxPrimaryMetric: number;
   pendingCount: number;
   selectedAccount: AccountDetail | null;
@@ -38,6 +39,7 @@ export const VideoTable = memo(function VideoTable({
   busy,
   completedCount,
   effectiveSortMode,
+  loading,
   maxPrimaryMetric,
   pendingCount,
   selectedAccount,
@@ -59,7 +61,7 @@ export const VideoTable = memo(function VideoTable({
             <h2>视频</h2>
           </div>
           <p className="pane-subtitle">
-            {accountDetailLoading ? "正在读取" : `${videos.length} 条 · 转写 ${completedCount}/${videos.length || 0}${pendingCount ? ` · 待处理 ${pendingCount}` : ""}`}
+            {loading || accountDetailLoading ? "正在读取" : `${videos.length} 条 · 转写 ${completedCount}/${videos.length || 0}${pendingCount ? ` · 待处理 ${pendingCount}` : ""}`}
           </p>
         </div>
         <div className="video-header-tools">
@@ -87,7 +89,7 @@ export const VideoTable = memo(function VideoTable({
             title={videoManageMode ? "退出选择" : "批量选择"}
             type="button"
           >
-            {videoManageMode ? <X aria-hidden="true" size={15} /> : <CheckSquare aria-hidden="true" size={15} />}
+            {videoManageMode ? <X aria-hidden="true" size={15} /> : <CheckCircle2 aria-hidden="true" size={15} />}
           </button>
         </div>
       </div>
@@ -109,73 +111,96 @@ export const VideoTable = memo(function VideoTable({
         </div>
       ) : null}
       <div className="pane-body">
-        <table className="video-table">
-          <thead>
-            <tr>
-              <th>标题</th>
-              <th>表现</th>
-              <th>转写</th>
-            </tr>
-          </thead>
-          <tbody>
-            {videos.map((video) => {
-              const checked = selectedVideoIds.includes(video.id);
-              const primaryMetric = getPrimaryMetric(video);
-              const primaryLabel = video.platform === "douyin" ? "热度" : "播放";
-              const primaryValue = video.platform === "douyin" ? video.hotScore : video.stats.views;
-              return (
-                <tr
-                  className={videoManageMode ? (checked ? "checked" : "") : selectedVideoId === video.id ? "active" : ""}
-                  key={video.id}
-                  onClick={() => onSelectVideo(video.id)}
-                >
-                  <td>
-                    <button
-                      aria-current={!videoManageMode && selectedVideoId === video.id ? "true" : undefined}
-                      aria-pressed={videoManageMode ? checked : undefined}
-                      className={`video-row-button ${videoManageMode ? "manage" : ""}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onSelectVideo(video.id);
-                      }}
-                      type="button"
-                    >
-                      <span className={`video-title-cell ${videoManageMode ? "manage" : ""}`}>
-                        {videoManageMode ? <span className={`check-dot ${checked ? "checked" : ""}`} aria-hidden="true" /> : null}
-                        <span className="video-title-copy">
-                          <span className="video-title-line">
-                            <strong>{video.title}</strong>
+        {loading ? (
+          <div className="library-loading-list video" aria-hidden="true">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <span className="library-loading-row video" key={index} />
+            ))}
+          </div>
+        ) : (
+          <table className="video-table">
+            <thead>
+              <tr>
+                {videoManageMode ? (
+                  <th className="video-select-column">
+                    <span className="sr-only">选择</span>
+                  </th>
+                ) : null}
+                <th>标题</th>
+                <th>发布日期</th>
+                <th>播放</th>
+                <th>点赞</th>
+                <th>评论</th>
+                <th>收藏</th>
+                <th>转写</th>
+              </tr>
+            </thead>
+            <tbody>
+              {videos.map((video) => {
+                const checked = selectedVideoIds.includes(video.id);
+                const primaryMetric = getPrimaryMetric(video);
+                const primaryLabel = video.platform === "douyin" ? "热度" : "播放";
+                const primaryValue = video.platform === "douyin" ? video.hotScore : video.stats.views;
+                const metricWidth = maxPrimaryMetric > 0 ? Math.max(4, Math.round((primaryMetric.sortValue / maxPrimaryMetric) * 100)) : 4;
+                return (
+                  <tr
+                    className={videoManageMode ? (checked ? "checked" : "") : selectedVideoId === video.id ? "active" : ""}
+                    key={video.id}
+                  >
+                    {videoManageMode ? (
+                      <td className="video-select-cell" aria-hidden="true">
+                        <span className={`check-dot ${checked ? "checked" : ""}`} />
+                      </td>
+                    ) : null}
+                    <td className="video-title-column">
+                      <button
+                        aria-current={!videoManageMode && selectedVideoId === video.id ? "true" : undefined}
+                        aria-pressed={videoManageMode ? checked : undefined}
+                        className={`video-row-button ${videoManageMode ? "manage" : ""}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onSelectVideo(video.id);
+                        }}
+                        type="button"
+                      >
+                        <span className="video-title-cell">
+                          <span className="video-title-copy">
+                            <span className="video-title-line">
+                              <strong>{video.title}</strong>
+                            </span>
+                            <span className="list-meta">{getVideoMetaText(video)}</span>
                           </span>
-                          <span className="list-meta">{getVideoMetaText(video)}</span>
                         </span>
+                      </button>
+                    </td>
+                    <td className="video-date-cell" data-label="发布日期">
+                      {getVideoMetaText(video)}
+                    </td>
+                    <td className="video-number-cell" data-label={primaryLabel} aria-label={`${primaryLabel} ${formatNumber(primaryValue)}`}>
+                      <strong>{formatNumber(primaryValue)}</strong>
+                      <span className="metric-bar" aria-hidden="true">
+                        <span style={{ transform: `scaleX(${metricWidth / 100})` }} />
                       </span>
-                    </button>
-                  </td>
-                  <td className="metric">
-                    <span className="metric-bar" aria-hidden="true">
-                      <span style={{ width: `${Math.max(4, Math.round((primaryMetric.sortValue / maxPrimaryMetric) * 100))}%` }} />
-                    </span>
-                    <span className="metric-compact">
-                      <span className="metric-primary">
-                        <span>{primaryLabel}</span>
-                        <strong>{formatNumber(primaryValue)}</strong>
-                      </span>
-                      <span className="metric-secondary">
-                        <span>点赞 {formatNumber(video.stats.likes)}</span>
-                        <span>评论 {formatNumber(video.stats.comments)}</span>
-                        <span>收藏 {formatNumber(video.stats.favorites)}</span>
-                      </span>
-                    </span>
-                  </td>
-                  <td>
-                    <StatusPill status={video.transcriptStatus} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {!accountDetailLoading && selectedAccountMeta && !videos.length ? <p className="subtle">这个账号还没有视频记录。</p> : null}
+                    </td>
+                    <td className="video-number-cell" data-label="点赞">
+                      {formatNumber(video.stats.likes)}
+                    </td>
+                    <td className="video-number-cell" data-label="评论">
+                      {formatNumber(video.stats.comments)}
+                    </td>
+                    <td className="video-number-cell" data-label="收藏">
+                      {formatNumber(video.stats.favorites)}
+                    </td>
+                    <td className="video-status-cell" data-label="转写">
+                      <StatusPill status={video.transcriptStatus} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {!loading && !accountDetailLoading && selectedAccountMeta && !videos.length ? <p className="subtle">这个账号还没有视频记录。</p> : null}
       </div>
     </section>
   );

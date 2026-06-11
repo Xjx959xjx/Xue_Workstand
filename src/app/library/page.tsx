@@ -5,7 +5,7 @@ import { FileText, RefreshCw } from "lucide-react";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
 import { LibraryDetailPane } from "./_components/LibraryDetailPane";
-import { LibraryQuickStartPanel, type LibraryStats } from "./_components/LibraryQuickStartPanel";
+import { LibraryQuickStartPanel } from "./_components/LibraryQuickStartPanel";
 import { TranscriptEditorModal } from "./_components/TranscriptEditorModal";
 import { VideoTable } from "./_components/VideoTable";
 import { collectOrderOptions, formatTimeRangeLabel, getDateFilter, type TimeRange } from "./_components/library-collect-utils";
@@ -55,6 +55,7 @@ export default function LibraryPage() {
   const editModalRef = useRef<HTMLDivElement>(null);
 
   const accounts = useMemo(() => library?.accounts || [], [library?.accounts]);
+  const initialLibraryLoading = loading && !library;
   const selectedAccountMeta = useMemo(() => {
     const first = accounts[0];
     return accounts.find((account) => account.id === selectedAccountId) || first || null;
@@ -219,18 +220,6 @@ export default function LibraryPage() {
   const visibleStylePreview = accountFilterHasNoMatch ? "" : stylePreview;
   const visibleMessage = message && message !== error ? message : "";
   const visibleMessageIsError = isErrorMessage(visibleMessage);
-  const stats: LibraryStats = useMemo(() => {
-    const videoCount = accounts.reduce((sum, account) => sum + account.videoCount, 0);
-    const transcriptCount = accounts.reduce((sum, account) => sum + account.transcriptCount, 0);
-    return {
-      accountCount: accounts.length,
-      videoCount,
-      transcriptCount,
-      copySourceCount: library?.copySources.length || 0,
-      projectCount: library?.projects.length || 0,
-      draftCount: library?.drafts.length || 0
-    };
-  }, [accounts, library?.copySources.length, library?.drafts.length, library?.projects.length]);
   const collectDateFilter = useMemo(() => getDateFilter(collectTimeRange, customFromDate, customToDate), [
     collectTimeRange,
     customFromDate,
@@ -363,16 +352,17 @@ export default function LibraryPage() {
 
   if (!loading && !library?.accounts.length) {
     return (
-      <div className="page library-page">
+      <div className="page library-page workbench-frame-page">
         <header className="page-header">
           <div className="page-title-group">
-            <span className="page-title-eyebrow">账号资产</span>
+            <span className="page-title-eyebrow">账号风格</span>
             <div className="page-title-row">
               <span className="page-title-mark" aria-hidden="true">
                 <FileText size={20} strokeWidth={2.1} />
               </span>
               <div className="page-title-copy">
-                <h1>账号风格库</h1>
+                <h1>账号库</h1>
+                <p className="subtle">采集、转写、风格沉淀。</p>
               </div>
             </div>
           </div>
@@ -388,7 +378,6 @@ export default function LibraryPage() {
           name={collectName}
           order={collectOrder}
           platform={collectPlatform}
-          stats={stats}
           timeRange={collectTimeRange}
           onCollect={handleCollect}
           onCustomFromDateChange={setCustomFromDate}
@@ -406,23 +395,21 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="page library-page">
+    <div className="page library-page workbench-frame-page">
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">内容资料库</span>
+          <span className="page-title-eyebrow">账号风格</span>
           <div className="page-title-row">
             <span className="page-title-mark" aria-hidden="true">
               <FileText size={20} strokeWidth={2.1} />
             </span>
             <div className="page-title-copy">
-              <h1>账号风格库</h1>
+              <h1>账号库</h1>
               <p className="subtle">采集、转写、风格沉淀。</p>
             </div>
           </div>
         </div>
         <div className="page-header-meta">
-          <span className="stat-pill">{accounts.length} 个账号</span>
-          <span className="stat-pill">{stats.transcriptCount} 份转写</span>
           <button className="btn ghost" onClick={() => void refresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             刷新
@@ -441,7 +428,6 @@ export default function LibraryPage() {
         name={collectName}
         order={collectOrder}
         platform={collectPlatform}
-        stats={stats}
         timeRange={collectTimeRange}
         onCollect={handleCollect}
         onCustomFromDateChange={setCustomFromDate}
@@ -455,13 +441,14 @@ export default function LibraryPage() {
       />
       {error ? <div className="error" role="alert">{error}</div> : null}
       {accountDetailError ? <div className="error" role="alert">{accountDetailError}</div> : null}
-      <section className="panel three-pane library-workspace">
+      <section className="three-pane library-workspace workbench-frame-workspace">
         <AccountSidebar
           accountFilter={accountFilter}
           accountManageMode={accountManageMode}
           accounts={filteredAccounts}
           allAccountCount={accounts.length}
           busy={busy}
+          loading={initialLibraryLoading}
           selectedAccountId={visibleSelectedAccountMeta?.id || ""}
           selectedAccountIds={selectedAccountIds}
           totalTranscriptCount={totalTranscriptCount}
@@ -478,6 +465,7 @@ export default function LibraryPage() {
           busy={busy}
           completedCount={completedCount}
           effectiveSortMode={effectiveSortMode}
+          loading={initialLibraryLoading}
           maxPrimaryMetric={maxPrimaryMetric}
           pendingCount={pendingCount}
           selectedAccount={visibleSelectedAccount}
@@ -495,6 +483,7 @@ export default function LibraryPage() {
         <LibraryDetailPane
           activeTranscript={visibleActiveTranscript}
           busy={busy}
+          loading={initialLibraryLoading}
           selectedAccount={visibleSelectedAccount}
           selectedVideo={visibleSelectedVideo}
           selectedVideoHasTranscript={visibleSelectedVideoHasTranscript}

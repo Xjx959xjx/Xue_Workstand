@@ -20,6 +20,7 @@ export type Account = {
   name: string;
   uid: string;
   sourceUrl?: string;
+  avatarUrl?: string;
   createdAt: string;
   updatedAt: string;
   lastCollectedAt?: string;
@@ -609,6 +610,67 @@ export type CollectResult = {
     missingDateCount: number;
     earliestPublishedAt?: string;
     latestPublishedAt?: string;
+  };
+};
+
+export type DouyinHotlistAccount = Pick<
+  Account,
+  "id" | "slug" | "platform" | "name" | "uid" | "sourceUrl" | "avatarUrl" | "createdAt" | "updatedAt" | "lastCollectedAt"
+> & {
+  videoCount: number;
+  recentVideoCount: number;
+};
+
+export type DouyinHotlistItem = {
+  rank: number;
+  account: Pick<Account, "id" | "name" | "uid" | "avatarUrl">;
+  video: VideoListItem;
+  heatScore: number;
+  ageHours?: number;
+  tags: string[];
+  signal: string;
+};
+
+export type DouyinHotlistSummary = {
+  windowKey: string;
+  windowLabel: string;
+  windowDays: number;
+  windowHours?: number;
+  fromDate: string;
+  toDate: string;
+  accountCount: number;
+  staleAccountIds: string[];
+  totalVideoCount: number;
+  recentVideoCount: number;
+  lastRefreshedAt?: string;
+};
+
+export type DouyinHotlistResponse = {
+  root: string;
+  accounts: DouyinHotlistAccount[];
+  items: DouyinHotlistItem[];
+  summary: DouyinHotlistSummary;
+};
+
+export type DouyinHotlistRefreshAccountResult = {
+  accountId: string;
+  name: string;
+  status: "completed" | "failed";
+  rawCount?: number;
+  savedCount?: number;
+  error?: string;
+  mode?: "batch" | "single";
+  retried?: boolean;
+  retryReason?: string;
+};
+
+export type DouyinHotlistRefreshResult = DouyinHotlistResponse & {
+  refresh: {
+    requested: number;
+    completed: number;
+    failed: number;
+    limit: number;
+    accounts: DouyinHotlistRefreshAccountResult[];
   };
 };
 

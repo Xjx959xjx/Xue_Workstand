@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { Check, ClipboardPaste, X } from "lucide-react";
-import { isBackdropEvent } from "@/components/dialog-events";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
 
 export function GrossMarginBulkMonitorModal({
@@ -48,12 +48,7 @@ export function GrossMarginBulkMonitorModal({
   }, []);
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(event) => {
-        if (isBackdropEvent(event) && !busy) onClose();
-      }}
-    >
+    <ModalBackdrop disabled={busy} onClose={onClose}>
       <div
         aria-labelledby="gross-bulk-monitor-modal-title"
         aria-modal="true"
@@ -77,11 +72,12 @@ export function GrossMarginBulkMonitorModal({
           <label className="field gross-bulk-monitor-input">
             <span>模板内容</span>
             <textarea
-              autoFocus
+              autoComplete="off"
+              name="grossBulkMonitorTemplate"
               rows={14}
               value={template}
               onChange={(event) => setTemplate(event.target.value)}
-              placeholder="粘贴多条账号昵称、视频链接、普通千川、HKJ 点赞、自定义评论、收藏、转发模板"
+              placeholder="粘贴多条账号昵称、视频链接、普通千川、HKJ 点赞、自定义评论、收藏、转发模板…"
             />
           </label>
 
@@ -111,13 +107,15 @@ export function GrossMarginBulkMonitorModal({
                 </label>
                 <input
                   aria-label="项目名"
+                  autoComplete="off"
                   disabled={!createProject || busy}
+                  name="grossBulkProjectName"
                   value={projectName}
                   onChange={(event) => {
                     setProjectNameTouched(true);
                     setProjectName(event.target.value);
                   }}
-                  placeholder="填写项目名"
+                  placeholder="填写项目名…"
                 />
               </div>
             ) : null}
@@ -160,7 +158,7 @@ export function GrossMarginBulkMonitorModal({
           </button>
         </footer>
       </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 

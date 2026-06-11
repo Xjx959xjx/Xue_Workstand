@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { MessageSquarePlus, RefreshCw } from "lucide-react";
 import { AssetsFeishuModal } from "./_components/AssetsFeishuModal";
 import { EngagementGeneratorPane } from "./_components/EngagementGeneratorPane";
@@ -10,22 +10,22 @@ import type { BusyState } from "./_components/asset-view-utils";
 import { useAssetFeishuPublish } from "./_hooks/useAssetFeishuPublish";
 import { useEngagementGeneration } from "./_hooks/useEngagementGeneration";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { deleteEngagementRecords, exportEngagementRecord } from "@/lib/client";
+import {
+  deleteEngagementRecords,
+  exportEngagementRecord,
+  getCachedEngagementRecords,
+  getEngagementRecords,
+  refreshEngagementRecords
+} from "@/lib/client";
 import type { EngagementRecord } from "@/lib/types";
 
 export default function AssetsPage() {
-  return (
-    <Suspense fallback={<AssetsFallback />}>
-      <AssetsPageContent />
-    </Suspense>
-  );
+  return <AssetsPageContent />;
 }
 
 function AssetsPageContent() {
-  const { library, refresh } = useLibrary();
   const { activeJobs, recentJobs, startTask } = useTasks();
   const { notify } = useFeedback();
   const [sourceInput, setSourceInput] = useState("");
@@ -35,8 +35,9 @@ function AssetsPageContent() {
   const [danmakuCount, setDanmakuCount] = useState(50);
   const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
+  const [records, setRecords] = useState<EngagementRecord[]>(() => getCachedEngagementRecords()?.records ?? []);
+  const [recordsLoading, setRecordsLoading] = useState(() => !getCachedEngagementRecords());
 
-  const records = library?.engagementRecords || [];
   const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持") || notice.includes("请");
 
   const { activeTitle, canGenerate, handleGenerate, resultRecord, setResultRecord } = useEngagementGeneration({
@@ -64,11 +65,48 @@ function AssetsPageContent() {
     notify({ tone: noticeIsError ? "error" : "success", message: notice });
   }, [notice, noticeIsError, notify]);
 
+  useEffect(() => {
+    let ignore = false;
+    const cachedRecords = getCachedEngagementRecords();
+    if (cachedRecords) {
+      setRecords(cachedRecords.records);
+      setRecordsLoading(false);
+      return;
+    }
+
+    setRecordsLoading(true);
+
+    getEngagementRecords()
+      .then((result) => {
+        if (!ignore) setRecords(result.records);
+      })
+      .catch((err) => {
+        if (!ignore) setNotice(err instanceof Error ? err.message : "读取互动素材历史失败");
+      })
+      .finally(() => {
+        if (!ignore) setRecordsLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!resultRecord) return;
+    setRecords((current) => mergeEngagementRecords([resultRecord], current));
+  }, [resultRecord]);
+
   async function handleRefresh() {
+    setRecordsLoading(true);
+    setNotice("");
     try {
-      await refresh();
+      const result = await refreshEngagementRecords();
+      setRecords(result.records);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "刷新失败");
+    } finally {
+      setRecordsLoading(false);
     }
   }
 
@@ -77,11 +115,11 @@ function AssetsPageContent() {
 
     try {
       await deleteEngagementRecords([record.id]);
+      setRecords((current) => current.filter((item) => item.id !== record.id));
       if (resultRecord?.id === record.id) {
         setResultRecord(replacement);
       }
       notify({ tone: "success", message: "历史记录已删除。" });
-      await refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除历史记录失败";
       notify({ tone: "error", message });
@@ -123,7 +161,7 @@ function AssetsPageContent() {
           </div>
         </div>
         <div className="page-header-meta">
-          <span className="stat-pill">{records.length} 条记录</span>
+          <span className="stat-pill">{recordsLoading ? "读取中" : `${records.length} 条记录`}</span>
           <button className="btn ghost" onClick={() => void handleRefresh()} type="button">
             <RefreshCw size={16} />
             刷新
@@ -167,6 +205,7 @@ function AssetsPageContent() {
           </div>
         </section>
         <EngagementHistoryPane
+          loading={recordsLoading}
           records={records}
           resultRecord={resultRecord}
           onDeleteRecord={handleDeleteRecord}
@@ -180,23 +219,8 @@ function AssetsPageContent() {
   );
 }
 
-function AssetsFallback() {
-  return (
-    <div className="page">
-      <header className="page-header">
-        <div className="page-title-group">
-          <span className="page-title-eyebrow">互动素材</span>
-          <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <MessageSquarePlus size={20} strokeWidth={2.1} />
-            </span>
-            <div className="page-title-copy">
-              <h1>评论生成</h1>
-              <p className="subtle">正在读取生成记录。</p>
-            </div>
-          </div>
-        </div>
-      </header>
-    </div>
-  );
+function mergeEngagementRecords(nextRecords: EngagementRecord[], currentRecords: EngagementRecord[]) {
+  const byId = new Map(currentRecords.map((record) => [record.id, record]));
+  for (const record of nextRecords) byId.set(record.id, record);
+  return [...byId.values()].sort((left, right) => +new Date(right.createdAt) - +new Date(left.createdAt));
 }

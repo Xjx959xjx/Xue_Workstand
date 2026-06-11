@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountDetail, AccountListItem, VideoListItem } from "@/lib/types";
 import {
@@ -27,8 +28,11 @@ export function useLibrarySelection({
   setSelectedAccountId,
   setSelectedVideoId
 }: UseLibrarySelectionInput) {
-  const [sortMode, setSortMode] = useState<VideoSortMode>("hot");
-  const [accountFilter, setAccountFilter] = useState("");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [sortMode, setSortMode] = useState<VideoSortMode>(() => parseVideoSortMode(searchParams.get("sort")));
+  const [accountFilter, setAccountFilter] = useState(() => searchParams.get("q") || "");
   const [accountManageMode, setAccountManageMode] = useState(false);
   const [videoManageMode, setVideoManageMode] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
@@ -68,6 +72,27 @@ export function useLibrarySelection({
     setSelectedVideoIds([]);
     setVideoManageMode(false);
   }, [selectedAccount?.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const trimmedFilter = accountFilter.trim();
+    if (trimmedFilter) {
+      params.set("q", trimmedFilter);
+    } else {
+      params.delete("q");
+    }
+    if (sortMode === "hot") {
+      params.delete("sort");
+    } else {
+      params.set("sort", sortMode);
+    }
+    const query = params.toString();
+    const nextHref = query ? `${pathname}?${query}` : pathname;
+    if (`${window.location.pathname}${window.location.search}` !== nextHref) {
+      router.replace(nextHref, { scroll: false });
+    }
+  }, [accountFilter, pathname, router, sortMode]);
 
   const toggleManagedAccount = useCallback((accountId: string) => {
     setSelectedAccountIds((current) =>
@@ -139,6 +164,12 @@ export function useLibrarySelection({
     videoManageMode,
     selectVideo
   };
+}
+
+const videoSortModes: VideoSortMode[] = ["hot", "views", "likes", "comments", "favorites", "latest"];
+
+function parseVideoSortMode(value: string | null): VideoSortMode {
+  return videoSortModes.includes(value as VideoSortMode) ? (value as VideoSortMode) : "hot";
 }
 
 function getVideoSorter(sortMode: VideoSortMode) {
