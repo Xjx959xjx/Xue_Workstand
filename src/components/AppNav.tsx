@@ -26,8 +26,8 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { href: "/library", label: "账号库", icon: FileText },
   { href: "/douyin-hotlist", label: "抖音热榜", icon: Flame },
+  { href: "/library", label: "账号库", icon: FileText },
   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban },
   { href: "/writer", label: "对话写作", icon: PenLine },
   { href: "/assets", label: "评论生成", icon: MessageSquarePlus },
@@ -38,36 +38,69 @@ const navItems: NavItem[] = [
 
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
 const ROUTE_BUSY_DELAY_MS = 200;
-const ROUTE_PREFETCH_START_DELAY_MS = 360;
-const ROUTE_PREFETCH_STAGGER_MS = 140;
+const ROUTE_DATA_PREFETCH_INTENT_MS = 180;
 
 export function AppNav({ appMode }: { appMode: AppMode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const prefetchedRoutesRef = useRef(new Set<string>());
+  const prefetchedCodeRoutesRef = useRef(new Set<string>());
+  const prefetchedDataRoutesRef = useRef(new Set<string>());
+  const dataPrefetchTimersRef = useRef(new Map<string, number>());
   const pendingTimerRef = useRef<number | null>(null);
-  const prefetchTimersRef = useRef<number[]>([]);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [showRouteBusy, setShowRouteBusy] = useState(false);
   const grossMarginMode = appMode === "gross-margin";
   const visibleNavItems = useMemo(() => grossMarginMode ? grossMarginNavItems : navItems, [grossMarginMode]);
-  const brandHref = grossMarginMode ? "/gross-margin" : "/library";
+  const brandHref = grossMarginMode ? "/gross-margin" : "/douyin-hotlist";
   const activeHref = visibleNavItems
     .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
     .sort((left, right) => right.href.length - left.href.length)[0]?.href;
 
-  const prefetchRoute = useCallback((href: string) => {
-    if (prefetchedRoutesRef.current.has(href)) return;
-    prefetchedRoutesRef.current.add(href);
+  const clearDataPrefetchTimer = useCallback((href: string) => {
+    const timer = dataPrefetchTimersRef.current.get(href);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    dataPrefetchTimersRef.current.delete(href);
+  }, []);
+
+  const clearDataPrefetchTimers = useCallback(() => {
+    dataPrefetchTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    dataPrefetchTimersRef.current.clear();
+  }, []);
+
+  const prefetchRouteCode = useCallback((href: string) => {
+    if (prefetchedCodeRoutesRef.current.has(href)) return;
+    prefetchedCodeRoutesRef.current.add(href);
     router.prefetch(href);
+  }, [router]);
+
+  const prefetchRouteData = useCallback((href: string) => {
+    if (prefetchedDataRoutesRef.current.has(href)) return;
     const routeDataWarmup = prefetchWorkspaceRouteData(href);
+    if (!routeDataWarmup) return;
+
+    prefetchedDataRoutesRef.current.add(href);
     if (routeDataWarmup) {
       void routeDataWarmup.catch((error) => {
-        prefetchedRoutesRef.current.delete(href);
+        prefetchedDataRoutesRef.current.delete(href);
         console.warn(`预热模块数据失败：${href}`, error);
       });
     }
-  }, [router]);
+  }, []);
+
+  const prefetchRoute = useCallback((href: string, options: { includeData?: boolean } = {}) => {
+    prefetchRouteCode(href);
+    if (options.includeData) prefetchRouteData(href);
+  }, [prefetchRouteCode, prefetchRouteData]);
+
+  const scheduleDataPrefetch = useCallback((href: string) => {
+    if (prefetchedDataRoutesRef.current.has(href) || dataPrefetchTimersRef.current.has(href)) return;
+    const timer = window.setTimeout(() => {
+      dataPrefetchTimersRef.current.delete(href);
+      prefetchRouteData(href);
+    }, ROUTE_DATA_PREFETCH_INTENT_MS);
+    dataPrefetchTimersRef.current.set(href, timer);
+  }, [prefetchRouteData]);
 
   const clearPending = useCallback(() => {
     if (pendingTimerRef.current !== null) {
@@ -83,31 +116,14 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
     prefetchRoute(pathname);
   }, [clearPending, pathname, prefetchRoute]);
 
-  useEffect(() => {
-    prefetchTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    prefetchTimersRef.current = [];
-
-    const routesToPrefetch = visibleNavItems
-      .map((item) => item.href)
-      .filter((href) => href !== pathname);
-
-    const startTimer = window.setTimeout(() => {
-      routesToPrefetch.forEach((href, index) => {
-        const timer = window.setTimeout(() => prefetchRoute(href), index * ROUTE_PREFETCH_STAGGER_MS);
-        prefetchTimersRef.current.push(timer);
-      });
-    }, ROUTE_PREFETCH_START_DELAY_MS);
-    prefetchTimersRef.current.push(startTimer);
-
-    return () => {
-      prefetchTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-      prefetchTimersRef.current = [];
-    };
-  }, [pathname, prefetchRoute, visibleNavItems]);
+  useEffect(() => () => {
+    clearDataPrefetchTimers();
+  }, [clearDataPrefetchTimers]);
 
   const beginNavigation = useCallback((href: string) => {
     if (href === activeHref || href === pathname) return;
-    prefetchRoute(href);
+    clearDataPrefetchTimers();
+    prefetchRoute(href, { includeData: true });
     setPendingHref(href);
     if (pendingTimerRef.current !== null) {
       window.clearTimeout(pendingTimerRef.current);
@@ -115,7 +131,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
     pendingTimerRef.current = window.setTimeout(() => {
       setShowRouteBusy(true);
     }, ROUTE_BUSY_DELAY_MS);
-  }, [activeHref, pathname, prefetchRoute]);
+  }, [activeHref, clearDataPrefetchTimers, pathname, prefetchRoute]);
 
   const handleNavClick = useCallback((event: MouseEvent<HTMLAnchorElement>, href: string) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
@@ -132,7 +148,18 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         <span className="window-control minimize" />
         <span className="window-control zoom" />
       </div>
-      <Link href={brandHref} className="brand">
+      <Link
+        href={brandHref}
+        className="brand"
+        prefetch={false}
+        onClick={(event) => handleNavClick(event, brandHref)}
+        onFocus={() => prefetchRoute(brandHref, { includeData: true })}
+        onPointerEnter={() => {
+          prefetchRoute(brandHref);
+          scheduleDataPrefetch(brandHref);
+        }}
+        onPointerLeave={() => clearDataPrefetchTimer(brandHref)}
+      >
         <span className="brand-mark" aria-hidden="true">
           <Sparkles size={18} strokeWidth={2.1} />
         </span>
@@ -152,9 +179,14 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                 href={item.href}
                 className={`nav-link ${active ? "active" : ""} ${pending ? "pending" : ""}`}
                 aria-current={active ? "page" : undefined}
+                prefetch={false}
                 onClick={(event) => handleNavClick(event, item.href)}
-                onFocus={() => prefetchRoute(item.href)}
-                onPointerEnter={() => prefetchRoute(item.href)}
+                onFocus={() => prefetchRoute(item.href, { includeData: true })}
+                onPointerEnter={() => {
+                  prefetchRoute(item.href);
+                  scheduleDataPrefetch(item.href);
+                }}
+                onPointerLeave={() => clearDataPrefetchTimer(item.href)}
               >
                 <span className="nav-emoji" aria-hidden="true">
                   <Icon size={17} strokeWidth={2.1} />

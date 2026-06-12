@@ -94,6 +94,37 @@
   outline-color: var(--accent);
 }
 
+.field select,
+.writer-ref-select,
+.inline-sort-control select {
+  --select-arrow: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m6 9 6 6 6-6' stroke='%23607083' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --select-background: linear-gradient(180deg, var(--panel-raised) 0%, color-mix(in oklch, var(--panel) 92%, var(--panel-soft)) 100%);
+
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background: var(--select-background), var(--select-arrow);
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    0 0,
+    right 11px center;
+  background-size:
+    100% 100%,
+    16px 16px;
+}
+
+.field select:hover,
+.writer-ref-select:hover,
+.inline-sort-control select:hover {
+  --select-background: linear-gradient(180deg, var(--panel-raised) 0%, var(--panel-raised) 100%);
+}
+
+.field select:focus,
+.writer-ref-select:focus,
+.inline-sort-control select:focus {
+  --select-background: linear-gradient(180deg, var(--panel-raised) 0%, var(--panel-raised) 100%);
+}
+
 .segmented,
 .source-tabs {
   overflow: hidden;

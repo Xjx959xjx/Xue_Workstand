@@ -170,6 +170,20 @@
   background: color-mix(in oklch, var(--log-color) 10%, var(--panel));
 }
 
+.douyin-hotlist-refresh-log-details {
+  display: grid;
+  gap: 4px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.douyin-hotlist-refresh-log-details span {
+  display: block;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in oklch, var(--log-color) 34%, var(--line));
+}
+
 .douyin-hotlist-workspace {
   display: grid;
   min-height: 0;
@@ -392,6 +406,21 @@
   background: linear-gradient(180deg, var(--green), var(--blue));
 }
 
+.douyin-hotlist-item.is-surging {
+  border-color: color-mix(in oklch, var(--rose) 48%, var(--line));
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, var(--panel)) 0%, var(--panel) 100%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklch, var(--rose) 18%, transparent),
+    0 10px 24px color-mix(in oklch, var(--rose) 7%, transparent);
+}
+
+.douyin-hotlist-item.is-surging::before {
+  width: 6px;
+  background: linear-gradient(180deg, var(--rose), var(--amber));
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--rose) 14%, transparent);
+}
+
 .douyin-hotlist-rank {
   display: grid;
   width: 38px;
@@ -439,6 +468,13 @@
   border-color: color-mix(in oklch, var(--green) 26%, var(--line));
   color: color-mix(in oklch, var(--green) 82%, var(--text-strong));
   background: color-mix(in oklch, var(--green-soft) 70%, var(--panel));
+}
+
+.douyin-hotlist-item.is-surging .douyin-hotlist-rank {
+  border-color: color-mix(in oklch, var(--rose) 38%, var(--line));
+  color: color-mix(in oklch, var(--rose) 86%, var(--text-strong));
+  background: color-mix(in oklch, var(--rose-soft) 76%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--rose) 12%, transparent);
 }
 
 .douyin-hotlist-item-content {
@@ -598,8 +634,17 @@
   background: color-mix(in oklch, var(--amber-soft) 76%, var(--panel));
 }
 
+.douyin-hotlist-signal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .douyin-hotlist-signal {
   justify-self: start;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   padding: 2px 7px;
@@ -612,6 +657,40 @@
   font-size: 11px;
   font-weight: 720;
   line-height: 1.12;
+}
+
+.douyin-hotlist-surge-badge {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 21px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--rose) 72%, var(--text-strong));
+  border-radius: 999px;
+  color: var(--panel-raised);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--rose) 88%, var(--amber) 12%) 0%, color-mix(in oklch, var(--rose) 74%, var(--text-strong)) 100%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.12;
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, white 28%, transparent),
+    0 2px 6px color-mix(in oklch, var(--rose) 18%, transparent);
+}
+
+.douyin-hotlist-surge-badge svg {
+  flex: 0 0 auto;
+  color: color-mix(in oklch, var(--amber-soft) 88%, white);
+}
+
+.douyin-hotlist-item.is-surging .douyin-hotlist-signal {
+  border-color: color-mix(in oklch, var(--line-strong) 42%, transparent);
+  color: var(--muted-strong);
+  background: color-mix(in oklch, var(--panel-soft) 72%, transparent);
 }
 
 .douyin-hotlist-tags {

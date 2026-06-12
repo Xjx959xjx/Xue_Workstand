@@ -197,6 +197,14 @@ const STYLE_REASONING_EFFORT: ChatReasoningEffort = "xhigh";
 const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = 8;
 const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = 2;
 const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 1200;
+const WRITE_BRIEF_REASONING_EFFORT: ChatReasoningEffort = "medium";
+export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "medium";
+export const WRITE_COPY_MAX_OUTPUT_TOKENS = 2600;
+const WRITE_BRIEF_MAX_OUTPUT_TOKENS = 1400;
+const WRITE_ACCOUNT_SAMPLE_LIMIT = 8;
+const WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT = 4;
+const WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS = 4200;
+const WRITE_PROJECT_MATERIAL_MAX_CHARS = 4200;
 const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
 const WEB_RESEARCH_TIMEOUT_MS = 180_000;
 
@@ -372,6 +380,7 @@ async function streamResponseApi(
     tool_choice: input.tools?.length ? "required" : undefined,
     include: input.tools?.length ? ["web_search_call.action.sources"] : undefined,
     reasoning: responseReasoning(input.reasoningEffort || config.reasoningEffort),
+    max_output_tokens: input.maxOutputTokens,
     service_tier: config.serviceTier || undefined,
     store: false
   }, input.signal);
@@ -2317,7 +2326,10 @@ export async function saveAndGenerateProjectStyleProfile(
 
 export async function writeCopy(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteResult> {
   const prepared = await prepareWriteCopyContext(input, options);
-  const result = await chatCompleteWithFallback(prepared.messages, "xhigh", undefined, { signal: options.signal });
+  const result = await chatCompleteWithFallback(prepared.messages, WRITE_COPY_REASONING_EFFORT, undefined, {
+    signal: options.signal,
+    maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS
+  });
   throwIfAborted(options.signal);
   const content = result.text || buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
   const draft = await savePreparedDraft(input, prepared, content);
@@ -2392,10 +2404,8 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
 
   const account = await resolveAccount(normalizedInput.platform, normalizedInput.accountId);
   const style = await fs.readFile(path.join(libraryRoot(), normalizedInput.platform, account.slug, "style.md"), "utf8");
-  const samples = await getTopTranscriptSamples(normalizedInput.platform, normalizedInput.accountId, "all");
-  const sampleContext = samples
-    .map(({ video, transcript }) => `《${video.title}》\n${transcript}`)
-    .join("\n\n---\n\n");
+  const samples = await getTopTranscriptSamples(normalizedInput.platform, normalizedInput.accountId, WRITE_ACCOUNT_SAMPLE_LIMIT);
+  const sampleContext = formatWriteSampleContext(samples);
 
   const userTask =
     normalizedInput.mode === "topic"
@@ -2437,6 +2447,7 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
           `账号写作 brief：\n${writingBrief}`,
           `账号风格卡：\n${style}`,
           `代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}`,
+          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
           `支持文档资料：\n${supportDocContext}`,
           `联网检索资料：\n${webContext}`,
           `任务：\n${userTask}`,
@@ -2446,8 +2457,9 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
             "2. 开头必须先给明确钩子或反差判断，不能铺垫背景。",
             "3. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
             "4. 保留用户给出的具体梗、场景、原话和事实线索。",
-            "5. 句子短，口播感强，少用抽象形容词。",
-            "6. 结尾给一个自然的评论区问题或行动引导。"
+            "5. 优先模仿账号的句法、转折和停顿，不要只堆口癖。",
+            "6. 句子短，口播感强，少用抽象形容词。",
+            "7. 结尾给一个自然的评论区问题或行动引导。"
           ].join("\n")
         ].join("\n\n")
       }
@@ -2495,7 +2507,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
     project.sourceAccountIds.map(async (sourceAccountId) => {
       const [platform] = sourceAccountId.split(":") as [Platform, string];
       const account = await resolveAccount(platform, sourceAccountId);
-      const samples = await getTopTranscriptSamples(platform, sourceAccountId, "all");
+      const samples = await getTopTranscriptSamples(platform, sourceAccountId, WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT);
       return {
         account,
         samples
@@ -2505,9 +2517,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
 
   const sampleContext = accountContexts
     .map(({ account, samples }) => {
-      const block = samples
-        .map(({ video, transcript }) => `《${video.title}》\n${transcript}`)
-        .join("\n\n");
+      const block = formatWriteSampleContext(samples);
       return `参考账号：${account.name}\n${block || "暂无样本"}`;
     })
     .join("\n\n---\n\n");
@@ -2554,6 +2564,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
           `项目写作 brief：\n${writingBrief}`,
           `项目风格卡：\n${style}`,
           `代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}`,
+          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
           `支持文档资料：\n${supportDocContext}`,
           `联网检索资料：\n${webContext}`,
           `任务：\n${userTask}`,
@@ -2563,8 +2574,9 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
             "2. 开头必须先给明确钩子或反差判断，不能铺垫背景。",
             "3. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
             "4. 保留用户给出的具体梗、场景、原话和事实线索。",
-            "5. 句子短，口播感强，少用抽象形容词。",
-            "6. 结尾给一个自然的评论区问题或行动引导。"
+            "5. 优先模仿项目样本的句法、转折和停顿，不要只堆口癖。",
+            "6. 句子短，口播感强，少用抽象形容词。",
+            "7. 结尾给一个自然的评论区问题或行动引导。"
           ].join("\n")
         ].join("\n\n")
       }
@@ -2645,12 +2657,14 @@ async function buildAccountWritingBrief(input: {
           `任务：\n${userTask}`,
           `账号风格卡：\n${input.style}`,
           `代表样本：\n${input.sampleContext || "暂无样本"}`,
+          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
           `支持文档资料：\n${input.supportDocContext}`,
           `联网检索资料：\n${input.webContext}`,
           [
             "请只输出以下结构：",
             "## 核心事件",
             "## 可见画面/具体细节",
+            "## 声音指纹",
             "## 账号化切入",
             "## 梗和映射",
             "## 成稿路线",
@@ -2712,12 +2726,14 @@ async function buildProjectWritingBrief(input: {
           `任务：\n${userTask}`,
           `项目风格卡：\n${input.style}`,
           `代表样本和案例素材：\n${input.referenceContext || "暂无样本"}`,
+          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
           `支持文档资料：\n${input.supportDocContext}`,
           `联网检索资料：\n${input.webContext}`,
           [
             "请只输出以下结构：",
             "## 核心事件",
             "## 可见画面/具体细节",
+            "## 声音指纹",
             "## 项目化切入",
             "## 梗和映射",
             "## 成稿路线",
@@ -2740,7 +2756,8 @@ async function buildProjectWritingBrief(input: {
 function completeWriteBriefGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
   return streamResponseText({
     messages,
-    reasoningEffort: "high",
+    reasoningEffort: WRITE_BRIEF_REASONING_EFFORT,
+    maxOutputTokens: WRITE_BRIEF_MAX_OUTPUT_TOKENS,
     signal: options.signal,
     onDelta() {
       // Keep the brief bounded without surfacing intermediate planning text to the UI.
@@ -2836,6 +2853,12 @@ function buildLocalWritingBrief(input: {
     [
       sourceText ? `- 原文线索：${sourceText}` : "- 暂无原文素材，围绕主题提取可口播的具体场景。",
       reference ? `- 参考样本/风格线索：${reference}` : "- 样本不足时，只使用用户输入里的事实和场景。"
+    ].join("\n"),
+    "## 声音指纹",
+    [
+      "- 先模仿句法、停顿、转折方式和判断习惯，再少量使用原账号口癖。",
+      "- 避免套话开场、万能鸡汤、连续排比和过度完整的书面句。",
+      "- 每段至少落一个可看见的动作、场景、物件、数字或原话。"
     ].join("\n"),
     `## ${input.angleHeading}`,
     [
@@ -2952,10 +2975,40 @@ function formatProjectCopySourceContext(sources: CopySource[]) {
             .filter(Boolean)
             .join("\n")
         : "素材底稿：只有转写，未做原视频画面描述";
-      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n转写：\n${source.transcript}`;
+      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n转写节选：\n${clampText(source.transcript, WRITE_PROJECT_MATERIAL_MAX_CHARS)}`;
     })
     .filter(Boolean)
     .join("\n\n");
+}
+
+function formatWriteSampleContext(samples: AccountStyleSample[]) {
+  return samples
+    .map(({ video, transcript }, index) => {
+      const stats = [
+        `播放:${video.stats.views}`,
+        `点赞:${video.stats.likes}`,
+        `评论:${video.stats.comments}`,
+        `收藏:${video.stats.favorites}`,
+        video.stats.shares === undefined ? "" : `分享:${video.stats.shares}`
+      ].filter(Boolean).join(" ");
+      return [
+        `样本 ${index + 1}｜《${video.title}》`,
+        stats,
+        `转写节选（原 ${transcript.length} 字）：`,
+        clampText(transcript, WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS)
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
+}
+
+function buildVoiceFingerprintInstruction() {
+  return [
+    "1. 先抓句法和节奏：开头如何下判断、怎样转折、每句话多长、停顿在哪里。",
+    "2. 再抓表达习惯：反问、类比、吐槽、提示观众的方式，只保留样本里真的出现过的倾向。",
+    "3. 不要把风格理解成堆口癖；同一个口头词最多自然出现一次。",
+    "4. 避免通用 AI 腔：不要用“在这个快节奏时代”“不仅是…更是…”“你是否也…”这类万能句。",
+    "5. 每 2-3 句必须落到一个具体画面、动作、物件、数字或原话。"
+  ].join("\n");
 }
 
 async function normalizeWriteCopyInput(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteCopyInput> {

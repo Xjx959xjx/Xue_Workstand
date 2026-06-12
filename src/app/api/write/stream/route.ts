@@ -1,4 +1,10 @@
-import { completePreparedWriteCopy, prepareWriteCopyContext, streamResponseTextWithFallback } from "@/lib/ai";
+import {
+  completePreparedWriteCopy,
+  prepareWriteCopyContext,
+  streamResponseTextWithFallback,
+  WRITE_COPY_MAX_OUTPUT_TOKENS,
+  WRITE_COPY_REASONING_EFFORT
+} from "@/lib/ai";
 import { apiError, parseJsonBody } from "@/lib/api-route";
 import { hasFeishuDocLink } from "@/lib/feishu";
 import { createNdjsonStream } from "@/lib/streaming";
@@ -36,7 +42,8 @@ export async function POST(request: Request) {
       emit({ type: "stage", stage: "generate", message: "正在生成文案", progress: 55 });
       const result = await streamResponseTextWithFallback({
         messages: prepared.messages,
-        reasoningEffort: "xhigh",
+        reasoningEffort: WRITE_COPY_REASONING_EFFORT,
+        maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
         signal,
         onDelta(delta) {
           emit({ type: "delta", delta });

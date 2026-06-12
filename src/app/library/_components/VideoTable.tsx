@@ -1,20 +1,14 @@
 "use client";
 
 import { memo } from "react";
-import { CheckCircle2, Trash2, X } from "lucide-react";
+import { ArrowDownWideNarrow, CheckCircle2, Trash2, X } from "lucide-react";
 import { formatNumber } from "@/components/Formatters";
 import { StatusPill } from "@/components/StatusPill";
 import type { AccountDetail, AccountListItem, VideoListItem } from "@/lib/types";
 import { getPrimaryMetric, getVideoMetaText, type VideoSortMode } from "./library-view-utils";
 
-type SortOption = {
-  value: VideoSortMode;
-  label: string;
-};
-
 type VideoTableProps = {
   accountDetailLoading: boolean;
-  availableSortOptions: SortOption[];
   busy: string;
   completedCount: number;
   effectiveSortMode: VideoSortMode;
@@ -35,7 +29,6 @@ type VideoTableProps = {
 
 export const VideoTable = memo(function VideoTable({
   accountDetailLoading,
-  availableSortOptions,
   busy,
   completedCount,
   effectiveSortMode,
@@ -53,6 +46,33 @@ export const VideoTable = memo(function VideoTable({
   onSortModeChange,
   onToggleVideoManage
 }: VideoTableProps) {
+  const primarySortMode: VideoSortMode = selectedAccount?.platform === "douyin" ? "hot" : "views";
+  const sortableHeaders: Array<{ label: string; mode: VideoSortMode }> = [
+    { label: "标题", mode: "title" },
+    { label: "发布日期", mode: "latest" },
+    { label: "播放", mode: primarySortMode },
+    { label: "点赞", mode: "likes" },
+    { label: "评论", mode: "comments" },
+    { label: "收藏", mode: "favorites" }
+  ];
+  const renderSortHeader = ({ label, mode }: { label: string; mode: VideoSortMode }) => {
+    const active = effectiveSortMode === mode;
+    return (
+      <th aria-sort={active ? (mode === "title" ? "ascending" : "descending") : undefined} key={mode === "hot" ? "views" : mode}>
+        <button
+          aria-label={`按${label}排序`}
+          aria-pressed={active}
+          className={`video-sort-button ${active ? "active" : ""}`}
+          onClick={() => onSortModeChange(mode)}
+          type="button"
+        >
+          <span>{label}</span>
+          {active ? <ArrowDownWideNarrow aria-hidden="true" size={13} strokeWidth={2.2} /> : null}
+        </button>
+      </th>
+    );
+  };
+
   return (
     <section className={`pane ${videoManageMode ? "selection-mode" : ""}`}>
       <div className="pane-header video-pane-header">
@@ -65,22 +85,6 @@ export const VideoTable = memo(function VideoTable({
           </p>
         </div>
         <div className="video-header-tools">
-          <div className="inline-sort-control">
-            <label htmlFor="library-video-sort">排序</label>
-            <select
-              aria-label="视频排序"
-              id="library-video-sort"
-              name="videoSort"
-              value={effectiveSortMode}
-              onChange={(event) => onSortModeChange(event.target.value as VideoSortMode)}
-            >
-              {availableSortOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
           <button
             className={`btn icon-btn icon-only ${videoManageMode ? "primary" : ""}`}
             aria-label={videoManageMode ? "退出视频选择" : "批量选择视频"}
@@ -126,12 +130,7 @@ export const VideoTable = memo(function VideoTable({
                     <span className="sr-only">选择</span>
                   </th>
                 ) : null}
-                <th>标题</th>
-                <th>发布日期</th>
-                <th>播放</th>
-                <th>点赞</th>
-                <th>评论</th>
-                <th>收藏</th>
+                {sortableHeaders.map(renderSortHeader)}
                 <th>转写</th>
               </tr>
             </thead>

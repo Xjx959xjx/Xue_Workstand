@@ -34,6 +34,23 @@ export type VideoStats = {
   shares?: number;
 };
 
+export type VideoHotlistTrend = {
+  previousHotScore: number;
+  currentHotScore: number;
+  heatDelta: number;
+  intervalHours: number;
+  previousUpdatedAt: string;
+  updatedAt: string;
+};
+
+export type VideoHotlistSurgeState = {
+  heatDelta: number;
+  heatPerHour: number;
+  intervalHours: number;
+  detectedAt: string;
+  expiresAt: string;
+};
+
 export type Video = {
   id: string;
   platform: Platform;
@@ -53,6 +70,8 @@ export type Video = {
   topComments?: string[];
   danmakuSamples?: string[];
   raw?: unknown;
+  hotlistTrend?: VideoHotlistTrend;
+  hotlistSurge?: VideoHotlistSurgeState;
   updatedAt: string;
 };
 
@@ -318,7 +337,7 @@ export type ProjectSourceAccount = {
   transcriptCount: number;
 };
 
-export type VideoListItem = Omit<Video, "raw">;
+export type VideoListItem = Omit<Video, "raw" | "hotlistTrend" | "hotlistSurge">;
 
 export type AccountListItem = Account & {
   videoCount: number;
@@ -629,6 +648,15 @@ export type DouyinHotlistItem = {
   ageHours?: number;
   tags: string[];
   signal: string;
+  surge?: DouyinHotlistSurgeHighlight;
+};
+
+export type DouyinHotlistSurgeHighlight = {
+  label: string;
+  reason: string;
+  heatDelta: number;
+  heatPerHour: number;
+  intervalHours: number;
 };
 
 export type DouyinHotlistSummary = {

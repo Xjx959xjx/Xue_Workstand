@@ -4,12 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountDetail, AccountListItem, VideoListItem } from "@/lib/types";
-import {
-  getAvailableSortOptions,
-  getPrimaryMetric,
-  getVideoOpenUrl,
-  type VideoSortMode
-} from "../_components/library-view-utils";
+import { getPrimaryMetric, getVideoOpenUrl, type VideoSortMode } from "../_components/library-view-utils";
 
 type UseLibrarySelectionInput = {
   accounts: AccountListItem[];
@@ -47,8 +42,7 @@ export function useLibrarySelection({
     });
   }, [accountFilter, accounts]);
 
-  const availableSortOptions = useMemo(() => getAvailableSortOptions(selectedAccount?.platform), [selectedAccount?.platform]);
-  const effectiveSortMode = selectedAccount?.platform === "douyin" && sortMode === "views" ? "hot" : sortMode;
+  const effectiveSortMode = resolveEffectiveVideoSortMode(sortMode, selectedAccount?.platform);
   const sortedVideos = useMemo(() => {
     const videos = [...(selectedAccount?.videos || [])];
     return videos.sort(getVideoSorter(effectiveSortMode));
@@ -136,7 +130,6 @@ export function useLibrarySelection({
   return {
     accountFilter,
     accountManageMode,
-    availableSortOptions,
     completedCount,
     effectiveSortMode,
     filteredAccounts,
@@ -166,15 +159,29 @@ export function useLibrarySelection({
   };
 }
 
-const videoSortModes: VideoSortMode[] = ["hot", "views", "likes", "comments", "favorites", "latest"];
+const videoTitleCollator = new Intl.Collator("zh-Hans-CN", {
+  numeric: true,
+  sensitivity: "base"
+});
+
+const videoSortModes: VideoSortMode[] = ["hot", "title", "views", "likes", "comments", "favorites", "latest"];
 
 function parseVideoSortMode(value: string | null): VideoSortMode {
   return videoSortModes.includes(value as VideoSortMode) ? (value as VideoSortMode) : "hot";
 }
 
+function resolveEffectiveVideoSortMode(sortMode: VideoSortMode, platform?: AccountDetail["platform"]): VideoSortMode {
+  if (platform === "douyin") {
+    return sortMode === "views" ? "hot" : sortMode;
+  }
+
+  return sortMode === "hot" ? "views" : sortMode;
+}
+
 function getVideoSorter(sortMode: VideoSortMode) {
   const sorters: Record<VideoSortMode, (a: VideoListItem, b: VideoListItem) => number> = {
     hot: (a, b) => b.hotScore - a.hotScore,
+    title: (a, b) => videoTitleCollator.compare(a.title, b.title),
     views: (a, b) => b.stats.views - a.stats.views,
     likes: (a, b) => b.stats.likes - a.stats.likes,
     comments: (a, b) => b.stats.comments - a.stats.comments,

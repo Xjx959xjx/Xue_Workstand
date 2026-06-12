@@ -75,7 +75,6 @@ export default function LibraryPage() {
   const {
     accountFilter,
     accountManageMode,
-    availableSortOptions,
     completedCount,
     effectiveSortMode,
     filteredAccounts,
@@ -461,7 +460,6 @@ export default function LibraryPage() {
 
         <VideoTable
           accountDetailLoading={accountDetailLoading}
-          availableSortOptions={availableSortOptions}
           busy={busy}
           completedCount={completedCount}
           effectiveSortMode={effectiveSortMode}

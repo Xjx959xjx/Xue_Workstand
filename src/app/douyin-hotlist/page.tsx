@@ -13,7 +13,8 @@ import {
   Trash2,
   TrendingUp,
   Users,
-  X
+  X,
+  Zap
 } from "lucide-react";
 import {
   addDouyinHotlistAccount,
@@ -24,12 +25,19 @@ import {
 } from "@/lib/client";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
-import type { DouyinHotlistAccount, DouyinHotlistItem, DouyinHotlistResponse } from "@/lib/types";
+import type {
+  DouyinHotlistAccount,
+  DouyinHotlistItem,
+  DouyinHotlistRefreshAccountResult,
+  DouyinHotlistResponse
+} from "@/lib/types";
 
 const DEFAULT_WINDOW = "3d";
 const REFRESH_LIMIT = 10;
 const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const AUTO_REFRESH_CHECK_INTERVAL_MS = 60 * 1000;
 const MAX_REFRESH_LOGS = 6;
+const MAX_REFRESH_LOG_DETAILS = 6;
 const REFRESH_LOG_STORAGE_KEY = "douyin-hotlist-refresh-logs";
 
 type BusyState = "" | "load" | "add" | "refresh" | `remove:${string}`;
@@ -44,6 +52,11 @@ type RefreshLogEntry = {
   automatic: boolean;
   status: RefreshLogStatus;
   text: string;
+  details?: string[];
+};
+
+type RefreshHotlistOptions = {
+  automatic?: boolean;
 };
 
 const sortOptions: { value: SortMode; label: string }[] = [
@@ -99,6 +112,12 @@ export default function DouyinHotlistPage() {
   const [accountDrawerOpen, setAccountDrawerOpen] = useState(false);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLogEntry[]>([]);
   const [refreshLogsReady, setRefreshLogsReady] = useState(false);
+  const busyRef = useRef<BusyState>(busy);
+  const accountCountRef = useRef(snapshot?.accounts.length ?? 0);
+  const lastRefreshedAtRef = useRef<string | undefined>(snapshot?.summary.lastRefreshedAt);
+  const lastAutoRefreshAttemptAtRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const refreshHotlistRef = useRef<(options?: RefreshHotlistOptions) => Promise<void>>(async () => {});
 
   const appendRefreshLog = useCallback((entry: Omit<RefreshLogEntry, "id" | "at">) => {
     const at = new Date().toISOString();
@@ -124,14 +143,25 @@ export default function DouyinHotlistPage() {
     window.localStorage.setItem(REFRESH_LOG_STORAGE_KEY, JSON.stringify(refreshLogs));
   }, [refreshLogs, refreshLogsReady]);
 
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
+    accountCountRef.current = snapshot?.accounts.length ?? 0;
+    lastRefreshedAtRef.current = snapshot?.summary.lastRefreshedAt;
+  }, [snapshot?.accounts.length, snapshot?.summary.lastRefreshedAt]);
+
   const loadHotlist = useCallback(async (options: { force?: boolean } = {}) => {
     const cached = options.force ? null : getCachedDouyinHotlist({ window: windowFilter });
     if (cached) {
       setSnapshot(cached);
+      busyRef.current = "";
       setBusy("");
       return;
     }
 
+    busyRef.current = "load";
     setBusy("load");
     setError("");
     try {
@@ -139,6 +169,7 @@ export default function DouyinHotlistPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "读取抖音热榜失败");
     } finally {
+      busyRef.current = "";
       setBusy("");
     }
   }, [windowFilter]);
@@ -216,6 +247,7 @@ export default function DouyinHotlistPage() {
     event.preventDefault();
     if (!canAdd) return;
 
+    busyRef.current = "add";
     setBusy("add");
     setMessage("");
     setError("");
@@ -227,11 +259,12 @@ export default function DouyinHotlistPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "添加抖音账号失败");
     } finally {
+      busyRef.current = "";
       setBusy("");
     }
   }
 
-  const refreshHotlist = useCallback(async (options: { automatic?: boolean } = {}) => {
+  const refreshHotlist = useCallback(async (options: RefreshHotlistOptions = {}) => {
     const automatic = Boolean(options.automatic);
     if (!snapshot?.accounts.length) {
       if (automatic) {
@@ -244,7 +277,7 @@ export default function DouyinHotlistPage() {
       return;
     }
 
-    if (busy === "refresh" || busy === "add" || busy.startsWith("remove:")) {
+    if (refreshInFlightRef.current || busyRef.current === "refresh" || busyRef.current === "add" || busyRef.current.startsWith("remove:")) {
       if (automatic) {
         appendRefreshLog({
           automatic,
@@ -255,6 +288,8 @@ export default function DouyinHotlistPage() {
       return;
     }
 
+    refreshInFlightRef.current = true;
+    busyRef.current = "refresh";
     setBusy("refresh");
     setMessage("");
     setError("");
@@ -266,33 +301,74 @@ export default function DouyinHotlistPage() {
       });
       setSnapshot(next);
       const failedText = next.refresh.failed ? `，${next.refresh.failed} 个失败` : "";
+      const retryCount = next.refresh.accounts.filter((account) => account.retried).length;
+      const retryText = retryCount ? `，${retryCount} 个触发重试` : "";
       appendRefreshLog({
         automatic,
         status: next.refresh.failed ? "warning" : "success",
-        text: `${automatic ? "自动" : "手动"}刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText} · ${next.summary.windowLabel}`
+        text: `${automatic ? "自动" : "手动"}刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}${retryText} · ${next.summary.windowLabel}`,
+        details: describeRefreshLogDetails(next.refresh.accounts)
       });
       if (!automatic) {
-        setMessage(`已刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}。`);
+        setMessage(`已刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}${retryText}。`);
       }
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "未知错误";
+      const refreshBusy = isRefreshBusyMessage(errorMessage);
       appendRefreshLog({
         automatic,
-        status: "failed",
-        text: `${automatic ? "自动" : "手动"}刷新失败：${err instanceof Error ? err.message : "未知错误"}`
+        status: refreshBusy ? "skipped" : "failed",
+        text: `${automatic ? "自动" : "手动"}刷新${refreshBusy ? "跳过" : "失败"}：${errorMessage}`
       });
-      setError(err instanceof Error ? err.message : "刷新抖音热榜失败");
+      if (refreshBusy) {
+        if (!automatic) setMessage(errorMessage);
+      } else {
+        setError(errorMessage);
+      }
     } finally {
+      refreshInFlightRef.current = false;
+      busyRef.current = "";
       setBusy("");
     }
-  }, [appendRefreshLog, busy, selectedAccount, snapshot?.accounts.length, windowFilter]);
+  }, [appendRefreshLog, selectedAccount, snapshot?.accounts.length, windowFilter]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !snapshot?.accounts.length) return;
-    const timer = window.setInterval(() => {
-      void refreshHotlist({ automatic: true });
-    }, AUTO_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [refreshHotlist, snapshot?.accounts.length]);
+    refreshHotlistRef.current = refreshHotlist;
+  }, [refreshHotlist]);
+
+  const runAutoRefreshIfDue = useCallback(() => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (!accountCountRef.current || busyRef.current) return;
+
+    const now = Date.now();
+    const lastCompletedRefreshAt = getTimeValue(lastRefreshedAtRef.current);
+    const lastAutoRefreshAttemptAt = lastAutoRefreshAttemptAtRef.current;
+    const lastAutoRefreshBaseline = Math.max(lastCompletedRefreshAt, lastAutoRefreshAttemptAt);
+    if (lastAutoRefreshBaseline && now - lastAutoRefreshBaseline < AUTO_REFRESH_INTERVAL_MS) return;
+
+    lastAutoRefreshAttemptAtRef.current = now;
+    void refreshHotlistRef.current({ automatic: true });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const timer = window.setInterval(runAutoRefreshIfDue, AUTO_REFRESH_CHECK_INTERVAL_MS);
+    const handlePageAvailable = () => runAutoRefreshIfDue();
+
+    window.addEventListener("focus", handlePageAvailable);
+    document.addEventListener("visibilitychange", handlePageAvailable);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", handlePageAvailable);
+      document.removeEventListener("visibilitychange", handlePageAvailable);
+    };
+  }, [runAutoRefreshIfDue]);
+
+  useEffect(() => {
+    runAutoRefreshIfDue();
+  }, [busy, runAutoRefreshIfDue, snapshot?.accounts.length, snapshot?.summary.lastRefreshedAt]);
 
   async function handleRefresh() {
     if (!canRefresh) return;
@@ -300,6 +376,7 @@ export default function DouyinHotlistPage() {
   }
 
   async function handleRemoveAccount(accountId: string) {
+    busyRef.current = `remove:${accountId}`;
     setBusy(`remove:${accountId}`);
     setMessage("");
     setError("");
@@ -313,6 +390,7 @@ export default function DouyinHotlistPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "移除抖音账号失败");
     } finally {
+      busyRef.current = "";
       setBusy("");
     }
   }
@@ -492,7 +570,7 @@ function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
       <div className="douyin-hotlist-refresh-log-panel" role="log" aria-label="刷新日志">
         <div className="douyin-hotlist-refresh-log-head">
           <strong>刷新日志</strong>
-          <span>每 30 分钟自动刷新</span>
+          <span>每 30 分钟自动刷新，切回补跑</span>
         </div>
         {logs.length ? (
           <ol>
@@ -504,6 +582,13 @@ function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
                   <span>{getRefreshLogStatusLabel(log.status)}</span>
                 </span>
                 <span>{log.text}</span>
+                {log.details?.length ? (
+                  <span className="douyin-hotlist-refresh-log-details">
+                    {log.details.map((detail) => (
+                      <span key={detail}>{detail}</span>
+                    ))}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ol>
@@ -695,6 +780,7 @@ function isRefreshLogEntry(value: unknown): value is RefreshLogEntry {
     typeof entry.at === "string" &&
     typeof entry.automatic === "boolean" &&
     typeof entry.text === "string" &&
+    (entry.details === undefined || (Array.isArray(entry.details) && entry.details.every((detail) => typeof detail === "string"))) &&
     isRefreshLogStatus(entry.status)
   );
 }
@@ -831,7 +917,7 @@ function HotlistTable({
     <div className="douyin-hotlist-list" ref={listRef}>
       {items.map(({ item, displayRank }) => (
         <article
-          className={`douyin-hotlist-item has-cover ${getRankClass(displayRank)}`}
+          className={`douyin-hotlist-item has-cover ${getRankClass(displayRank)} ${item.surge ? "is-surging" : ""}`}
           key={`${item.account.id}:${item.video.id}`}
         >
           <div className="douyin-hotlist-rank" aria-label={`第 ${displayRank} 名`}>
@@ -869,7 +955,15 @@ function HotlistTable({
                     {item.ageHours !== undefined ? ` · ${formatAge(item.ageHours)}` : ""}
                   </span>
                 </div>
-                <span className="douyin-hotlist-signal">{item.signal}</span>
+                <div className="douyin-hotlist-signal-row">
+                  <span className="douyin-hotlist-signal">{item.signal}</span>
+                  {item.surge ? (
+                    <span className="douyin-hotlist-surge-badge" title={item.surge.reason} aria-label={item.surge.reason}>
+                      <Zap aria-hidden="true" size={12} />
+                      {item.surge.label}
+                    </span>
+                  ) : null}
+                </div>
                 {item.tags.length ? (
                   <div className="douyin-hotlist-tags">
                     {item.tags.map((tag) => <span key={tag}>{tag}</span>)}
@@ -1003,6 +1097,31 @@ function getRefreshLogStatusLabel(status: RefreshLogStatus) {
   if (status === "warning") return "部分失败";
   if (status === "failed") return "失败";
   return "跳过";
+}
+
+function describeRefreshLogDetails(accounts: DouyinHotlistRefreshAccountResult[]) {
+  const issueAccounts = accounts.filter((account) => account.status === "failed" || account.retried);
+  const details = issueAccounts.slice(0, MAX_REFRESH_LOG_DETAILS).map(describeRefreshAccountResult);
+  const omitted = issueAccounts.length - details.length;
+  if (omitted > 0) details.push(`还有 ${omitted} 个账号也触发了重试或失败。`);
+  return details;
+}
+
+function describeRefreshAccountResult(account: DouyinHotlistRefreshAccountResult) {
+  if (account.status === "failed") {
+    const retryText = account.retried ? "重试后仍失败" : "失败";
+    return `${account.name}：${retryText}${account.error ? `，${compactRefreshError(account.error)}` : ""}`;
+  }
+
+  return `${account.name}：批量抓取失败后单账号重试成功${account.retryReason ? `，原因为 ${compactRefreshError(account.retryReason)}` : ""}`;
+}
+
+function compactRefreshError(message: string) {
+  return message.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function isRefreshBusyMessage(message: string) {
+  return /热榜正在刷新中|正在刷新中|已有.*刷新/i.test(message);
 }
 
 function formatAge(ageHours: number) {

@@ -10,7 +10,7 @@ cp .env.example .env
 npm run dev
 ```
 
-打开 `http://localhost:3000`。
+打开 `http://localhost:3000`，默认进入 `/douyin-hotlist`。
 
 如果希望服务退出终端后仍然保持运行，可以使用后台启动：
 

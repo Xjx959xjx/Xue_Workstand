@@ -1,4 +1,11 @@
 import {
+  formatHotlistSurgeReason,
+  getHotlistSurgeDecision,
+  getHotlistSurgeLabel,
+  getSurgeMinHeatPerHour,
+  isHotlistSurgeActive
+} from "./douyin-hotlist-surge";
+import {
   collectDouyinPostVideosBatch,
   collectVideos,
   resolveAccountUid,
@@ -25,7 +32,10 @@ import type {
   DouyinHotlistRefreshAccountResult,
   DouyinHotlistRefreshResult,
   DouyinHotlistResponse,
+  DouyinHotlistSurgeHighlight,
   Video,
+  VideoHotlistSurgeState,
+  VideoHotlistTrend,
   VideoListItem
 } from "./types";
 import { extractFirstLinkFromInput } from "./platform-links";
@@ -54,6 +64,17 @@ const FAST_RISING_MAX_AGE_HOURS = 12;
 const FAST_RISING_MIN_LIKES = 500;
 const FAST_RISING_MIN_HEAT_PER_HOUR = LIKE_HEAT_WEIGHT * 220;
 const DOUYIN_SEC_UID_PATTERN = /MS4wLjAB[0-9A-Za-z_.-]{20,}/;
+
+let activeRefreshPromise: Promise<DouyinHotlistRefreshResult> | null = null;
+
+class DouyinHotlistRefreshInProgressError extends Error {
+  readonly statusCode = 409;
+
+  constructor() {
+    super("抖音热榜正在刷新中，请等这一轮结束后再试。");
+    this.name = "DouyinHotlistRefreshInProgressError";
+  }
+}
 
 export async function getDouyinHotlist(options: { windowDays?: number; windowKey?: string } = {}): Promise<DouyinHotlistResponse> {
   const window = resolveHotlistWindow(options.windowKey || options.windowDays);
@@ -84,15 +105,12 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
     };
   });
 
-  const items = accountVideos
+  const rankedItems = accountVideos
     .flatMap(({ account, videos }) => videos
       .filter((video) => isVideoInWindow(video, window))
       .map((video) => buildRankItem(account, video, window)))
-    .sort((left, right) => right.heatScore - left.heatScore || comparePublishedAtDesc(left.video, right.video))
-    .map((item, index) => ({
-      ...item,
-      rank: index + 1
-    }));
+    .sort((left, right) => right.heatScore - left.heatScore || comparePublishedAtDesc(left.video, right.video));
+  const items = rankedItems.map((item, index) => finalizeRankItem(item, index));
 
   return {
     root: libraryRoot(),
@@ -147,6 +165,28 @@ export async function removeDouyinHotlistAccount(accountId: string) {
 }
 
 export async function refreshDouyinHotlist(options: {
+  accountIds?: string[];
+  limit?: number;
+  windowDays?: number;
+  windowKey?: string;
+  signal?: AbortSignal;
+} = {}): Promise<DouyinHotlistRefreshResult> {
+  if (activeRefreshPromise) {
+    throw new DouyinHotlistRefreshInProgressError();
+  }
+
+  const refreshPromise = refreshDouyinHotlistUnlocked(options);
+  activeRefreshPromise = refreshPromise;
+  try {
+    return await refreshPromise;
+  } finally {
+    if (activeRefreshPromise === refreshPromise) {
+      activeRefreshPromise = null;
+    }
+  }
+}
+
+async function refreshDouyinHotlistUnlocked(options: {
   accountIds?: string[];
   limit?: number;
   windowDays?: number;
@@ -452,11 +492,16 @@ function resolveHotlistWindowStart(now: Date, preset: HotlistWindowPreset) {
   return from;
 }
 
+type HotlistRankItemDraft = Omit<DouyinHotlistItem, "surge"> & {
+  surgeState?: VideoHotlistSurgeState;
+  trend?: VideoHotlistTrend;
+};
+
 function buildRankItem(
   account: Account,
   video: Video,
   window: HotlistWindow
-): DouyinHotlistItem {
+): HotlistRankItemDraft {
   const ageHours = getVideoAgeHours(video);
   const heatScore = calculateHeatScore(video, ageHours, window);
   const listVideo = stripVideoRaw(video);
@@ -476,7 +521,55 @@ function buildRankItem(
     heatScore,
     ageHours,
     tags: extractTags(video.title),
-    signal: describeContentSignal(video, ageHours, window.label)
+    signal: describeContentSignal(video, ageHours, window.label),
+    surgeState: video.hotlistSurge,
+    trend: video.hotlistTrend
+  };
+}
+
+function finalizeRankItem(
+  item: HotlistRankItemDraft,
+  index: number
+): DouyinHotlistItem {
+  const rank = index + 1;
+  const surge = buildSurgeHighlight(item, rank);
+
+  return {
+    account: item.account,
+    video: item.video,
+    heatScore: item.heatScore,
+    ageHours: item.ageHours,
+    tags: item.tags,
+    signal: item.signal,
+    rank,
+    ...(surge ? { surge } : {})
+  };
+}
+
+function buildSurgeHighlight(
+  item: HotlistRankItemDraft,
+  rank: number
+): DouyinHotlistSurgeHighlight | undefined {
+  const currentDecision = getHotlistSurgeDecision(item.trend);
+  if (currentDecision) {
+    return {
+      label: getHotlistSurgeLabel(rank, currentDecision.heatPerHour, currentDecision.minHeatPerHour),
+      reason: formatHotlistSurgeReason(currentDecision),
+      heatDelta: currentDecision.heatDelta,
+      heatPerHour: currentDecision.heatPerHour,
+      intervalHours: currentDecision.intervalHours
+    };
+  }
+
+  const surgeState = item.surgeState;
+  if (!isHotlistSurgeActive(surgeState)) return undefined;
+
+  return {
+    label: getHotlistSurgeLabel(rank, surgeState.heatPerHour, getSurgeMinHeatPerHour(Math.max(0.25, surgeState.intervalHours))),
+    reason: formatHotlistSurgeReason(surgeState),
+    heatDelta: surgeState.heatDelta,
+    heatPerHour: surgeState.heatPerHour,
+    intervalHours: surgeState.intervalHours
   };
 }
 
@@ -593,6 +686,8 @@ function formatSignalAge(ageHours?: number) {
 function stripVideoRaw(video: Video): VideoListItem {
   const copy = { ...video };
   delete copy.raw;
+  delete copy.hotlistTrend;
+  delete copy.hotlistSurge;
   return copy;
 }
 

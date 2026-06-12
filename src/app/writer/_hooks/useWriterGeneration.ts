@@ -216,8 +216,8 @@ export function useWriterGeneration({
     try {
       const job = await startTask({
         kind: "write-copy",
-        title: mode === "topic" ? "生成主题文案" : "改写文案",
-        inputSummary: activeTitle ? `${activeTitle} · ${mode === "topic" ? "主题写作" : "文案改写"}` : undefined,
+        title: "生成文案",
+        inputSummary: activeTitle ? `${activeTitle} · ${mode === "topic" ? "自由输入" : "素材改写"}` : undefined,
         href: "/writer",
         input: {
           targetType,

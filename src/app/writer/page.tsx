@@ -45,7 +45,6 @@ function WriterPageContent() {
   const [targetType, setTargetType] = useState<"account" | "project">("account");
   const [accountId, setAccountId] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [mode, setMode] = useState<Draft["mode"]>("topic");
   const [prompt, setPrompt] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [supportDocLinks, setSupportDocLinks] = useState("");
@@ -97,23 +96,24 @@ function WriterPageContent() {
     targetType
   });
   const sourceExtraction = useMemo(() => extractRewriteSourceMaterial(sourceText), [sourceText]);
-  const normalizedPrompt = useMemo(() => normalizeRewritePrompt(mode, prompt, sourceText), [mode, prompt, sourceText]);
   const normalizedSourceText = sourceText;
   const hasRewriteSource = Boolean(normalizedSourceText.trim());
-  const hasTaskInput = mode === "topic" ? Boolean(normalizedPrompt.trim()) : Boolean(normalizedPrompt.trim() || hasRewriteSource);
+  const effectiveMode: Draft["mode"] = hasRewriteSource ? "rewrite" : "topic";
+  const normalizedPrompt = useMemo(() => normalizeRewritePrompt(effectiveMode, prompt, sourceText), [effectiveMode, prompt, sourceText]);
+  const hasTaskInput = Boolean(normalizedPrompt.trim() || hasRewriteSource);
   const activeReference = targetType === "project" ? selectedProject : selectedAccount;
   const writerInputSignature = useMemo(
     () =>
       makeWriterInputSignature({
         targetType,
         referenceId: activeReference?.id || "",
-        mode,
+        mode: effectiveMode,
         prompt: normalizedPrompt,
         sourceText: normalizedSourceText,
         supportDocLinks,
         useWebResearch
       }),
-    [activeReference?.id, mode, normalizedPrompt, normalizedSourceText, supportDocLinks, targetType, useWebResearch]
+    [activeReference?.id, effectiveMode, normalizedPrompt, normalizedSourceText, supportDocLinks, targetType, useWebResearch]
   );
   const briefReady = Boolean(brief.trim()) && briefSignature === writerInputSignature;
   const briefStale = Boolean(brief.trim()) && briefSignature !== writerInputSignature;
@@ -152,7 +152,7 @@ function WriterPageContent() {
         platform: targetType === "account" ? selectedAccount?.platform : undefined,
         accountId: targetType === "account" ? selectedAccount?.id : undefined,
         projectId: targetType === "project" ? selectedProject?.id : undefined,
-        mode,
+        mode: effectiveMode,
         prompt: normalizedPrompt,
         sourceText: normalizedSourceText,
         supportDocLinks: supportDocLinks.trim() || undefined,
@@ -176,7 +176,7 @@ function WriterPageContent() {
     }
   }, [
     canPrepareBrief,
-    mode,
+    effectiveMode,
     normalizedPrompt,
     normalizedSourceText,
     selectedAccount?.id,
@@ -233,9 +233,9 @@ function WriterPageContent() {
     activeTitle,
     cancelTask,
     busy,
-    hasTaskInput: hasTaskInput && briefReady,
-    brief,
-    mode,
+    hasTaskInput,
+    brief: briefReady ? brief : "",
+    mode: effectiveMode,
     normalizedPrompt,
     normalizedSourceText,
     preparedSourceText,
@@ -261,19 +261,12 @@ function WriterPageContent() {
     setNotice
   });
   const displayResearch = lastResearch || briefResearch;
-  const referenceFlowValue = activeTitle || "待选择";
-  const materialFlowValue =
-    mode === "topic"
-      ? normalizedPrompt.trim()
-        ? "主题就绪"
-        : "待主题"
-      : sourceExtraction.materials.length
-        ? `${sourceExtraction.materials.length} 条素材`
-        : "待素材";
-  const briefFlowState = busy === "brief" ? "active" : briefReady ? "done" : briefStale ? "pending" : "neutral";
-  const draftFlowState = busy === "generate" ? "active" : lastContent ? "done" : "neutral";
-  const briefStatusLabel = busy === "brief" ? "准备中" : briefReady ? "已确认" : briefStale ? "需更新" : "待准备";
-  const briefProgressLabel = busy === "brief" ? `${briefStage || "等待模型"} ${briefProgress}%` : "";
+  const materialStatusLabel = sourceExtraction.materials.length
+    ? `${sourceExtraction.materials.length} 条素材`
+    : normalizedPrompt.trim()
+      ? "自由输入"
+      : "待素材";
+  const briefStatusLabel = busy === "brief" ? "准备中" : briefReady ? "已确认" : briefStale ? "需更新" : "可选";
   const briefMetaLabel = briefMeta
     ? briefMeta.fallback
       ? briefMeta.fallbackReason || "本地结构"
@@ -325,7 +318,6 @@ function WriterPageContent() {
       } else {
         setAccountId(sourceDraft.accountId);
       }
-      setMode(sourceDraft.mode);
       setPrompt(sourceDraft.prompt);
       setSourceText(sourceDraft.input || "");
       setSupportDocLinks(sourceDraft.supportDocLinks || "");
@@ -357,7 +349,6 @@ function WriterPageContent() {
     if (nextTargetType) setTargetType(nextTargetType);
     if (nextAccountId) setAccountId(nextAccountId);
     if (nextProjectId) setProjectId(nextProjectId);
-    if (nextMode === "topic" || nextMode === "rewrite") setMode(nextMode);
     if (nextPrompt !== null) setPrompt(nextPrompt);
     if (nextSourceText !== null) setSourceText(nextSourceText);
     setUseWebResearch(false);
@@ -378,7 +369,6 @@ function WriterPageContent() {
       } else {
         setAccountId(draft.accountId);
       }
-      setMode(draft.mode);
       setPrompt(draft.prompt);
       setSourceText(draft.input || "");
       setSupportDocLinks(draft.supportDocLinks || "");
@@ -420,7 +410,7 @@ function WriterPageContent() {
             setBriefMeta(null);
             const params = new URLSearchParams({
               targetType,
-              mode
+              mode: effectiveMode
             });
             if (targetType === "project") {
               const nextProjectId = selectedProject?.id || projectId;
@@ -446,8 +436,8 @@ function WriterPageContent() {
       clearDraftResult,
       handleSelectHistoryDraft,
       historyDrafts,
+      effectiveMode,
       lastDraftId,
-      mode,
       notify,
       projectId,
       refresh,
@@ -486,7 +476,7 @@ function WriterPageContent() {
             setBriefMeta(null);
             const params = new URLSearchParams({
               targetType,
-              mode
+              mode: effectiveMode
             });
             if (targetType === "project") {
               const nextProjectId = selectedProject?.id || projectId;
@@ -512,8 +502,8 @@ function WriterPageContent() {
       clearDraftResult,
       handleSelectHistoryDraft,
       historyDrafts,
+      effectiveMode,
       lastDraftId,
-      mode,
       notify,
       projectId,
       refresh,
@@ -585,18 +575,6 @@ function WriterPageContent() {
 
       <section className="writer-workbench">
         <section className="panel writer-main">
-          <div className="writer-flow-strip" aria-label="写作链路">
-            <WriterFlowStep label="引用" state={activeReference ? "done" : "pending"} value={referenceFlowValue} />
-            <WriterFlowStep label="素材" state={hasTaskInput ? "done" : "pending"} value={materialFlowValue} />
-            <WriterFlowStep
-              label="Brief"
-              state={briefFlowState}
-              value={busy === "brief" ? briefProgressLabel : briefStatusLabel}
-              progress={busy === "brief" ? briefProgress : undefined}
-            />
-            <WriterFlowStep label="成稿" state={draftFlowState} value={busy === "generate" ? "生成中" : lastContent ? "已生成" : "待生成"} />
-          </div>
-
           <div className="writer-refbar">
             <div aria-label="选择引用类型" className="segmented" role="group">
               <button aria-pressed={targetType === "account"} className={targetType === "account" ? "active" : ""} onClick={() => setTargetType("account")} type="button">
@@ -645,6 +623,21 @@ function WriterPageContent() {
               </select>
             )}
 
+            <div className="writer-ref-meta" aria-label="当前写作上下文">
+              <span>
+                <FileText aria-hidden="true" size={14} />
+                {activeTitle || "未选择引用"}
+              </span>
+              <span>{activeStyleLoading ? "读取风格卡" : activeStyle?.trim().length ? `${activeStyle.trim().length} 字风格卡` : "无风格卡"}</span>
+              <span>
+                {targetType === "project" && selectedProject
+                  ? `${selectedProject.sourceMaterialCount} 份案例 · ${selectedProject.sourceAccounts.length} 个账号`
+                  : selectedAccount
+                    ? `${selectedAccount.transcriptCount} 份转写 · ${selectedAccount.videoCount} 条视频`
+                    : "待选择"}
+              </span>
+            </div>
+
             <button className="btn ghost writer-style-trigger" disabled={activeStyleLoading || !activeStyle} onClick={() => setStyleOpen(true)} type="button">
               <Eye aria-hidden="true" size={16} />
               风格卡
@@ -655,63 +648,44 @@ function WriterPageContent() {
             <div className="writer-task">
               <div className="section-title-row">
                 <h2>需求</h2>
-                <div aria-label="选择写作模式" className="segmented" role="group">
-                  <button aria-pressed={mode === "topic"} className={mode === "topic" ? "active" : ""} onClick={() => setMode("topic")} type="button">
-                    主题
-                  </button>
-                  <button aria-pressed={mode === "rewrite"} className={mode === "rewrite" ? "active" : ""} onClick={() => setMode("rewrite")} type="button">
-                    改写
-                  </button>
-                </div>
+                <span className={`status-pill ${hasTaskInput ? "done" : "pending"}`}>{materialStatusLabel}</span>
               </div>
 
-              <div className="writer-context-summary" aria-label="当前写作上下文">
-                <span>
-                  <FileText aria-hidden="true" size={14} />
-                  {activeTitle || "未选择引用"}
-                </span>
-                <span>{activeStyleLoading ? "读取风格卡" : activeStyle?.trim().length ? `${activeStyle.trim().length} 字风格卡` : "无风格卡"}</span>
-                <span>
-                  {targetType === "project" && selectedProject
-                    ? `${selectedProject.sourceMaterialCount} 份案例 · ${selectedProject.sourceAccounts.length} 个账号`
-                    : selectedAccount
-                      ? `${selectedAccount.transcriptCount} 份转写 · ${selectedAccount.videoCount} 条视频`
-                      : "待选择"}
-                </span>
-              </div>
-
-              <textarea
-                aria-label={mode === "topic" ? "写作主题和要求" : "改写要求"}
-                autoComplete="off"
-                className="writer-textarea main"
-                name="prompt"
-                placeholder={mode === "topic" ? "主题、目标人群、核心观点…" : DEFAULT_REWRITE_PROMPT}
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-              />
-              {mode === "rewrite" ? (
-                <>
+              <label className="writer-field">
+                <span>素材 / 原文</span>
                   <textarea
-                    aria-label="需要改写的原文"
+                    aria-label="素材、原文或链接"
                     autoComplete="off"
                     className="writer-textarea source"
                     name="sourceText"
-                    placeholder="粘贴原文、抖音分享链接；多条素材中间空一行…"
+                    placeholder="粘贴原文、抖音分享链接；多条素材中间空一行。"
                     value={sourceText}
                     onChange={(event) => setSourceText(event.target.value)}
                   />
-                  {sourceText.trim() ? (
-                    <div className="source-detect-row" aria-live="polite">
-                      <span className="status-pill done">{sourceExtraction.materials.length || 1} 条素材</span>
-                      {sourceExtraction.linkCount ? <span className="status-pill pending">{sourceExtraction.linkCount} 个链接待转写</span> : null}
-                      {!sourceExtraction.linkCount && sourceExtraction.textMaterialCount ? <span className="status-pill">{sourceExtraction.textMaterialCount} 条文案</span> : null}
-                      {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
-                    </div>
-                  ) : null}
-                </>
+              </label>
+              {sourceText.trim() ? (
+                <div className="source-detect-row" aria-live="polite">
+                  <span className="status-pill done">{sourceExtraction.materials.length || 1} 条素材</span>
+                  {sourceExtraction.linkCount ? <span className="status-pill pending">{sourceExtraction.linkCount} 个链接待转写</span> : null}
+                  {!sourceExtraction.linkCount && sourceExtraction.textMaterialCount ? <span className="status-pill">{sourceExtraction.textMaterialCount} 条文案</span> : null}
+                  {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
+                </div>
               ) : null}
 
-              <label className="support-doc-field">
+              <label className="writer-field">
+                <span>写作要求</span>
+                <textarea
+                  aria-label="写作要求"
+                  autoComplete="off"
+                  className="writer-textarea main"
+                  name="prompt"
+                  placeholder={DEFAULT_REWRITE_PROMPT}
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+              </label>
+
+              <label className="writer-field support-doc-field">
                 <span>支持文档</span>
                 <textarea
                   aria-label="商单支持文档链接"
@@ -769,7 +743,7 @@ function WriterPageContent() {
                   {useWebResearch ? "联网开" : "联网关"}
                 </button>
                 <button
-                  className={`btn ${briefReady ? "" : "primary"}`}
+                  className="btn"
                   aria-busy={busy === "brief"}
                   disabled={!canPrepareBrief || busy === "brief"}
                   onClick={handlePrepareBrief}
@@ -779,10 +753,10 @@ function WriterPageContent() {
                   {busy === "brief" ? "准备中" : briefReady ? "更新 Brief" : "准备 Brief"}
                 </button>
                 <button
-                  className={`btn ${briefReady ? "primary" : ""}`}
+                  className="btn primary"
                   disabled={!canGenerate}
                   onClick={handleGenerate}
-                  title={canGenerate ? "按当前 brief 生成文案" : briefStale ? "先更新 brief" : "先准备 brief"}
+                  title={canGenerate ? "生成文案" : "先填写素材或写作要求"}
                   type="button"
                 >
                   <Send aria-hidden="true" size={16} />
@@ -908,39 +882,6 @@ function mergeDraftLists(...groups: Draft[][]) {
 
 function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
   return +new Date(right.createdAt) - +new Date(left.createdAt);
-}
-
-type WriterFlowState = "active" | "done" | "neutral" | "pending";
-
-function WriterFlowStep({
-  label,
-  state,
-  value,
-  progress
-}: {
-  label: string;
-  state: WriterFlowState;
-  value: string;
-  progress?: number;
-}) {
-  const safeProgress = clampPercent(progress);
-
-  return (
-    <div className={`writer-flow-step ${state}`} aria-busy={state === "active" ? "true" : undefined}>
-      <span className="writer-flow-label">{label}</span>
-      <strong>{value}</strong>
-      {typeof safeProgress === "number" ? (
-        <span className="writer-flow-progress" aria-label={`${label} 进度 ${safeProgress}%`}>
-          <span style={{ transform: `scaleX(${safeProgress / 100})` }} />
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function clampPercent(value?: number) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  return Math.min(100, Math.max(0, Math.round(value)));
 }
 
 function getBriefProgressStage(elapsedMs: number, useWebResearch: boolean) {

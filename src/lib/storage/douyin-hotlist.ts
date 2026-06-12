@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
-import type { Account, Video } from "../types";
+import { createHotlistSurgeState, getHotlistSurgeDecision, isHotlistSurgeActive } from "../douyin-hotlist-surge";
+import type { Account, Video, VideoHotlistSurgeState, VideoHotlistTrend } from "../types";
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { readJsonFile, writeJsonFile } from "./fs";
@@ -208,6 +209,9 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
     const id = safeSegment(video.id, shortHash(`${video.title}-${video.url}`));
     const existing = await readJsonFile<Video>(hotlistVideoJsonPath(account.slug, id));
     const mergedStats = mergeVideoStats(existing, video);
+    const hotScore = calculateStoredHotScore({ ...video, stats: mergedStats });
+    const updatedAt = nowIso();
+    const hotlistTrend = buildHotlistTrend(existing, hotScore, updatedAt);
     const next: Video = {
       ...existing,
       ...video,
@@ -215,13 +219,15 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
       accountId: account.id,
       platform: "douyin",
       stats: mergedStats,
-      hotScore: calculateStoredHotScore({ ...video, stats: mergedStats }),
+      hotScore,
       relativeViewRate:
         mergedStats.views > 0 && averageViews > 0 ? Number((mergedStats.views / averageViews).toFixed(2)) : 0,
       transcriptStatus: existing?.transcriptStatus ?? video.transcriptStatus,
       transcriptPath: existing?.transcriptPath ?? video.transcriptPath,
       transcriptSource: existing?.transcriptSource ?? video.transcriptSource,
-      updatedAt: nowIso()
+      hotlistTrend,
+      hotlistSurge: resolveHotlistSurgeState(existing?.hotlistSurge, hotlistTrend, existing?.hotlistTrend, updatedAt),
+      updatedAt
     };
 
     await writeJsonFile(hotlistVideoJsonPath(account.slug, id), next);
@@ -272,6 +278,50 @@ function pickPreferredMetric(existing?: number, incoming?: number) {
   return safeIncoming > 0 ? safeIncoming : safeExisting;
 }
 
+function buildHotlistTrend(existing: Video | null, currentHotScore: number, updatedAt: string): VideoHotlistTrend | undefined {
+  if (!existing?.updatedAt) return undefined;
+
+  const previousTime = new Date(existing.updatedAt).getTime();
+  const currentTime = new Date(updatedAt).getTime();
+  if (!Number.isFinite(previousTime) || !Number.isFinite(currentTime) || currentTime <= previousTime) {
+    return undefined;
+  }
+
+  const previousHotScore = Number.isFinite(existing.hotScore) ? existing.hotScore : calculateStoredHotScore(existing);
+  const intervalHours = (currentTime - previousTime) / 3_600_000;
+
+  return {
+    previousHotScore,
+    currentHotScore,
+    heatDelta: currentHotScore - previousHotScore,
+    intervalHours: roundTo(intervalHours, 2),
+    previousUpdatedAt: existing.updatedAt,
+    updatedAt
+  };
+}
+
+function resolveHotlistSurgeState(
+  existing: VideoHotlistSurgeState | undefined,
+  trend: VideoHotlistTrend | undefined,
+  previousTrend: VideoHotlistTrend | undefined,
+  updatedAt: string
+): VideoHotlistSurgeState | undefined {
+  const decision = getHotlistSurgeDecision(trend);
+  if (decision) return createHotlistSurgeState(decision, updatedAt);
+
+  const updatedTime = new Date(updatedAt).getTime();
+  const now = Number.isFinite(updatedTime) ? updatedTime : Date.now();
+  if (isHotlistSurgeActive(existing, now)) return existing;
+
+  const previousDecision = getHotlistSurgeDecision(previousTrend);
+  if (previousDecision && previousTrend?.updatedAt) {
+    const carried = createHotlistSurgeState(previousDecision, previousTrend.updatedAt);
+    if (isHotlistSurgeActive(carried, now)) return carried;
+  }
+
+  return undefined;
+}
+
 function calculateStoredHotScore(video: Video) {
   return (
     video.stats.views +
@@ -280,6 +330,11 @@ function calculateStoredHotScore(video: Video) {
     video.stats.favorites * 80 +
     (video.stats.shares ?? 0) * 50
   );
+}
+
+function roundTo(value: number, digits: number) {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }
 
 async function migrateLegacyWatchlistAccountIds(accountIds: string[]) {

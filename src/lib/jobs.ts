@@ -11,7 +11,9 @@ import {
   prepareSavedProjectStyleContext,
   prepareWriteCopyContext,
   streamStyleResponseTextWithFallback,
-  streamResponseTextWithFallback
+  streamResponseTextWithFallback,
+  WRITE_COPY_MAX_OUTPUT_TOKENS,
+  WRITE_COPY_REASONING_EFFORT
 } from "./ai";
 import { runBatchTranscribe } from "./batch-transcribe";
 import { buildWriterDraftHref } from "./draft-links";
@@ -476,7 +478,8 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
 
   const result = await streamResponseTextWithFallback({
     messages: prepared.messages,
-    reasoningEffort: "xhigh",
+    reasoningEffort: WRITE_COPY_REASONING_EFFORT,
+    maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {
       partialText += delta;
@@ -947,7 +950,7 @@ function defaultJobTitle(input: JobStartInput) {
 }
 
 function defaultInputSummary(input: JobStartInput) {
-  if (input.kind === "write-copy") return input.input.mode === "topic" ? "主题写作" : "文案改写";
+  if (input.kind === "write-copy") return input.input.mode === "topic" ? "自由输入" : "素材改写";
   if (input.kind === "account-style") return input.input.accountId;
   if (input.kind === "project-style") return input.input.name;
   if (input.kind === "transcribe-video") return input.input.videoId;

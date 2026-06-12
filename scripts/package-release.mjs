@@ -164,7 +164,7 @@ function getPresetConfig(value) {
   return {
     preset: "portable",
     appMode: "workspace",
-    startPath: "/library",
+    startPath: "/douyin-hotlist",
     includeLibraryMode: includeLibrary ? "all" : "empty",
     archiveTarGz: true,
     archiveZip: true,

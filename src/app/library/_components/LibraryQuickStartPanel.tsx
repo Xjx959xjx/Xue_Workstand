@@ -207,7 +207,7 @@ function CollectControls({
         />
       </div>
       <div className="field">
-        <label htmlFor="collect-order">排序</label>
+        <label htmlFor="collect-order">采集排序</label>
         <select id="collect-order" name="order" onChange={(event) => onOrderChange(event.target.value as CollectOrder)} value={order}>
           {activeOrderOptions.map((option) => (
             <option key={option.value} value={option.value}>
@@ -217,7 +217,7 @@ function CollectControls({
         </select>
       </div>
       <div className="field">
-        <label htmlFor="collect-time-range">时间</label>
+        <label htmlFor="collect-time-range">采集时间</label>
         <select id="collect-time-range" name="timeRange" onChange={(event) => onTimeRangeChange(event.target.value as TimeRange)} value={timeRange}>
           {timeRangeOptions.map((option) => (
             <option key={option.value} value={option.value}>

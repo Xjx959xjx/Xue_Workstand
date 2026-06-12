@@ -90,5 +90,15 @@ function hasCustomZodMessage(issue: z.ZodIssue) {
 function getApiErrorStatus(error: unknown, options: ApiResponseOptions) {
   if (error instanceof z.ZodError) return 400;
   if (error instanceof ApiRouteError) return error.status;
+  const status = getErrorStatus(error);
+  if (status) return status;
   return options.status ?? 500;
+}
+
+function getErrorStatus(error: unknown) {
+  if (!error || typeof error !== "object") return 0;
+  const candidate = error as { status?: unknown; statusCode?: unknown };
+  const status = typeof candidate.statusCode === "number" ? candidate.statusCode : candidate.status;
+  if (typeof status !== "number" || !Number.isInteger(status)) return 0;
+  return status >= 400 && status <= 599 ? status : 0;
 }
