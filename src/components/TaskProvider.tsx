@@ -304,7 +304,7 @@ function isActiveJob(job: JobRecord | JobListItem) {
   return job.status === "queued" || job.status === "running";
 }
 
-function isRecentJob(job: JobRecord) {
+function isRecentJob(job: Pick<JobRecord, "completedAt" | "updatedAt" | "createdAt">) {
   const time = Date.parse(job.completedAt || job.updatedAt || job.createdAt);
   return Number.isFinite(time) && Date.now() - time < 15 * 60 * 1000;
 }
@@ -359,11 +359,15 @@ function shouldHydrateJob(
   if (!relevantToCurrentPage || !needsFullJob) return false;
   const cachedJob = cache.get(job.id);
   if (cachedJob && (!job.hasResult || typeof cachedJob.result !== "undefined")) return false;
-  if (isFirstLoad) return false;
+  if (isFirstLoad) return shouldHydrateInitialTerminalJob(job, index, pathname);
 
   const previous = previousStatus.get(job.id);
   if (previous && previous !== job.status) return true;
   return false;
+}
+
+function shouldHydrateInitialTerminalJob(job: JobListItem, index: number, pathname: string) {
+  return pathname === "/writer" && job.kind === "write-copy" && index < 12 && isRecentJob(job);
 }
 
 function shouldExposeHydrationError(job: JobListItem) {

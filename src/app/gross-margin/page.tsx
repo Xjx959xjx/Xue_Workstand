@@ -1,9 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, Copy, FileText, RefreshCw, Save, Upload } from "lucide-react";
+import Link from "next/link";
+import { Calculator, Copy, FileText, MessageSquarePlus, RefreshCw, Save, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { bulkSaveGrossMarginMonitorRecords, getGrossMarginLibrary, saveGrossMarginMonitorRecord, saveGrossMarginPriceTable } from "@/lib/client";
+import {
+  bulkSaveGrossMarginMonitorRecords,
+  getGrossMarginLibrary,
+  saveGrossMarginMonitorRecord,
+  saveGrossMarginPriceTable
+} from "@/lib/client";
 import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/platform-links";
 import { GrossMarginBulkMonitorModal } from "./_components/GrossMarginBulkMonitorModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
@@ -120,6 +126,10 @@ export default function GrossMarginPage() {
   const effectiveReviewTemplate = reviewTemplateOverride ?? reviewDraft;
   const reviewTemplateLineCount = countTemplateLines(effectiveReviewTemplate);
   const configuredPriceCount = table?.items.filter((item) => toAmount(priceInputs[item.id] ?? item.unitPrice) > 0).length || 0;
+  const engagementTarget = useMemo(
+    () => buildEngagementTarget(calculation.lines, videoUrl),
+    [calculation.lines, videoUrl]
+  );
 
   useEffect(() => {
     let ignore = false;
@@ -669,6 +679,29 @@ export default function GrossMarginPage() {
                   {busy === "export" ? "导出中" : "导出并监控"}
                 </button>
               </div>
+              {engagementTarget.href ? (
+                <Link className="gross-engagement-jump" href={engagementTarget.href}>
+                  <span className="gross-engagement-jump-copy">
+                    <MessageSquarePlus aria-hidden="true" size={15} />
+                    <span>
+                      <strong>评论 / 弹幕</strong>
+                      <small>{formatEngagementTargetCounts(engagementTarget)}</small>
+                    </span>
+                  </span>
+                  <strong className="gross-engagement-jump-action">去生成</strong>
+                </Link>
+              ) : (
+                <button className="gross-engagement-jump" disabled type="button">
+                  <span className="gross-engagement-jump-copy">
+                    <MessageSquarePlus aria-hidden="true" size={15} />
+                    <span>
+                      <strong>评论 / 弹幕</strong>
+                      <small>{formatEngagementTargetCounts(engagementTarget)}</small>
+                    </span>
+                  </span>
+                  <strong className="gross-engagement-jump-action">去生成</strong>
+                </button>
+              )}
             </div>
           </div>
         </aside>
@@ -1055,6 +1088,37 @@ function toAbsoluteMetricValue(line: GrossMarginCalculationLine) {
   if (line.quantityUnit === "万") return line.quantity * 10000;
   if (line.quantityUnit === "千") return line.quantity * 1000;
   return line.quantity;
+}
+
+function buildEngagementTarget(lines: GrossMarginCalculationLine[], videoUrl: string) {
+  const params = new URLSearchParams();
+  const commentCount = getAbsoluteServiceQuantity(lines, "comment");
+  const danmakuCount = getAbsoluteServiceQuantity(lines, "danmaku");
+  const source = videoUrl.trim();
+
+  if (source) params.set("source", source);
+  if (commentCount > 0) params.set("comments", String(commentCount));
+  if (danmakuCount > 0) params.set("danmaku", String(danmakuCount));
+
+  return {
+    commentCount,
+    danmakuCount,
+    href: commentCount > 0 || danmakuCount > 0 ? `/assets?${params.toString()}` : ""
+  };
+}
+
+function getAbsoluteServiceQuantity(lines: GrossMarginCalculationLine[], service: GrossMarginServiceKind) {
+  const line = lines.find((item) => item.service === service);
+  if (!line || line.quantity <= 0) return 0;
+  return Math.max(1, Math.round(toAbsoluteMetricValue(line)));
+}
+
+function formatEngagementTargetCounts({ commentCount, danmakuCount }: { commentCount: number; danmakuCount: number }) {
+  const parts = [
+    commentCount > 0 ? `评论 ${formatReviewNumber(commentCount)}` : "评论",
+    danmakuCount > 0 ? `弹幕 ${formatReviewNumber(danmakuCount)}` : "弹幕"
+  ];
+  return parts.join(" · ");
 }
 
 function getSplitRoundStep(service: GrossMarginServiceKind) {

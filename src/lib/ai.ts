@@ -244,6 +244,54 @@ export async function chatComplete(
   return chatCompleteWithFallback(messages, reasoningEffort, undefined, options);
 }
 
+export async function chatCompleteStrict(
+  messages: ChatMessage[],
+  reasoningEffort?: ChatReasoningEffort,
+  options: ChatRequestOptions = {}
+): Promise<ChatCompletionResult> {
+  throwIfAborted(options.signal);
+  const configs = configuredChatConfigs();
+  if (!configs.length) {
+    throw new Error("未配置对话模型，请先配置 CHAT_API_KEY / OPENAI_API_KEY、CHAT_BASE_URL 和 CHAT_MODEL 后再生成。");
+  }
+
+  let lastError: unknown;
+  for (const config of configs) {
+    try {
+      return await chatCompleteWithConfig(config, messages, reasoningEffort, undefined, options);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      lastError = error;
+    }
+  }
+
+  throw new Error(formatStrictChatError(lastError));
+}
+
+function formatStrictChatError(error: unknown) {
+  const failure = error
+    ? classifyModelFailure(error)
+    : {
+        kind: "unknown" as const,
+        userMessage: "对话模型暂时不可用",
+        rawMessage: "unknown model error"
+      };
+  return `${failure.userMessage}，此功能不会切到本地模板。${strictChatFailureAction(failure.kind)}`;
+}
+
+function strictChatFailureAction(kind: ModelErrorKind) {
+  if (kind === "not_configured") return "请配置 CHAT_API_KEY / OPENAI_API_KEY、CHAT_BASE_URL 和 CHAT_MODEL。";
+  if (kind === "auth") return "请检查 CHAT_API_KEY / OPENAI_API_KEY；如果使用备用模型，也检查 CHAT_FALLBACK_API_KEY / FHL_API_KEY。";
+  if (kind === "quota") return "请检查模型额度是否不足，必要时补余额或切换到可用的备用对话模型。";
+  if (kind === "endpoint") return "请检查 CHAT_BASE_URL、CHAT_WIRE_API、CHAT_RESPONSES_URL 或 CHAT_COMPLETIONS_URL。";
+  if (kind === "network") return "请检查网络、中转站地址和 CHAT_PROXY_URL。";
+  if (kind === "rate_limit") return "可以稍后重试，或先把 ENGAGEMENT_MODEL_CONCURRENCY 调低。";
+  if (kind === "timeout") return "可以稍后重试，或先把 ENGAGEMENT_MODEL_CONCURRENCY 调低。";
+  if (kind === "server") return "请稍后重试，或切换到可用的备用对话模型。";
+  if (kind === "parse" || kind === "empty") return "请重试或切换到更稳定的对话模型。";
+  return "请检查对话模型配置后再重试。";
+}
+
 export async function analyzeMaterialFrames(input: {
   frames: string[];
   platform: Platform | "unknown";
@@ -1275,6 +1323,9 @@ function summarizeWebResearchFailure(error: unknown) {
   }
   if (/429\b|rate limit/i.test(message)) {
     return "模型联网搜索被限流";
+  }
+  if (/402\b|insufficient[_\s-]*(?:user[_\s-]*)?quota|insufficient[_\s-]*balance|quota[_\s-]*exceeded|billing|payment[_\s-]*required|credit|余额|额度|预扣费|扣费/i.test(message)) {
+    return "模型联网搜索额度不足";
   }
   if (/401\b|403\b|unauthorized|forbidden/i.test(message)) {
     return "模型联网搜索鉴权异常";

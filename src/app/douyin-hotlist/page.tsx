@@ -36,6 +36,7 @@ const DEFAULT_WINDOW = "3d";
 const REFRESH_LIMIT = 10;
 const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const AUTO_REFRESH_CHECK_INTERVAL_MS = 60 * 1000;
+const AUTO_REFRESH_START_DELAY_MS = AUTO_REFRESH_CHECK_INTERVAL_MS;
 const MAX_REFRESH_LOGS = 6;
 const MAX_REFRESH_LOG_DETAILS = 6;
 const REFRESH_LOG_STORAGE_KEY = "douyin-hotlist-refresh-logs";
@@ -108,6 +109,7 @@ export default function DouyinHotlistPage() {
   const [busy, setBusy] = useState<BusyState>(() => getCachedDouyinHotlist({ window: initialWindowFilter }) ? "" : "load");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [refreshOrigin, setRefreshOrigin] = useState<"" | "automatic" | "manual">("");
   const [removeTarget, setRemoveTarget] = useState<DouyinHotlistAccount | null>(null);
   const [accountDrawerOpen, setAccountDrawerOpen] = useState(false);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLogEntry[]>([]);
@@ -116,6 +118,7 @@ export default function DouyinHotlistPage() {
   const accountCountRef = useRef(snapshot?.accounts.length ?? 0);
   const lastRefreshedAtRef = useRef<string | undefined>(snapshot?.summary.lastRefreshedAt);
   const lastAutoRefreshAttemptAtRef = useRef(0);
+  const autoRefreshReadyAtRef = useRef(0);
   const refreshInFlightRef = useRef(false);
   const refreshHotlistRef = useRef<(options?: RefreshHotlistOptions) => Promise<void>>(async () => {});
 
@@ -291,6 +294,7 @@ export default function DouyinHotlistPage() {
     refreshInFlightRef.current = true;
     busyRef.current = "refresh";
     setBusy("refresh");
+    setRefreshOrigin(automatic ? "automatic" : "manual");
     setMessage("");
     setError("");
     try {
@@ -305,11 +309,13 @@ export default function DouyinHotlistPage() {
       const retryText = retryCount ? `，${retryCount} 个触发重试` : "";
       appendRefreshLog({
         automatic,
-        status: next.refresh.failed ? "warning" : "success",
+        status: next.refresh.completed === 0 ? "failed" : next.refresh.failed ? "warning" : "success",
         text: `${automatic ? "自动" : "手动"}刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}${retryText} · ${next.summary.windowLabel}`,
         details: describeRefreshLogDetails(next.refresh.accounts)
       });
-      if (!automatic) {
+      if (isAllRefreshFailed(next.refresh)) {
+        setError(buildRefreshFailureMessage(next.refresh.accounts));
+      } else if (!automatic) {
         setMessage(`已刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}${retryText}。`);
       }
     } catch (err) {
@@ -329,6 +335,7 @@ export default function DouyinHotlistPage() {
       refreshInFlightRef.current = false;
       busyRef.current = "";
       setBusy("");
+      setRefreshOrigin("");
     }
   }, [appendRefreshLog, selectedAccount, snapshot?.accounts.length, windowFilter]);
 
@@ -341,6 +348,8 @@ export default function DouyinHotlistPage() {
     if (!accountCountRef.current || busyRef.current) return;
 
     const now = Date.now();
+    if (autoRefreshReadyAtRef.current && now < autoRefreshReadyAtRef.current) return;
+
     const lastCompletedRefreshAt = getTimeValue(lastRefreshedAtRef.current);
     const lastAutoRefreshAttemptAt = lastAutoRefreshAttemptAtRef.current;
     const lastAutoRefreshBaseline = Math.max(lastCompletedRefreshAt, lastAutoRefreshAttemptAt);
@@ -353,6 +362,7 @@ export default function DouyinHotlistPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    autoRefreshReadyAtRef.current = Date.now() + AUTO_REFRESH_START_DELAY_MS;
     const timer = window.setInterval(runAutoRefreshIfDue, AUTO_REFRESH_CHECK_INTERVAL_MS);
     const handlePageAvailable = () => runAutoRefreshIfDue();
 
@@ -365,10 +375,6 @@ export default function DouyinHotlistPage() {
       document.removeEventListener("visibilitychange", handlePageAvailable);
     };
   }, [runAutoRefreshIfDue]);
-
-  useEffect(() => {
-    runAutoRefreshIfDue();
-  }, [busy, runAutoRefreshIfDue, snapshot?.accounts.length, snapshot?.summary.lastRefreshedAt]);
 
   async function handleRefresh() {
     if (!canRefresh) return;
@@ -422,7 +428,7 @@ export default function DouyinHotlistPage() {
           </button>
           <button className="btn primary" disabled={!canRefresh} onClick={() => void handleRefresh()} type="button">
             <TrendingUp aria-hidden="true" size={16} />
-            {busy === "refresh" ? "正在抓取" : refreshLabel}
+            {busy === "refresh" ? (refreshOrigin === "automatic" ? "自动抓取中" : "正在抓取") : refreshLabel}
           </button>
         </div>
       </header>
@@ -570,7 +576,7 @@ function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
       <div className="douyin-hotlist-refresh-log-panel" role="log" aria-label="刷新日志">
         <div className="douyin-hotlist-refresh-log-head">
           <strong>刷新日志</strong>
-          <span>每 30 分钟自动刷新，切回补跑</span>
+          <span>每 30 分钟自动检查，失败会记录</span>
         </div>
         {logs.length ? (
           <ol>
@@ -1114,6 +1120,15 @@ function describeRefreshAccountResult(account: DouyinHotlistRefreshAccountResult
   }
 
   return `${account.name}：批量抓取失败后单账号重试成功${account.retryReason ? `，原因为 ${compactRefreshError(account.retryReason)}` : ""}`;
+}
+
+function isAllRefreshFailed(refresh: { accounts: DouyinHotlistRefreshAccountResult[] }) {
+  return refresh.accounts.length > 0 && refresh.accounts.every((account) => account.status === "failed");
+}
+
+function buildRefreshFailureMessage(accounts: DouyinHotlistRefreshAccountResult[]) {
+  const details = describeRefreshLogDetails(accounts);
+  return details.length ? `刷新失败：${details.join("；")}` : "刷新失败：所有账号都没有抓到可用结果。";
 }
 
 function compactRefreshError(message: string) {

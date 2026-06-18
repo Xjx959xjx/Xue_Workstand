@@ -10,6 +10,13 @@ export function formatJobErrorMessage(message: string) {
     return "没有取得当前抖音视频的可转写媒体地址。请确认 opencli 已登录抖音、视频链接仍可访问，或重新采集账号后再试。";
   }
 
+  if (/Browser profile\s+"[^"]+"\s+is not connected|Extension not connected|Browser Bridge[^。\n]*not connected|OpenCLI extension[^。\n]*enabled/i.test(normalized)) {
+    if (/opencli browser .*bilibili-link-transcribe/i.test(normalized)) {
+      return "B站链接转写需要 OpenCLI Browser Bridge，但当前浏览器桥接没有连上。请保持 Chrome/Edge 打开并启用 OpenCLI 扩展，运行 opencli doctor 看到 Extension connected 后再重试。";
+    }
+    return "OpenCLI Browser Bridge 当前没有连上。请保持 Chrome/Edge 打开并启用 OpenCLI 扩展，运行 opencli doctor 看到 Extension connected 后再重试。";
+  }
+
   if (/最近 50 条视频里找不到|可能已删除、隐藏、下架/.test(normalized)) {
     return normalized;
   }

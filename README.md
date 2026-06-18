@@ -63,7 +63,7 @@ npm run dev
 - `IMAGE_API_KEY`、`IMAGE_BASE_URL`、`IMAGE_MODEL`、`IMAGE_SIZE`、`IMAGE_QUALITY`、`IMAGE_FORMAT`、`IMAGE_PROXY_URL`：可选。用于后续独立封面生成能力，默认按 OpenAI Images API / `gpt-image-2` / `2048x1152` 生成。
 - `FEISHU_OPENCLI_AS`、`FEISHU_FOLDER_TOKEN`：可选。飞书文档发布固定使用 `opencli lark-cli docs +create`，默认使用当前 lark-cli 用户身份。
 
-如果没有配置对话模型，系统会使用本地兜底模板生成可编辑结果，便于先跑通流程。
+如果没有配置对话模型，风格卡和写作链路会使用本地兜底模板生成可编辑结果，便于先跑通流程。评论 / 弹幕生成依赖可用的对话模型；鉴权、限流或模型未配置会直接失败，不会静默切到本地模板。
 
 评论生成页位于 `/assets`，可基于已保存草稿、粘贴文案或 B站 / 抖音视频链接生成观众评论，并可按需生成弹幕。评论和弹幕使用对话模型；链接提取沿用现有视频转写链路，普通网页内容请改用粘贴文案。当前默认会生成 `100` 条评论，评论高批量场景会按 `25` 条一批并发生成；如果模型中转站限流，可把 `ENGAGEMENT_MODEL_CONCURRENCY` 调低。
 

@@ -1,4 +1,4 @@
-import { chatComplete, getChatRuntimeConfig } from "./ai";
+import { chatCompleteStrict, getChatRuntimeConfig } from "./ai";
 import {
   getBilibiliRelatedTopicComments,
   getDouyinRelatedTopicComments,
@@ -517,7 +517,7 @@ async function generateComments(
       const waveResults = await Promise.all(
         wave.map(async (batch, waveIndex) => {
           throwIfAborted(signal);
-          const result = await chatComplete(
+          const result = await chatCompleteStrict(
             [
               {
                 role: "system",
@@ -701,7 +701,7 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
   const samples = contexts
     .map((context) => `账号：${context.accountName}\n弹幕样本：\n${context.danmaku.slice(0, 70).join("\n") || "暂无弹幕样本"}`)
     .join("\n\n---\n\n") || "暂无弹幕样本，请按正文节奏生成自然短弹幕。";
-  const result = await chatComplete(
+  const result = await chatCompleteStrict(
     [
       {
         role: "system",
@@ -749,7 +749,7 @@ async function buildCommentSourceBrief(
   signal?: AbortSignal
 ): Promise<{ brief: CommentSourceBrief; entityCorrections: CommentEntityCorrection[] }> {
   throwIfAborted(signal);
-  const result = await chatComplete(
+  const result = await chatCompleteStrict(
     [
       {
         role: "system",
@@ -1411,7 +1411,7 @@ async function summarizeRelatedCommentSamples(
   signal?: AbortSignal
 ): Promise<Pick<CommentRelatedResearch, "themes" | "phrases" | "questions" | "objections" | "longCommentPatterns" | "chatterAngles">> {
   throwIfAborted(signal);
-  const result = await chatComplete(
+  const result = await chatCompleteStrict(
     [
       {
         role: "system",

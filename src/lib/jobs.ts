@@ -93,6 +93,8 @@ const jobWriteQueues = new Map<string, Promise<unknown>>();
 let jobSummaryCache: JobSummaryCache | null = null;
 const PARTIAL_TEXT_PATCH_INTERVAL_MS = 250;
 const PARTIAL_TEXT_PATCH_CHARS = 160;
+const JOB_SUMMARY_EVENT_LIMIT = 3;
+const JOB_SUMMARY_LIMIT = 80;
 const DEFAULT_MAX_ACTIVE_JOBS = 2;
 const DEFAULT_JOB_HISTORY_LIMIT = 200;
 const jobKindSet = new Set<JobKind>(jobKinds);
@@ -302,7 +304,7 @@ export async function listJobSummaries() {
   for (const job of runtime.records.values()) {
     summaries.set(job.id, toJobListItem(job));
   }
-  return [...summaries.values()].sort(compareJobsByUpdatedAtDesc);
+  return [...summaries.values()].sort(compareJobsByUpdatedAtDesc).slice(0, JOB_SUMMARY_LIMIT);
 }
 
 export async function getJob(jobId: string) {
@@ -1177,7 +1179,7 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
     progress: readRequiredNumber(target, raw, "progress"),
     ...(href ? { href } : {}),
     ...(resultRef ? { resultRef } : {}),
-    ...(events ? { events } : {}),
+    ...(events ? { events: summarizeJobEvents(events) } : {}),
     ...(error ? { error: summarizeJobListText(error, 240) } : {}),
     createdAt: readRequiredString(target, raw, "createdAt"),
     updatedAt: readRequiredString(target, raw, "updatedAt"),
@@ -1333,11 +1335,16 @@ function toJobListItem(job: JobRecord): JobListItem {
   return {
     ...item,
     error: item.error ? summarizeJobListText(item.error, 240) : undefined,
+    events: item.events ? summarizeJobEvents(item.events) : undefined,
     inputSummary: item.inputSummary ? summarizeJobListText(item.inputSummary, 120) : undefined,
     message: summarizeJobListText(item.message, 160),
     hasPartialText: Boolean(partialText),
     hasResult: typeof result !== "undefined"
   };
+}
+
+function summarizeJobEvents(events: JobEvent[]) {
+  return events.slice(-JOB_SUMMARY_EVENT_LIMIT);
 }
 
 function summarizeJobListText(value: string, maxLength: number) {

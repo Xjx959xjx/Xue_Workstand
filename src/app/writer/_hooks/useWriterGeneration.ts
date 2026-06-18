@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { saveDraft } from "@/lib/client";
+import { buildWriterDraftHref } from "@/lib/draft-links";
 import { writeCopySourceKey } from "@/lib/job-scope";
 import type {
   AccountDraftInput,
@@ -34,6 +35,7 @@ type UseWriterGenerationInput = {
   cancelTask: (jobId: string) => Promise<JobRecord>;
   refresh: () => Promise<void>;
   routerPush: (href: string) => void;
+  routerReplace: (href: string, options?: { scroll?: boolean }) => void;
   selectedAccount: AccountListItem | null;
   selectedProject: ProjectListItem | null;
   setBusy: Dispatch<SetStateAction<string>>;
@@ -60,6 +62,7 @@ export function useWriterGeneration({
   cancelTask,
   refresh,
   routerPush,
+  routerReplace,
   selectedAccount,
   selectedProject,
   setBusy,
@@ -177,6 +180,7 @@ export function useWriterGeneration({
         onGenerationResult?.(result);
         if (result.draft) {
           onDraftSaved?.(result.draft);
+          routerReplace(buildWriterDraftHref(result.draft), { scroll: false });
           void refresh();
         }
         setNotice(
@@ -202,7 +206,7 @@ export function useWriterGeneration({
       setGenerateStage("已停止");
       setGenerateProgress(Math.max(0, activeWriteJob.progress || 0));
     }
-  }, [activeWriteJob, onDraftSaved, onGenerationResult, refresh, setBusy, setNotice, useWebResearch]);
+  }, [activeWriteJob, onDraftSaved, onGenerationResult, refresh, routerReplace, setBusy, setNotice, useWebResearch]);
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;

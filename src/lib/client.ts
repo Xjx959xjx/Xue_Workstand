@@ -33,6 +33,8 @@ import type { PublishCopyInput, PublishCopyResult } from "./publish-copy-types";
 
 let draftsCache: { drafts: Draft[] } | null = null;
 let draftsRequest: Promise<{ drafts: Draft[] }> | null = null;
+const draftOverrides = new Map<string, Draft>();
+const deletedDraftIds = new Set<string>();
 let copySourcesCache: { sources: CopySource[] } | null = null;
 let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
 let engagementRecordsCache: { records: EngagementRecord[] } | null = null;
@@ -232,10 +234,31 @@ async function readNdjsonStream<TEvent extends { type: string }>(
 }
 
 function rememberDrafts(drafts: Draft[]) {
-  if (!drafts.length || !draftsCache) return;
+  const activeDrafts = drafts.filter((draft) => !deletedDraftIds.has(draft.id));
+  if (!activeDrafts.length) return;
+  for (const draft of activeDrafts) draftOverrides.set(draft.id, draft);
   draftsCache = {
-    drafts: mergeById(drafts, draftsCache.drafts, compareCreatedAtDesc)
+    drafts: mergeDraftOverrides(draftsCache?.drafts ?? [])
   };
+}
+
+function rememberDraftList(drafts: Draft[]) {
+  draftsCache = {
+    drafts: mergeDraftOverrides(drafts)
+  };
+  return draftsCache;
+}
+
+function mergeDraftOverrides(drafts: Draft[]) {
+  const byId = new Map(
+    drafts
+      .filter((draft) => !deletedDraftIds.has(draft.id))
+      .map((draft) => [draft.id, draft])
+  );
+  for (const [draftId, draft] of draftOverrides) {
+    if (!deletedDraftIds.has(draftId)) byId.set(draftId, draft);
+  }
+  return [...byId.values()].sort(compareCreatedAtDesc);
 }
 
 function rememberDraftFromJob(job: JobRecord) {
@@ -551,19 +574,6 @@ export function getDouyinHotlist(input: { windowDays?: number; window?: string }
 
 export function getCachedDouyinHotlist(input: { windowDays?: number; window?: string } = {}) {
   return douyinHotlistCache.get(getDouyinHotlistWindowKey(input)) || null;
-}
-
-export function prefetchWorkspaceRouteData(href: string): Promise<unknown> | undefined {
-  const pathname = href.split("?")[0];
-  if (pathname === "/douyin-hotlist") {
-    const queryString = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
-    return getDouyinHotlist({ window: new URLSearchParams(queryString).get("window") || undefined });
-  }
-  if (pathname === "/project-workbench") return getCopySources();
-  if (pathname === "/writer") return getDrafts();
-  if (pathname === "/assets") return getEngagementRecords();
-  if (pathname === "/gross-margin" || pathname === "/gross-margin/monitor") return getGrossMarginLibrary();
-  return undefined;
 }
 
 export function addDouyinHotlistAccount(query: string) {
@@ -1126,8 +1136,7 @@ export function getDrafts() {
 
   draftsRequest = requestJson<{ drafts: Draft[] }>("/api/drafts")
     .then((result) => {
-      draftsCache = result;
-      return result;
+      return rememberDraftList(result.drafts);
     })
     .finally(() => {
       draftsRequest = null;
@@ -1150,6 +1159,10 @@ export function deleteDrafts(draftIds: string[]) {
     method: "DELETE",
     body: JSON.stringify({ draftIds })
   }).then((result) => {
+    for (const draftId of result.deleted) {
+      deletedDraftIds.add(draftId);
+      draftOverrides.delete(draftId);
+    }
     if (draftsCache) {
       const deleted = new Set(result.deleted);
       draftsCache = {
@@ -1400,10 +1413,10 @@ export type WorkspaceHealthResponse = {
     endpoint?: string;
     latencyMs?: number;
     checkedAt: string;
-    errorKind?: "not_configured" | "auth" | "rate_limit" | "timeout" | "network" | "server" | "endpoint" | "parse" | "empty" | "unknown";
+    errorKind?: "not_configured" | "auth" | "quota" | "rate_limit" | "timeout" | "network" | "server" | "endpoint" | "parse" | "empty" | "unknown";
     message?: string;
     rawError?: string;
-    primaryErrorKind?: "not_configured" | "auth" | "rate_limit" | "timeout" | "network" | "server" | "endpoint" | "parse" | "empty" | "unknown";
+    primaryErrorKind?: "not_configured" | "auth" | "quota" | "rate_limit" | "timeout" | "network" | "server" | "endpoint" | "parse" | "empty" | "unknown";
     primaryMessage?: string;
     primaryRawError?: string;
   };

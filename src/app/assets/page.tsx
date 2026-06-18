@@ -66,6 +66,26 @@ function AssetsPageContent() {
   }, [notice, noticeIsError, notify]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const source = params.get("source")?.trim();
+    const nextCommentCount = readCountParam(params, "comments");
+    const nextDanmakuCount = readCountParam(params, "danmaku");
+
+    if (source) setSourceInput(source);
+    if (nextCommentCount !== null) {
+      setIncludeComments(true);
+      setCommentCount(nextCommentCount);
+    }
+    if (nextDanmakuCount !== null) {
+      setIncludeDanmaku(true);
+      setDanmakuCount(nextDanmakuCount);
+    }
+    if (nextCommentCount === null && nextDanmakuCount !== null) {
+      setIncludeComments(false);
+    }
+  }, []);
+
+  useEffect(() => {
     let ignore = false;
     const cachedRecords = getCachedEngagementRecords();
     if (cachedRecords) {
@@ -223,4 +243,12 @@ function mergeEngagementRecords(nextRecords: EngagementRecord[], currentRecords:
   const byId = new Map(currentRecords.map((record) => [record.id, record]));
   for (const record of nextRecords) byId.set(record.id, record);
   return [...byId.values()].sort((left, right) => +new Date(right.createdAt) - +new Date(left.createdAt));
+}
+
+function readCountParam(params: URLSearchParams, key: string) {
+  const rawValue = params.get(key);
+  if (!rawValue) return null;
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value);
 }

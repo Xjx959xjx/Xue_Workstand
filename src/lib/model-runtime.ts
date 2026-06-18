@@ -9,6 +9,7 @@ export type ChatTool = {
 export type ModelErrorKind =
   | "not_configured"
   | "auth"
+  | "quota"
   | "rate_limit"
   | "timeout"
   | "network"
@@ -407,6 +408,9 @@ export function classifyModelFailure(error: unknown): {
   }
   if (/429\b|rate limit/i.test(message)) {
     return { kind: "rate_limit", userMessage: "对话模型服务限流", rawMessage: compactErrorMessage(message) };
+  }
+  if (/402\b|insufficient[_\s-]*(?:user[_\s-]*)?quota|insufficient[_\s-]*balance|quota[_\s-]*exceeded|billing|payment[_\s-]*required|credit|余额|额度|预扣费|扣费/i.test(message)) {
+    return { kind: "quota", userMessage: "对话模型服务额度不足", rawMessage: compactErrorMessage(message) };
   }
   if (/401\b|403\b|unauthorized|forbidden/i.test(message)) {
     return { kind: "auth", userMessage: "对话模型服务鉴权异常", rawMessage: compactErrorMessage(message) };

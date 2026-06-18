@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { TaskCenter } from "./TaskCenter";
 import type { AppMode } from "@/lib/app-mode";
-import { prefetchWorkspaceRouteData } from "@/lib/client";
 
 type NavItem = {
   href: string;
@@ -38,14 +37,9 @@ const navItems: NavItem[] = [
 
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
 const ROUTE_BUSY_DELAY_MS = 200;
-const ROUTE_DATA_PREFETCH_INTENT_MS = 180;
 
 export function AppNav({ appMode }: { appMode: AppMode }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const prefetchedCodeRoutesRef = useRef(new Set<string>());
-  const prefetchedDataRoutesRef = useRef(new Set<string>());
-  const dataPrefetchTimersRef = useRef(new Map<string, number>());
   const pendingTimerRef = useRef<number | null>(null);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [showRouteBusy, setShowRouteBusy] = useState(false);
@@ -55,52 +49,6 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   const activeHref = visibleNavItems
     .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
     .sort((left, right) => right.href.length - left.href.length)[0]?.href;
-
-  const clearDataPrefetchTimer = useCallback((href: string) => {
-    const timer = dataPrefetchTimersRef.current.get(href);
-    if (timer === undefined) return;
-    window.clearTimeout(timer);
-    dataPrefetchTimersRef.current.delete(href);
-  }, []);
-
-  const clearDataPrefetchTimers = useCallback(() => {
-    dataPrefetchTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    dataPrefetchTimersRef.current.clear();
-  }, []);
-
-  const prefetchRouteCode = useCallback((href: string) => {
-    if (prefetchedCodeRoutesRef.current.has(href)) return;
-    prefetchedCodeRoutesRef.current.add(href);
-    router.prefetch(href);
-  }, [router]);
-
-  const prefetchRouteData = useCallback((href: string) => {
-    if (prefetchedDataRoutesRef.current.has(href)) return;
-    const routeDataWarmup = prefetchWorkspaceRouteData(href);
-    if (!routeDataWarmup) return;
-
-    prefetchedDataRoutesRef.current.add(href);
-    if (routeDataWarmup) {
-      void routeDataWarmup.catch((error) => {
-        prefetchedDataRoutesRef.current.delete(href);
-        console.warn(`预热模块数据失败：${href}`, error);
-      });
-    }
-  }, []);
-
-  const prefetchRoute = useCallback((href: string, options: { includeData?: boolean } = {}) => {
-    prefetchRouteCode(href);
-    if (options.includeData) prefetchRouteData(href);
-  }, [prefetchRouteCode, prefetchRouteData]);
-
-  const scheduleDataPrefetch = useCallback((href: string) => {
-    if (prefetchedDataRoutesRef.current.has(href) || dataPrefetchTimersRef.current.has(href)) return;
-    const timer = window.setTimeout(() => {
-      dataPrefetchTimersRef.current.delete(href);
-      prefetchRouteData(href);
-    }, ROUTE_DATA_PREFETCH_INTENT_MS);
-    dataPrefetchTimersRef.current.set(href, timer);
-  }, [prefetchRouteData]);
 
   const clearPending = useCallback(() => {
     if (pendingTimerRef.current !== null) {
@@ -113,17 +61,10 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
 
   useEffect(() => {
     clearPending();
-    prefetchRoute(pathname);
-  }, [clearPending, pathname, prefetchRoute]);
-
-  useEffect(() => () => {
-    clearDataPrefetchTimers();
-  }, [clearDataPrefetchTimers]);
+  }, [clearPending, pathname]);
 
   const beginNavigation = useCallback((href: string) => {
     if (href === activeHref || href === pathname) return;
-    clearDataPrefetchTimers();
-    prefetchRoute(href, { includeData: true });
     setPendingHref(href);
     if (pendingTimerRef.current !== null) {
       window.clearTimeout(pendingTimerRef.current);
@@ -131,7 +72,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
     pendingTimerRef.current = window.setTimeout(() => {
       setShowRouteBusy(true);
     }, ROUTE_BUSY_DELAY_MS);
-  }, [activeHref, clearDataPrefetchTimers, pathname, prefetchRoute]);
+  }, [activeHref, pathname]);
 
   const handleNavClick = useCallback((event: MouseEvent<HTMLAnchorElement>, href: string) => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
@@ -153,12 +94,6 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         className="brand"
         prefetch={false}
         onClick={(event) => handleNavClick(event, brandHref)}
-        onFocus={() => prefetchRoute(brandHref, { includeData: true })}
-        onPointerEnter={() => {
-          prefetchRoute(brandHref);
-          scheduleDataPrefetch(brandHref);
-        }}
-        onPointerLeave={() => clearDataPrefetchTimer(brandHref)}
       >
         <span className="brand-mark" aria-hidden="true">
           <Sparkles size={18} strokeWidth={2.1} />
@@ -181,12 +116,6 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                 aria-current={active ? "page" : undefined}
                 prefetch={false}
                 onClick={(event) => handleNavClick(event, item.href)}
-                onFocus={() => prefetchRoute(item.href, { includeData: true })}
-                onPointerEnter={() => {
-                  prefetchRoute(item.href);
-                  scheduleDataPrefetch(item.href);
-                }}
-                onPointerLeave={() => clearDataPrefetchTimer(item.href)}
               >
                 <span className="nav-emoji" aria-hidden="true">
                   <Icon size={17} strokeWidth={2.1} />

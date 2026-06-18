@@ -16,16 +16,23 @@ let libraryOverviewCache: LibraryOverviewResponse | null = null;
 let libraryOverviewRequest: Promise<LibraryOverviewResponse> | null = null;
 let libraryOverviewRequestSeq = 0;
 
-export function LibraryProvider({ children }: { children: React.ReactNode }) {
+export function LibraryProvider({
+  children,
+  enabled = true
+}: {
+  children: React.ReactNode;
+  enabled?: boolean;
+}) {
   const [library, setLibrary] = useState<LibraryOverview | null>(() =>
     libraryOverviewCache ? buildLibraryOverview(libraryOverviewCache) : null
   );
-  const [loading, setLoading] = useState(() => !libraryOverviewCache);
+  const [loading, setLoading] = useState(() => enabled && !libraryOverviewCache);
   const [error, setError] = useState("");
   const hasLibraryRef = useRef(Boolean(libraryOverviewCache));
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async (options: { force?: boolean } = {}) => {
+    if (!enabled && !options.force) return;
     const refreshSeq = refreshSeqRef.current + 1;
     refreshSeqRef.current = refreshSeq;
     if (!hasLibraryRef.current) setLoading(true);
@@ -41,13 +48,21 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
     } finally {
       if (refreshSeq === refreshSeqRef.current) setLoading(false);
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     refresh({ force: false });
-  }, [refresh]);
+  }, [enabled, refresh]);
 
-  const value = useMemo(() => ({ library, loading, error, refresh }), [library, loading, error, refresh]);
+  const effectiveLoading = enabled && !hasLibraryRef.current && !error ? true : loading;
+  const value = useMemo(
+    () => ({ library, loading: effectiveLoading, error, refresh }),
+    [library, effectiveLoading, error, refresh]
+  );
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;
 }

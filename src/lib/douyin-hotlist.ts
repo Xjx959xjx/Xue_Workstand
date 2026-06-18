@@ -207,13 +207,12 @@ async function refreshDouyinHotlistUnlocked(options: {
     options.signal
   );
 
-  const refreshedAt = nowIso();
-  if (resolved.accounts.length) {
-    await markDouyinHotlistRefreshed(refreshedAt);
+  const completed = results.filter((result) => result.status === "completed").length;
+  if (completed > 0) {
+    await markDouyinHotlistRefreshed(nowIso());
   }
 
   const snapshot = await getDouyinHotlist({ windowKey: window.windowKey });
-  const completed = results.filter((result) => result.status === "completed").length;
   const staleResults = resolved.staleAccountIds.map((accountId) => ({
     accountId,
     name: accountId,
@@ -715,9 +714,18 @@ function getPublishedTime(video: Pick<Video, "publishedAt">) {
 }
 
 function extractTags(title: string) {
-  return [...title.matchAll(/#[^\s#，。！？、；;,.!?]+/g)]
-    .map((match) => match[0])
-    .slice(0, 4);
+  const tags: string[] = [];
+  const seen = new Set<string>();
+
+  for (const match of title.matchAll(/#[^\s#，。！？、；;,.!?]+/g)) {
+    const tag = match[0];
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    tags.push(tag);
+    if (tags.length >= 4) break;
+  }
+
+  return tags;
 }
 
 function clampInteger(value: unknown, min: number, max: number, fallback: number) {

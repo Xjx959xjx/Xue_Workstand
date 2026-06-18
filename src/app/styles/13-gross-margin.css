@@ -567,6 +567,80 @@
   grid-column: 1 / -1;
 }
 
+.gross-engagement-jump {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--surface-soft) 90%, white);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.gross-engagement-jump:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--accent) 24%, var(--line));
+  background: color-mix(in oklch, var(--surface-raised) 94%, white);
+}
+
+.gross-engagement-jump:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.gross-engagement-jump:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.gross-engagement-jump-copy {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.gross-engagement-jump-copy > svg {
+  flex: 0 0 auto;
+  color: var(--blue);
+}
+
+.gross-engagement-jump-copy > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.gross-engagement-jump-copy strong {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gross-engagement-jump-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.gross-engagement-jump-action {
+  flex: 0 0 auto;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .gross-import-modal {
   width: min(780px, calc(100vw - 32px));
   max-height: min(82vh, 680px);

@@ -245,6 +245,7 @@ function WriterPageContent() {
     onDraftSaved: handleDraftSaved,
     refresh,
     routerPush: router.push,
+    routerReplace: router.replace,
     selectedAccount,
     selectedProject,
     setBusy,
@@ -287,7 +288,7 @@ function WriterPageContent() {
     getDrafts()
       .then((result) => {
         if (ignore) return;
-        setFullDrafts(result.drafts);
+        setFullDrafts((current) => mergeDraftLists(current || [], result.drafts));
       })
       .catch((err) => {
         if (!ignore) setNotice(err instanceof Error ? err.message : "读取历史记录失败");
