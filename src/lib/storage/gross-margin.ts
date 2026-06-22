@@ -10,9 +10,16 @@ import {
   GrossMarginMonitorStatus,
   GrossMarginPriceOption,
   GrossMarginPriceTable,
+  GrossMarginPriceTableSaveItem,
+  GrossMarginReviewTemplate,
   GrossMarginServiceKind,
   GrossMarginTier
 } from "../types";
+import {
+  getDefaultGrossMarginReviewTemplate,
+  normalizeGrossMarginReviewTemplateContent,
+  validateGrossMarginReviewTemplate
+} from "../gross-margin-template";
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 import { libraryRoot, normalizeStorageSegment } from "./core";
@@ -43,6 +50,10 @@ function grossMarginCategoryJsonPath(id: string) {
 
 function grossMarginPriceTablePath(platform: GrossMarginPriceTable["platform"]) {
   return path.join(grossMarginPath(), platform + ".json");
+}
+
+function grossMarginReviewTemplatePath(platform: GrossMarginPriceTable["platform"]) {
+  return path.join(grossMarginPath(), `${platform}.template.json`);
 }
 
 function grossMarginAccountsPath() {
@@ -117,15 +128,26 @@ export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
       return normalizeGrossMarginPriceTable(platform, table);
     })
   );
+  const templates = await Promise.all(grossMarginTablePlatforms.map((platform) => getGrossMarginReviewTemplate(platform)));
   const monitorRecords = await getGrossMarginMonitorRecords();
 
   return {
     root: grossMarginPath(),
     tables,
+    templates,
     accounts: normalizeGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath())),
     monitorRecords,
     monitorProjects: buildGrossMarginMonitorProjects(monitorRecords)
   };
+}
+
+export async function getGrossMarginReviewTemplate(
+  platformInput: GrossMarginPriceTable["platform"]
+): Promise<GrossMarginReviewTemplate> {
+  await ensureGrossMarginDirs();
+  const platform = normalizeGrossMarginPlatform(platformInput);
+  const template = await readJson<Partial<GrossMarginReviewTemplate>>(grossMarginReviewTemplatePath(platform));
+  return normalizeGrossMarginReviewTemplate(platform, template);
 }
 
 export async function getGrossMarginMonitorRecords() {
@@ -220,7 +242,7 @@ export async function deleteGrossMarginMonitorRecord(recordId: string) {
 
 export async function saveGrossMarginPriceTable(input: {
   platform: GrossMarginPriceTable["platform"];
-  items: Array<Pick<GrossMarginPriceOption, "id" | "service" | "name" | "unitPrice" | "quantityUnit" | "minimumQuantity" | "note">>;
+  items: GrossMarginPriceTableSaveItem[];
 }) {
   await ensureGrossMarginDirs();
   const platform = normalizeGrossMarginPlatform(input.platform);
@@ -238,8 +260,9 @@ export async function saveGrossMarginPriceTable(input: {
       name: incoming.name.trim() || formatGrossMarginServiceName(service),
       unitPrice: normalizeGrossMarginUnitPrice(incoming.unitPrice),
       quantityUnit: normalizeGrossMarginQuantityUnit(incoming.quantityUnit),
-      minimumQuantity: normalizeGrossMarginMinimumQuantity(incoming.minimumQuantity) ?? currentItem?.minimumQuantity,
+      minimumQuantity: normalizeIncomingGrossMarginMinimumQuantity(incoming, currentItem),
       note: incoming.note?.trim() || undefined,
+      active: incoming.active ?? currentItem?.active ?? true,
       updatedAt: now
     });
   }
@@ -252,6 +275,30 @@ export async function saveGrossMarginPriceTable(input: {
 
   await writeJson(grossMarginPriceTablePath(platform), table);
   return table;
+}
+
+export async function saveGrossMarginReviewTemplate(input: {
+  platform: GrossMarginPriceTable["platform"];
+  content: string;
+}) {
+  await ensureGrossMarginDirs();
+  const platform = normalizeGrossMarginPlatform(input.platform);
+  const content = validateGrossMarginReviewTemplate(input.content);
+  const template = normalizeGrossMarginReviewTemplate(platform, {
+    platform,
+    content,
+    customized: true,
+    updatedAt: nowIso()
+  });
+  await writeJson(grossMarginReviewTemplatePath(platform), template);
+  return template;
+}
+
+export async function resetGrossMarginReviewTemplate(platformInput: GrossMarginPriceTable["platform"]) {
+  await ensureGrossMarginDirs();
+  const platform = normalizeGrossMarginPlatform(platformInput);
+  await fs.rm(grossMarginReviewTemplatePath(platform), { force: true });
+  return normalizeGrossMarginReviewTemplate(platform, null);
 }
 
 export async function upsertGrossMarginCategory(input: {
@@ -400,6 +447,7 @@ function normalizeGrossMarginPriceTable(
       quantityUnit: normalizeGrossMarginQuantityUnit(item.quantityUnit),
       minimumQuantity: normalizeGrossMarginMinimumQuantity(item.minimumQuantity) ?? defaultItem?.minimumQuantity,
       note: normalizeLegacyGrossMarginOptionNote(platform, id, item.note) || undefined,
+      active: item.active ?? defaultItem?.active ?? true,
       updatedAt: item.updatedAt || now
     });
   }
@@ -408,6 +456,24 @@ function normalizeGrossMarginPriceTable(
     platform,
     items: [...byId.values()].sort(compareGrossMarginPriceOptions),
     updatedAt: now
+  };
+}
+
+function normalizeGrossMarginReviewTemplate(
+  platform: GrossMarginPriceTable["platform"],
+  template?: Partial<GrossMarginReviewTemplate> | null
+): GrossMarginReviewTemplate {
+  const defaultContent = getDefaultGrossMarginReviewTemplate(platform);
+  const content = normalizeGrossMarginReviewTemplateContent(template?.content || "");
+  const customized = Boolean(content);
+  const effectiveContent = customized ? validateGrossMarginReviewTemplate(content) : defaultContent;
+
+  return {
+    platform,
+    content: effectiveContent,
+    defaultContent,
+    customized,
+    updatedAt: template?.updatedAt || nowIso()
   };
 }
 
@@ -939,4 +1005,13 @@ function normalizeGrossMarginMinimumQuantity(value: number | undefined) {
   const safeValue = Number(value);
   if (safeValue <= 0) return undefined;
   return Number(safeValue.toFixed(6));
+}
+
+function normalizeIncomingGrossMarginMinimumQuantity(
+  incoming: GrossMarginPriceTableSaveItem,
+  currentItem?: GrossMarginPriceOption
+) {
+  if (!("minimumQuantity" in incoming)) return currentItem?.minimumQuantity;
+  if (incoming.minimumQuantity === null) return undefined;
+  return normalizeGrossMarginMinimumQuantity(incoming.minimumQuantity ?? undefined);
 }

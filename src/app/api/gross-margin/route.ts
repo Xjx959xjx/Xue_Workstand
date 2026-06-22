@@ -12,9 +12,11 @@ import {
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
   getGrossMarginMonitorRecords,
+  resetGrossMarginReviewTemplate,
   resolveGrossMarginMonitorRecord,
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
+  saveGrossMarginReviewTemplate,
   upsertGrossMarginMonitorRecord
 } from "@/lib/storage";
 import type {
@@ -68,10 +70,20 @@ const mutationSchema = z.discriminatedUnion("action", [
         name: z.string().trim().min(1, "请填写单价项名称").max(40, "单价项名称太长"),
         unitPrice: amountSchema,
         quantityUnit: z.string().trim().min(1, "请填写数量单位").max(12, "数量单位太长"),
-        minimumQuantity: minimumQuantitySchema.optional(),
-        note: z.string().trim().max(120, "备注太长").optional()
+        minimumQuantity: minimumQuantitySchema.nullish(),
+        note: z.string().trim().max(120, "备注太长").optional(),
+        active: z.boolean().optional()
       })
     )
+  }),
+  z.object({
+    action: z.literal("saveReviewTemplate"),
+    platform: platformSchema,
+    content: z.string().trim().min(1, "文案模板不能为空")
+  }),
+  z.object({
+    action: z.literal("resetReviewTemplate"),
+    platform: platformSchema
   }),
   z.object({
     action: z.literal("saveMonitorRecord"),
@@ -150,10 +162,18 @@ export async function POST(request: Request) {
       const result = await deleteGrossMarginMonitorRecord(input.recordId);
       return { ...result, library: await getGrossMarginLibrary() };
     }
+    if (input.action === "saveReviewTemplate") {
+      const template = await saveGrossMarginReviewTemplate(input);
+      return { template, library: await getGrossMarginLibrary() };
+    }
+    if (input.action === "resetReviewTemplate") {
+      const template = await resetGrossMarginReviewTemplate(input.platform);
+      return { template, library: await getGrossMarginLibrary() };
+    }
     const table = await saveGrossMarginPriceTable(input);
     return { table, library: await getGrossMarginLibrary() };
   }, {
-    fallbackMessage: "保存毛利单价表失败",
+    fallbackMessage: "保存毛利配置失败",
     formatError: formatGrossMarginError
   });
 }

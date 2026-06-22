@@ -14,6 +14,8 @@ import {
   GrossMarginLibrary,
   GrossMarginMonitorRecord,
   GrossMarginPriceTable,
+  GrossMarginPriceTableSaveItem,
+  GrossMarginReviewTemplate,
   GrossMarginServiceKind,
   JobListItem,
   JobRecord,
@@ -374,10 +376,30 @@ export function getGrossMarginLibrary() {
   return grossMarginLibraryRequest;
 }
 
-export function saveGrossMarginPriceTable(input: Pick<GrossMarginPriceTable, "platform" | "items">) {
+export function saveGrossMarginPriceTable(input: { platform: GrossMarginPriceTable["platform"]; items: GrossMarginPriceTableSaveItem[] }) {
   return requestJson<{ table: GrossMarginPriceTable; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
     body: JSON.stringify({ action: "savePriceTable", ...input })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
+  });
+}
+
+export function saveGrossMarginReviewTemplate(input: Pick<GrossMarginReviewTemplate, "platform" | "content">) {
+  return requestJson<{ template: GrossMarginReviewTemplate; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "saveReviewTemplate", ...input })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
+  });
+}
+
+export function resetGrossMarginReviewTemplate(platform: GrossMarginReviewTemplate["platform"]) {
+  return requestJson<{ template: GrossMarginReviewTemplate; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "resetReviewTemplate", platform })
   }).then((result) => {
     rememberGrossMarginLibrary(result.library);
     return result;

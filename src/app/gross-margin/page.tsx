@@ -2,17 +2,25 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Calculator, Copy, FileText, MessageSquarePlus, RefreshCw, Save, Upload } from "lucide-react";
+import { Calculator, Copy, FileText, MessageSquarePlus, RefreshCw, Save, Settings2, Upload } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
 import {
   bulkSaveGrossMarginMonitorRecords,
   getGrossMarginLibrary,
+  resetGrossMarginReviewTemplate,
   saveGrossMarginMonitorRecord,
-  saveGrossMarginPriceTable
+  saveGrossMarginPriceTable,
+  saveGrossMarginReviewTemplate
 } from "@/lib/client";
+import {
+  getDefaultGrossMarginReviewTemplate,
+  renderGrossMarginReviewTemplate,
+  type GrossMarginReviewTemplateValues
+} from "@/lib/gross-margin-template";
 import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/platform-links";
 import { GrossMarginBulkMonitorModal } from "./_components/GrossMarginBulkMonitorModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
+import { GrossMarginPriceTableEditorModal } from "./_components/GrossMarginPriceTableEditorModal";
 import { GrossMarginTemplateModal } from "./_components/GrossMarginTemplateModal";
 import type {
   GrossMarginCalculationLine,
@@ -21,6 +29,8 @@ import type {
   GrossMarginLibrary,
   GrossMarginPriceOption,
   GrossMarginPriceTable,
+  GrossMarginPriceTableSaveItem,
+  GrossMarginReviewTemplate,
   GrossMarginServiceKind
 } from "@/lib/types";
 
@@ -77,12 +87,16 @@ export default function GrossMarginPage() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [bulkMonitorModalOpen, setBulkMonitorModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [priceEditorOpen, setPriceEditorOpen] = useState(false);
   const [splitDeliveryEnabled, setSplitDeliveryEnabled] = useState(false);
-  const [reviewTemplateOverride, setReviewTemplateOverride] = useState<string | null>(null);
   const tables = useMemo(() => library?.tables || [], [library]);
   const table = useMemo(
     () => tables.find((item) => item.platform === platform) || tables[0] || null,
     [platform, tables]
+  );
+  const reviewTemplate = useMemo(
+    () => getPlatformReviewTemplate(library, platform),
+    [library, platform]
   );
   const platformAccounts = useMemo(
     () => (library?.accounts || []).filter((account) => account.platform === platform),
@@ -93,11 +107,11 @@ export default function GrossMarginPage() {
     [accountName, platformAccounts]
   );
   const activeServiceConfigs = useMemo(
-    () => serviceConfigs.filter((config) => (table ? getServiceOptions(table, config.service).length > 0 : false)),
+    () => serviceConfigs.filter((config) => (table ? getActiveServiceOptions(table, config.service).length > 0 : false)),
     [table]
   );
   const activePricePanelServiceConfigs = useMemo(
-    () => pricePanelServiceConfigs.filter((config) => (table ? getServiceOptions(table, config.service).length > 0 : false)),
+    () => pricePanelServiceConfigs.filter((config) => (table ? getActiveServiceOptions(table, config.service).length > 0 : false)),
     [table]
   );
   const calculation = useMemo(
@@ -112,8 +126,8 @@ export default function GrossMarginPage() {
     }),
     [activeServiceConfigs, discountPrice, originalPrice, priceInputs, quantityInputs, selectedOptions, table]
   );
-  const reviewDraft = useMemo(
-    () => buildGrossMarginReview({
+  const reviewTemplateValues = useMemo(
+    () => buildGrossMarginTemplateValues({
       account: matchedAccount,
       accountName,
       calculation,
@@ -123,8 +137,15 @@ export default function GrossMarginPage() {
     }),
     [accountName, calculation, matchedAccount, platform, splitDeliveryEnabled, videoUrl]
   );
-  const effectiveReviewTemplate = reviewTemplateOverride ?? reviewDraft;
-  const reviewTemplateLineCount = countTemplateLines(effectiveReviewTemplate);
+  const renderedReviewTemplate = useMemo(() => {
+    try {
+      return { text: renderGrossMarginReviewTemplate(reviewTemplate.content, reviewTemplateValues), error: "" };
+    } catch (error) {
+      return { text: "", error: error instanceof Error ? error.message : "文案模板无法渲染" };
+    }
+  }, [reviewTemplate, reviewTemplateValues]);
+  const effectiveReviewTemplate = renderedReviewTemplate.text;
+  const reviewTemplateLineCount = countTemplateLines(effectiveReviewTemplate || reviewTemplate.content);
   const configuredPriceCount = table?.items.filter((item) => toAmount(priceInputs[item.id] ?? item.unitPrice) > 0).length || 0;
   const engagementTarget = useMemo(
     () => buildEngagementTarget(calculation.lines, videoUrl),
@@ -157,7 +178,6 @@ export default function GrossMarginPage() {
 
   function handlePlatformChange(nextPlatform: PlatformKey) {
     setPlatform(nextPlatform);
-    setReviewTemplateOverride(null);
     const nextTable = tables.find((item) => item.platform === nextPlatform) || null;
     if (!nextTable) return;
     setPriceInputs(makePriceInputs(nextTable));
@@ -238,10 +258,35 @@ export default function GrossMarginPage() {
     }
   }
 
+  async function handleSaveFullPriceTable(items: GrossMarginPriceTableSaveItem[]) {
+    if (!table) return;
+    setBusy("price-editor");
+    try {
+      const result = await saveGrossMarginPriceTable({
+        platform: table.platform,
+        items
+      });
+      setLibrary(result.library);
+      setPriceInputs(makePriceInputs(result.table));
+      setSelectedOptions(makeDefaultSelections(result.table));
+      setPriceEditorOpen(false);
+      notify({ tone: "success", message: `${formatPlatform(table.platform)}单价表已保存` });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "保存单价表失败" });
+      throw error;
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function handleExportReview() {
     if (busy) return;
     if (!videoUrl.trim()) {
       notify({ tone: "error", message: "请先补视频链接，再导出文案" });
+      return;
+    }
+    if (renderedReviewTemplate.error) {
+      notify({ tone: "error", message: renderedReviewTemplate.error });
       return;
     }
     setBusy("export");
@@ -267,11 +312,35 @@ export default function GrossMarginPage() {
     }
   }
 
-  function handleSaveReviewTemplate(value: string) {
-    const normalized = normalizeTemplateText(value);
-    setReviewTemplateOverride(normalized === reviewDraft ? null : normalized);
-    setTemplateModalOpen(false);
-    notify({ tone: "success", message: "文案模版已保存" });
+  async function handleSaveReviewTemplate(value: string) {
+    setBusy("template");
+    try {
+      const result = await saveGrossMarginReviewTemplate({
+        platform,
+        content: normalizeTemplateText(value)
+      });
+      setLibrary(result.library);
+      setTemplateModalOpen(false);
+      notify({ tone: "success", message: `${formatPlatform(platform)}文案模板已永久保存` });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "保存文案模板失败" });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleResetReviewTemplate() {
+    setBusy("template");
+    try {
+      const result = await resetGrossMarginReviewTemplate(platform);
+      setLibrary(result.library);
+      setTemplateModalOpen(false);
+      notify({ tone: "success", message: `${formatPlatform(platform)}文案模板已恢复系统默认` });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "恢复默认模板失败" });
+    } finally {
+      setBusy("");
+    }
   }
 
   async function handleBulkMonitorSubmit(input: { template: string; createProject: boolean; projectName: string }) {
@@ -302,7 +371,7 @@ export default function GrossMarginPage() {
 
     if (nextTable) {
       for (const metric of template.metrics) {
-        const options = getServiceOptions(nextTable, metric.service);
+        const options = getActiveServiceOptions(nextTable, metric.service);
         const option = findImportedOption(options, metric);
         if (option) nextSelectedOptions[metric.service] = option.id;
         const selectedOption = option || getSelectedOption(options, nextSelectedOptions[metric.service]);
@@ -321,7 +390,6 @@ export default function GrossMarginPage() {
     const nextAccountName = template.accountName || accountName;
     setAccountName(nextAccountName);
     if (template.videoUrl) setVideoUrl(template.videoUrl);
-    setReviewTemplateOverride(null);
 
     const importedAccounts = (library?.accounts || []).filter((account) => account.platform === nextPlatform);
     const nextAccount = findGrossMarginAccount(importedAccounts, nextAccountName);
@@ -368,6 +436,10 @@ export default function GrossMarginPage() {
               <h2>平台单价表</h2>
               <p className="pane-subtitle">默认单价</p>
             </div>
+            <button className="btn compact" disabled={!table || Boolean(busy)} onClick={() => setPriceEditorOpen(true)} type="button">
+              <Settings2 aria-hidden="true" size={14} />
+              整体编辑
+            </button>
           </div>
           <div className="pane-body">
             <div className="source-tabs gross-platform-tabs" role="group" aria-label="选择平台">
@@ -399,7 +471,7 @@ export default function GrossMarginPage() {
                   {activePricePanelServiceConfigs.map((config) => (
                     <PriceGroup
                       config={config}
-                      items={getServiceOptions(table, config.service)}
+                      items={getActiveServiceOptions(table, config.service)}
                       key={config.service}
                       priceInputs={priceInputs}
                       onPriceChange={(id, value) => setPriceInputs((current) => ({ ...current, [id]: value }))}
@@ -535,7 +607,7 @@ export default function GrossMarginPage() {
                 </thead>
                 <tbody>
                   {activeServiceConfigs.map((config) => {
-                    const options = table ? getServiceOptions(table, config.service) : [];
+                    const options = table ? getActiveServiceOptions(table, config.service) : [];
                     const selectedOption = getSelectedOption(options, selectedOptions[config.service]);
                     const unitPrice = selectedOption ? toAmount(priceInputs[selectedOption.id] ?? selectedOption.unitPrice) : 0;
                     const quantity = toAmount(quantityInputs[config.service]);
@@ -635,10 +707,8 @@ export default function GrossMarginPage() {
                 <span className="gross-template-entry-copy">
                   <FileText aria-hidden="true" size={16} />
                   <span>
-                    <strong>文案模版</strong>
-                    <small>
-                      {reviewTemplateLineCount} 行，{reviewTemplateOverride ? "已保存自定义" : "自动生成"}
-                    </small>
+                    <strong>文案模板</strong>
+                    <small>{reviewTemplateLineCount} 行，{reviewTemplate.customized ? "永久自定义" : "系统默认"}</small>
                   </span>
                 </span>
                 <strong className="gross-template-entry-action">编辑</strong>
@@ -716,11 +786,22 @@ export default function GrossMarginPage() {
       ) : null}
       {templateModalOpen ? (
         <GrossMarginTemplateModal
-          generatedValue={reviewDraft}
-          isCustomized={reviewTemplateOverride !== null}
-          value={effectiveReviewTemplate}
+          busy={busy === "template"}
+          platformLabel={formatPlatform(platform)}
+          previewValues={reviewTemplateValues}
+          template={reviewTemplate}
           onClose={() => setTemplateModalOpen(false)}
           onSave={handleSaveReviewTemplate}
+          onReset={handleResetReviewTemplate}
+        />
+      ) : null}
+      {priceEditorOpen && table ? (
+        <GrossMarginPriceTableEditorModal
+          busy={busy === "price-editor"}
+          platformLabel={formatPlatform(table.platform)}
+          table={table}
+          onClose={() => setPriceEditorOpen(false)}
+          onSave={handleSaveFullPriceTable}
         />
       ) : null}
       {bulkMonitorModalOpen ? (
@@ -825,7 +906,7 @@ function calculateGrossMargin({
   table: GrossMarginPriceTable | null;
 }): GrossMarginCalculationResult {
   const lines: GrossMarginCalculationLine[] = configs.map((config) => {
-    const options = table ? getServiceOptions(table, config.service) : [];
+    const options = table ? getActiveServiceOptions(table, config.service) : [];
     const option = getSelectedOption(options, selectedOptions[config.service]);
     const unitPrice = option ? toAmount(priceInputs[option.id] ?? option.unitPrice) : 0;
     const quantity = toAmount(quantityInputs[config.service]);
@@ -874,8 +955,24 @@ function makeEmptyQuantityInputs(): Record<GrossMarginServiceKind, string> {
 
 function makeDefaultSelections(table: GrossMarginPriceTable) {
   return Object.fromEntries(
-    serviceConfigs.map((config) => [config.service, getServiceOptions(table, config.service)[0]?.id || ""])
+    serviceConfigs.map((config) => [config.service, getActiveServiceOptions(table, config.service)[0]?.id || ""])
   ) as Partial<Record<GrossMarginServiceKind, string>>;
+}
+
+function getPlatformReviewTemplate(
+  library: GrossMarginLibrary | null,
+  platform: GrossMarginPriceTable["platform"]
+): GrossMarginReviewTemplate {
+  const defaultContent = getDefaultGrossMarginReviewTemplate(platform);
+  return (
+    library?.templates.find((template) => template.platform === platform) || {
+      platform,
+      content: defaultContent,
+      defaultContent,
+      customized: false,
+      updatedAt: ""
+    }
+  );
 }
 
 function normalizeTemplateText(value: string) {
@@ -888,6 +985,10 @@ function countTemplateLines(value: string) {
 
 function getServiceOptions(table: GrossMarginPriceTable, service: GrossMarginServiceKind) {
   return table.items.filter((item) => item.service === service);
+}
+
+function getActiveServiceOptions(table: GrossMarginPriceTable, service: GrossMarginServiceKind) {
+  return getServiceOptions(table, service).filter((item) => item.active !== false);
 }
 
 function getSelectedOption(options: GrossMarginPriceOption[], selectedId?: string) {
@@ -976,7 +1077,7 @@ function formatThreshold(value: number) {
   });
 }
 
-function buildGrossMarginReview({
+function buildGrossMarginTemplateValues({
   account,
   accountName,
   calculation,
@@ -990,49 +1091,45 @@ function buildGrossMarginReview({
   platform: PlatformKey;
   splitDeliveryEnabled: boolean;
   videoUrl: string;
-}) {
+}): GrossMarginReviewTemplateValues {
   const lines = new Map(calculation.lines.map((line) => [line.service, line]));
   const displayName = account?.name || accountName.trim();
   const displayVideoUrl = videoUrl.trim();
   const reviewFooter = "@罗娜 @姚琳琳(Lin.) @罗雪莲 @翁林湑(空白) @罗月琴 辛苦审核";
   const splitRoundLine = splitDeliveryEnabled ? buildSplitRoundLine(lines, platform) : "";
+  const playLine = lines.get("play");
+  const likeLine = lines.get("like");
+  const commentLine = lines.get("comment");
+  const favoriteLine = lines.get("favorite");
+  const shareLine = lines.get("share");
+  const douPlusLine = lines.get("douPlus");
+  const coinLine = lines.get("coin");
+  const danmakuLine = lines.get("danmaku");
+  const blueLinkLine = lines.get("blueLink");
 
-  if (platform === "bilibili") {
-    const blueLinkLine = lines.get("blueLink");
-    return [
-      "【B站】",
-      `账号：${displayName}`,
-      `视频链接：${displayVideoUrl}`,
-      `播放量（${formatBilibiliPlayChannel(lines.get("play"))}）：${formatReviewMetricValue(lines.get("play"), platform)}`,
-      `点赞：${formatReviewMetricValue(lines.get("like"), platform)}`,
-      `投币：${formatReviewMetricValue(lines.get("coin"), platform)}`,
-      `收藏：${formatReviewMetricValue(lines.get("favorite"), platform)}`,
-      `评论：${formatReviewMetricValue(lines.get("comment"), platform)}`,
-      `分享：${formatReviewMetricValue(lines.get("share"), platform)}`,
-      `弹幕：${formatReviewMetricValue(lines.get("danmaku"), platform)}`,
-      ...(blueLinkLine && blueLinkLine.quantity > 0 ? [`蓝链点击：${formatReviewMetricValue(blueLinkLine, platform)}`] : []),
-      `维护成本：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`,
-      ...(splitRoundLine ? [splitRoundLine] : []),
-      reviewFooter
-    ].join("\n");
-  }
-
-  return [
-    "【抖音】",
-    `账号：${displayName}`,
-    `抖音ID：${account?.douyinId || ""}`,
-    `合作码：${account?.cooperationCode || ""}`,
-    `视频链接：${displayVideoUrl}`,
-    `播放量${formatReviewLabelSuffix(lines.get("play"))}：${formatReviewMetricValue(lines.get("play"), platform)}`,
-    `点赞${formatReviewLabelSuffix(lines.get("like"))}：${formatReviewMetricValue(lines.get("like"), platform)}`,
-    `评论${formatReviewLabelSuffix(lines.get("comment"))}：${formatReviewMetricValue(lines.get("comment"), platform)}`,
-    `收藏：${formatReviewMetricValue(lines.get("favorite"), platform)}`,
-    `转发：${formatReviewMetricValue(lines.get("share"), platform)}`,
-    `抖加：${formatReviewMetricValue(lines.get("douPlus"), platform)}`,
-    `维护成本预计：${formatReviewMoney(calculation.maintenanceCost)}元，维护后毛利率${formatReviewPercent(calculation.grossMarginRate)}`,
-    ...(splitRoundLine ? [splitRoundLine] : []),
+  return {
+    accountName: displayName,
+    douyinId: account?.douyinId || "",
+    cooperationCode: account?.cooperationCode || "",
+    bilibiliUid: account?.bilibiliUid || "",
+    videoUrl: displayVideoUrl,
+    playLabel: platform === "bilibili" ? formatBilibiliPlayChannel(playLine) : formatReviewLabelSuffix(playLine),
+    playValue: formatReviewMetricValue(playLine, platform),
+    likeLabel: formatReviewLabelSuffix(likeLine),
+    likeValue: formatReviewMetricValue(likeLine, platform),
+    commentLabel: formatReviewLabelSuffix(commentLine),
+    commentValue: formatReviewMetricValue(commentLine, platform),
+    favoriteValue: formatReviewMetricValue(favoriteLine, platform),
+    shareValue: formatReviewMetricValue(shareLine, platform),
+    douPlusValue: formatReviewMetricValue(douPlusLine, platform),
+    coinValue: formatReviewMetricValue(coinLine, platform),
+    danmakuValue: formatReviewMetricValue(danmakuLine, platform),
+    blueLinkLine: blueLinkLine && blueLinkLine.quantity > 0 ? `蓝链点击：${formatReviewMetricValue(blueLinkLine, platform)}` : "",
+    maintenanceCost: formatReviewMoney(calculation.maintenanceCost),
+    grossMarginRate: formatReviewPercent(calculation.grossMarginRate),
+    splitRoundLine,
     reviewFooter
-  ].join("\n");
+  };
 }
 
 function formatReviewLabelSuffix(line?: GrossMarginCalculationLine) {

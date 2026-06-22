@@ -473,6 +473,7 @@ export type GrossMarginPriceOption = {
   quantityUnit: string;
   minimumQuantity?: number;
   note?: string;
+  active?: boolean;
   updatedAt: string;
 };
 
@@ -480,6 +481,13 @@ export type GrossMarginPriceTable = {
   platform: Extract<Platform, "bilibili" | "douyin">;
   items: GrossMarginPriceOption[];
   updatedAt: string;
+};
+
+export type GrossMarginPriceTableSaveItem = Pick<
+  GrossMarginPriceOption,
+  "id" | "service" | "name" | "unitPrice" | "quantityUnit" | "note" | "active"
+> & {
+  minimumQuantity?: number | null;
 };
 
 export type GrossMarginAccountPrice = {
@@ -493,6 +501,14 @@ export type GrossMarginAccountPrice = {
   cooperationCode?: string;
   bilibiliUid?: string;
   homepage?: string;
+};
+
+export type GrossMarginReviewTemplate = {
+  platform: GrossMarginPriceTable["platform"];
+  content: string;
+  defaultContent: string;
+  customized: boolean;
+  updatedAt: string;
 };
 
 export type GrossMarginCalculationLine = {
@@ -553,6 +569,7 @@ export type GrossMarginMonitorRecord = {
 export type GrossMarginLibrary = {
   root: string;
   tables: GrossMarginPriceTable[];
+  templates: GrossMarginReviewTemplate[];
   accounts: GrossMarginAccountPrice[];
   monitorRecords: GrossMarginMonitorRecord[];
   monitorProjects: Array<{

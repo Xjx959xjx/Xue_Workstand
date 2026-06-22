@@ -38,9 +38,12 @@ export {
   deleteGrossMarginTier,
   getGrossMarginLibrary,
   getGrossMarginMonitorRecords,
+  getGrossMarginReviewTemplate,
+  resetGrossMarginReviewTemplate,
   resolveGrossMarginMonitorRecord,
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
+  saveGrossMarginReviewTemplate,
   upsertGrossMarginCategory,
   upsertGrossMarginMonitorRecord,
   upsertGrossMarginTier
