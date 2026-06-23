@@ -1,7 +1,14 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { createHotlistSurgeState, getHotlistSurgeDecision, isHotlistSurgeActive } from "../douyin-hotlist-surge";
-import type { Account, Video, VideoHotlistSurgeState, VideoHotlistTrend } from "../types";
+import {
+  createHotlistSurgeState,
+  getHotlistSurgeDecision,
+  isHotlistSurgeActive,
+  isHotlistSurgeEligible,
+  isHotlistSurgeStateAboveThreshold,
+  shouldRetainHotlistSurgeState
+} from "../douyin-hotlist-surge";
+import type { Account, Platform, Video, VideoHotlistSurgeState, VideoHotlistTrend } from "../types";
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { readJsonFile, writeJsonFile } from "./fs";
@@ -119,38 +126,39 @@ export async function resolveDouyinHotlistAccount(accountIdOrSlug: string) {
   const slug = normalizeDouyinHotlistAccountSlug(accountIdOrSlug);
   const account = await readJsonFile<Account>(hotlistAccountJsonPath(slug));
   if (!account) {
-    throw new Error(`找不到抖音热榜账号：${slug}`);
+    throw new Error(`找不到视频热榜账号：${slug}`);
   }
   return account;
 }
 
-export async function findDouyinHotlistAccountByName(name: string) {
+export async function findDouyinHotlistAccountByName(platform: Platform, name: string) {
   await ensureDouyinHotlistDirs();
   const normalizedName = name.trim().toLowerCase();
   if (!normalizedName) return null;
 
   for (const slug of await readDouyinHotlistAccountSlugs()) {
     const account = await readJsonFile<Account>(hotlistAccountJsonPath(slug));
-    if (account?.name.trim().toLowerCase() === normalizedName) return account;
+    if (account?.platform === platform && account.name.trim().toLowerCase() === normalizedName) return account;
   }
 
   return null;
 }
 
-export async function findDouyinHotlistAccountByUid(uid: string) {
+export async function findDouyinHotlistAccountByUid(platform: Platform, uid: string) {
   await ensureDouyinHotlistDirs();
   const normalizedUid = uid.trim();
   if (!normalizedUid) return null;
 
   for (const slug of await readDouyinHotlistAccountSlugs()) {
     const account = await readJsonFile<Account>(hotlistAccountJsonPath(slug));
-    if (account?.uid === normalizedUid) return account;
+    if (account?.platform === platform && account.uid === normalizedUid) return account;
   }
 
   return null;
 }
 
 export async function upsertDouyinHotlistAccount(input: {
+  platform: Platform;
   name: string;
   uid: string;
   sourceUrl?: string;
@@ -158,15 +166,15 @@ export async function upsertDouyinHotlistAccount(input: {
   lastCollectedAt?: string;
 }) {
   await ensureDouyinHotlistDirs();
-  const existing = await findDouyinHotlistAccountByUid(input.uid);
+  const existing = await findDouyinHotlistAccountByUid(input.platform, input.uid);
   const now = nowIso();
-  const slug = existing?.slug ? normalizeDouyinHotlistAccountSlug(existing.slug) : createHotlistSlug(input.name || input.uid, input.uid);
+  const slug = existing?.slug ? normalizeDouyinHotlistAccountSlug(existing.slug) : createHotlistSlug(input.platform, input.name || input.uid, input.uid);
   await ensureDouyinHotlistAccountDirs(slug);
 
   const account: Account = {
     id: `douyin-hotlist:${slug}`,
     slug,
-    platform: "douyin",
+    platform: input.platform,
     name: input.name || existing?.name || input.uid,
     uid: input.uid,
     sourceUrl: input.sourceUrl || existing?.sourceUrl,
@@ -212,12 +220,12 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
     const hotScore = calculateStoredHotScore({ ...video, stats: mergedStats });
     const updatedAt = nowIso();
     const hotlistTrend = buildHotlistTrend(existing, hotScore, updatedAt);
-    const next: Video = {
+    const nextBase: Video = {
       ...existing,
       ...video,
       id,
       accountId: account.id,
-      platform: "douyin",
+      platform: account.platform,
       stats: mergedStats,
       hotScore,
       relativeViewRate:
@@ -226,8 +234,12 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
       transcriptPath: existing?.transcriptPath ?? video.transcriptPath,
       transcriptSource: existing?.transcriptSource ?? video.transcriptSource,
       hotlistTrend,
-      hotlistSurge: resolveHotlistSurgeState(existing?.hotlistSurge, hotlistTrend, existing?.hotlistTrend, updatedAt),
+      hotlistSurge: undefined,
       updatedAt
+    };
+    const next: Video = {
+      ...nextBase,
+      hotlistSurge: resolveHotlistSurgeState(existing?.hotlistSurge, hotlistTrend, existing?.hotlistTrend, updatedAt, nextBase)
     };
 
     await writeJsonFile(hotlistVideoJsonPath(account.slug, id), next);
@@ -249,16 +261,16 @@ function normalizeDouyinHotlistAccountIds(accountIds: string[]) {
 function normalizeDouyinHotlistAccountId(accountId: string) {
   const [scope, rawSlug] = accountId.split(":");
   if (scope !== "douyin-hotlist" || !rawSlug) return "";
-  return `douyin-hotlist:${normalizeStorageSegment(rawSlug, "抖音热榜账号 ID")}`;
+  return `douyin-hotlist:${normalizeStorageSegment(rawSlug, "视频热榜账号 ID")}`;
 }
 
 function normalizeDouyinHotlistAccountSlug(accountIdOrSlug: string) {
   const slug = accountIdOrSlug.includes(":") ? accountIdOrSlug.split(":").at(-1)! : accountIdOrSlug;
-  return normalizeStorageSegment(slug, "抖音热榜账号 ID");
+  return normalizeStorageSegment(slug, "视频热榜账号 ID");
 }
 
-function createHotlistSlug(name: string, uid: string) {
-  return normalizeStorageSegment(safeSegment(name, shortHash(uid)), "抖音热榜账号 ID");
+function createHotlistSlug(platform: Platform, name: string, uid: string) {
+  return normalizeStorageSegment(`${platform}-${safeSegment(name, shortHash(uid))}`, "视频热榜账号 ID");
 }
 
 function mergeVideoStats(existing: Video | null, incoming: Video) {
@@ -304,22 +316,36 @@ function resolveHotlistSurgeState(
   existing: VideoHotlistSurgeState | undefined,
   trend: VideoHotlistTrend | undefined,
   previousTrend: VideoHotlistTrend | undefined,
-  updatedAt: string
+  updatedAt: string,
+  video: Video
 ): VideoHotlistSurgeState | undefined {
-  const decision = getHotlistSurgeDecision(trend);
+  const ageHours = getVideoAgeHours(video, updatedAt);
+  if (!isHotlistSurgeEligible({ ageHours, hotScore: video.hotScore, platform: video.platform, stats: video.stats })) return undefined;
+
+  const decision = getHotlistSurgeDecision(trend, video.platform);
   if (decision) return createHotlistSurgeState(decision, updatedAt);
+
+  if (!shouldRetainHotlistSurgeState(video.platform)) return undefined;
 
   const updatedTime = new Date(updatedAt).getTime();
   const now = Number.isFinite(updatedTime) ? updatedTime : Date.now();
-  if (isHotlistSurgeActive(existing, now)) return existing;
+  if (isHotlistSurgeActive(existing, now) && isHotlistSurgeStateAboveThreshold(existing, video.platform)) return existing;
 
-  const previousDecision = getHotlistSurgeDecision(previousTrend);
+  const previousDecision = getHotlistSurgeDecision(previousTrend, video.platform);
   if (previousDecision && previousTrend?.updatedAt) {
     const carried = createHotlistSurgeState(previousDecision, previousTrend.updatedAt);
     if (isHotlistSurgeActive(carried, now)) return carried;
   }
 
   return undefined;
+}
+
+function getVideoAgeHours(video: Video, referenceIso: string) {
+  if (!video.publishedAt) return undefined;
+  const publishedTime = new Date(video.publishedAt).getTime();
+  const referenceTime = new Date(referenceIso).getTime();
+  if (!Number.isFinite(publishedTime) || !Number.isFinite(referenceTime)) return undefined;
+  return Math.max(0, (referenceTime - publishedTime) / 3_600_000);
 }
 
 function calculateStoredHotScore(video: Video) {
@@ -359,6 +385,7 @@ async function migrateLegacyWatchlistAccountIds(accountIds: string[]) {
     }
 
     const account = await upsertDouyinHotlistAccount({
+      platform: "douyin",
       name: legacy.name,
       uid: legacy.uid,
       sourceUrl: legacy.sourceUrl,

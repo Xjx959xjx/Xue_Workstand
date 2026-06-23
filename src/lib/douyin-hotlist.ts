@@ -3,7 +3,10 @@ import {
   getHotlistSurgeDecision,
   getHotlistSurgeLabel,
   getSurgeMinHeatPerHour,
-  isHotlistSurgeActive
+  isHotlistSurgeActive,
+  isHotlistSurgeStateAboveThreshold,
+  shouldRetainHotlistSurgeState,
+  isHotlistSurgeEligible
 } from "./douyin-hotlist-surge";
 import {
   collectDouyinPostVideosBatch,
@@ -11,7 +14,7 @@ import {
   resolveAccountUid,
   type DouyinBatchVideoCollectResult
 } from "./opencli";
-import { resolveAccountProfile } from "./account-profile";
+import { inferAccountAvatarFromCollectedData, resolveAccountProfile } from "./account-profile";
 import {
   addDouyinHotlistAccountRef,
   findDouyinHotlistAccountByName,
@@ -33,12 +36,13 @@ import type {
   DouyinHotlistRefreshResult,
   DouyinHotlistResponse,
   DouyinHotlistSurgeHighlight,
+  Platform,
   Video,
   VideoHotlistSurgeState,
   VideoHotlistTrend,
   VideoListItem
 } from "./types";
-import { extractFirstLinkFromInput } from "./platform-links";
+import { extractLinksFromInput } from "./platform-links";
 import { nowIso, shortHash } from "./utils";
 
 const DEFAULT_WINDOW_KEY = "3d";
@@ -63,7 +67,10 @@ const EXPLOSIVE_MIN_HEAT_PER_HOUR = LIKE_HEAT_WEIGHT * 300;
 const FAST_RISING_MAX_AGE_HOURS = 12;
 const FAST_RISING_MIN_LIKES = 500;
 const FAST_RISING_MIN_HEAT_PER_HOUR = LIKE_HEAT_WEIGHT * 220;
+const STALE_LOW_HEAT_MAX_AGE_HOURS = 12;
+const STALE_LOW_HEAT_MIN_SCORE = 50_000;
 const DOUYIN_SEC_UID_PATTERN = /MS4wLjAB[0-9A-Za-z_.-]{20,}/;
+const BILIBILI_UID_PATTERN = /^\d{4,}$/;
 
 let activeRefreshPromise: Promise<DouyinHotlistRefreshResult> | null = null;
 
@@ -71,7 +78,7 @@ class DouyinHotlistRefreshInProgressError extends Error {
   readonly statusCode = 409;
 
   constructor() {
-    super("抖音热榜正在刷新中，请等这一轮结束后再试。");
+    super("视频热榜正在刷新中，请等这一轮结束后再试。");
     this.name = "DouyinHotlistRefreshInProgressError";
   }
 }
@@ -86,9 +93,16 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
       videos: await getDouyinHotlistAccountVideos(account)
     }))
   );
+  const accountRankItems = accountVideos.map(({ account, videos }) => ({
+    account,
+    videos,
+    rankItems: videos
+      .filter((video) => isVideoInWindow(video, window))
+      .map((video) => buildRankItem(account, video, window))
+      .filter(shouldShowHotlistRankItem)
+  }));
 
-  const accounts: DouyinHotlistAccount[] = accountVideos.map(({ account, videos }) => {
-    const recentVideoCount = videos.filter((video) => isVideoInWindow(video, window)).length;
+  const accounts: DouyinHotlistAccount[] = accountRankItems.map(({ account, videos, rankItems }) => {
     return {
       id: account.id,
       slug: account.slug,
@@ -101,14 +115,12 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
       updatedAt: account.updatedAt,
       lastCollectedAt: account.lastCollectedAt,
       videoCount: videos.length,
-      recentVideoCount
+      recentVideoCount: rankItems.length
     };
   });
 
-  const rankedItems = accountVideos
-    .flatMap(({ account, videos }) => videos
-      .filter((video) => isVideoInWindow(video, window))
-      .map((video) => buildRankItem(account, video, window)))
+  const rankedItems = accountRankItems
+    .flatMap(({ rankItems }) => rankItems)
     .sort((left, right) => right.heatScore - left.heatScore || comparePublishedAtDesc(left.video, right.video));
   const items = rankedItems.map((item, index) => finalizeRankItem(item, index));
 
@@ -133,23 +145,25 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
 }
 
 export async function addDouyinHotlistAccount(input: {
+  platform: Platform;
   query: string;
   signal?: AbortSignal;
 }) {
-  const target = resolveAccountTarget(input.query);
-  const existingByName = target.uidOrUrl ? null : await findDouyinHotlistAccountByName(target.lookupName);
+  const target = resolveAccountTarget(input.platform, input.query);
+  const existingByName = target.uidOrUrl ? null : await findDouyinHotlistAccountByName(input.platform, target.lookupName);
   const uid =
     existingByName?.uid ||
-    (await resolveAccountUid("douyin", target.lookupName, target.uidOrUrl, { signal: input.signal }));
-  const existingByUid = await findDouyinHotlistAccountByUid(uid);
+    (await resolveAccountUid(input.platform, target.lookupName, target.uidOrUrl, { signal: input.signal }));
+  const existingByUid = await findDouyinHotlistAccountByUid(input.platform, uid);
   const profile = await resolveAccountProfile({
-    platform: "douyin",
+    platform: input.platform,
     uid,
     fallbackName: existingByUid?.name || existingByName?.name || target.displayName,
     sourceUrl: existingByUid?.sourceUrl || existingByName?.sourceUrl || target.sourceUrl,
     signal: input.signal
   });
   const account = await upsertDouyinHotlistAccount({
+    platform: input.platform,
     name: profile.name,
     uid,
     sourceUrl: profile.sourceUrl,
@@ -254,17 +268,18 @@ async function refreshDouyinHotlistAccount(
 
   try {
     const collected = await collectVideos({
-      platform: "douyin",
+      platform: account.platform,
       account,
       limit,
-      order: "likes",
-      fromDate: window.fromDate,
-      toDate: window.toDate,
+      order: getHotlistCollectOrder(account.platform),
+      fromDate: account.platform === "douyin" ? window.fromDate : undefined,
+      toDate: account.platform === "douyin" ? window.toDate : undefined,
       signal
     });
     throwIfAborted(signal);
     return saveDouyinHotlistRefreshResult(account, collected.videos, collected.rawCount, {
       mode: "single",
+      raw: collected.raw,
       retried: Boolean(retryReason),
       retryReason
     });
@@ -274,7 +289,7 @@ async function refreshDouyinHotlistAccount(
       accountId: account.id,
       name: account.name,
       status: "failed",
-      error: error instanceof Error ? error.message : "抖音热榜刷新失败",
+      error: error instanceof Error ? error.message : `${formatPlatformName(account.platform)}热榜刷新失败`,
       mode: "single",
       retried: Boolean(retryReason),
       retryReason
@@ -290,35 +305,61 @@ async function refreshDouyinHotlistAccounts(
   signal?: AbortSignal
 ): Promise<DouyinHotlistRefreshAccountResult[]> {
   if (accounts.length <= 1) {
-    return mapWithConcurrency(
-      accounts,
+    return mapWithConcurrency(accounts, concurrency, (account) => refreshDouyinHotlistAccount(account, window, limit, signal));
+  }
+
+  const results = new Array<DouyinHotlistRefreshAccountResult>(accounts.length);
+  const douyinEntries = accounts
+    .map((account, index) => ({ account, index }))
+    .filter((entry) => entry.account.platform === "douyin");
+  const singleEntries = accounts
+    .map((account, index) => ({ account, index }))
+    .filter((entry) => entry.account.platform !== "douyin" || douyinEntries.length <= 1);
+
+  if (singleEntries.length) {
+    const singleResults = await mapWithConcurrency(
+      singleEntries,
       concurrency,
-      (account) => refreshDouyinHotlistAccount(account, window, limit, signal)
+      ({ account }) => refreshDouyinHotlistAccount(account, window, limit, signal)
     );
+    singleResults.forEach((result, index) => {
+      results[singleEntries[index].index] = result;
+    });
+  }
+
+  if (douyinEntries.length <= 1) {
+    return results.map((result, index) => result || {
+      accountId: accounts[index].id,
+      error: "视频热榜刷新没有返回这个账号的结果。",
+      mode: "single",
+      name: accounts[index].name,
+      status: "failed"
+    });
   }
 
   throwIfAborted(signal);
   const batchResults = await collectDouyinPostVideosBatch({
-    accounts,
+    accounts: douyinEntries.map((entry) => entry.account),
     concurrency,
     fromDate: window.fromDate,
     limit,
     signal,
     toDate: window.toDate
   });
-  const results = new Array<DouyinHotlistRefreshAccountResult>(accounts.length);
   const retryInputs: Array<{ index: number; result: DouyinBatchVideoCollectResult }> = [];
 
   await Promise.all(
     batchResults.map(async (batchResult, index) => {
       throwIfAborted(signal);
+      const resultIndex = douyinEntries[index].index;
       if (batchResult.status === "failed") {
-        retryInputs.push({ index, result: batchResult });
+        retryInputs.push({ index: resultIndex, result: batchResult });
         return;
       }
 
-      results[index] = await saveDouyinHotlistRefreshResult(batchResult.account, batchResult.videos, batchResult.rawCount, {
-        mode: "batch"
+      results[resultIndex] = await saveDouyinHotlistRefreshResult(batchResult.account, batchResult.videos, batchResult.rawCount, {
+        mode: "batch",
+        raw: batchResult.raw
       });
     })
   );
@@ -336,7 +377,7 @@ async function refreshDouyinHotlistAccounts(
 
   return results.map((result, index) => result || {
     accountId: accounts[index].id,
-    error: "抖音批量抓取没有返回这个账号的结果，且未进入重试。",
+    error: "视频热榜刷新没有返回这个账号的结果，且未进入重试。",
     mode: "batch",
     name: accounts[index].name,
     status: "failed"
@@ -347,13 +388,29 @@ async function saveDouyinHotlistRefreshResult(
   account: Account,
   videos: Video[],
   rawCount: number,
-  options: Pick<DouyinHotlistRefreshAccountResult, "mode" | "retried" | "retryReason"> = {}
+  options: Pick<DouyinHotlistRefreshAccountResult, "mode" | "retried" | "retryReason"> & { raw?: unknown } = {}
 ): Promise<DouyinHotlistRefreshAccountResult> {
+  if (!videos.length) {
+    return {
+      accountId: account.id,
+      error: `${formatPlatformName(account.platform)}账号没有抓到可用视频，内容未更新。`,
+      mode: options.mode,
+      name: account.name,
+      rawCount,
+      retried: options.retried || undefined,
+      retryReason: options.retryReason,
+      savedCount: 0,
+      status: "failed"
+    };
+  }
+
+  const inferredAvatarUrl = account.avatarUrl || inferAccountAvatarFromCollectedData(videos, options.raw);
   const updatedAccount = await upsertDouyinHotlistAccount({
+    platform: account.platform,
     name: account.name,
     uid: account.uid,
     sourceUrl: account.sourceUrl,
-    avatarUrl: account.avatarUrl,
+    avatarUrl: inferredAvatarUrl,
     lastCollectedAt: nowIso()
   });
   const saved = await saveDouyinHotlistVideos(updatedAccount, videos);
@@ -383,17 +440,17 @@ async function resolveWatchlistAccounts(accountIds: string[]) {
   };
 }
 
-function resolveAccountTarget(query: string) {
+function resolveAccountTarget(platform: Platform, query: string) {
   const raw = query.replace(/\s+/g, " ").trim();
   if (!raw) {
-    throw new Error("请输入抖音账号名、主页链接或 sec_uid。");
+    throw new Error(`请输入${formatPlatformName(platform)}账号名、主页链接或 ${platform === "douyin" ? "sec_uid" : "UID"}。`);
   }
 
-  const link = extractFirstLinkFromInput(raw, { kind: "account" });
-  const secUid = raw.match(DOUYIN_SEC_UID_PATTERN)?.[0] || "";
-  const uidOrUrl = link || secUid || undefined;
-  const label = uidOrUrl ? removeAccountReference(raw, uidOrUrl) : raw;
-  const displayName = label || `抖音账号 ${shortHash(uidOrUrl || raw)}`;
+  const link = extractPlatformAccountLink(platform, raw);
+  const idToken = extractPlatformAccountIdToken(platform, raw);
+  const uidOrUrl = link || idToken || undefined;
+  const label = uidOrUrl ? removeAccountReference(platform, raw, uidOrUrl) : raw;
+  const displayName = label || `${formatPlatformName(platform)}账号 ${shortHash(uidOrUrl || raw)}`;
 
   return {
     lookupName: label || raw,
@@ -403,14 +460,59 @@ function resolveAccountTarget(query: string) {
   };
 }
 
-function removeAccountReference(input: string, reference: string) {
+function extractPlatformAccountLink(platform: Platform, input: string) {
+  return extractLinksFromInput(input, { kind: "account" }).find((link) => isPlatformAccountLink(platform, link.url))?.url || "";
+}
+
+function extractPlatformAccountIdToken(platform: Platform, input: string) {
+  const token = input.trim();
+  if (platform === "bilibili" && BILIBILI_UID_PATTERN.test(token)) return token;
+  if (platform === "douyin") return token.match(DOUYIN_SEC_UID_PATTERN)?.[0] || "";
+  return "";
+}
+
+function isPlatformAccountLink(platform: Platform, input: string) {
+  try {
+    const parsed = new URL(addHttpScheme(input));
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname;
+
+    if (platform === "bilibili") {
+      return host.endsWith("bilibili.com") && /^\/\d+/.test(pathname);
+    }
+
+    return (
+      /(^|\.)douyin\.com$/.test(host) || /(^|\.)iesdouyin\.com$/.test(host)
+    ) && (/\/(?:user|share\/user)\//i.test(pathname) || parsed.searchParams.has("sec_uid"));
+  } catch {
+    return false;
+  }
+}
+
+function addHttpScheme(input: string) {
+  return /^https?:\/\//i.test(input) ? input : `https://${input}`;
+}
+
+function removeAccountReference(platform: Platform, input: string, reference: string) {
+  const platformPattern = platform === "bilibili"
+    ? /(?:https?:\/\/)?(?:space\.)?bilibili\.com\/\S+/gi
+    : /(?:https?:\/\/)?(?:www\.)?(?:douyin|iesdouyin)\.com\/\S+/gi;
+
   return input
     .replace(reference, "")
     .replace(/https?:\/\/\S+/gi, "")
-    .replace(/(?:www\.)?(?:douyin|iesdouyin)\.com\/\S+/gi, "")
-    .replace(DOUYIN_SEC_UID_PATTERN, "")
+    .replace(platformPattern, "")
+    .replace(platform === "douyin" ? DOUYIN_SEC_UID_PATTERN : BILIBILI_UID_PATTERN, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getHotlistCollectOrder(platform: Platform) {
+  return platform === "bilibili" ? "pubdate" : "likes";
+}
+
+function formatPlatformName(platform: Platform) {
+  return platform === "bilibili" ? "B站" : "抖音";
 }
 
 function resolveHotlistWindow(windowInput?: number | string): HotlistWindow {
@@ -509,6 +611,7 @@ function buildRankItem(
     rank: 0,
     account: {
       id: account.id,
+      platform: account.platform,
       name: account.name,
       uid: account.uid,
       avatarUrl: account.avatarUrl
@@ -524,6 +627,14 @@ function buildRankItem(
     surgeState: video.hotlistSurge,
     trend: video.hotlistTrend
   };
+}
+
+function shouldShowHotlistRankItem(item: HotlistRankItemDraft) {
+  return (
+    item.ageHours === undefined ||
+    item.ageHours <= STALE_LOW_HEAT_MAX_AGE_HOURS ||
+    item.heatScore >= STALE_LOW_HEAT_MIN_SCORE
+  );
 }
 
 function finalizeRankItem(
@@ -549,7 +660,16 @@ function buildSurgeHighlight(
   item: HotlistRankItemDraft,
   rank: number
 ): DouyinHotlistSurgeHighlight | undefined {
-  const currentDecision = getHotlistSurgeDecision(item.trend);
+  if (!isHotlistSurgeEligible({
+    ageHours: item.ageHours,
+    hotScore: item.video.hotScore,
+    platform: item.video.platform,
+    stats: item.video.stats
+  })) {
+    return undefined;
+  }
+
+  const currentDecision = getHotlistSurgeDecision(item.trend, item.video.platform);
   if (currentDecision) {
     return {
       label: getHotlistSurgeLabel(rank, currentDecision.heatPerHour, currentDecision.minHeatPerHour),
@@ -560,11 +680,22 @@ function buildSurgeHighlight(
     };
   }
 
+  if (!shouldRetainHotlistSurgeState(item.video.platform)) return undefined;
+
   const surgeState = item.surgeState;
-  if (!isHotlistSurgeActive(surgeState)) return undefined;
+  if (
+    !isHotlistSurgeActive(surgeState) ||
+    !isHotlistSurgeStateAboveThreshold(surgeState, item.video.platform)
+  ) {
+    return undefined;
+  }
 
   return {
-    label: getHotlistSurgeLabel(rank, surgeState.heatPerHour, getSurgeMinHeatPerHour(Math.max(0.25, surgeState.intervalHours))),
+    label: getHotlistSurgeLabel(
+      rank,
+      surgeState.heatPerHour,
+      getSurgeMinHeatPerHour(Math.max(0.25, surgeState.intervalHours), item.video.platform)
+    ),
     reason: formatHotlistSurgeReason(surgeState),
     heatDelta: surgeState.heatDelta,
     heatPerHour: surgeState.heatPerHour,

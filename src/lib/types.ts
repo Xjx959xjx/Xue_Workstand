@@ -659,7 +659,7 @@ export type DouyinHotlistAccount = Pick<
 
 export type DouyinHotlistItem = {
   rank: number;
-  account: Pick<Account, "id" | "name" | "uid" | "avatarUrl">;
+  account: Pick<Account, "id" | "platform" | "name" | "uid" | "avatarUrl">;
   video: VideoListItem;
   heatScore: number;
   ageHours?: number;

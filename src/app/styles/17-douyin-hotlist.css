@@ -246,13 +246,15 @@
 
 .douyin-hotlist-rank-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
 }
 
-.douyin-hotlist-window-filter {
+.douyin-hotlist-window-filter,
+.douyin-hotlist-platform-filter {
   display: inline-flex;
   min-height: 34px;
   padding: 3px;
@@ -262,7 +264,8 @@
   box-shadow: inset 0 1px 0 color-mix(in oklch, white 72%, transparent);
 }
 
-.douyin-hotlist-window-filter button {
+.douyin-hotlist-window-filter button,
+.douyin-hotlist-platform-filter button {
   min-width: 42px;
   height: 26px;
   padding: 0 10px;
@@ -281,18 +284,25 @@
     box-shadow var(--motion-base) var(--ease-apple);
 }
 
-.douyin-hotlist-window-filter button:hover:not(:disabled) {
+.douyin-hotlist-platform-filter button {
+  min-width: 48px;
+}
+
+.douyin-hotlist-window-filter button:hover:not(:disabled),
+.douyin-hotlist-platform-filter button:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in oklch, var(--panel-raised) 76%, transparent);
 }
 
-.douyin-hotlist-window-filter button.active {
+.douyin-hotlist-window-filter button.active,
+.douyin-hotlist-platform-filter button.active {
   color: var(--accent-strong);
   background: color-mix(in oklch, var(--accent-tint) 70%, var(--panel-raised));
   box-shadow: 0 1px 4px color-mix(in oklch, var(--accent) 12%, transparent);
 }
 
-.douyin-hotlist-window-filter button:disabled {
+.douyin-hotlist-window-filter button:disabled,
+.douyin-hotlist-platform-filter button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -406,19 +416,37 @@
   background: linear-gradient(180deg, var(--green), var(--blue));
 }
 
+.douyin-hotlist-item.is-surging,
+.douyin-hotlist-surge-badge {
+  --surge-color: color-mix(in oklch, var(--rose) 88%, var(--text-strong));
+  --surge-soft: color-mix(in oklch, var(--rose-soft) 72%, var(--amber-soft));
+  --surge-accent: color-mix(in oklch, var(--amber) 82%, var(--rose));
+  --surge-deep: color-mix(in oklch, var(--rose) 82%, var(--text-strong));
+  --surge-border: color-mix(in oklch, var(--surge-color) 48%, var(--line));
+}
+
+.douyin-hotlist-item.is-surging.surge-rising,
+.douyin-hotlist-surge-badge.surge-rising {
+  --surge-color: oklch(0.62 0.16 56);
+  --surge-soft: oklch(0.95 0.055 64);
+  --surge-accent: oklch(0.69 0.15 48);
+  --surge-deep: oklch(0.5 0.14 48);
+  --surge-border: oklch(0.67 0.11 54);
+}
+
 .douyin-hotlist-item.is-surging {
-  border-color: color-mix(in oklch, var(--rose) 48%, var(--line));
+  border-color: var(--surge-border);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, var(--panel)) 0%, var(--panel) 100%);
   box-shadow:
-    inset 0 0 0 1px color-mix(in oklch, var(--rose) 18%, transparent),
-    0 10px 24px color-mix(in oklch, var(--rose) 7%, transparent);
+    inset 0 0 0 1px color-mix(in oklch, var(--surge-color) 18%, transparent),
+    0 10px 24px color-mix(in oklch, var(--surge-color) 7%, transparent);
 }
 
 .douyin-hotlist-item.is-surging::before {
   width: 6px;
-  background: linear-gradient(180deg, var(--rose), var(--amber));
-  box-shadow: 0 0 0 1px color-mix(in oklch, var(--rose) 14%, transparent);
+  background: linear-gradient(180deg, var(--surge-color), var(--surge-accent));
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--surge-color) 14%, transparent);
 }
 
 .douyin-hotlist-rank {
@@ -471,10 +499,10 @@
 }
 
 .douyin-hotlist-item.is-surging .douyin-hotlist-rank {
-  border-color: color-mix(in oklch, var(--rose) 38%, var(--line));
-  color: color-mix(in oklch, var(--rose) 86%, var(--text-strong));
-  background: color-mix(in oklch, var(--rose-soft) 76%, var(--panel));
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--rose) 12%, transparent);
+  border-color: var(--surge-border);
+  color: var(--surge-deep);
+  background: color-mix(in oklch, var(--surge-soft) 76%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--surge-color) 12%, transparent);
 }
 
 .douyin-hotlist-item-content {
@@ -667,11 +695,11 @@
   gap: 4px;
   padding: 2px 8px;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--rose) 72%, var(--text-strong));
+  border: 1px solid color-mix(in oklch, var(--surge-deep) 82%, var(--line));
   border-radius: 999px;
   color: var(--panel-raised);
   background:
-    linear-gradient(180deg, color-mix(in oklch, var(--rose) 88%, var(--amber) 12%) 0%, color-mix(in oklch, var(--rose) 74%, var(--text-strong)) 100%);
+    linear-gradient(180deg, color-mix(in oklch, var(--surge-color) 88%, var(--surge-accent) 12%) 0%, var(--surge-deep) 100%);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
@@ -679,12 +707,12 @@
   line-height: 1.12;
   box-shadow:
     inset 0 1px 0 color-mix(in oklch, white 28%, transparent),
-    0 2px 6px color-mix(in oklch, var(--rose) 18%, transparent);
+    0 2px 6px color-mix(in oklch, var(--surge-color) 18%, transparent);
 }
 
 .douyin-hotlist-surge-badge svg {
   flex: 0 0 auto;
-  color: color-mix(in oklch, var(--amber-soft) 88%, white);
+  color: color-mix(in oklch, var(--surge-soft) 88%, white);
 }
 
 .douyin-hotlist-item.is-surging .douyin-hotlist-signal {
@@ -731,6 +759,11 @@
 .douyin-hotlist-metric.tone-likes {
   --metric-color: var(--rose);
   --metric-soft: var(--rose-soft);
+}
+
+.douyin-hotlist-metric.tone-views {
+  --metric-color: var(--green);
+  --metric-soft: var(--green-soft);
 }
 
 .douyin-hotlist-metric.tone-comments {
@@ -968,6 +1001,52 @@
   font-weight: 720;
 }
 
+.douyin-hotlist-platform-switch {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 34px;
+  padding: 3px;
+  border: 1px solid color-mix(in oklch, var(--line-strong) 54%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--panel-soft) 72%, var(--panel));
+  box-shadow: inset 0 1px 0 color-mix(in oklch, white 72%, transparent);
+}
+
+.douyin-hotlist-platform-switch button {
+  min-width: 56px;
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--motion-base) var(--ease-apple),
+    background-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple);
+}
+
+.douyin-hotlist-platform-switch button:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in oklch, var(--panel-raised) 76%, transparent);
+}
+
+.douyin-hotlist-platform-switch button.active {
+  color: var(--accent-strong);
+  background: color-mix(in oklch, var(--accent-tint) 70%, var(--panel-raised));
+  box-shadow: 0 1px 4px color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
+.douyin-hotlist-platform-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .douyin-hotlist-add-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 38px;
@@ -1060,10 +1139,22 @@
 }
 
 .douyin-hotlist-account-row .list-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 730;
   line-height: 1.25;
+}
+
+.douyin-hotlist-account-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .douyin-hotlist-account-row .list-meta {
@@ -1071,6 +1162,25 @@
   color: var(--muted);
   font-size: 11px;
   line-height: 1.25;
+}
+
+.douyin-hotlist-platform-logo {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.douyin-hotlist-platform-logo-image {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 7px;
+  object-fit: cover;
 }
 
 .douyin-hotlist-account-remove.btn.icon-only.compact {
@@ -1220,8 +1330,14 @@
 
   .douyin-hotlist-rank-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr auto;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
+  }
+
+  .douyin-hotlist-window-filter,
+  .douyin-hotlist-platform-filter {
+    justify-content: center;
+    width: 100%;
   }
 
   .douyin-hotlist-account-filter,
@@ -1229,6 +1345,10 @@
     grid-template-columns: 1fr;
     gap: 4px;
     min-width: 0;
+  }
+
+  .douyin-hotlist-rank-actions .status-pill {
+    justify-self: start;
   }
 
   .douyin-hotlist-list {

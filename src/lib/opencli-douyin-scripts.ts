@@ -211,6 +211,145 @@ export function buildDouyinPostExtractJs(options: {
   });
 }
 
+export const DOUYIN_PROFILE_VIDEO_LINKS_EXTRACT_JS = `
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const normalizeUrl = (href) => {
+    if (!href) return "";
+    if (href.startsWith("//")) return "https:" + href;
+    if (href.startsWith("/")) return location.origin + href;
+    return href;
+  };
+  const compactNumber = (text) => {
+    const match = clean(text).match(/^([0-9.]+)\\s*([万億亿kKmM]?)$/);
+    if (!match) return 0;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base)) return 0;
+    const unit = String(match[2] || "").toLowerCase();
+    if (unit === "万") return Math.round(base * 10000);
+    if (unit === "亿" || unit === "億") return Math.round(base * 100000000);
+    if (unit === "k") return Math.round(base * 1000);
+    if (unit === "m") return Math.round(base * 1000000);
+    return Math.round(base);
+  };
+  const titleFromLines = (lines) => {
+    const cleaned = lines.map(clean).filter(Boolean).filter((line) => line !== "置顶");
+    const firstMetric = cleaned.findIndex((line) => compactNumber(line) > 0);
+    if (firstMetric >= 0 && cleaned[firstMetric + 1]) return cleaned[firstMetric + 1];
+    return cleaned.find((line) => /[\\u4e00-\\u9fa5A-Za-z]/.test(line) && !/^\\d/.test(line)) || "";
+  };
+  const extract = () => {
+    const seen = new Set();
+    return Array.from(document.querySelectorAll('a[href*="/video/"]'))
+      .map((anchor, index) => {
+        const href = normalizeUrl(anchor.getAttribute("href") || anchor.href || "");
+        const awemeId = href.match(/\\/video\\/(\\d{10,})/)?.[1] || "";
+        if (!awemeId || seen.has(awemeId)) return null;
+        seen.add(awemeId);
+        const lines = String(anchor.innerText || anchor.textContent || "")
+          .split(/\\n+/)
+          .map(clean)
+          .filter(Boolean);
+        const likeLine = lines.find((line) => compactNumber(line) > 0) || "";
+        const title = titleFromLines(lines);
+        return title ? {
+          index: index + 1,
+          aweme_id: awemeId,
+          id: awemeId,
+          title,
+          desc: title,
+          digg_count: compactNumber(likeLine),
+          share_url: href,
+          web_url: href,
+          url: href,
+          source: "douyin_profile_dom"
+        } : null;
+      })
+      .filter(Boolean);
+  };
+
+  for (let index = 0; index < 4; index += 1) {
+    const rows = extract();
+    if (rows.length >= 24) return rows;
+    window.scrollBy(0, Math.max(600, window.innerHeight || 800));
+    document.dispatchEvent(new Event("scroll", { bubbles: true }));
+    await sleep(900);
+  }
+  return extract();
+})()
+`;
+
+export function buildDouyinVideoPageDomExtractJs(fallback: {
+  awemeId: string;
+  title: string;
+  url: string;
+  likes: number;
+}) {
+  return `
+(() => {
+  const fallback = ${JSON.stringify(fallback)};
+  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const compactNumber = (text) => {
+    const match = clean(text).match(/^([0-9.]+)\\s*([万億亿kKmM]?)$/);
+    if (!match) return 0;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base)) return 0;
+    const unit = String(match[2] || "").toLowerCase();
+    if (unit === "万") return Math.round(base * 10000);
+    if (unit === "亿" || unit === "億") return Math.round(base * 100000000);
+    if (unit === "k") return Math.round(base * 1000);
+    if (unit === "m") return Math.round(base * 1000000);
+    return Math.round(base);
+  };
+  const toEpochSeconds = (value) => {
+    const match = clean(value).match(/(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})日?\\s+(\\d{1,2}):(\\d{1,2})/);
+    if (!match) return 0;
+    const [, year, month, day, hour, minute] = match;
+    const time = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      0
+    ).getTime();
+    return Number.isFinite(time) ? Math.floor(time / 1000) : 0;
+  };
+  const lines = String(document.body?.innerText || "")
+    .split(/\\n+/)
+    .map(clean)
+    .filter(Boolean);
+  const fallbackTitle = clean(fallback.title);
+  const titleIndex = lines.findIndex((line) => line === fallbackTitle) >= 0
+    ? lines.findIndex((line) => line === fallbackTitle)
+    : lines.findIndex((line) => /#[^\\s#]+/.test(line) && /[\\u4e00-\\u9fa5A-Za-z]/.test(line));
+  const title = titleIndex >= 0 ? lines[titleIndex] : fallbackTitle;
+  const metricLines = titleIndex >= 0
+    ? lines.slice(titleIndex + 1, titleIndex + 8).filter((line) => compactNumber(line) > 0)
+    : [];
+  const publishedLine = lines.find((line) => /^发布时间[:：]/.test(line)) || "";
+  const createTime = toEpochSeconds(publishedLine);
+  return {
+    index: 1,
+    aweme_id: fallback.awemeId,
+    id: fallback.awemeId,
+    title: title || fallbackTitle || "未命名视频",
+    desc: title || fallbackTitle || "未命名视频",
+    create_time: createTime,
+    digg_count: metricLines[0] ? compactNumber(metricLines[0]) : Number(fallback.likes || 0),
+    comment_count: metricLines[1] ? compactNumber(metricLines[1]) : 0,
+    collect_count: metricLines[2] ? compactNumber(metricLines[2]) : 0,
+    share_count: metricLines[3] ? compactNumber(metricLines[3]) : 0,
+    share_url: fallback.url,
+    web_url: fallback.url,
+    url: fallback.url,
+    source: "douyin_video_page_dom"
+  };
+})()
+`;
+}
+
 export function buildDouyinBatchPostExtractJs(options: {
   accounts: DouyinBatchPostExtractAccount[];
   concurrency: number;

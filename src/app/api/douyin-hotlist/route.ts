@@ -6,6 +6,7 @@ import {
   refreshDouyinHotlist,
   removeDouyinHotlistAccount
 } from "@/lib/douyin-hotlist";
+import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ const getSchema = z.object({
 
 const postSchema = z.object({
   action: z.enum(["addAccount", "removeAccount", "refresh"]),
+  platform: z.enum(platforms).optional(),
   query: z.string().optional(),
   accountId: z.string().optional(),
   accountIds: z.array(z.string()).optional(),
@@ -36,7 +38,7 @@ export async function GET(request: Request) {
       windowKey: input.window
     });
   }, {
-    fallbackMessage: "读取抖音热榜失败"
+    fallbackMessage: "读取视频热榜失败"
   });
 }
 
@@ -46,7 +48,8 @@ export async function POST(request: Request) {
 
     if (input.action === "addAccount") {
       return addDouyinHotlistAccount({
-        query: z.string().min(1, "请输入抖音账号名、主页链接或 sec_uid。").parse(input.query),
+        platform: input.platform || "douyin",
+        query: z.string().min(1, "请输入账号名、主页链接或平台 ID。").parse(input.query),
         signal: request.signal
       });
     }
@@ -65,6 +68,6 @@ export async function POST(request: Request) {
       signal: request.signal
     });
   }, {
-    fallbackMessage: "更新抖音热榜失败"
+    fallbackMessage: "更新视频热榜失败"
   });
 }

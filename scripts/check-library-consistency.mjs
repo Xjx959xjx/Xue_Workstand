@@ -256,7 +256,7 @@ function checkDouyinHotlistWatchlist() {
     if (account.id !== expectedAccountId) {
       pushIssue("douyin-hotlist-account-id-slug-mismatch", accountFile, `id=${account.id}, expected=${expectedAccountId}`);
     }
-    if (account.platform !== "douyin") {
+    if (account.platform !== "douyin" && account.platform !== "bilibili") {
       pushIssue("douyin-hotlist-account-invalid-platform", accountFile, String(account.platform));
     }
 
@@ -270,6 +270,9 @@ function checkDouyinHotlistWatchlist() {
       }
       if (video.accountId !== account.id) {
         pushIssue("douyin-hotlist-video-account-mismatch", videoFile, `video.accountId=${video.accountId}, account=${account.id}`);
+      }
+      if (video.platform !== account.platform) {
+        pushIssue("douyin-hotlist-video-platform-mismatch", videoFile, `video.platform=${video.platform}, account=${account.platform}`);
       }
     }
   }

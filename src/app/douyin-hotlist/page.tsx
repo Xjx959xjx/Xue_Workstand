@@ -29,7 +29,9 @@ import type {
   DouyinHotlistAccount,
   DouyinHotlistItem,
   DouyinHotlistRefreshAccountResult,
-  DouyinHotlistResponse
+  DouyinHotlistResponse,
+  Platform,
+  VideoListItem
 } from "@/lib/types";
 
 const DEFAULT_WINDOW = "3d";
@@ -43,6 +45,7 @@ const REFRESH_LOG_STORAGE_KEY = "douyin-hotlist-refresh-logs";
 
 type BusyState = "" | "load" | "add" | "refresh" | `remove:${string}`;
 type AccountSelection = "all" | string;
+type MetricTone = "views" | "likes" | "comments" | "favorites" | "shares";
 type SortMode = "heat" | "likes" | "comments" | "saves" | "recent";
 type WindowFilter = "3h" | "6h" | "12h" | "24h" | "3d";
 type RefreshLogStatus = "success" | "warning" | "failed" | "skipped";
@@ -64,7 +67,7 @@ const sortOptions: { value: SortMode; label: string }[] = [
   { value: "heat", label: "综合热度" },
   { value: "likes", label: "点赞最高" },
   { value: "comments", label: "评论最多" },
-  { value: "saves", label: "收藏转发" },
+  { value: "saves", label: "收藏/转发" },
   { value: "recent", label: "最新发布" }
 ];
 
@@ -75,6 +78,11 @@ const windowOptions: { value: WindowFilter; label: string; labelText: string }[]
   { value: "24h", label: "24h", labelText: "近 24 小时" },
   { value: "3d", label: "3天", labelText: "近 3 天" }
 ];
+
+const platformLogoSrc: Record<Platform, string> = {
+  bilibili: "/platform-logos/bilibili.png",
+  douyin: "/platform-logos/douyin.png"
+};
 
 const numberFormatter = new Intl.NumberFormat("zh-CN", {
   notation: "compact",
@@ -103,6 +111,7 @@ export default function DouyinHotlistPage() {
   const initialWindowFilter = parseWindowFilter(searchParams.get("window"));
   const [snapshot, setSnapshot] = useState<DouyinHotlistResponse | null>(() => getCachedDouyinHotlist({ window: initialWindowFilter }));
   const [query, setQuery] = useState("");
+  const [accountPlatform, setAccountPlatform] = useState<Platform>("douyin");
   const [selectedAccountId, setSelectedAccountId] = useState<AccountSelection>(() => searchParams.get("account") || "all");
   const [sortMode, setSortMode] = useState<SortMode>(() => parseSortMode(searchParams.get("sort")));
   const [windowFilter, setWindowFilter] = useState<WindowFilter>(() => initialWindowFilter);
@@ -170,7 +179,7 @@ export default function DouyinHotlistPage() {
     try {
       setSnapshot(await getDouyinHotlist({ window: windowFilter }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "读取抖音热榜失败");
+      setError(err instanceof Error ? err.message : "读取视频热榜失败");
     } finally {
       busyRef.current = "";
       setBusy("");
@@ -183,9 +192,12 @@ export default function DouyinHotlistPage() {
 
   useEffect(() => {
     if (!snapshot || selectedAccountId === "all") return;
+    if (getSelectionPlatform(selectedAccountId)) return;
     if (snapshot.accounts.some((account) => account.id === selectedAccountId)) return;
     setSelectedAccountId("all");
   }, [selectedAccountId, snapshot]);
+
+  const selectedPlatform = useMemo(() => getSelectionPlatform(selectedAccountId), [selectedAccountId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -213,13 +225,21 @@ export default function DouyinHotlistPage() {
   }, [pathname, router, selectedAccountId, sortMode, windowFilter]);
 
   const selectedAccount = useMemo(() => {
-    if (!snapshot || selectedAccountId === "all") return null;
+    if (!snapshot || selectedAccountId === "all" || selectedPlatform) return null;
     return snapshot.accounts.find((account) => account.id === selectedAccountId) || null;
-  }, [selectedAccountId, snapshot]);
+  }, [selectedAccountId, selectedPlatform, snapshot]);
+
+  const selectedPlatformAccounts = useMemo(() => {
+    if (!snapshot || !selectedPlatform) return [];
+    return snapshot.accounts.filter((account) => account.platform === selectedPlatform);
+  }, [selectedPlatform, snapshot]);
 
   const visibleItems = useMemo(() => {
     const filtered = (snapshot?.items || []).filter(
-      (item) => selectedAccountId === "all" || item.account.id === selectedAccountId
+      (item) =>
+        selectedAccountId === "all" ||
+        item.account.id === selectedAccountId ||
+        item.account.platform === selectedPlatform
     );
     return [...filtered]
       .sort((left, right) => compareHotlistItems(left, right, sortMode))
@@ -227,19 +247,29 @@ export default function DouyinHotlistPage() {
         item,
         displayRank: index + 1
       }));
-  }, [selectedAccountId, snapshot, sortMode]);
+  }, [selectedAccountId, selectedPlatform, snapshot, sortMode]);
 
   const summary = snapshot?.summary;
   const canAdd = Boolean(query.trim()) && busy !== "add" && busy !== "refresh";
-  const canRefresh = Boolean(snapshot?.accounts.length) && busy !== "refresh" && busy !== "add" && !busy.startsWith("remove:");
+  const canRefresh = Boolean(selectedPlatform ? selectedPlatformAccounts.length : snapshot?.accounts.length) &&
+    busy !== "refresh" &&
+    busy !== "add" &&
+    !busy.startsWith("remove:");
   const initialLoading = busy === "load" && !snapshot;
   const windowLabel = getWindowLabel(summary?.windowKey || windowFilter);
-  const refreshLabel = selectedAccount ? "抓取当前账号" : `抓取全部${windowLabel}`;
-  const rankTitle = selectedAccount ? selectedAccount.name : "实时热度榜";
+  const selectedPlatformLabel = selectedPlatform ? getPlatformLabel(selectedPlatform) : "";
+  const selectedPlatformRecentVideoCount = selectedPlatformAccounts.reduce((sum, account) => sum + account.recentVideoCount, 0);
+  const refreshLabel = selectedAccount ? "抓取当前账号" : selectedPlatform ? `抓取${selectedPlatformLabel}${windowLabel}` : `抓取全部${windowLabel}`;
+  const rankTitle = selectedAccount ? selectedAccount.name : selectedPlatform ? `${selectedPlatformLabel}热度榜` : "实时热度榜";
+  const activePlatformFilter: Platform | "all" = selectedPlatform || selectedAccount?.platform || "all";
   const rankSubtitle = selectedAccount
-    ? `${selectedAccount.recentVideoCount} 条${windowLabel}内容 · 总榜中筛选${
+    ? `${getPlatformLabel(selectedAccount.platform)} · ${selectedAccount.recentVideoCount} 条${windowLabel}内容 · 总榜中筛选${
         summary?.lastRefreshedAt ? ` · 最近刷新 ${formatDate(summary.lastRefreshedAt)}` : ""
       }`
+    : selectedPlatform
+      ? `${selectedPlatformAccounts.length} 个${selectedPlatformLabel}账号 · ${windowLabel} ${selectedPlatformRecentVideoCount} 条 · 最近刷新 ${
+          summary?.lastRefreshedAt ? formatDate(summary.lastRefreshedAt) : "未刷新"
+        }`
     : summary
       ? `${summary.accountCount} 个账号 · ${windowLabel} ${summary.recentVideoCount} 条 · 最近刷新 ${
           summary.lastRefreshedAt ? formatDate(summary.lastRefreshedAt) : "未刷新"
@@ -255,12 +285,12 @@ export default function DouyinHotlistPage() {
     setMessage("");
     setError("");
     try {
-      const next = await addDouyinHotlistAccount(query);
+      const next = await addDouyinHotlistAccount({ platform: accountPlatform, query });
       setSnapshot(next);
       setQuery("");
-      setMessage("已加入独立热榜账号池。");
+      setMessage(`已加入${getPlatformLabel(accountPlatform)}视频热榜账号池。`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "添加抖音账号失败");
+      setError(err instanceof Error ? err.message : `添加${getPlatformLabel(accountPlatform)}账号失败`);
     } finally {
       busyRef.current = "";
       setBusy("");
@@ -299,7 +329,13 @@ export default function DouyinHotlistPage() {
     setError("");
     try {
       const next = await refreshDouyinHotlist({
-        accountIds: automatic || !selectedAccount ? undefined : [selectedAccount.id],
+        accountIds: automatic
+          ? undefined
+          : selectedAccount
+            ? [selectedAccount.id]
+            : selectedPlatform
+              ? selectedPlatformAccounts.map((account) => account.id)
+              : undefined,
         limit: REFRESH_LIMIT,
         window: windowFilter
       });
@@ -337,7 +373,7 @@ export default function DouyinHotlistPage() {
       setBusy("");
       setRefreshOrigin("");
     }
-  }, [appendRefreshLog, selectedAccount, snapshot?.accounts.length, windowFilter]);
+  }, [appendRefreshLog, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, windowFilter]);
 
   useEffect(() => {
     refreshHotlistRef.current = refreshHotlist;
@@ -394,7 +430,7 @@ export default function DouyinHotlistPage() {
       }
       setMessage("已从热榜账号池移除。");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "移除抖音账号失败");
+      setError(err instanceof Error ? err.message : "移除视频热榜账号失败");
     } finally {
       busyRef.current = "";
       setBusy("");
@@ -411,8 +447,8 @@ export default function DouyinHotlistPage() {
               <Flame size={20} strokeWidth={2.1} />
             </span>
             <div className="page-title-copy">
-              <h1>抖音热榜</h1>
-              <p className="subtle">维护独立对标池，抓取{windowLabel}值得拆解的内容。</p>
+              <h1>视频热榜</h1>
+              <p className="subtle">维护抖音 / B站独立对标池，抓取{windowLabel}值得拆解的内容。</p>
             </div>
           </div>
         </div>
@@ -449,6 +485,11 @@ export default function DouyinHotlistPage() {
                 onChange={setWindowFilter}
                 value={windowFilter}
               />
+              <PlatformFilterControl
+                disabled={initialLoading || !snapshot?.accounts.length}
+                onChange={(platform) => setSelectedAccountId(platform === "all" ? "all" : getPlatformAccountSelection(platform))}
+                value={activePlatformFilter}
+              />
               <AccountFilter
                 accounts={snapshot?.accounts || []}
                 disabled={initialLoading || !snapshot?.accounts.length}
@@ -483,6 +524,7 @@ export default function DouyinHotlistPage() {
       {accountDrawerOpen ? (
         <AccountManagementDrawer
           accounts={snapshot?.accounts || []}
+          accountPlatform={accountPlatform}
           busy={busy}
           canAdd={canAdd}
           initialLoading={initialLoading}
@@ -492,6 +534,7 @@ export default function DouyinHotlistPage() {
           windowLabel={windowLabel}
           onAddAccount={handleAddAccount}
           onClose={() => setAccountDrawerOpen(false)}
+          onPlatformChange={setAccountPlatform}
           onQueryChange={setQuery}
           onRemoveAccount={setRemoveTarget}
           onSelectAccount={setSelectedAccountId}
@@ -499,7 +542,7 @@ export default function DouyinHotlistPage() {
       ) : null}
       {removeTarget ? (
         <ConfirmDialog
-          body={`会将“${removeTarget.name}”从热榜账号池移除，本地热榜记录也会随账号池更新。`}
+          body={`会将“${removeTarget.name}”从视频热榜账号池移除，本地热榜记录也会随账号池更新。`}
           busy={busy === `remove:${removeTarget.id}`}
           confirmLabel="移除账号"
           title="移除热榜账号？"
@@ -529,8 +572,10 @@ function AccountFilter({
       <span>账号</span>
       <select aria-label="筛选对标账号" disabled={disabled} onChange={(event) => onChange(event.target.value)} value={value}>
         <option value="all">全部账号</option>
+        <option value={getPlatformAccountSelection("douyin")}>全部抖音账号</option>
+        <option value={getPlatformAccountSelection("bilibili")}>全部 B站账号</option>
         {accounts.map((account) => (
-          <option key={account.id} value={account.id}>{account.name}</option>
+          <option key={account.id} value={account.id}>{getPlatformLabel(account.platform)} · {account.name}</option>
         ))}
       </select>
     </label>
@@ -558,6 +603,66 @@ function WindowFilterControl({
           type="button"
         >
           {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PlatformFilterControl({
+  disabled,
+  onChange,
+  value
+}: {
+  disabled: boolean;
+  onChange: (value: Platform | "all") => void;
+  value: Platform | "all";
+}) {
+  const options: Array<{ label: string; value: Platform | "all" }> = [
+    { label: "全部", value: "all" },
+    { label: "抖音", value: "douyin" },
+    { label: "B站", value: "bilibili" }
+  ];
+
+  return (
+    <div className="segmented-control douyin-hotlist-platform-filter" aria-label="平台筛选">
+      {options.map((option) => (
+        <button
+          aria-pressed={value === option.value}
+          className={value === option.value ? "active" : ""}
+          disabled={disabled}
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          type="button"
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PlatformSwitch({
+  disabled,
+  onChange,
+  value
+}: {
+  disabled: boolean;
+  onChange: (value: Platform) => void;
+  value: Platform;
+}) {
+  return (
+    <div className="segmented-control douyin-hotlist-platform-switch" aria-label="选择账号平台">
+      {(["douyin", "bilibili"] as const).map((platform) => (
+        <button
+          aria-pressed={value === platform}
+          className={value === platform ? "active" : ""}
+          disabled={disabled}
+          key={platform}
+          onClick={() => onChange(platform)}
+          type="button"
+        >
+          {getPlatformLabel(platform)}
         </button>
       ))}
     </div>
@@ -608,6 +713,7 @@ function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
 
 function AccountManagementDrawer({
   accounts,
+  accountPlatform,
   busy,
   canAdd,
   initialLoading,
@@ -617,11 +723,13 @@ function AccountManagementDrawer({
   windowLabel,
   onAddAccount,
   onClose,
+  onPlatformChange,
   onQueryChange,
   onRemoveAccount,
   onSelectAccount
 }: {
   accounts: DouyinHotlistAccount[];
+  accountPlatform: Platform;
   busy: BusyState;
   canAdd: boolean;
   initialLoading: boolean;
@@ -631,6 +739,7 @@ function AccountManagementDrawer({
   windowLabel: string;
   onAddAccount: (event: FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
+  onPlatformChange: (platform: Platform) => void;
   onQueryChange: (value: string) => void;
   onRemoveAccount: (account: DouyinHotlistAccount) => void;
   onSelectAccount: (value: AccountSelection) => void;
@@ -638,6 +747,13 @@ function AccountManagementDrawer({
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const locked = busy === "add" || busy.startsWith("remove:");
+  const platformLabel = getPlatformLabel(accountPlatform);
+  const visibleAccounts = useMemo(
+    () => accounts.filter((account) => account.platform === accountPlatform),
+    [accounts, accountPlatform]
+  );
+  const visibleRecentVideoCount = visibleAccounts.reduce((sum, account) => sum + account.recentVideoCount, 0);
+  const platformSelection = getPlatformAccountSelection(accountPlatform);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -670,35 +786,41 @@ function AccountManagementDrawer({
 
         <form className="douyin-hotlist-drawer-add-form" onSubmit={onAddAccount}>
           <label htmlFor="douyin-hotlist-drawer-query">账号名 / 主页链接</label>
+          <PlatformSwitch
+            disabled={busy === "add"}
+            onChange={onPlatformChange}
+            value={accountPlatform}
+          />
           <div className="douyin-hotlist-add-row">
             <input
               autoComplete="off"
               id="douyin-hotlist-drawer-query"
               name="query"
               onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="输入抖音账号名…"
+              placeholder={getAccountInputPlaceholder(accountPlatform)}
               ref={inputRef}
               value={query}
             />
-            <button className="btn primary icon-only" disabled={!canAdd} type="submit" aria-label="添加抖音账号">
+            <button className="btn primary icon-only" disabled={!canAdd} type="submit" aria-label={`添加${getPlatformLabel(accountPlatform)}账号`}>
               <Plus aria-hidden="true" size={17} />
             </button>
           </div>
         </form>
 
-        <div className="douyin-hotlist-drawer-body" aria-label="已关注抖音账号">
+        <div className="douyin-hotlist-drawer-body" aria-label={`已关注${platformLabel}账号`}>
           {initialLoading ? (
             <HotlistAccountLoadingRows />
-          ) : accounts.length && summary ? (
+          ) : visibleAccounts.length ? (
             <>
               <AccountRowAll
-                active={selectedAccountId === "all"}
-                accountCount={summary.accountCount}
-                recentVideoCount={summary.recentVideoCount}
+                active={selectedAccountId === platformSelection}
+                accountCount={visibleAccounts.length}
+                label={`全部${platformLabel}账号`}
+                recentVideoCount={visibleRecentVideoCount}
                 windowLabel={windowLabel}
-                onSelect={() => onSelectAccount("all")}
+                onSelect={() => onSelectAccount(platformSelection)}
               />
-              {accounts.map((account) => (
+              {visibleAccounts.map((account) => (
                 <AccountRow
                   account={account}
                   active={selectedAccountId === account.id}
@@ -713,7 +835,7 @@ function AccountManagementDrawer({
           ) : (
             <div className="douyin-hotlist-empty-inline">
               <Users aria-hidden="true" size={17} />
-              <span>还没有对标账号。</span>
+              <span>还没有{platformLabel}对标账号。</span>
             </div>
           )}
         </div>
@@ -825,12 +947,14 @@ function HotlistLoadingRows() {
 function AccountRowAll({
   accountCount,
   active,
+  label,
   onSelect,
   recentVideoCount,
   windowLabel
 }: {
   accountCount: number;
   active: boolean;
+  label: string;
   onSelect: () => void;
   recentVideoCount: number;
   windowLabel: string;
@@ -847,7 +971,7 @@ function AccountRowAll({
           <Users size={15} strokeWidth={2.1} />
         </span>
         <span className="account-list-copy">
-          <span className="list-title">全部对标账号</span>
+          <span className="list-title">{label}</span>
           <span className="list-meta">{windowLabel} {recentVideoCount} · {accountCount} 个账号</span>
         </span>
       </button>
@@ -882,12 +1006,13 @@ function AccountRow({
           className={`account-avatar tone-${getAvatarTone(account.id)} ${account.avatarUrl ? "has-image" : ""}`}
           aria-hidden="true"
         >
-          {account.avatarUrl ? (
-            <Image alt="" height={30} src={account.avatarUrl} unoptimized width={30} />
-          ) : getAccountInitial(account.name)}
+          <AccountAvatarImage account={account} size={30} />
         </span>
         <span className="account-list-copy">
-          <span className="list-title">{account.name}</span>
+          <span className="list-title">
+            <PlatformLogoBadge platform={account.platform} />
+            <span className="douyin-hotlist-account-name">{account.name}</span>
+          </span>
           <span className="list-meta">{windowLabel} {account.recentVideoCount} · 累计 {account.videoCount}</span>
         </span>
       </button>
@@ -921,88 +1046,162 @@ function HotlistTable({
 
   return (
     <div className="douyin-hotlist-list" ref={listRef}>
-      {items.map(({ item, displayRank }) => (
-        <article
-          className={`douyin-hotlist-item has-cover ${getRankClass(displayRank)} ${item.surge ? "is-surging" : ""}`}
-          key={`${item.account.id}:${item.video.id}`}
-        >
-          <div className="douyin-hotlist-rank" aria-label={`第 ${displayRank} 名`}>
-            <strong>{displayRank}</strong>
-            <span>{showGlobalRank ? `总榜 ${item.rank}` : "热榜"}</span>
-          </div>
-          <div className="douyin-hotlist-item-content">
-            <div className="douyin-hotlist-item-head">
-              {item.video.coverUrl ? (
-                <Image alt="" className="douyin-hotlist-cover" height={76} src={item.video.coverUrl} unoptimized width={56} />
-              ) : (
-                <span className={`douyin-hotlist-cover douyin-hotlist-cover-placeholder tone-${getAvatarTone(item.account.id)}`} aria-hidden="true">
-                  {item.account.avatarUrl ? (
-                    <Image alt="" height={32} src={item.account.avatarUrl} unoptimized width={32} />
-                  ) : getAccountInitial(item.account.name)}
-                </span>
-              )}
-              <div className="douyin-hotlist-item-main">
-                <h3>{item.video.title}</h3>
-                <div className="douyin-hotlist-item-meta">
-                  <span className="douyin-hotlist-account-meta">
-                    <span
-                      className={`douyin-hotlist-source-avatar tone-${getAvatarTone(item.account.id)} ${item.account.avatarUrl ? "has-image" : ""}`}
-                      aria-hidden="true"
-                    >
-                      {item.account.avatarUrl ? (
-                        <Image alt="" height={22} src={item.account.avatarUrl} unoptimized width={22} />
-                      ) : getAccountInitial(item.account.name)}
+      {items.map(({ item, displayRank }) => {
+        const surgeClass = getSurgeClass(item.surge);
+
+        return (
+          <article
+            className={`douyin-hotlist-item has-cover ${getRankClass(displayRank)} ${surgeClass}`}
+            key={`${item.account.id}:${item.video.id}`}
+          >
+            <div className="douyin-hotlist-rank" aria-label={`第 ${displayRank} 名`}>
+              <strong>{displayRank}</strong>
+              <span>{showGlobalRank ? `总榜 ${item.rank}` : "热榜"}</span>
+            </div>
+            <div className="douyin-hotlist-item-content">
+              <div className="douyin-hotlist-item-head">
+                <HotlistCover item={item} />
+                <div className="douyin-hotlist-item-main">
+                  <h3>{item.video.title}</h3>
+                  <div className="douyin-hotlist-item-meta">
+                    <span className="douyin-hotlist-account-meta">
+                      <span
+                        className={`douyin-hotlist-source-avatar tone-${getAvatarTone(item.account.id)} ${item.account.avatarUrl ? "has-image" : ""}`}
+                        aria-hidden="true"
+                      >
+                        <AccountAvatarImage account={item.account} size={22} />
+                      </span>
+                      <PlatformLogoBadge platform={item.account.platform} />
+                      {item.account.name}
                     </span>
-                    {item.account.name}
-                  </span>
-                  <span>
-                    <Clock3 aria-hidden="true" size={12} />
-                    {formatDate(item.video.publishedAt)}
-                    {item.ageHours !== undefined ? ` · ${formatAge(item.ageHours)}` : ""}
-                  </span>
-                </div>
-                <div className="douyin-hotlist-signal-row">
-                  <span className="douyin-hotlist-signal">{item.signal}</span>
-                  {item.surge ? (
-                    <span className="douyin-hotlist-surge-badge" title={item.surge.reason} aria-label={item.surge.reason}>
-                      <Zap aria-hidden="true" size={12} />
-                      {item.surge.label}
+                    <span>
+                      <Clock3 aria-hidden="true" size={12} />
+                      {formatDate(item.video.publishedAt)}
+                      {item.ageHours !== undefined ? ` · ${formatAge(item.ageHours)}` : ""}
                     </span>
+                  </div>
+                  <div className="douyin-hotlist-signal-row">
+                    <span className="douyin-hotlist-signal">{item.signal}</span>
+                    {item.surge ? (
+                      <span className={`douyin-hotlist-surge-badge ${surgeClass}`} title={item.surge.reason} aria-label={item.surge.reason}>
+                        <Zap aria-hidden="true" size={12} />
+                        {item.surge.label}
+                      </span>
+                    ) : null}
+                  </div>
+                  {item.tags.length ? (
+                    <div className="douyin-hotlist-tags">
+                      {item.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                    </div>
                   ) : null}
                 </div>
-                {item.tags.length ? (
-                  <div className="douyin-hotlist-tags">
-                    {item.tags.map((tag) => <span key={tag}>{tag}</span>)}
-                  </div>
-                ) : null}
+                <a className="btn icon-only compact" href={item.video.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.video.title}`}>
+                  <ExternalLink aria-hidden="true" size={15} />
+                </a>
               </div>
-              <a className="btn icon-only compact" href={item.video.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.video.title}`}>
-                <ExternalLink aria-hidden="true" size={15} />
-              </a>
-            </div>
 
-            <div className="douyin-hotlist-item-data">
-              <div className="douyin-hotlist-metrics" aria-label="互动数据">
-                <Metric label="点赞" tone="likes" value={item.video.stats.likes} />
-                <Metric label="评论" tone="comments" value={item.video.stats.comments} />
-                <Metric label="收藏" tone="favorites" value={item.video.stats.favorites} />
-                <Metric label="转发" tone="shares" value={item.video.stats.shares || 0} />
-              </div>
-              <div className="douyin-hotlist-heat">
-                <div className="douyin-hotlist-score">
-                  <span>热度</span>
-                  <strong>{scoreFormatter.format(item.heatScore)}</strong>
+              <div className="douyin-hotlist-item-data">
+                <div className="douyin-hotlist-metrics" aria-label="互动数据">
+                  {getMetricItems(item.video).map((metric) => (
+                    <Metric key={metric.label} label={metric.label} tone={metric.tone} value={metric.value} />
+                  ))}
                 </div>
-                <div className="douyin-hotlist-heat-track" aria-hidden="true">
-                  <span style={{ "--heat-strength": `${getHeatStrength(item.heatScore, maxHeatScore)}%` } as CSSProperties} />
+                <div className="douyin-hotlist-heat">
+                  <div className="douyin-hotlist-score">
+                    <span>热度</span>
+                    <strong>{scoreFormatter.format(item.heatScore)}</strong>
+                  </div>
+                  <div className="douyin-hotlist-heat-track" aria-hidden="true">
+                    <span style={{ "--heat-strength": `${getHeatStrength(item.heatScore, maxHeatScore)}%` } as CSSProperties} />
+                  </div>
+                  <small>互动与发布时间综合</small>
                 </div>
-                <small>互动与发布时间综合</small>
               </div>
             </div>
-          </div>
-        </article>
-      ))}
+          </article>
+        );
+      })}
     </div>
+  );
+}
+
+function HotlistCover({ item }: { item: DouyinHotlistItem }) {
+  const [coverFailed, setCoverFailed] = useState(false);
+
+  useEffect(() => {
+    setCoverFailed(false);
+  }, [item.account.avatarUrl, item.video.coverUrl]);
+
+  if (item.video.coverUrl && !coverFailed) {
+    return (
+      <Image
+        alt=""
+        className="douyin-hotlist-cover"
+        height={76}
+        onError={() => setCoverFailed(true)}
+        referrerPolicy="no-referrer"
+        src={item.video.coverUrl}
+        unoptimized
+        width={56}
+      />
+    );
+  }
+
+  return (
+    <span className={`douyin-hotlist-cover douyin-hotlist-cover-placeholder tone-${getAvatarTone(item.account.id)}`} aria-hidden="true">
+      <AccountAvatarImage account={item.account} size={32} />
+    </span>
+  );
+}
+
+function AccountAvatarImage({
+  account,
+  size
+}: {
+  account: Pick<DouyinHotlistItem["account"], "avatarUrl" | "id" | "name">;
+  size: number;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [account.avatarUrl]);
+
+  if (!account.avatarUrl || failed) return <>{getAccountInitial(account.name)}</>;
+
+  return (
+    <Image
+      alt=""
+      height={size}
+      onError={() => setFailed(true)}
+      referrerPolicy="no-referrer"
+      src={account.avatarUrl}
+      unoptimized
+      width={size}
+    />
+  );
+}
+
+function PlatformLogoBadge({ platform }: { platform: Platform }) {
+  const label = getPlatformLabel(platform);
+
+  return (
+    <span
+      aria-label={label}
+      className={`douyin-hotlist-platform-logo platform-${platform}`}
+      role="img"
+      title={label}
+    >
+      <Image
+        alt=""
+        aria-hidden="true"
+        className="douyin-hotlist-platform-logo-image"
+        height={18}
+        src={platformLogoSrc[platform]}
+        unoptimized
+        width={18}
+      />
+    </span>
   );
 }
 
@@ -1012,7 +1211,7 @@ function Metric({
   value
 }: {
   label: string;
-  tone: "likes" | "comments" | "favorites" | "shares";
+  tone: MetricTone;
   value: number;
 }) {
   return (
@@ -1021,6 +1220,24 @@ function Metric({
       <strong>{formatNumber(value)}</strong>
     </span>
   );
+}
+
+function getMetricItems(video: VideoListItem): Array<{ label: string; tone: MetricTone; value: number }> {
+  if (video.platform === "bilibili") {
+    return [
+      { label: "播放", tone: "views", value: video.stats.views },
+      { label: "点赞", tone: "likes", value: video.stats.likes },
+      { label: "评论", tone: "comments", value: video.stats.comments },
+      { label: "收藏", tone: "favorites", value: video.stats.favorites }
+    ];
+  }
+
+  return [
+    { label: "点赞", tone: "likes", value: video.stats.likes },
+    { label: "评论", tone: "comments", value: video.stats.comments },
+    { label: "收藏", tone: "favorites", value: video.stats.favorites },
+    { label: "转发", tone: "shares", value: video.stats.shares || 0 }
+  ];
 }
 
 function EmptyHotlist({ selectedAccount, windowLabel }: { selectedAccount?: string; windowLabel: string }) {
@@ -1064,6 +1281,11 @@ function getRankClass(rank: number) {
   if (rank === 2) return "rank-two";
   if (rank === 3) return "rank-three";
   return "";
+}
+
+function getSurgeClass(surge?: DouyinHotlistItem["surge"]) {
+  if (!surge) return "";
+  return surge.label === "猛涨" ? "is-surging surge-rapid" : "is-surging surge-rising";
 }
 
 function getHeatStrength(score: number, maxScore: number) {
@@ -1115,11 +1337,19 @@ function describeRefreshLogDetails(accounts: DouyinHotlistRefreshAccountResult[]
 
 function describeRefreshAccountResult(account: DouyinHotlistRefreshAccountResult) {
   if (account.status === "failed") {
-    const retryText = account.retried ? "重试后仍失败" : "失败";
-    return `${account.name}：${retryText}${account.error ? `，${compactRefreshError(account.error)}` : ""}`;
+    const retryText = account.retried ? "重试后未更新" : "失败";
+    const countText = formatRefreshCountText(account);
+    return `${account.name}：${retryText}${countText}${account.error ? `，${compactRefreshError(account.error)}` : ""}`;
   }
 
-  return `${account.name}：批量抓取失败后单账号重试成功${account.retryReason ? `，原因为 ${compactRefreshError(account.retryReason)}` : ""}`;
+  const countText = formatRefreshCountText(account);
+  return `${account.name}：批量抓取失败后单账号重试成功${countText}${account.retryReason ? `，原因为 ${compactRefreshError(account.retryReason)}` : ""}`;
+}
+
+function formatRefreshCountText(account: DouyinHotlistRefreshAccountResult) {
+  if (account.savedCount !== undefined) return `，保存 ${account.savedCount} 条`;
+  if (account.rawCount !== undefined) return `，抓到 ${account.rawCount} 条`;
+  return "";
 }
 
 function isAllRefreshFailed(refresh: { accounts: DouyinHotlistRefreshAccountResult[] }) {
@@ -1146,9 +1376,27 @@ function formatAge(ageHours: number) {
 }
 
 function getAccountInitial(name: string) {
-  return Array.from(name.trim()).at(0)?.toLocaleUpperCase("zh-CN") || "抖";
+  return Array.from(name.trim()).at(0)?.toLocaleUpperCase("zh-CN") || "视";
 }
 
 function getAvatarTone(id: string) {
   return Array.from(id).reduce((sum, char) => sum + char.charCodeAt(0), 0) % 8;
+}
+
+function getPlatformLabel(platform: Platform) {
+  return platform === "bilibili" ? "B站" : "抖音";
+}
+
+function getPlatformAccountSelection(platform: Platform) {
+  return `platform:${platform}`;
+}
+
+function getSelectionPlatform(value: AccountSelection): Platform | null {
+  if (value === getPlatformAccountSelection("bilibili")) return "bilibili";
+  if (value === getPlatformAccountSelection("douyin")) return "douyin";
+  return null;
+}
+
+function getAccountInputPlaceholder(platform: Platform) {
+  return platform === "bilibili" ? "输入 B站账号名、UID 或主页链接…" : "输入抖音账号名、sec_uid 或主页链接…";
 }

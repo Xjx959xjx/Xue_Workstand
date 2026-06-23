@@ -25,7 +25,7 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { href: "/douyin-hotlist", label: "抖音热榜", icon: Flame },
+  { href: "/douyin-hotlist", label: "视频热榜", icon: Flame },
   { href: "/library", label: "账号库", icon: FileText },
   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban },
   { href: "/writer", label: "对话写作", icon: PenLine },

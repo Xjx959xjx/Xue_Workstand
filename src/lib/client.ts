@@ -598,10 +598,10 @@ export function getCachedDouyinHotlist(input: { windowDays?: number; window?: st
   return douyinHotlistCache.get(getDouyinHotlistWindowKey(input)) || null;
 }
 
-export function addDouyinHotlistAccount(query: string) {
+export function addDouyinHotlistAccount(input: { platform: Platform; query: string }) {
   return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
     method: "POST",
-    body: JSON.stringify({ action: "addAccount", query })
+    body: JSON.stringify({ action: "addAccount", ...input })
   }).then((result) => {
     resetDouyinHotlistCache(result);
     return result;

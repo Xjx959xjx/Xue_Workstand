@@ -31,6 +31,7 @@ import { collectBilibiliVideos, searchBilibiliUserUid } from "./opencli-bilibili
 import {
   DOUYIN_AWEME_ID_EXTRACT_JS,
   DOUYIN_MEDIA_EXTRACT_JS,
+  DOUYIN_PROFILE_VIDEO_LINKS_EXTRACT_JS,
   DOUYIN_RELATED_VIDEO_EXTRACT_JS,
   DOUYIN_SEARCH_EXTRACT_JS,
   DOUYIN_VIDEO_COMMENT_EXTRACT_JS,
@@ -38,6 +39,7 @@ import {
   buildDouyinBatchPostExtractJs,
   buildDouyinDetailExtractJs,
   buildDouyinPostExtractJs,
+  buildDouyinVideoPageDomExtractJs,
   buildDouyinStatsExtractJs
 } from "./opencli-douyin-scripts";
 
@@ -434,6 +436,7 @@ async function scanDouyinPostVideoRows(
 ) {
   const workspace = `douyin-post-${process.pid}-${Date.now()}-${shortHash(account.uid)}`;
   const scanLimit = Math.min(Math.max(options.limit, 1), DOUYIN_BROWSER_VIDEO_SCAN_LIMIT);
+  let apiError: unknown;
 
   try {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
@@ -448,10 +451,130 @@ async function scanDouyinPostVideoRows(
         toDate: options.toDate
       })
     ]);
-    return asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 90_000, signal: options.signal })));
+    const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 90_000, signal: options.signal })));
+    if (rows.length) return rows;
+    apiError = new Error("aweme/post 没有返回可用视频");
+    return await scanDouyinProfileDomVideoRows(workspace, account, {
+      ...options,
+      limit: scanLimit,
+      retryReason: formatErrorMessage(apiError)
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    apiError = error;
+    return await scanDouyinProfileDomVideoRows(workspace, account, {
+      ...options,
+      limit: scanLimit,
+      retryReason: formatErrorMessage(apiError)
+    });
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
+}
+
+async function scanDouyinProfileDomVideoRows(
+  workspace: string,
+  account: Account,
+  options: {
+    limit: number;
+    fromDate?: string;
+    toDate?: string;
+    retryReason?: string;
+    signal?: AbortSignal;
+  }
+) {
+  const profileUrl = account.sourceUrl || `https://www.douyin.com/user/${encodeURIComponent(account.uid)}`;
+  await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
+    timeout: 30_000,
+    signal: options.signal
+  });
+  await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]), {
+    timeout: 10_000,
+    signal: options.signal
+  }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return undefined;
+  });
+
+  const rawCandidates = asArray(parseJsonish(await runOpenCli(
+    buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_PROFILE_VIDEO_LINKS_EXTRACT_JS]),
+    { timeout: 45_000, signal: options.signal }
+  )));
+  const candidates = rawCandidates
+    .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
+    .filter((row): row is Record<string, unknown> => Boolean(row?.aweme_id))
+    .slice(0, Math.min(Math.max(options.limit * 3, options.limit), 36));
+
+  if (!candidates.length) {
+    throw new Error(`抖音主页兜底抓取也没有找到作品链接${options.retryReason ? `；接口失败原因为：${options.retryReason}` : ""}`);
+  }
+
+  const rows: Record<string, unknown>[] = [];
+  const fromTime = options.fromDate ? new Date(`${options.fromDate}T00:00:00+08:00`).getTime() : null;
+  const toTime = options.toDate ? new Date(`${options.toDate}T23:59:59+08:00`).getTime() : null;
+
+  for (const candidate of candidates) {
+    if (rows.length >= options.limit) break;
+    const awemeId = stringField(candidate.aweme_id) || stringField(candidate.id);
+    const url = stringField(candidate.url) || stringField(candidate.web_url) || buildDouyinVideoUrl(awemeId);
+    if (!awemeId || !url) continue;
+
+    throwIfAbortedSignal(options.signal);
+    const detail = await readDouyinVideoDomDetail(workspace, {
+      awemeId,
+      likes: toNumber(candidate.digg_count),
+      title: stringField(candidate.title),
+      url
+    }, options.signal).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return candidate;
+    });
+    const createTime = toNumber((detail as Record<string, unknown>).create_time);
+    if (fromTime !== null || toTime !== null) {
+      if (!createTime) continue;
+      const publishedTime = createTime * 1000;
+      if (fromTime !== null && publishedTime < fromTime) continue;
+      if (toTime !== null && publishedTime > toTime) continue;
+    }
+    rows.push({
+      ...candidate,
+      ...(detail && typeof detail === "object" ? detail as Record<string, unknown> : {}),
+      source: "douyin_profile_dom_fallback"
+    });
+  }
+
+  if (!rows.length) {
+    throw new Error(`抖音主页兜底找到 ${candidates.length} 条作品，但没有符合当前日期窗口的可用内容。`);
+  }
+
+  return rows;
+}
+
+async function readDouyinVideoDomDetail(
+  workspace: string,
+  input: {
+    awemeId: string;
+    likes: number;
+    title: string;
+    url: string;
+  },
+  signal?: AbortSignal
+) {
+  await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [input.url], { window: "background" }), {
+    timeout: 30_000,
+    signal
+  });
+  await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
+    timeout: 8_000,
+    signal
+  }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return undefined;
+  });
+  return parseJsonish(await runOpenCli(
+    buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinVideoPageDomExtractJs(input)]),
+    { timeout: 20_000, signal }
+  ));
 }
 
 function normalizeDouyinBatchCollectResults(
@@ -1013,10 +1136,20 @@ function isAbortError(error: unknown) {
   return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
 }
 
+function throwIfAbortedSignal(signal?: AbortSignal) {
+  if (signal?.aborted) throw createAbortError();
+}
+
 function createAbortError() {
   const error = new Error("任务已停止");
   error.name = "AbortError";
   return error;
+}
+
+function formatErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message.replace(/\s+/g, " ").trim().slice(0, 240);
+  if (typeof error === "string" && error.trim()) return error.replace(/\s+/g, " ").trim().slice(0, 240);
+  return "未知错误";
 }
 
 function ignoreAbortToNull(error: unknown) {

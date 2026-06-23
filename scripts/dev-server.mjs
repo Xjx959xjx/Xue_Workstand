@@ -9,6 +9,7 @@ const stateDir = path.join(root, ".dev-server");
 const pidFile = path.join(stateDir, "next-dev.pid");
 const logFile = path.join(stateDir, "next-dev.log");
 const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || "127.0.0.1";
 
 const command = process.argv[2] || "start";
 
@@ -41,26 +42,60 @@ async function start() {
   }
 
   const logFd = fs.openSync(logFile, "a");
-  const child = spawn("npm", ["run", "dev"], {
+  const child = spawn("npm", ["run", "dev", "--", "--hostname", host], {
     cwd: root,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...process.env, PORT: String(port) }
+    env: { ...process.env, HOST: host, PORT: String(port) }
   });
 
-  child.unref();
   fs.writeFileSync(pidFile, `${child.pid}\n`, "utf8");
   fs.closeSync(logFd);
 
+  const earlyExit = await waitForEarlyExit(child, 2500);
+  if (earlyExit) {
+    fs.rmSync(pidFile, { force: true });
+    console.error(`Next dev 启动失败：子进程过早退出 code=${earlyExit.code ?? "null"} signal=${earlyExit.signal ?? "null"}`);
+    const logTail = readLogTail(logFile);
+    if (logTail) {
+      console.error("\n最近日志：");
+      console.error(logTail.trimEnd());
+    }
+    if (logTail.includes("listen EPERM")) {
+      console.error(
+        `\n检测到 listen EPERM：当前执行环境没有权限监听 ${host}:${port}。请在普通 Terminal 里运行 npm run dev:daemon，或给当前工具授予本地端口监听权限。`
+      );
+    }
+    process.exit(1);
+  }
+
+  child.unref();
   console.log(`已后台启动 Next dev：pid=${child.pid}`);
-  console.log(`地址：http://localhost:${port}`);
+  console.log(`地址：http://${host}:${port}`);
   console.log(`日志：${logFile}`);
 }
 
 async function stop(options = {}) {
   const pid = readPid();
   if (!pid) {
-    if (!options.quiet) console.log("没有找到后台 dev server pid。");
+    const listener = await findPortListener(port);
+    if (!listener?.pid) {
+      if (!options.quiet) console.log("没有找到后台 dev server pid。");
+      return;
+    }
+
+    const listenerCwd = await findProcessCwd(listener.pid);
+    if (listenerCwd !== root) {
+      if (!options.quiet) {
+        console.log(`没有找到后台 dev server pid，端口 ${port} 被其他目录占用：pid=${listener.pid} ${listener.command || ""}`.trim());
+      }
+      return;
+    }
+
+    if (!options.quiet) {
+      console.log(`没有 pid 文件，但端口 ${port} 上有本项目旧 dev server：pid=${listener.pid}，尝试停止。`);
+    }
+    await stopPid(listener.pid, options);
     return;
   }
 
@@ -70,9 +105,23 @@ async function stop(options = {}) {
     return;
   }
 
-  signalDevServer(pid, "SIGTERM");
+  await stopPid(pid, options);
+}
+
+async function stopPid(pid, options = {}) {
+  const signaled = signalDevServer(pid, "SIGTERM");
+  if (!signaled) {
+    if (!options.quiet) console.log(`无法停止后台 dev server：pid=${pid}，当前进程没有权限发送 SIGTERM。`);
+    return;
+  }
+
   const stopped = await waitForStop(pid, 5000);
-  if (!stopped) signalDevServer(pid, "SIGKILL");
+  if (!stopped) {
+    const killed = signalDevServer(pid, "SIGKILL");
+    if (!killed && !options.quiet) {
+      console.log(`后台 dev server 未退出，且当前进程没有权限发送 SIGKILL：pid=${pid}。`);
+    }
+  }
   fs.rmSync(pidFile, { force: true });
   if (!options.quiet) console.log(`已停止后台 dev server：pid=${pid}`);
 }
@@ -91,7 +140,7 @@ async function status() {
         portListening: Boolean(listener),
         listener,
         healthy,
-        url: `http://localhost:${port}`,
+        url: `http://${host}:${port}`,
         logFile
       },
       null,
@@ -133,6 +182,27 @@ function signalDevServer(pid, signal) {
   }
 }
 
+function waitForEarlyExit(child, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+      child.off("exit", onExit);
+    }
+
+    function onExit(code, signal) {
+      cleanup();
+      resolve({ code, signal });
+    }
+
+    child.once("exit", onExit);
+  });
+}
+
 async function waitForStop(pid, timeoutMs) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -141,6 +211,23 @@ async function waitForStop(pid, timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   return false;
+}
+
+function readLogTail(targetFile, maxBytes = 6000) {
+  try {
+    const fd = fs.openSync(targetFile, "r");
+    try {
+      const { size } = fs.fstatSync(fd);
+      const length = Math.min(size, maxBytes);
+      const buffer = Buffer.alloc(length);
+      fs.readSync(fd, buffer, 0, length, size - length);
+      return buffer.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
 }
 
 function canConnect(targetPort) {
@@ -160,10 +247,10 @@ function canConnect(targetPort) {
 }
 
 async function findPortListener(targetPort) {
-  if (!(await canConnect(targetPort))) return null;
-
   const result = await run("lsof", ["-nP", `-iTCP:${targetPort}`, "-sTCP:LISTEN", "-FpPc"]).catch(() => "");
   const lines = result.split("\n").filter(Boolean);
+  if (!lines.length) return null;
+
   const info = {};
   for (const line of lines) {
     const prefix = line[0];
@@ -172,6 +259,15 @@ async function findPortListener(targetPort) {
     if (prefix === "c") info.command = value;
   }
   return Object.keys(info).length ? info : { port: targetPort };
+}
+
+async function findProcessCwd(pid) {
+  if (!pid) return "";
+  const result = await run("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]).catch(() => "");
+  return result
+    .split("\n")
+    .find((line) => line.startsWith("n"))
+    ?.slice(1) || "";
 }
 
 function run(bin, args) {

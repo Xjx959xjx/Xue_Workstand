@@ -68,7 +68,7 @@ npm run package:release
 
 ## 入口地图
 
-- 页面：`/library`、`/douyin-hotlist`、`/project-workbench`、`/writer`、`/assets`、`/tools`、`/gross-margin`、`/gross-margin/monitor`。
+- 页面：`/library`、`/douyin-hotlist`（视频热榜，历史路径保留）、`/project-workbench`、`/writer`、`/assets`、`/tools`、`/gross-margin`、`/gross-margin/monitor`。
 - API：以 `src/app/api/**/route.ts` 为准；所有涉及文件系统、环境变量、`opencli`、`ffmpeg`、模型、飞书的路由使用 Node.js runtime。
 - 前端请求：`src/lib/client.ts` 是前端可见 API 的集中入口；新增或改 API 响应时同步类型、客户端函数、缓存刷新逻辑。
 - 页面状态：`LibraryProvider`、`useLibrary()`、`getLibraryOverview()`、客户端缓存和任务中心共同驱动主要页面。
@@ -128,7 +128,7 @@ style-library/
 ## 业务链路
 
 - 采集：`src/lib/opencli.ts`、`src/lib/opencli-bilibili.ts`、`src/lib/opencli-douyin-scripts.ts`。
-- 抖音热榜：`src/app/douyin-hotlist/**`、`src/app/api/douyin-hotlist/route.ts`、`src/lib/douyin-hotlist.ts`、`src/lib/storage/douyin-hotlist.ts`；热榜账号和视频独立保存在 `style-library/douyin-hotlist/accounts`，不要写入主账号库。
+- 视频热榜：`src/app/douyin-hotlist/**`、`src/app/api/douyin-hotlist/route.ts`、`src/lib/douyin-hotlist.ts`、`src/lib/storage/douyin-hotlist.ts`；路径和存储目录沿用 `douyin-hotlist`，账号池支持抖音和 B站，热榜账号和视频独立保存在 `style-library/douyin-hotlist/accounts`，不要写入主账号库。
 - opencli 执行：统一走 `src/lib/opencli-runtime.ts` 的 `execFile` 封装，传数组参数，支持 timeout / abort signal / timing；不要拼 shell 字符串执行用户输入。
 - 转写：`src/lib/transcription.ts`、`src/lib/batch-transcribe.ts`、`src/lib/transcript-cleaning.ts`。
 - 模型 / 写作 / 风格：`src/lib/ai.ts`、`src/lib/write-validation.ts`。

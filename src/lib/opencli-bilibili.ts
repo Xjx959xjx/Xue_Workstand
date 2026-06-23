@@ -415,10 +415,10 @@ async function normalizeBilibiliVideo(
           return {};
         })
       : {};
-  const views = toNumber(object.plays ?? object.views ?? object.play ?? object.view ?? metadata.view);
-  const likes = toNumber(object.likes ?? object.like ?? metadata.like);
-  const comments = toNumber(object.comments ?? object.reply ?? object.replies ?? metadata.reply);
-  const favorites = toNumber(object.favorites ?? object.stow ?? object.collect ?? metadata.favorite);
+  const views = firstNumber(object.plays, object.views, object.play, object.view, metadata.view);
+  const likes = firstNumber(object.likes, object.like, metadata.like);
+  const comments = firstNumber(object.comments, object.reply, object.replies, metadata.reply);
+  const favorites = firstNumber(object.favorites, object.stow, object.collect, metadata.favorite);
 
   return {
     id: safeSegment(bvid || shortHash(`${title}-${url}`)),
