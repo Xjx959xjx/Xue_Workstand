@@ -23,6 +23,7 @@ import {
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 import { libraryRoot, normalizeStorageSegment } from "./core";
+import { resolveGrossMarginAccounts } from "../wecom-account-source";
 
 const grossMarginTablePlatforms = ["douyin", "bilibili"] as const;
 const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"] as const;
@@ -130,12 +131,16 @@ export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
   );
   const templates = await Promise.all(grossMarginTablePlatforms.map((platform) => getGrossMarginReviewTemplate(platform)));
   const monitorRecords = await getGrossMarginMonitorRecords();
+  const accountSource = await resolveGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath()) || []);
 
   return {
     root: grossMarginPath(),
     tables,
     templates,
-    accounts: normalizeGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath())),
+    accounts: normalizeGrossMarginAccounts(accountSource.accounts),
+    accountSource: accountSource.source,
+    accountSourceWarning: accountSource.warning,
+    accountSourceFetchedAt: accountSource.fetchedAt,
     monitorRecords,
     monitorProjects: buildGrossMarginMonitorProjects(monitorRecords)
   };

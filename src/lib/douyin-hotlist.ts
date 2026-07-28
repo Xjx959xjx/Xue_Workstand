@@ -11,23 +11,27 @@ import {
 import {
   collectDouyinPostVideosBatch,
   collectVideos,
-  resolveAccountUid,
-  type DouyinBatchVideoCollectResult
+  resolveAccountUid
 } from "./opencli";
 import { inferAccountAvatarFromCollectedData, resolveAccountProfile } from "./account-profile";
+import {
+  calculateHotlistInteractionHeat,
+  calculateHotlistRankScore,
+  calculateHotlistVelocity
+} from "./douyin-hotlist-score";
 import {
   addDouyinHotlistAccountRef,
   findDouyinHotlistAccountByName,
   findDouyinHotlistAccountByUid,
   getDouyinHotlistAccountVideos,
-  markDouyinHotlistRefreshed,
+  recordDouyinHotlistRefresh,
   readDouyinHotlistWatchlist,
   removeDouyinHotlistAccountRefs,
   resolveDouyinHotlistAccount,
   saveDouyinHotlistVideos,
-  upsertDouyinHotlistAccount
+  upsertDouyinHotlistAccount,
+  withDouyinHotlistMutationLock
 } from "./storage/douyin-hotlist";
-import { libraryRoot } from "./storage/core";
 import type {
   Account,
   DouyinHotlistAccount,
@@ -39,8 +43,7 @@ import type {
   Platform,
   Video,
   VideoHotlistSurgeState,
-  VideoHotlistTrend,
-  VideoListItem
+  VideoHotlistTrend
 } from "./types";
 import { extractLinksFromInput } from "./platform-links";
 import { nowIso, shortHash } from "./utils";
@@ -52,27 +55,26 @@ const MAX_REFRESH_LIMIT = 120;
 const MAX_WINDOW_DAYS = 14;
 const DEFAULT_REFRESH_CONCURRENCY = 5;
 const MAX_REFRESH_CONCURRENCY = 5;
-const LIKE_HEAT_WEIGHT = 22;
-const COMMENT_HEAT_WEIGHT = 80;
-const FAVORITE_HEAT_WEIGHT = 70;
-const SHARE_HEAT_WEIGHT = 90;
-const MAX_RECENCY_BOOST = 0.25;
-const VELOCITY_WINDOW_HOURS = 36;
-const VELOCITY_AGE_FLOOR_HOURS = 0.5;
-const VELOCITY_BONUS_MULTIPLIER = 14;
-const VELOCITY_FULL_CONFIDENCE_HEAT = LIKE_HEAT_WEIGHT * 1000;
 const EXPLOSIVE_MAX_AGE_HOURS = 3;
 const EXPLOSIVE_MIN_LIKES = 1000;
-const EXPLOSIVE_MIN_HEAT_PER_HOUR = LIKE_HEAT_WEIGHT * 300;
+const EXPLOSIVE_MIN_HEAT_PER_HOUR = 22 * 300;
 const FAST_RISING_MAX_AGE_HOURS = 12;
 const FAST_RISING_MIN_LIKES = 500;
-const FAST_RISING_MIN_HEAT_PER_HOUR = LIKE_HEAT_WEIGHT * 220;
+const FAST_RISING_MIN_HEAT_PER_HOUR = 22 * 220;
 const STALE_LOW_HEAT_MAX_AGE_HOURS = 12;
 const STALE_LOW_HEAT_MIN_SCORE = 50_000;
 const DOUYIN_SEC_UID_PATTERN = /MS4wLjAB[0-9A-Za-z_.-]{20,}/;
 const BILIBILI_UID_PATTERN = /^\d{4,}$/;
 
-let activeRefreshPromise: Promise<DouyinHotlistRefreshResult> | null = null;
+const globalHotlistRuntime = globalThis as typeof globalThis & {
+  __styleWorkbenchHotlistRefreshPromise?: Promise<DouyinHotlistRefreshResult> | null;
+};
+
+export type DouyinHotlistRefreshProgress = {
+  completed: number;
+  total: number;
+  result: DouyinHotlistRefreshAccountResult;
+};
 
 class DouyinHotlistRefreshInProgressError extends Error {
   readonly statusCode = 409;
@@ -83,14 +85,14 @@ class DouyinHotlistRefreshInProgressError extends Error {
   }
 }
 
-export async function getDouyinHotlist(options: { windowDays?: number; windowKey?: string } = {}): Promise<DouyinHotlistResponse> {
+export async function getDouyinHotlist(options: { force?: boolean; windowDays?: number; windowKey?: string } = {}): Promise<DouyinHotlistResponse> {
   const window = resolveHotlistWindow(options.windowKey || options.windowDays);
   const watchlist = await readDouyinHotlistWatchlist();
   const resolved = await resolveWatchlistAccounts(watchlist.accountIds);
   const accountVideos = await Promise.all(
     resolved.accounts.map(async (account) => ({
       account,
-      videos: await getDouyinHotlistAccountVideos(account)
+      videos: await getDouyinHotlistAccountVideos(account, { force: options.force })
     }))
   );
   const accountRankItems = accountVideos.map(({ account, videos }) => ({
@@ -125,7 +127,6 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
   const items = rankedItems.map((item, index) => finalizeRankItem(item, index));
 
   return {
-    root: libraryRoot(),
     accounts,
     items,
     summary: {
@@ -139,7 +140,9 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
       staleAccountIds: resolved.staleAccountIds,
       totalVideoCount: accountVideos.reduce((sum, current) => sum + current.videos.length, 0),
       recentVideoCount: items.length,
-      lastRefreshedAt: watchlist.lastRefreshedAt
+      lastRefreshedAt: watchlist.lastRefreshedAt,
+      lastFullRefreshAttemptAt: watchlist.lastFullRefreshAttemptAt || watchlist.lastRefreshedAt,
+      lastFullRefreshAt: watchlist.lastFullRefreshAt || watchlist.lastRefreshedAt
     }
   };
 }
@@ -148,6 +151,8 @@ export async function addDouyinHotlistAccount(input: {
   platform: Platform;
   query: string;
   signal?: AbortSignal;
+  windowDays?: number;
+  windowKey?: string;
 }) {
   const target = resolveAccountTarget(input.platform, input.query);
   const existingByName = target.uidOrUrl ? null : await findDouyinHotlistAccountByName(input.platform, target.lookupName);
@@ -162,20 +167,25 @@ export async function addDouyinHotlistAccount(input: {
     sourceUrl: existingByUid?.sourceUrl || existingByName?.sourceUrl || target.sourceUrl,
     signal: input.signal
   });
-  const account = await upsertDouyinHotlistAccount({
-    platform: input.platform,
-    name: profile.name,
-    uid,
-    sourceUrl: profile.sourceUrl,
-    avatarUrl: profile.avatarUrl
+  await withDouyinHotlistMutationLock(async () => {
+    const account = await upsertDouyinHotlistAccount({
+      platform: input.platform,
+      name: profile.name,
+      uid,
+      sourceUrl: profile.sourceUrl,
+      avatarUrl: profile.avatarUrl
+    });
+    await addDouyinHotlistAccountRef(account.id);
   });
-  await addDouyinHotlistAccountRef(account.id);
-  return getDouyinHotlist();
+  return getDouyinHotlist({ windowDays: input.windowDays, windowKey: input.windowKey });
 }
 
-export async function removeDouyinHotlistAccount(accountId: string) {
+export async function removeDouyinHotlistAccount(
+  accountId: string,
+  options: { windowDays?: number; windowKey?: string } = {}
+) {
   await removeDouyinHotlistAccountRefs([accountId]);
-  return getDouyinHotlist();
+  return getDouyinHotlist(options);
 }
 
 export async function refreshDouyinHotlist(options: {
@@ -184,18 +194,19 @@ export async function refreshDouyinHotlist(options: {
   windowDays?: number;
   windowKey?: string;
   signal?: AbortSignal;
+  onProgress?: (progress: DouyinHotlistRefreshProgress) => void | Promise<void>;
 } = {}): Promise<DouyinHotlistRefreshResult> {
-  if (activeRefreshPromise) {
+  if (globalHotlistRuntime.__styleWorkbenchHotlistRefreshPromise) {
     throw new DouyinHotlistRefreshInProgressError();
   }
 
   const refreshPromise = refreshDouyinHotlistUnlocked(options);
-  activeRefreshPromise = refreshPromise;
+  globalHotlistRuntime.__styleWorkbenchHotlistRefreshPromise = refreshPromise;
   try {
     return await refreshPromise;
   } finally {
-    if (activeRefreshPromise === refreshPromise) {
-      activeRefreshPromise = null;
+    if (globalHotlistRuntime.__styleWorkbenchHotlistRefreshPromise === refreshPromise) {
+      globalHotlistRuntime.__styleWorkbenchHotlistRefreshPromise = null;
     }
   }
 }
@@ -206,40 +217,56 @@ async function refreshDouyinHotlistUnlocked(options: {
   windowDays?: number;
   windowKey?: string;
   signal?: AbortSignal;
+  onProgress?: (progress: DouyinHotlistRefreshProgress) => void | Promise<void>;
 } = {}): Promise<DouyinHotlistRefreshResult> {
   const window = resolveHotlistWindow(options.windowKey || options.windowDays);
   const limit = clampInteger(options.limit, 1, MAX_REFRESH_LIMIT, DEFAULT_REFRESH_LIMIT);
   const watchlist = await readDouyinHotlistWatchlist();
-  const targetIds = options.accountIds?.length ? options.accountIds : watchlist.accountIds;
+  const targetIds = options.accountIds ? uniqueAccountIds(options.accountIds) : watchlist.accountIds;
+  if (!targetIds.length) throw new Error("视频热榜账号池为空，请先添加账号。");
   const resolved = await resolveWatchlistAccounts(targetIds);
   const concurrency = resolveRefreshConcurrency(resolved.accounts.length);
+  let processedCount = 0;
+  const reportProgress = async (result: DouyinHotlistRefreshAccountResult) => {
+    processedCount += 1;
+    await options.onProgress?.({ completed: processedCount, total: targetIds.length, result });
+  };
   const results = await refreshDouyinHotlistAccounts(
     resolved.accounts,
     window,
     limit,
     concurrency,
-    options.signal
+    options.signal,
+    reportProgress
   );
 
   const completed = results.filter((result) => result.status === "completed").length;
-  if (completed > 0) {
-    await markDouyinHotlistRefreshed(nowIso());
-  }
-
-  const snapshot = await getDouyinHotlist({ windowKey: window.windowKey });
+  const unchanged = results.filter((result) => result.status === "unchanged").length;
   const staleResults = resolved.staleAccountIds.map((accountId) => ({
     accountId,
     name: accountId,
     status: "failed" as const,
     error: "热榜关注列表里的账号已经不存在。"
   }));
+  for (const staleResult of staleResults) await reportProgress(staleResult);
+  const failed = results.length - completed - unchanged + staleResults.length;
+  const isFullRefresh = hasSameAccountIds(targetIds, watchlist.accountIds);
+  await recordDouyinHotlistRefresh({
+    attemptedAt: nowIso(),
+    changed: completed > 0,
+    full: isFullRefresh,
+    successful: failed === 0
+  });
+
+  const snapshot = await getDouyinHotlist({ windowKey: window.windowKey });
 
   return {
     ...snapshot,
     refresh: {
       requested: targetIds.length,
       completed,
-      failed: results.length - completed + staleResults.length,
+      unchanged,
+      failed,
       limit,
       accounts: [...results, ...staleResults]
     }
@@ -302,10 +329,15 @@ async function refreshDouyinHotlistAccounts(
   window: HotlistWindow,
   limit: number,
   concurrency: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onResult?: (result: DouyinHotlistRefreshAccountResult) => void | Promise<void>
 ): Promise<DouyinHotlistRefreshAccountResult[]> {
   if (accounts.length <= 1) {
-    return mapWithConcurrency(accounts, concurrency, (account) => refreshDouyinHotlistAccount(account, window, limit, signal));
+    return mapWithConcurrency(accounts, concurrency, async (account) => {
+      const result = await refreshDouyinHotlistAccount(account, window, limit, signal);
+      await onResult?.(result);
+      return result;
+    });
   }
 
   const results = new Array<DouyinHotlistRefreshAccountResult>(accounts.length);
@@ -320,7 +352,11 @@ async function refreshDouyinHotlistAccounts(
     const singleResults = await mapWithConcurrency(
       singleEntries,
       concurrency,
-      ({ account }) => refreshDouyinHotlistAccount(account, window, limit, signal)
+      async ({ account }) => {
+        const result = await refreshDouyinHotlistAccount(account, window, limit, signal);
+        await onResult?.(result);
+        return result;
+      }
     );
     singleResults.forEach((result, index) => {
       results[singleEntries[index].index] = result;
@@ -346,14 +382,21 @@ async function refreshDouyinHotlistAccounts(
     signal,
     toDate: window.toDate
   });
-  const retryInputs: Array<{ index: number; result: DouyinBatchVideoCollectResult }> = [];
 
   await Promise.all(
     batchResults.map(async (batchResult, index) => {
       throwIfAborted(signal);
       const resultIndex = douyinEntries[index].index;
       if (batchResult.status === "failed") {
-        retryInputs.push({ index: resultIndex, result: batchResult });
+        results[resultIndex] = {
+          accountId: batchResult.account.id,
+          error: batchResult.error || "抖音批量抓取失败，已跳过单账号重试。",
+          mode: "batch",
+          name: batchResult.account.name,
+          rawCount: batchResult.rawCount,
+          status: "failed"
+        };
+        await onResult?.(results[resultIndex]);
         return;
       }
 
@@ -361,19 +404,9 @@ async function refreshDouyinHotlistAccounts(
         mode: "batch",
         raw: batchResult.raw
       });
+      await onResult?.(results[resultIndex]);
     })
   );
-
-  if (retryInputs.length) {
-    const retryResults = await mapWithConcurrency(
-      retryInputs,
-      concurrency,
-      ({ result }) => refreshDouyinHotlistAccount(result.account, window, limit, signal, result.error)
-    );
-    retryResults.forEach((retryResult, index) => {
-      results[retryInputs[index].index] = retryResult;
-    });
-  }
 
   return results.map((result, index) => result || {
     accountId: accounts[index].id,
@@ -393,36 +426,41 @@ async function saveDouyinHotlistRefreshResult(
   if (!videos.length) {
     return {
       accountId: account.id,
-      error: `${formatPlatformName(account.platform)}账号没有抓到可用视频，内容未更新。`,
+      error: `${formatPlatformName(account.platform)}账号在当前窗口没有可用新视频，内容未更新。`,
       mode: options.mode,
       name: account.name,
       rawCount,
       retried: options.retried || undefined,
       retryReason: options.retryReason,
       savedCount: 0,
-      status: "failed"
+      status: "unchanged"
     };
   }
 
-  const inferredAvatarUrl = account.avatarUrl || inferAccountAvatarFromCollectedData(videos, options.raw);
-  const updatedAccount = await upsertDouyinHotlistAccount({
-    platform: account.platform,
-    name: account.name,
-    uid: account.uid,
-    sourceUrl: account.sourceUrl,
-    avatarUrl: inferredAvatarUrl,
-    lastCollectedAt: nowIso()
+  const saved = await withDouyinHotlistMutationLock(async () => {
+    const inferredAvatarUrl = account.avatarUrl || inferAccountAvatarFromCollectedData(videos, options.raw);
+    const updatedAccount = await upsertDouyinHotlistAccount({
+      platform: account.platform,
+      name: account.name,
+      uid: account.uid,
+      sourceUrl: account.sourceUrl,
+      avatarUrl: inferredAvatarUrl,
+      lastCollectedAt: nowIso()
+    });
+    const writeResult = await saveDouyinHotlistVideos(updatedAccount, videos);
+    return { account: updatedAccount, ...writeResult };
   });
-  const saved = await saveDouyinHotlistVideos(updatedAccount, videos);
   return {
-    accountId: updatedAccount.id,
+    accountId: saved.account.id,
     mode: options.mode,
-    name: updatedAccount.name,
+    name: saved.account.name,
     rawCount,
     retried: options.retried || undefined,
     retryReason: options.retryReason,
-    savedCount: saved.length,
-    status: "completed"
+    savedCount: saved.changedCount,
+    observedCount: saved.observedCount,
+    changedCount: saved.changedCount,
+    status: saved.changedCount > 0 ? "completed" : "unchanged"
   };
 }
 
@@ -604,8 +642,9 @@ function buildRankItem(
   window: HotlistWindow
 ): HotlistRankItemDraft {
   const ageHours = getVideoAgeHours(video);
-  const heatScore = calculateHeatScore(video, ageHours, window);
-  const listVideo = stripVideoRaw(video);
+  const windowHours = window.windowHours || window.windowDays * 24;
+  const heatScore = calculateHotlistRankScore(video, ageHours, windowHours);
+  const listVideo = toHotlistVideo(video);
 
   return {
     rank: 0,
@@ -710,21 +749,11 @@ function stripTitleTags(title: string) {
     .trim() || title;
 }
 
-function calculateHeatScore(video: Video, ageHours: number | undefined, window: HotlistWindow) {
-  const engagementHeat = calculateEngagementHeat(video);
-  const base = video.stats.views + engagementHeat;
-  const windowHours = window.windowHours || window.windowDays * 24;
-  const recencyMultiplier =
-    ageHours === undefined ? 1 : 1 + Math.max(0, windowHours - ageHours) / windowHours * MAX_RECENCY_BOOST;
-  const velocity = calculateVelocityMetrics(engagementHeat, ageHours);
-  return Math.round(base * recencyMultiplier + velocity.bonus);
-}
-
 function describeContentSignal(video: Video, ageHours: number | undefined, windowLabel: string) {
   const likes = video.stats.likes;
   const comments = video.stats.comments;
   const savesAndShares = video.stats.favorites + (video.stats.shares ?? 0);
-  const velocity = calculateVelocityMetrics(calculateEngagementHeat(video), ageHours);
+  const velocity = calculateHotlistVelocity(calculateHotlistInteractionHeat(video.stats), ageHours);
 
   if (isExplosiveVelocity(video, velocity, ageHours)) {
     return `${formatCompactCount(likes)}赞/${formatSignalAge(ageHours)}，正在跑量`;
@@ -748,37 +777,9 @@ function describeContentSignal(video: Video, ageHours: number | undefined, windo
   return `进入${windowLabel}样本，适合观察切入`;
 }
 
-function calculateEngagementHeat(video: Video) {
-  return (
-    video.stats.likes * LIKE_HEAT_WEIGHT +
-    video.stats.comments * COMMENT_HEAT_WEIGHT +
-    video.stats.favorites * FAVORITE_HEAT_WEIGHT +
-    (video.stats.shares ?? 0) * SHARE_HEAT_WEIGHT
-  );
-}
-
-function calculateVelocityMetrics(engagementHeat: number, ageHours?: number) {
-  if (ageHours === undefined || engagementHeat <= 0) {
-    return {
-      heatPerHour: 0,
-      bonus: 0
-    };
-  }
-
-  const effectiveAgeHours = Math.max(ageHours, VELOCITY_AGE_FLOOR_HOURS);
-  const earlyFactor = Math.max(0, (VELOCITY_WINDOW_HOURS - effectiveAgeHours) / VELOCITY_WINDOW_HOURS);
-  const heatPerHour = engagementHeat / effectiveAgeHours;
-  const confidence = Math.min(1, engagementHeat / VELOCITY_FULL_CONFIDENCE_HEAT);
-
-  return {
-    heatPerHour,
-    bonus: heatPerHour * VELOCITY_BONUS_MULTIPLIER * earlyFactor * confidence
-  };
-}
-
 function isExplosiveVelocity(
   video: Video,
-  velocity: ReturnType<typeof calculateVelocityMetrics>,
+  velocity: ReturnType<typeof calculateHotlistVelocity>,
   ageHours?: number
 ) {
   return (
@@ -791,7 +792,7 @@ function isExplosiveVelocity(
 
 function isFastRisingVelocity(
   video: Video,
-  velocity: ReturnType<typeof calculateVelocityMetrics>,
+  velocity: ReturnType<typeof calculateHotlistVelocity>,
   ageHours?: number
 ) {
   return (
@@ -813,12 +814,17 @@ function formatSignalAge(ageHours?: number) {
   return `${Math.max(1, Math.round(ageHours))}h`;
 }
 
-function stripVideoRaw(video: Video): VideoListItem {
-  const copy = { ...video };
-  delete copy.raw;
-  delete copy.hotlistTrend;
-  delete copy.hotlistSurge;
-  return copy;
+function toHotlistVideo(video: Video): DouyinHotlistItem["video"] {
+  return {
+    id: video.id,
+    platform: video.platform,
+    title: video.title,
+    url: video.url,
+    coverUrl: video.coverUrl,
+    publishedAt: video.publishedAt,
+    stats: video.stats,
+    hotScore: video.hotScore
+  };
 }
 
 function isVideoInWindow(video: Video, window: HotlistWindow) {
@@ -826,11 +832,11 @@ function isVideoInWindow(video: Video, window: HotlistWindow) {
   return publishedAt !== null && publishedAt >= window.fromTime && publishedAt <= window.toTime;
 }
 
-function comparePublishedAtDesc(left: VideoListItem, right: VideoListItem) {
+function comparePublishedAtDesc(left: Pick<Video, "publishedAt">, right: Pick<Video, "publishedAt">) {
   return (getPublishedTime(right) ?? 0) - (getPublishedTime(left) ?? 0);
 }
 
-function getVideoAgeHours(video: Video | VideoListItem) {
+function getVideoAgeHours(video: Pick<Video, "publishedAt">) {
   const publishedAt = getPublishedTime(video);
   if (publishedAt === null) return undefined;
   const ageMs = Date.now() - publishedAt;
@@ -863,6 +869,16 @@ function clampInteger(value: unknown, min: number, max: number, fallback: number
   const number = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(number)));
+}
+
+function uniqueAccountIds(accountIds: string[]) {
+  return [...new Set(accountIds.map((accountId) => accountId.trim()).filter(Boolean))];
+}
+
+function hasSameAccountIds(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  const rightIds = new Set(right);
+  return left.every((accountId) => rightIds.has(accountId));
 }
 
 async function mapWithConcurrency<T, R>(

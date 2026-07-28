@@ -18,7 +18,8 @@ export async function GET(request: Request) {
       platform: searchParams.get("platform"),
       accountId: searchParams.get("accountId")
     });
-    const result = await createAccountTranscriptDocx(input.platform, input.accountId);
+    const videoIds = searchParams.getAll("videoId").filter(Boolean);
+    const result = await createAccountTranscriptDocx(input.platform, input.accountId, videoIds.length ? videoIds : undefined);
     const headers = new Headers({
       "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(result.fileName)}`,

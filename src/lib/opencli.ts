@@ -45,6 +45,7 @@ import {
 
 const DOUYIN_BROWSER_VIDEO_SCAN_LIMIT = 500;
 const DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS = 300_000;
+const DOUYIN_BATCH_ACCOUNT_CHUNK_SIZE = 8;
 const DOUYIN_RELATED_COMMENT_VIDEO_LIMIT = 6;
 const DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT = 20;
 
@@ -183,7 +184,7 @@ async function searchDouyinUserSecUidWithBrowser(name: string, options: { signal
 
 export async function getDouyinRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number } = {}
+  options: { videoLimit?: number; commentLimit?: number; signal?: AbortSignal } = {}
 ): Promise<DouyinRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
@@ -197,11 +198,18 @@ export async function getDouyinRelatedTopicComments(
 
   try {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
-      timeout: 30_000
+      timeout: 30_000,
+      signal: options.signal
     });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), {
+      timeout: 12_000,
+      signal: options.signal
+    }).catch(() => undefined);
 
-    const videos = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), { timeout: 20_000 })))
+    const videos = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), {
+      timeout: 20_000,
+      signal: options.signal
+    })))
       .map(normalizeDouyinRelatedVideo)
       .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
       .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery))
@@ -210,9 +218,18 @@ export async function getDouyinRelatedTopicComments(
 
     const comments: string[] = [];
     for (const video of videos) {
-      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [video.url]), { timeout: 30_000 }).catch(() => undefined);
-      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
-      const rows = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_VIDEO_COMMENT_EXTRACT_JS]), { timeout: 35_000 })));
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [video.url]), {
+        timeout: 30_000,
+        signal: options.signal
+      }).catch(() => undefined);
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), {
+        timeout: 12_000,
+        signal: options.signal
+      }).catch(() => undefined);
+      const rows = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_VIDEO_COMMENT_EXTRACT_JS]), {
+        timeout: 35_000,
+        signal: options.signal
+      })));
       comments.push(...rows.map(normalizeCommentText).filter(Boolean).slice(0, commentLimit));
     }
 
@@ -396,26 +413,39 @@ export async function collectDouyinPostVideosBatch(input: {
       timeout: 30_000,
       signal: input.signal
     });
-    const stdout = await runOpenCli(
-      buildOpenCliBrowserArgs(workspace, "eval", [
-        buildDouyinBatchPostExtractJs({
-          accounts: input.accounts.map((account) => ({
-            id: account.id,
-            name: account.name,
-            uid: account.uid
-          })),
-          concurrency,
-          fromDate: input.fromDate,
-          limit: scanLimit,
-          toDate: input.toDate
-        })
-      ]),
-      {
-        timeout: DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS,
-        signal: input.signal
+    const results: DouyinBatchVideoCollectResult[] = [];
+    for (const accounts of chunkItems(input.accounts, DOUYIN_BATCH_ACCOUNT_CHUNK_SIZE)) {
+      if (input.signal?.aborted) throw createAbortError();
+      try {
+        const stdout = await runOpenCli(
+          buildOpenCliBrowserArgs(workspace, "eval", [
+            buildDouyinBatchPostExtractJs({
+              accounts: accounts.map((account) => ({
+                id: account.id,
+                name: account.name,
+                uid: account.uid
+              })),
+              concurrency: Math.min(concurrency, accounts.length),
+              fromDate: input.fromDate,
+              limit: scanLimit,
+              toDate: input.toDate
+            })
+          ]),
+          {
+            timeout: DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS,
+            signal: input.signal
+          }
+        );
+        results.push(...normalizeDouyinBatchCollectResults(accounts, asArray(parseJsonish(stdout))));
+      } catch (error) {
+        if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
+        const message = error instanceof Error ? error.message : "抖音批量抓取失败";
+        results.push(...accounts.map((account) =>
+          makeFailedDouyinBatchCollectResult(account, `抖音分批抓取失败：${message}`)
+        ));
       }
-    );
-    return normalizeDouyinBatchCollectResults(input.accounts, asArray(parseJsonish(stdout)));
+    }
+    return results;
   } catch (error) {
     if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
     const message = error instanceof Error ? error.message : "抖音批量抓取失败";
@@ -423,6 +453,14 @@ export async function collectDouyinPostVideosBatch(input: {
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
+}
+
+function chunkItems<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function scanDouyinPostVideoRows(
@@ -1585,8 +1623,8 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
     .filter(Boolean);
   const downloadUrl = sourceUrls.find(isLikelyDirectMediaUrl) || "";
   const pageUrl =
-    sourceUrls.find((url) => /^https?:\/\//i.test(url) && !isLikelyDirectMediaUrl(url)) ||
     buildDouyinVideoUrl(awemeId) ||
+    sourceUrls.find((url) => /^https?:\/\//i.test(url) && !isLikelyDirectMediaUrl(url)) ||
     downloadUrl;
   const rawStatistics =
     object.raw_statistics && typeof object.raw_statistics === "object" ? (object.raw_statistics as Record<string, unknown>) : {};

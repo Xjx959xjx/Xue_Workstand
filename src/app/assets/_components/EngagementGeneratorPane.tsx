@@ -1,10 +1,11 @@
 "use client";
 
-import { Send } from "lucide-react";
+import { MessageSquareText, Send, Zap } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
+import type { EngagementGenerationMode } from "@/lib/types";
 
-const COMMENT_COUNT_PRESETS = [100, 150, 200];
+const COMMENT_COUNT_PRESETS = [30, 50, 100];
 
 type EngagementGeneratorPaneProps = {
   busy: BusyState;
@@ -13,10 +14,17 @@ type EngagementGeneratorPaneProps = {
   danmakuCount: number;
   includeComments: boolean;
   includeDanmaku: boolean;
+  generationMode: EngagementGenerationMode;
+  generationProgress: {
+    stage: string;
+    message: string;
+    progress: number;
+  } | null;
   sourceInput: string;
   onCommentCountChange: (count: number) => void;
   onDanmakuCountChange: (count: number) => void;
   onGenerate: () => void;
+  onGenerationModeChange: (mode: EngagementGenerationMode) => void;
   onIncludeCommentsChange: (enabled: boolean) => void;
   onIncludeDanmakuChange: (enabled: boolean) => void;
   onSourceInputChange: (value: string) => void;
@@ -29,10 +37,13 @@ export function EngagementGeneratorPane({
   danmakuCount,
   includeComments,
   includeDanmaku,
+  generationMode,
+  generationProgress,
   sourceInput,
   onCommentCountChange,
   onDanmakuCountChange,
   onGenerate,
+  onGenerationModeChange,
   onIncludeCommentsChange,
   onIncludeDanmakuChange,
   onSourceInputChange
@@ -52,6 +63,31 @@ export function EngagementGeneratorPane({
               <Send aria-hidden="true" size={16} />
               {busy === "generate" ? "正在生成" : "生成"}
             </button>
+          </div>
+          <div className="engagement-mode-row">
+            <span className="field-label">生成模式</span>
+            <div aria-label="选择评论生成模式" className="segmented engagement-mode-segmented" role="group">
+              <button
+                className={generationMode === "quick" ? "active" : ""}
+                disabled={busy === "generate"}
+                onClick={() => onGenerationModeChange("quick")}
+                title="直接根据当前素材生成"
+                type="button"
+              >
+                <Zap aria-hidden="true" size={14} />
+                快速自然
+              </button>
+              <button
+                className={generationMode === "reference" ? "active" : ""}
+                disabled={busy === "generate"}
+                onClick={() => onGenerationModeChange("reference")}
+                title="额外读取一组同类热评参考"
+                type="button"
+              >
+                <MessageSquareText aria-hidden="true" size={14} />
+                参考热评
+              </button>
+            </div>
           </div>
           <div className="engagement-option-grid">
             <label className={`engagement-option ${includeComments ? "active" : ""}`}>
@@ -107,13 +143,20 @@ export function EngagementGeneratorPane({
         </section>
 
         {busy === "generate" ? (
-          <div className="project-progress" role="status" aria-live="polite">
+          <div
+            aria-live="polite"
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={generationProgress?.progress || 0}
+            className="project-progress"
+            role="progressbar"
+          >
             <div className="project-progress-copy">
-              <span>正在读取素材并生成互动内容</span>
-              <strong>处理中</strong>
+              <span>{generationProgress?.message || "任务正在排队"}</span>
+              <strong>{generationProgress ? `${generationProgress.progress}%` : "等待中"}</strong>
             </div>
             <div className="progress-track" aria-hidden="true">
-              <div className="progress-fill indeterminate" />
+              <div className="progress-fill" style={{ width: `${generationProgress?.progress || 3}%` }} />
             </div>
           </div>
         ) : null}

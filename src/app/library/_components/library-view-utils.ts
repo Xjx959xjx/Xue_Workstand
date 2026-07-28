@@ -1,9 +1,10 @@
 import { formatDateWithYear } from "@/components/Formatters";
+import type { FeedbackTone } from "@/components/FeedbackProvider";
 import { buildDouyinVideoUrl, extractDouyinAwemeId, isLikelyDirectMediaUrl } from "@/lib/platform-links";
 import type { Video, VideoListItem } from "@/lib/types";
 
-export type BatchLimit = 3 | 5 | 10 | "all";
 export type VideoSortMode = "hot" | "title" | "views" | "likes" | "comments" | "favorites" | "latest";
+export type LibraryMessageSetter = (message: string, tone?: FeedbackTone) => void;
 
 export function canReadTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath"> | null) {
   return Boolean(video?.transcriptPath) || video?.transcriptStatus === "completed";

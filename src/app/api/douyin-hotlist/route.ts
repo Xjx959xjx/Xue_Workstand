@@ -11,6 +11,7 @@ import { platforms } from "@/lib/types";
 export const runtime = "nodejs";
 
 const getSchema = z.object({
+  force: z.boolean().optional(),
   windowDays: z.coerce.number().int().min(1).max(14).optional(),
   window: z.string().optional()
 });
@@ -30,10 +31,12 @@ export async function GET(request: Request) {
   return apiJson(async () => {
     const { searchParams } = new URL(request.url);
     const input = getSchema.parse({
+      force: searchParams.get("force") === "1",
       windowDays: searchParams.get("windowDays") || undefined,
       window: searchParams.get("window") || undefined
     });
     return getDouyinHotlist({
+      force: input.force,
       windowDays: input.windowDays,
       windowKey: input.window
     });
@@ -50,13 +53,16 @@ export async function POST(request: Request) {
       return addDouyinHotlistAccount({
         platform: input.platform || "douyin",
         query: z.string().min(1, "请输入账号名、主页链接或平台 ID。").parse(input.query),
-        signal: request.signal
+        signal: request.signal,
+        windowDays: input.windowDays,
+        windowKey: input.window
       });
     }
 
     if (input.action === "removeAccount") {
       return removeDouyinHotlistAccount(
-        z.string().min(1, "缺少要移除的账号。").parse(input.accountId)
+        z.string().min(1, "缺少要移除的账号。").parse(input.accountId),
+        { windowDays: input.windowDays, windowKey: input.window }
       );
     }
 

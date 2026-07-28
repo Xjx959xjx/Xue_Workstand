@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { createHash } from "crypto";
 import path from "path";
 import {
   Account,
@@ -21,6 +22,7 @@ import {
   ProjectDraft,
   ProjectListItem,
   ProjectSummary,
+  TranscriptVersion,
   Video,
   VideoListItem,
   platforms
@@ -68,10 +70,14 @@ const DEFAULT_STYLE = `# 风格卡
 `;
 
 const draftAssetQueues = new Map<string, Promise<unknown>>();
+const engagementRecordQueues = new Map<string, Promise<unknown>>();
+const transcriptQueues = new Map<string, Promise<unknown>>();
 
 type DetailReadOptions = {
   includeStyle?: boolean;
 };
+
+export type EngagementCacheKind = "source" | "brief" | "research";
 
 export type AccountStyleMeta = {
   sampleHash: string;
@@ -158,6 +164,14 @@ function engagementPath() {
   return path.join(libraryRoot(), "engagement");
 }
 
+function engagementCachePath(kind: EngagementCacheKind) {
+  return path.join(engagementPath(), ".cache", kind);
+}
+
+function engagementCacheJsonPath(kind: EngagementCacheKind, cacheKey: string) {
+  return path.join(engagementCachePath(kind), `${normalizeStorageSegment(cacheKey, "评论缓存键")}.json`);
+}
+
 function engagementRecordJsonPath(id: string) {
   return path.join(engagementPath(), `${id}.json`);
 }
@@ -212,6 +226,10 @@ function videosPath(platform: Platform, slug: string) {
 
 function transcriptsPath(platform: Platform, slug: string) {
   return path.join(accountPath(platform, slug), "transcripts");
+}
+
+function transcriptHistoryPath(platform: Platform, slug: string, videoId: string) {
+  return path.join(transcriptsPath(platform, slug), ".history", normalizeVideoId(videoId));
 }
 
 function draftsPath(platform: Platform, slug: string) {
@@ -301,6 +319,44 @@ async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
     if (draftAssetQueues.get(draftId) === next) {
       draftAssetQueues.delete(draftId);
     }
+  }
+}
+
+async function withEngagementRecordLock<T>(recordId: string, run: () => Promise<T>) {
+  const previous = engagementRecordQueues.get(recordId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.then(() => current, () => current);
+  engagementRecordQueues.set(recordId, next);
+
+  try {
+    await previous.catch(() => undefined);
+    return await run();
+  } finally {
+    release();
+    if (engagementRecordQueues.get(recordId) === next) {
+      engagementRecordQueues.delete(recordId);
+    }
+  }
+}
+
+async function withTranscriptLock<T>(key: string, run: () => Promise<T>) {
+  const previous = transcriptQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.then(() => current, () => current);
+  transcriptQueues.set(key, next);
+
+  try {
+    await previous.catch(() => undefined);
+    return await run();
+  } finally {
+    release();
+    if (transcriptQueues.get(key) === next) transcriptQueues.delete(key);
   }
 }
 
@@ -665,6 +721,37 @@ export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | 
   return record;
 }
 
+export async function updateEngagementRecord(
+  recordId: string,
+  update: (current: EngagementRecord) => EngagementRecord | Promise<EngagementRecord>
+) {
+  await ensureLibrary();
+  const id = normalizeEngagementRecordId(recordId);
+  return withEngagementRecordLock(id, async () => {
+    const current = await readJson<EngagementRecord>(engagementRecordJsonPath(id));
+    if (!current) throw new Error(`找不到互动素材：${id}`);
+    const updated = await update(current);
+    const next: EngagementRecord = {
+      ...updated,
+      id: current.id,
+      createdAt: current.createdAt,
+      updatedAt: nowIso()
+    };
+    await writeJson(engagementRecordJsonPath(id), next);
+    return next;
+  });
+}
+
+export async function readEngagementCache<T>(kind: EngagementCacheKind, cacheKey: string) {
+  await ensureLibrary();
+  return readJson<T>(engagementCacheJsonPath(kind, cacheKey));
+}
+
+export async function writeEngagementCache(kind: EngagementCacheKind, cacheKey: string, value: unknown) {
+  await ensureLibrary();
+  await writeJson(engagementCacheJsonPath(kind, cacheKey), value);
+}
+
 export async function getEngagementRecords() {
   await ensureLibrary();
   const files = await fs.readdir(engagementPath()).catch(() => []);
@@ -806,29 +893,127 @@ export async function saveTranscript(input: {
   videoId: string;
   text: string;
   source: Video["transcriptSource"];
+  expectedRevision?: string | null;
 }) {
   const account = await resolveAccount(input.platform, input.accountId);
   await ensureAccountDirs(account.platform, account.slug);
   const videoId = normalizeVideoId(input.videoId);
+  const lockKey = `${account.platform}:${account.slug}:${videoId}`;
 
-  const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
-  const video = await readJson<Video>(videoFile);
-  if (!video) throw new Error("找不到视频元数据");
+  return withTranscriptLock(lockKey, async () => {
+    const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
+    const video = await readJson<Video>(videoFile);
+    if (!video) throw new Error("找不到视频元数据");
 
-  const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`);
-  await writeTextFileAtomic(transcriptFile, input.text.trim());
+    const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${videoId}.txt`);
+    const currentTranscript = await readTextIfExists(transcriptFile);
+    const currentRevision = getTranscriptRevision(currentTranscript);
+    if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
+      throw createTranscriptConflictError();
+    }
 
-  const next: Video = {
-    ...video,
-    transcriptStatus: "completed",
-    transcriptPath: transcriptFile,
-    transcriptSource: input.source,
-    raw: clearTranscriptError(video.raw),
-    updatedAt: nowIso()
+    const transcript = input.text.trim();
+    const revision = getTranscriptRevision(transcript);
+    const previousVersionCreated = Boolean(currentTranscript && currentTranscript !== transcript);
+    if (previousVersionCreated) {
+      await archiveTranscript(account.platform, account.slug, videoId, currentTranscript, currentRevision!);
+    }
+    await writeTextFileAtomic(transcriptFile, transcript);
+
+    const next: Video = {
+      ...video,
+      transcriptStatus: "completed",
+      transcriptPath: transcriptFile,
+      transcriptRevision: revision || undefined,
+      transcriptSource: input.source,
+      raw: clearTranscriptError(video.raw),
+      updatedAt: nowIso()
+    };
+    await writeJson(videoFile, next);
+
+    return { account, video: next, transcript, revision, previousVersionCreated };
+  });
+}
+
+export async function getTranscriptSnapshot(platform: Platform, accountId: string, videoId: string) {
+  const transcript = await readTranscript(platform, accountId, videoId);
+  return {
+    transcript,
+    revision: getTranscriptRevision(transcript),
+    versions: await listTranscriptVersions(platform, accountId, videoId)
   };
-  await writeJson(videoFile, next);
+}
 
-  return { account, video: next, transcript: input.text.trim() };
+export async function restoreTranscriptVersion(input: {
+  platform: Platform;
+  accountId: string;
+  videoId: string;
+  versionId: string;
+  expectedRevision: string | null;
+}) {
+  const account = await resolveAccount(input.platform, input.accountId);
+  const videoId = normalizeVideoId(input.videoId);
+  const versionId = normalizeStorageSegment(input.versionId, "转写历史版本 ID");
+  const target = path.join(transcriptHistoryPath(account.platform, account.slug, videoId), `${versionId}.txt`);
+  const text = await readTextIfExists(target);
+  if (!text) throw new Error("找不到这份转写历史版本");
+  return saveTranscript({
+    platform: account.platform,
+    accountId: account.id,
+    videoId,
+    text,
+    source: "manual",
+    expectedRevision: input.expectedRevision
+  });
+}
+
+async function listTranscriptVersions(platform: Platform, accountId: string, videoId: string): Promise<TranscriptVersion[]> {
+  const account = await resolveAccount(platform, accountId);
+  const normalizedVideoId = normalizeVideoId(videoId);
+  const historyDir = transcriptHistoryPath(account.platform, account.slug, normalizedVideoId);
+  const files = await fs.readdir(historyDir).catch(() => []);
+  const versions = await Promise.all(
+    files
+      .filter((file) => file.endsWith(".txt"))
+      .map(async (file) => {
+        const target = path.join(historyDir, file);
+        const [text, stat] = await Promise.all([readTextIfExists(target), fs.stat(target)]);
+        return {
+          id: file.slice(0, -4),
+          createdAt: stat.mtime.toISOString(),
+          revision: getTranscriptRevision(text) || "",
+          preview: text.replace(/\s+/g, " ").trim().slice(0, 96)
+        } satisfies TranscriptVersion;
+      })
+  );
+  return versions.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+async function archiveTranscript(platform: Platform, slug: string, videoId: string, text: string, revision: string) {
+  const historyDir = transcriptHistoryPath(platform, slug, videoId);
+  await fs.mkdir(historyDir, { recursive: true });
+  const timestamp = nowIso().replace(/[:.]/g, "-");
+  await writeTextFileAtomic(path.join(historyDir, `${timestamp}-${revision.slice(0, 12)}.txt`), text);
+}
+
+async function readTextIfExists(target: string) {
+  try {
+    return await fs.readFile(target, "utf8");
+  } catch (error) {
+    if (isFsErrorCode(error, "ENOENT")) return "";
+    throw error;
+  }
+}
+
+function getTranscriptRevision(text: string) {
+  if (!text) return null;
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function createTranscriptConflictError() {
+  const error = new Error("转写稿已被其他任务更新，请重新打开后再编辑或转写。") as Error & { statusCode: number };
+  error.statusCode = 409;
+  return error;
 }
 
 function clearTranscriptError(raw: unknown) {
@@ -847,7 +1032,7 @@ export async function markTranscriptFailed(platform: Platform, accountId: string
 
   await writeJson(videoFile, {
     ...video,
-    transcriptStatus: "failed",
+    transcriptStatus: videoHasTranscript(video) ? "completed" : "failed",
     raw: { ...(typeof video.raw === "object" && video.raw ? video.raw : {}), transcriptError: reason },
     updatedAt: nowIso()
   });
@@ -868,26 +1053,36 @@ export async function readTranscript(platform: Platform, accountId: string, vide
 export async function deleteTranscript(platform: Platform, accountId: string, videoId: string) {
   const account = await resolveAccount(platform, accountId);
   const normalizedVideoId = normalizeVideoId(videoId);
-  const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
-  const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
-  const styleAnalysisFile = accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId);
-  const video = await readJson<Video>(videoFile);
-  if (!video) throw new Error("找不到视频元数据");
+  const lockKey = `${account.platform}:${account.slug}:${normalizedVideoId}`;
+  return withTranscriptLock(lockKey, async () => {
+    const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
+    const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
+    const styleAnalysisFile = accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId);
+    const video = await readJson<Video>(videoFile);
+    if (!video) throw new Error("找不到视频元数据");
 
-  await Promise.all([
-    fs.rm(transcriptFile, { force: true }),
-    fs.rm(styleAnalysisFile, { force: true })
-  ]);
-  const next: Video = {
-    ...video,
-    transcriptStatus: "not_started",
-    transcriptPath: undefined,
-    transcriptSource: undefined,
-    updatedAt: nowIso()
-  };
-  await writeJson(videoFile, next);
+    const transcript = await readTextIfExists(transcriptFile);
+    const revision = getTranscriptRevision(transcript);
+    if (transcript && revision) {
+      await archiveTranscript(account.platform, account.slug, normalizedVideoId, transcript, revision);
+    }
 
-  return { account, video: next };
+    await Promise.all([
+      fs.rm(transcriptFile, { force: true }),
+      fs.rm(styleAnalysisFile, { force: true })
+    ]);
+    const next: Video = {
+      ...video,
+      transcriptStatus: "not_started",
+      transcriptPath: undefined,
+      transcriptRevision: undefined,
+      transcriptSource: undefined,
+      updatedAt: nowIso()
+    };
+    await writeJson(videoFile, next);
+
+    return { account, video: next };
+  });
 }
 
 export async function deleteVideos(platform: Platform, accountId: string, videoIds: string[]) {
@@ -903,6 +1098,7 @@ export async function deleteVideos(platform: Platform, accountId: string, videoI
     await Promise.all([
       fs.rm(videoFile, { force: true }),
       fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true }),
+      fs.rm(transcriptHistoryPath(account.platform, account.slug, normalizedVideoId), { recursive: true, force: true }),
       fs.rm(accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId), { force: true })
     ]);
     deleted.push(normalizedVideoId);
@@ -1320,24 +1516,33 @@ export async function getAccountDetail(
 async function getAccountListItem(account: Account): Promise<AccountListItem> {
   await ensureAccountDirs(account.platform, account.slug);
 
-  const [videoFiles, draftFiles] = await Promise.all([
+  const [videoFiles, transcriptFiles, draftFiles, styleMeta, styleText, styleStat] = await Promise.all([
     fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
-    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => [])
+    fs.readdir(transcriptsPath(account.platform, account.slug)).catch(() => []),
+    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []),
+    readJson<AccountStyleMeta>(styleMetaPath(account.platform, account.slug)),
+    fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE),
+    fs.stat(stylePath(account.platform, account.slug)).catch(() => null)
   ]);
-
-  const videos = (
-    await Promise.all(
-      videoFiles
-        .filter((file) => file.endsWith(".json"))
-        .map((file) => readJson<Video>(path.join(videosPath(account.platform, account.slug), file)))
-    )
-  ).filter(Boolean) as Video[];
+  const videoIds = new Set(videoFiles.filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -5)));
+  const transcriptIds = new Set(transcriptFiles.filter((file) => file.endsWith(".txt")).map((file) => file.slice(0, -4)));
+  const transcriptCount = [...videoIds].filter((videoId) => transcriptIds.has(videoId)).length;
+  const styleStatus = styleMeta
+    ? styleMeta.fallback
+      ? "fallback"
+      : "ready"
+    : styleText.trim() !== DEFAULT_STYLE.trim()
+      ? "manual"
+      : "not_generated";
 
   return {
     ...account,
-    videoCount: videos.length,
-    transcriptCount: videos.filter(videoHasTranscript).length,
-    draftCount: draftFiles.filter((file) => file.endsWith(".json")).length
+    videoCount: videoIds.size,
+    transcriptCount,
+    missingTranscriptCount: Math.max(0, videoIds.size - transcriptCount),
+    draftCount: draftFiles.filter((file) => file.endsWith(".json")).length,
+    styleStatus,
+    styleUpdatedAt: styleMeta?.updatedAt || (styleStatus === "manual" ? styleStat?.mtime.toISOString() : undefined)
   };
 }
 
@@ -1428,19 +1633,36 @@ async function getAllAccountSummaries() {
 }
 
 async function getAllAccountListItems() {
-  const accounts: AccountListItem[] = [];
+  const accountRecords = (
+    await Promise.all(
+      platforms.map(async (platform) => {
+        const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+        return Promise.all(
+          entries
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => readJson<Account>(accountJsonPath(platform, entry.name)))
+        );
+      })
+    )
+  ).flat().filter(Boolean) as Account[];
+  const accounts = await mapWithConcurrency(accountRecords, 6, getAccountListItem);
+  return accounts.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+}
 
-  for (const platform of platforms) {
-    const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const account = await readJson<Account>(accountJsonPath(platform, entry.name));
-      if (!account) continue;
-      accounts.push(await getAccountListItem(account));
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index]);
     }
   }
 
-  return accounts.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
 }
 
 async function getAllProjectSummaries() {
@@ -1868,6 +2090,7 @@ function stripDraftForOverview(draft: Draft): Draft {
   return {
     ...draft,
     input: undefined,
+    research: undefined,
     content: "",
     assets: strippedAssets
   } as Draft;

@@ -18,6 +18,7 @@ import {
 import { runBatchTranscribe } from "./batch-transcribe";
 import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
+import { refreshDouyinHotlist } from "./douyin-hotlist";
 import { hasFeishuDocLink } from "./feishu";
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
 import { libraryRoot } from "./storage";
@@ -395,6 +396,8 @@ async function runJob(jobId: string, input: JobStartInput) {
       await runTranscribeVideoJob(jobId, input);
     } else if (input.kind === "batch-transcribe") {
       await runBatchTranscribeJob(jobId, input);
+    } else if (input.kind === "hotlist-refresh") {
+      await runHotlistRefreshJob(jobId, input);
     } else {
       await runEngagementJob(jobId, input);
     }
@@ -428,21 +431,22 @@ async function runJob(jobId: string, input: JobStartInput) {
 
 async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { kind: "write-copy" }>) {
   throwIfCancelled(jobId);
+  const isRevision = start.input.action === "revise";
   let partialText = "";
   const partialUpdater = createPartialTextUpdater(jobId, {
     stage: "generate",
-    message: "正在生成文案",
+    message: isRevision ? "正在生成新版本" : "正在生成文案",
     progress(text) {
       return Math.min(86, 60 + Math.floor(text.length / 120));
     }
   });
   await patchJob(jobId, {
     stage: "prepare",
-    message: "正在读取风格卡和代表样本",
+    message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡和代表样本",
     progress: 10
   });
 
-  if (start.input.mode === "rewrite" && /https?:\/\//i.test(start.input.sourceText || "")) {
+  if (!isRevision && start.input.mode === "rewrite" && /https?:\/\//i.test(start.input.sourceText || "")) {
     await patchJob(jobId, {
       stage: "transcribe-links",
       message: "正在转写链接里的视频文稿",
@@ -450,7 +454,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     });
   }
 
-  if (hasFeishuDocLink(start.input.supportDocLinks)) {
+  if (!isRevision && hasFeishuDocLink(start.input.supportDocLinks)) {
     await patchJob(jobId, {
       stage: "fetch-support-docs",
       message: "正在读取商单支持文档",
@@ -461,7 +465,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   const prepared = await prepareWriteCopyContext(start.input, { signal: getJobAbortSignal(jobId) });
   throwIfCancelled(jobId);
 
-  if (start.input.useWebResearch) {
+  if (!isRevision && start.input.useWebResearch) {
     await patchJob(jobId, {
       stage: "research",
       message: prepared.research?.startsWith("联网资料：模型联网暂时不可用")
@@ -474,7 +478,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
 
   await patchJob(jobId, {
     stage: "generate",
-    message: "正在生成文案",
+    message: isRevision ? "正在按本轮要求生成新版本" : "正在生成文案",
     progress: 55
   });
 
@@ -491,7 +495,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   await partialUpdater.flush(partialText);
   throwIfCancelled(jobId);
 
-  if (!result.text.trim()) {
+  if (!isRevision && !result.text.trim()) {
     await patchJob(jobId, {
       stage: "fallback",
       message: "正在切换到本地模板",
@@ -836,12 +840,23 @@ async function runEngagementJob(jobId: string, start: Extract<JobStartInput, { k
     message: start.input.sourceType === "url" ? "正在读取链接并准备素材" : "正在准备互动素材",
     progress: 18
   });
-  await patchJob(jobId, {
-    stage: "generate",
-    message: "正在生成评论和弹幕",
-    progress: 48
+  const result = await generateEngagement(start.input, {
+    signal: getJobAbortSignal(jobId),
+    async onProgress(progress) {
+      throwIfCancelled(jobId);
+      await patchTransientJob(jobId, {
+        stage: progress.stage,
+        message: progress.message,
+        progress: progress.progress,
+        result: progress.previewComments
+          ? {
+              previewComments: progress.previewComments,
+              requestedCount: start.input.commentCount
+            }
+          : undefined
+      });
+    }
   });
-  const result = await generateEngagement(start.input, { signal: getJobAbortSignal(jobId) });
   throwIfCancelled(jobId);
 
   await completeJob(jobId, {
@@ -851,6 +866,55 @@ async function runEngagementJob(jobId: string, start: Extract<JobStartInput, { k
       id: result.record.id,
       href: start.input.sourceType === "draft" ? `/assets?draftId=${encodeURIComponent(start.input.draftId)}` : "/assets",
       label: "查看评论生成"
+    }
+  });
+}
+
+async function runHotlistRefreshJob(jobId: string, start: Extract<JobStartInput, { kind: "hotlist-refresh" }>) {
+  throwIfCancelled(jobId);
+  await patchJob(jobId, {
+    stage: "prepare",
+    message: "正在读取热榜账号池",
+    progress: 8
+  });
+
+  const result = await refreshDouyinHotlist({
+    accountIds: start.input.accountIds,
+    limit: start.input.limit,
+    windowKey: start.input.window,
+    signal: getJobAbortSignal(jobId),
+    async onProgress(progress) {
+      throwIfCancelled(jobId);
+      const account = progress.result;
+      const status = account.status === "completed" ? "有更新" : account.status === "unchanged" ? "无变化" : "失败";
+      await patchTransientJob(jobId, {
+        stage: "collect",
+        message: `已处理 ${progress.completed}/${progress.total}：${account.name}（${status}）`,
+        progress: Math.min(92, 10 + Math.round((progress.completed / progress.total) * 82))
+      });
+    }
+  });
+  throwIfCancelled(jobId);
+
+  if (result.refresh.requested > 0 && result.refresh.failed === result.refresh.requested) {
+    const details = result.refresh.accounts
+      .map((account) => account.error)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join("；");
+    throw new Error(details ? `视频热榜刷新失败：${details}` : "视频热榜刷新失败：所有账号都未返回可用结果。");
+  }
+
+  await completeJob(jobId, {
+    message: `热榜刷新完成：${result.refresh.completed} 个账号有更新，${result.refresh.unchanged} 个无变化，${result.refresh.failed} 个失败`,
+    result: {
+      automatic: Boolean(start.input.automatic),
+      refresh: result.refresh,
+      summary: result.summary
+    },
+    resultRef: {
+      href: start.href || "/douyin-hotlist",
+      label: "查看视频热榜"
     }
   });
 }
@@ -948,17 +1012,33 @@ function defaultJobTitle(input: JobStartInput) {
   if (input.kind === "project-style") return "生成项目风格卡";
   if (input.kind === "transcribe-video") return "转写视频";
   if (input.kind === "batch-transcribe") return input.input.updateStyle ? "批量转写并更新风格" : "批量转写";
+  if (input.kind === "hotlist-refresh") return input.input.automatic ? "自动刷新视频热榜" : "刷新视频热榜";
+  if (input.input.sourceType === "record") return "补齐评论素材";
   return "生成评论素材";
 }
 
 function defaultInputSummary(input: JobStartInput) {
-  if (input.kind === "write-copy") return input.input.mode === "topic" ? "自由输入" : "素材改写";
+  if (input.kind === "write-copy") {
+    if (input.input.action === "revise") return input.input.revisionScope === "selection" ? "选中段落续改" : "全文续改";
+    return input.input.mode === "topic" ? "自由输入" : "素材改写";
+  }
   if (input.kind === "account-style") return input.input.accountId;
   if (input.kind === "project-style") return input.input.name;
   if (input.kind === "transcribe-video") return input.input.videoId;
-  if (input.kind === "batch-transcribe") return `${input.input.accountId} · ${input.input.limit === "all" ? "全部视频" : `${input.input.limit} 条视频`}`;
+  if (input.kind === "batch-transcribe") {
+    const range = input.input.videoIds?.length
+      ? `所选 ${input.input.videoIds.length} 条视频`
+      : input.input.limit === "all"
+        ? "全部待转写视频"
+        : `${input.input.limit} 条待转写视频`;
+    return `${input.input.accountId} · ${range}`;
+  }
+  if (input.kind === "hotlist-refresh") {
+    return `${input.input.window} · ${input.input.accountIds?.length ? `${input.input.accountIds.length} 个账号` : "全部账号"}`;
+  }
   if (input.input.sourceType === "draft") return "从草稿生成";
   if (input.input.sourceType === "url") return "从链接生成";
+  if (input.input.sourceType === "record") return "补齐已有评论";
   return input.input.title || "从粘贴文案生成";
 }
 
@@ -1001,10 +1081,22 @@ function defaultJobScope(input: JobStartInput): JobScope {
       accountId: input.input.accountId
     });
   }
+  if (input.kind === "hotlist-refresh") {
+    return compactJobScope({
+      targetType: "hotlist",
+      sourceKey: shortHash(`${input.input.window}-${(input.input.accountIds || []).join(",") || "all"}`)
+    });
+  }
   if (input.input.sourceType === "draft") {
     return compactJobScope({
       targetType: "draft",
       draftId: input.input.draftId
+    });
+  }
+  if (input.input.sourceType === "record") {
+    return compactJobScope({
+      targetType: "engagement",
+      engagementRecordId: input.input.recordId
     });
   }
   if (input.input.sourceType === "url") {
@@ -1029,6 +1121,7 @@ function defaultHref(input: JobStartInput) {
   if (input.kind === "write-copy") return "/writer";
   if (input.kind === "account-style" || input.kind === "transcribe-video" || input.kind === "batch-transcribe") return "/library";
   if (input.kind === "project-style") return "/project-workbench";
+  if (input.kind === "hotlist-refresh") return "/douyin-hotlist";
   return "/assets";
 }
 
@@ -1054,8 +1147,12 @@ function summarizeBatchResult(result: BatchTranscribeResult) {
 function buildEngagementSuccessMessage(record: EngagementRecord) {
   const commentCount = record.comments?.items.length || 0;
   const danmakuCount = record.danmaku?.items.length || 0;
-  if (commentCount && danmakuCount) return `已生成 ${commentCount} 条评论和 ${danmakuCount} 条弹幕`;
-  if (commentCount) return `已生成 ${commentCount} 条评论`;
+  const requestedCount = record.comments?.requestedCount || 0;
+  const commentLabel = requestedCount && commentCount < requestedCount
+    ? `${commentCount}/${requestedCount} 条评论`
+    : `${commentCount} 条评论`;
+  if (commentCount && danmakuCount) return `已生成 ${commentLabel}和 ${danmakuCount} 条弹幕`;
+  if (commentCount) return `已生成 ${commentLabel}`;
   return `已生成 ${danmakuCount} 条弹幕`;
 }
 

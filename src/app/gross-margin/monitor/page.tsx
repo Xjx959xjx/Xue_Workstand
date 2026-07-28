@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -36,6 +36,14 @@ import {
 import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRecord } from "@/lib/types";
 
 export default function GrossMarginMonitorPage() {
+  return (
+    <Suspense fallback={<GrossMarginMonitorFallback />}>
+      <GrossMarginMonitorPageContent />
+    </Suspense>
+  );
+}
+
+function GrossMarginMonitorPageContent() {
   const { notify } = useFeedback();
   const router = useRouter();
   const pathname = usePathname();
@@ -345,6 +353,19 @@ export default function GrossMarginMonitorPage() {
           onConfirm={() => void handleDelete(deleteTarget.id)}
         />
       ) : null}
+    </div>
+  );
+}
+
+function GrossMarginMonitorFallback() {
+  return (
+    <div className="page gross-margin-page gross-monitor-page">
+      <section className="gross-monitor-board">
+        <div className="gross-monitor-empty">
+          <RefreshCw aria-hidden="true" size={18} />
+          <p>正在读取监控记录。</p>
+        </div>
+      </section>
     </div>
   );
 }

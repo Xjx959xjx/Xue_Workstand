@@ -49,6 +49,7 @@ type ChatRuntimePublicTargetConfig = {
 export type ChatRuntimePublicConfig = ChatRuntimePublicTargetConfig & {
   primary: ChatRuntimePublicTargetConfig;
   fallback: ChatRuntimePublicTargetConfig;
+  fallbacks: ChatRuntimePublicTargetConfig[];
   fallbackEnabled: boolean;
   fallbackConfigured: boolean;
 };
@@ -82,6 +83,7 @@ type ChatMessage = {
 
 const DEFAULT_FALLBACK_CHAT_BASE_URL = "https://www.fhl.mom";
 const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-5.5";
+const MAX_ADDITIONAL_CHAT_FALLBACKS = 4;
 
 class ModelRuntimeError extends Error {
   kind: ModelErrorKind;
@@ -145,11 +147,43 @@ export function getChatFallbackConfig() {
   } satisfies ChatRuntimeConfig;
 }
 
+function getAdditionalChatFallbackConfigs() {
+  return Array.from({ length: MAX_ADDITIONAL_CHAT_FALLBACKS }, (_, offset) => {
+    const index = offset + 2;
+    const prefix = `CHAT_FALLBACK_${index}`;
+    const chatReasoningEffort =
+      process.env[`${prefix}_REASONING_EFFORT`] ||
+      process.env.CHAT_FALLBACK_REASONING_EFFORT ||
+      process.env.CHAT_REASONING_EFFORT ||
+      "xhigh";
+
+    return {
+      role: "fallback" as const,
+      enabled: process.env[`${prefix}_ENABLED`] !== "0",
+      apiKey: process.env[`${prefix}_API_KEY`] || "",
+      baseUrl: normalizeBaseUrl(process.env[`${prefix}_BASE_URL`] || ""),
+      responsesUrl: process.env[`${prefix}_RESPONSES_URL`] || "",
+      chatCompletionsUrl: process.env[`${prefix}_COMPLETIONS_URL`] || "",
+      model: process.env[`${prefix}_MODEL`] || "",
+      wireApi: normalizeWireApi(process.env[`${prefix}_WIRE_API`] || "auto"),
+      reasoningEffort: normalizeReasoningEffort(chatReasoningEffort),
+      chatCompletionReasoningEffort: chatReasoningEffort ? normalizeReasoningEffort(chatReasoningEffort) : "none",
+      serviceTier: normalizeServiceTier(process.env[`${prefix}_SERVICE_TIER`]),
+      proxyUrl:
+        process.env[`${prefix}_PROXY_URL`] ||
+        process.env.CHAT_FALLBACK_PROXY_URL ||
+        process.env.CHAT_PROXY_URL ||
+        ""
+    } satisfies ChatRuntimeConfig;
+  }).filter((config) => Boolean(config.apiKey || config.baseUrl || config.model));
+}
+
 export function getChatConfigs() {
   const primary = getChatConfig();
-  const fallback = getChatFallbackConfig();
-  if (sameChatRuntimeConfig(primary, fallback)) return [primary];
-  return [primary, fallback];
+  return [primary, getChatFallbackConfig(), ...getAdditionalChatFallbackConfigs()].filter(
+    (config, index, configs) =>
+      index === configs.findIndex((candidate) => sameChatRuntimeConfig(candidate, config))
+  );
 }
 
 export function getConfiguredChatConfigs() {
@@ -163,17 +197,20 @@ export function isChatConfigConfigured(config: ChatRuntimeConfig) {
 export function getChatRuntimeConfig(): ChatRuntimePublicConfig {
   const primary = getChatConfig();
   const fallback = getChatFallbackConfig();
+  const fallbacks = [fallback, ...getAdditionalChatFallbackConfigs()];
   const publicPrimary = toPublicChatConfig(primary);
-  const publicFallback = toPublicChatConfig(fallback);
-  const active = publicPrimary.configured ? publicPrimary : publicFallback.configured ? publicFallback : publicPrimary;
+  const publicFallbacks = fallbacks.map(toPublicChatConfig);
+  const publicFallback = publicFallbacks[0];
+  const active = [publicPrimary, ...publicFallbacks].find((config) => config.configured) || publicPrimary;
 
   return {
     ...active,
-    configured: publicPrimary.configured || publicFallback.configured,
+    configured: [publicPrimary, ...publicFallbacks].some((config) => config.configured),
     primary: publicPrimary,
     fallback: publicFallback,
-    fallbackEnabled: fallback.enabled,
-    fallbackConfigured: publicFallback.configured
+    fallbacks: publicFallbacks,
+    fallbackEnabled: fallbacks.some((config) => config.enabled),
+    fallbackConfigured: publicFallbacks.some((config) => config.configured)
   };
 }
 

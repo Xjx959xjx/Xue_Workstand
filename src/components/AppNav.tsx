@@ -12,6 +12,7 @@ import {
   FolderKanban,
   MessageSquarePlus,
   PenLine,
+  Radar,
   Sparkles,
   Wrench
 } from "lucide-react";
@@ -25,6 +26,7 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
+  { href: "/hotspots", label: "热点雷达", icon: Radar },
   { href: "/douyin-hotlist", label: "视频热榜", icon: Flame },
   { href: "/library", label: "账号库", icon: FileText },
   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban },

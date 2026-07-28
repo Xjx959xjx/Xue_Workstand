@@ -402,6 +402,7 @@ function defaultJobHref(kind: JobRecord["kind"]) {
   if (kind === "write-copy") return "/writer";
   if (kind === "project-style") return "/project-workbench";
   if (kind === "engagement") return "/assets";
+  if (kind === "hotlist-refresh") return "/douyin-hotlist";
   return "/library";
 }
 

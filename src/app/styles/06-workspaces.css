@@ -584,6 +584,310 @@
   }
 }
 
+/* Library workflow controls */
+.library-page .account-filter-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.library-page .account-filter-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.library-page .account-filter-row select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 10.5px;
+}
+
+.library-page .account-filter-row select:last-child {
+  grid-column: 1 / -1;
+}
+
+.library-page .account-list-button {
+  min-height: 64px;
+  align-items: start;
+}
+
+.library-page .account-list-flags {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.library-page .account-list-flags .warning {
+  color: var(--amber);
+  font-weight: 650;
+}
+
+.library-page .library-filter-empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 8px 2px;
+}
+
+.library-page .video-pane-header {
+  gap: 10px;
+}
+
+.library-page .video-header-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.library-page .video-filter-search {
+  width: min(190px, 32vw);
+}
+
+.library-page .video-filter-search > svg {
+  left: 10px;
+}
+
+.library-page .video-filter-search input,
+.library-page .video-header-tools select {
+  min-height: 34px;
+  font-size: 11px;
+}
+
+.library-page .video-filter-search input {
+  width: 100%;
+  padding-left: 30px;
+}
+
+.library-page .video-header-tools select {
+  width: 106px;
+  padding-inline: 8px;
+}
+
+.library-page .video-selection-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library-page .video-selection-toolbar .selection-copy {
+  margin-right: auto;
+}
+
+.library-detail-header {
+  gap: 10px;
+}
+
+.library-detail-header > div:first-child {
+  min-width: 0;
+}
+
+.library-detail-header .pane-subtitle {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.library-detail-header .btn {
+  flex: 0 0 auto;
+}
+
+.library-page .detail-freshness {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.library-page .selected-video-context {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.library-page .selected-video-context img,
+.library-page .selected-video-cover-placeholder {
+  width: 76px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  object-fit: cover;
+}
+
+.library-page .selected-video-cover-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.library-page .selected-video-context h3 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0 0 4px;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.library-page .selected-video-context p {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.library-page .account-style-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.library-page .account-style-actions .detail-action-primary,
+.library-page .account-style-actions .progress-button:nth-child(3),
+.library-page .account-style-actions .btn:last-child {
+  grid-column: 1 / -1;
+}
+
+.transcript-history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.transcript-history-toolbar .field {
+  min-width: 0;
+}
+
+.transcript-history-toolbar select {
+  width: 100%;
+}
+
+.confirm-dialog-content {
+  display: grid;
+  gap: 6px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.confirm-dialog-content p {
+  margin: 0;
+}
+
+.library-quick-start.workbench-leading-panel {
+  min-height: 0;
+}
+
+.library-page .library-quick-fields {
+  grid-template-columns: minmax(112px, 0.55fr) minmax(280px, 1.8fr);
+}
+
+.library-page .library-quick-advanced {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.library-page .library-quick-actions {
+  align-items: center;
+  padding-top: 17px;
+}
+
+.library-page .library-advanced-trigger {
+  max-width: 210px;
+  color: var(--muted-strong);
+  white-space: nowrap;
+}
+
+@media (min-width: 1181px) {
+  .workbench-frame-page:has(> .library-quick-start.advanced-open) {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: auto;
+    min-height: var(--workspace-page-height);
+  }
+
+  .library-page .library-quick-start.advanced-open + .library-workspace {
+    min-height: var(--workspace-default-height);
+  }
+}
+
+@media (max-width: 1320px) {
+  .library-page .video-pane-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .library-page .video-header-tools {
+    width: 100%;
+  }
+
+  .library-page .video-filter-search {
+    width: auto;
+    flex: 1 1 180px;
+  }
+}
+
+@media (max-width: 780px) {
+  .library-page .library-quick-fields,
+  .library-page .library-quick-advanced {
+    grid-template-columns: 1fr;
+  }
+
+  .library-page .library-quick-advanced {
+    grid-column: auto;
+  }
+
+  .library-page .library-quick-actions {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding-top: 0;
+  }
+
+  .library-page .library-advanced-trigger {
+    min-width: 44px;
+    max-width: 44px;
+    padding-inline: 0;
+    overflow: hidden;
+    color: transparent;
+    font-size: 0;
+  }
+
+  .library-page .library-advanced-trigger svg {
+    color: var(--muted-strong);
+  }
+
+  .library-page .video-header-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .library-page .video-filter-search {
+    grid-column: 1 / -1;
+  }
+
+  .library-page .account-style-actions,
+  .transcript-history-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .library-page .account-style-actions > *,
+  .transcript-history-toolbar > * {
+    grid-column: auto;
+  }
+}
+
 /* Library page layout */
 /* Library helpers kept here because the markup is page-specific. */
 .library-page .input-with-icon {

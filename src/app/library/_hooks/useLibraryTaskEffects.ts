@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import type { StyleGenerationResponse } from "@/lib/client";
 import { invalidateAccountDetail } from "@/lib/detail-cache";
 import { formatJobErrorMessage } from "@/lib/job-messages";
-import type { AccountDetail, BatchTranscribeResult, JobRecord, Video, VideoListItem } from "@/lib/types";
+import type { AccountDetail, BatchTranscribeResult, JobRecord, VideoListItem } from "@/lib/types";
+import type { LibraryMessageSetter } from "../_components/library-view-utils";
 
 type ReloadAccountDetail = (options?: { includeStyle?: boolean; force?: boolean }) => Promise<AccountDetail | null>;
 
@@ -14,11 +15,10 @@ type UseLibraryTaskEffectsInput = {
   reloadSelectedAccountDetail: ReloadAccountDetail;
   selectedAccount: AccountDetail | null;
   selectedVideo: VideoListItem | null;
+  invalidateTranscript: () => void;
   setAccountDetail: Dispatch<SetStateAction<AccountDetail | null>>;
-  setMessage: Dispatch<SetStateAction<string>>;
+  setMessage: LibraryMessageSetter;
   setStyleDraft: Dispatch<SetStateAction<string>>;
-  setTranscript: Dispatch<SetStateAction<string>>;
-  setTranscriptVideoId: Dispatch<SetStateAction<string>>;
 };
 
 export function useLibraryTaskEffects({
@@ -27,11 +27,10 @@ export function useLibraryTaskEffects({
   reloadSelectedAccountDetail,
   selectedAccount,
   selectedVideo,
+  invalidateTranscript,
   setAccountDetail,
   setMessage,
-  setStyleDraft,
-  setTranscript,
-  setTranscriptVideoId
+  setStyleDraft
 }: UseLibraryTaskEffectsInput) {
   const [busy, setBusy] = useState("");
   const [transcribeProgress, setTranscribeProgress] = useState(0);
@@ -125,14 +124,15 @@ export function useLibraryTaskEffects({
           ? `已降级生成风格卡：${result.fallbackReason || "模型没有返回可用内容，已用本地模板生成，可继续编辑。"}`
           : result?.generationMode === "incremental"
           ? "已根据新增/变化样本增量更新风格卡。"
-          : "已自动总结风格卡。"
+          : "已自动总结风格卡。",
+        result?.fallback ? "warning" : "success"
       );
       return;
     }
     if (accountStyleJob.status === "failed") {
       setStyleStage("生成失败");
       setStyleProgress(100);
-      setMessage(accountStyleJob.error || "自动总结失败");
+      setMessage(accountStyleJob.error || "自动总结失败", "error");
       return;
     }
     if (accountStyleJob.status === "cancelled") {
@@ -154,28 +154,24 @@ export function useLibraryTaskEffects({
     handledLibraryJobsRef.current.add(transcribeJob.id);
     setBusy("");
     if (transcribeJob.status === "completed") {
-      const result = transcribeJob.result as { transcript?: string; video?: Video } | undefined;
-      if (result?.transcript && (!selectedVideo || result.video?.id === selectedVideo.id)) {
-        setTranscript(result.transcript);
-        setTranscriptVideoId(result.video?.id || selectedVideo?.id || "");
-      }
+      invalidateTranscript();
       void reloadSelectedAccountDetail({ force: true });
       setTranscribeStage("转写稿已生成");
       setTranscribeProgress(100);
-      setMessage("转写完成。");
+      setMessage("转写完成。", "success");
       return;
     }
     if (transcribeJob.status === "failed") {
       setTranscribeStage("转写失败");
       setTranscribeProgress(100);
-      setMessage(formatJobErrorMessage(transcribeJob.error || "转写失败"));
+      setMessage(formatJobErrorMessage(transcribeJob.error || "转写失败"), "error");
       return;
     }
     if (transcribeJob.status === "cancelled") {
       setTranscribeStage("已停止");
       setMessage("已停止当前转写任务。");
     }
-  }, [reloadSelectedAccountDetail, selectedVideo, setMessage, setTranscript, setTranscriptVideoId, transcribeJob]);
+  }, [invalidateTranscript, reloadSelectedAccountDetail, setMessage, transcribeJob]);
 
   useEffect(() => {
     if (!batchJob) return;
@@ -191,6 +187,7 @@ export function useLibraryTaskEffects({
     setBusy("");
     if (batchJob.status === "completed") {
       const result = batchJob.result as BatchTranscribeResult | undefined;
+      invalidateTranscript();
       if (result?.style) {
         invalidateAccountDetail();
         setStyleDraft(result.style);
@@ -199,20 +196,23 @@ export function useLibraryTaskEffects({
       void reloadSelectedAccountDetail({ force: true });
       setTranscribeStage("批量任务已完成");
       setTranscribeProgress(100);
-      setMessage(result ? summarizeBatchTranscribeResult(result) : "批量转写完成。");
+      setMessage(
+        result ? summarizeBatchTranscribeResult(result) : "批量转写完成。",
+        result && (result.failed > 0 || result.fallback || result.styleError) ? "warning" : "success"
+      );
       return;
     }
     if (batchJob.status === "failed") {
       setTranscribeStage("批量任务失败");
       setTranscribeProgress(100);
-      setMessage(batchJob.error || "批量转写失败");
+      setMessage(batchJob.error || "批量转写失败", "error");
       return;
     }
     if (batchJob.status === "cancelled") {
       setTranscribeStage("已停止");
       setMessage("已停止批量任务。");
     }
-  }, [batchJob, reloadSelectedAccountDetail, setAccountDetail, setMessage, setStyleDraft]);
+  }, [batchJob, invalidateTranscript, reloadSelectedAccountDetail, setAccountDetail, setMessage, setStyleDraft]);
 
   return {
     busy,

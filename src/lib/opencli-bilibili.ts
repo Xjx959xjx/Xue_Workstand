@@ -18,6 +18,7 @@ import { firstNumber, isRelatedVideoRelevant, normalizeCommentText, normalizeTim
 
 const BILIBILI_FETCH_TIMEOUT_MS = 15_000;
 const BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS = 45_000;
+const BILIBILI_DETAIL_CONCURRENCY = 6;
 
 export type BilibiliCommentSample = {
   rank: number;
@@ -65,6 +66,13 @@ export type BilibiliVideoStatsResult = {
     share: number;
     danmaku: number;
   };
+};
+
+type BilibiliHydratedVideoFieldsResult = {
+  error?: string;
+  fallbackReason?: string;
+  metadata: Record<string, unknown>;
+  source: "public" | "opencli" | "none";
 };
 
 class BilibiliSubtitleFetchError extends Error {
@@ -127,13 +135,14 @@ export async function collectBilibiliVideos(input: {
   });
   const raw = parseJsonish(stdout);
   const rows = asArray(raw);
-  const videos = await Promise.all(
-    rows.map((row) =>
+  const videos = await mapWithConcurrency(
+    rows,
+    BILIBILI_DETAIL_CONCURRENCY,
+    (row) =>
       normalizeBilibiliVideo(row, input.account, {
         hydrateDetails: input.hydrateDetails ?? true,
         signal: input.signal
       })
-    )
   );
 
   return {
@@ -146,7 +155,7 @@ export async function collectBilibiliVideos(input: {
 
 export async function getBilibiliRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number } = {}
+  options: { videoLimit?: number; commentLimit?: number; signal?: AbortSignal } = {}
 ): Promise<BilibiliRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
@@ -165,7 +174,7 @@ export async function getBilibiliRelatedTopicComments(
     String(Math.max(videoLimit * 2, videoLimit)),
     "-f",
     "json"
-  ], { timeout: 30_000 });
+  ], { timeout: 30_000, signal: options.signal });
   const videos = asArray(parseJsonish(stdout))
     .map(normalizeBilibiliRelatedVideo)
     .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
@@ -175,7 +184,14 @@ export async function getBilibiliRelatedTopicComments(
 
   const comments: string[] = [];
   for (const video of videos) {
-    const rows = await getBilibiliComments({ id: video.id, url: video.url, raw: video.url }, commentLimit).catch(() => []);
+    const rows = await getBilibiliComments(
+      { id: video.id, url: video.url, raw: video.url },
+      commentLimit,
+      { signal: options.signal }
+    ).catch((error) => {
+      if (isAbortError(error, options.signal)) throw error;
+      return [];
+    });
     comments.push(...rows.map((comment) => comment.text).filter(Boolean));
   }
 
@@ -205,7 +221,11 @@ export async function getBilibiliSubtitle(video: Video, options: { signal?: Abor
   return "";
 }
 
-export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw">, limit = 50) {
+export async function getBilibiliComments(
+  video: Pick<Video, "id" | "url" | "raw">,
+  limit = 50,
+  options: { signal?: AbortSignal } = {}
+) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) return [];
 
@@ -217,7 +237,7 @@ export async function getBilibiliComments(video: Pick<Video, "id" | "url" | "raw
     String(Math.max(1, Math.min(limit, 50))),
     "-f",
     "json"
-  ]);
+  ], { signal: options.signal });
   return asArray(parseJsonish(stdout))
     .map((row, index) => normalizeBilibiliComment(row, index))
     .filter((comment) => comment.text) as BilibiliCommentSample[];
@@ -294,11 +314,21 @@ export async function downloadBilibiliVideo(video: Video, options: { signal?: Ab
   }
 }
 
-export async function hydrateBilibiliVideoStats(video: Video) {
+export async function hydrateBilibiliVideoStats(video: Video): Promise<Video> {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
-  if (!bvid) return video;
+  if (!bvid) throw new Error("没有从视频记录里解析到 B 站 BV 号，无法补全统计数据。");
 
   const metadata = await getBilibiliVideoFields(bvid);
+  const requiredFields = ["view", "like", "reply", "favorite"] as const;
+  const fieldMap = {
+    view: "views",
+    like: "likes",
+    reply: "comments",
+    favorite: "favorites"
+  } as const;
+  const missingFields: Array<keyof Video["stats"]> = requiredFields
+    .filter((field) => metadata[field] === undefined || metadata[field] === null)
+    .map((field) => fieldMap[field]);
   return {
     ...video,
     coverUrl: String(metadata.thumbnail || video.coverUrl || ""),
@@ -309,6 +339,12 @@ export async function hydrateBilibiliVideoStats(video: Video) {
       comments: toNumber(metadata.reply ?? video.stats.comments),
       favorites: toNumber(metadata.favorite ?? video.stats.favorites),
       shares: toNumber(metadata.share ?? video.stats.shares)
+    },
+    statsHydration: {
+      status: missingFields.length ? "partial" : "complete",
+      source: "opencli",
+      checkedAt: nowIso(),
+      missingFields
     },
     raw: { ...(typeof video.raw === "object" && video.raw ? video.raw : {}), metadata },
     updatedAt: nowIso()
@@ -408,13 +444,11 @@ async function normalizeBilibiliVideo(
   const title = String(object.title || object.name || "未命名视频");
   const url = String(object.url || object.link || "");
   const bvid = extractBvid(url) || String(object.bvid || object.BVID || object.aid || "");
-  const metadata: Record<string, unknown> =
+  const metadataResult =
     options.hydrateDetails !== false && bvid
-      ? await getBilibiliVideoFields(bvid, { signal: options.signal }).catch((error) => {
-          if (isAbortError(error, options.signal)) throw error;
-          return {};
-        })
-      : {};
+      ? await getBilibiliHydratedVideoFields(bvid, { signal: options.signal })
+      : ({ metadata: {}, source: "none" } satisfies BilibiliHydratedVideoFieldsResult);
+  const metadata = metadataResult.metadata;
   const views = firstNumber(object.plays, object.views, object.play, object.view, metadata.view);
   const likes = firstNumber(object.likes, object.like, metadata.like);
   const comments = firstNumber(object.comments, object.reply, object.replies, metadata.reply);
@@ -426,15 +460,60 @@ async function normalizeBilibiliVideo(
     accountId: account.id,
     title,
     url,
-    coverUrl: stringField(metadata.thumbnail) || stringField(object.thumbnail) || stringField(object.pic),
+    coverUrl: stringField(metadata.thumbnail) || stringField(metadata.pic) || stringField(metadata.cover) || stringField(object.thumbnail) || stringField(object.pic),
     duration: String(metadata.duration || object.duration || ""),
-    publishedAt: String(object.date || object.pubdate || object.created_at || metadata.publish_time || ""),
+    publishedAt: normalizeTimestamp(object.date || object.pubdate || object.created_at || metadata.publish_time || metadata.pubdate),
     stats: { views, likes, comments, favorites },
     hotScore: 0,
     relativeViewRate: 0,
     transcriptStatus: "not_started",
-    raw: { ...(typeof row === "object" && row ? row : { value: row }), metadata },
+    raw: {
+      ...(typeof row === "object" && row ? row : { value: row }),
+      metadata,
+      metadataSource: metadataResult.source,
+      ...(metadataResult.fallbackReason ? { metadataFallbackReason: metadataResult.fallbackReason } : {}),
+      ...(metadataResult.error ? { metadataError: metadataResult.error } : {})
+    },
     updatedAt: nowIso()
+  };
+}
+
+async function getBilibiliHydratedVideoFields(
+  bvid: string,
+  options: OpenCliTimingOptions = {}
+): Promise<BilibiliHydratedVideoFieldsResult> {
+  const publicResult = await getBilibiliPublicVideoFields(bvid, options).catch((error) => {
+    if (isAbortError(error, options.signal)) throw error;
+    return toError(error);
+  });
+  if (!(publicResult instanceof Error)) {
+    return { metadata: normalizeBilibiliPublicFields(publicResult), source: "public" as const };
+  }
+
+  const opencliResult = await getBilibiliVideoFields(bvid, options).catch((error) => {
+    if (isAbortError(error, options.signal)) throw error;
+    return toError(error);
+  });
+  if (!(opencliResult instanceof Error)) {
+    return {
+      fallbackReason: `公开接口：${formatErrorMessage(publicResult)}`,
+      metadata: opencliResult,
+      source: "opencli" as const
+    };
+  }
+
+  return {
+    error: `公开接口：${formatErrorMessage(publicResult)}；opencli：${formatErrorMessage(opencliResult)}`,
+    metadata: {},
+    source: "none" as const
+  };
+}
+
+function normalizeBilibiliPublicFields(fields: Record<string, unknown>) {
+  const stat = fields.stat && typeof fields.stat === "object" ? (fields.stat as Record<string, unknown>) : {};
+  return {
+    ...fields,
+    ...stat
   };
 }
 
@@ -562,6 +641,26 @@ function hasBilibiliStatFields(metadata: Record<string, unknown>) {
   ].some((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  run: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await run(items[currentIndex], currentIndex);
+      }
+    })
+  );
+  return results;
+}
+
 function formatBilibiliStatsFetchError(
   bvid: string,
   opencliResult: PromiseSettledResult<Record<string, unknown>>,
@@ -589,6 +688,10 @@ function formatErrorMessage(error: unknown) {
   if (/Failed to fetch|fetch failed/i.test(message)) return "网络请求失败（fetch failed）";
   if (message) return message.replace(/\s+/g, " ").slice(0, 240);
   return "未知错误";
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
 async function runBilibiliSubtitleCommand(args: string[], errors: unknown[], options: { signal?: AbortSignal } = {}) {

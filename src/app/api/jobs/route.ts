@@ -69,15 +69,17 @@ const batchTranscribeSchema = z.object({
     platform: z.enum(platforms),
     accountId: z.string().min(1),
     limit: z.union([z.number().int().min(1), z.literal("all")]).default(5),
+    videoIds: z.array(z.string().min(1)).min(1).optional(),
     updateStyle: z.boolean().optional()
   })
 });
 
 const engagementOptionsSchema = {
   includeComments: z.boolean().optional().default(true),
-  commentCount: z.number().int().min(1).max(200).optional().default(100),
+  commentCount: z.number().int().min(1).max(200).optional().default(50),
   includeDanmaku: z.boolean().optional().default(false),
-  danmakuCount: z.number().int().min(1).max(300).optional().default(50)
+  danmakuCount: z.number().int().min(1).max(300).optional().default(50),
+  generationMode: z.enum(["quick", "reference"]).optional().default("quick")
 };
 
 const engagementSchema = z.object({
@@ -101,8 +103,26 @@ const engagementSchema = z.object({
       sourceType: z.literal("url"),
       url: urlSchema,
       ...engagementOptionsSchema
+    }),
+    z.object({
+      sourceType: z.literal("record"),
+      recordId: z.string().min(1),
+      ...engagementOptionsSchema
     })
   ])
+});
+
+const hotlistRefreshSchema = z.object({
+  kind: z.literal("hotlist-refresh"),
+  title: z.string().optional(),
+  inputSummary: z.string().optional(),
+  href: z.string().optional(),
+  input: z.object({
+    accountIds: z.array(z.string().min(1)).min(1).optional(),
+    limit: z.number().int().min(1).max(120).optional(),
+    window: z.string().min(1),
+    automatic: z.boolean().optional()
+  })
 });
 
 const startJobSchema = z.discriminatedUnion("kind", [
@@ -111,6 +131,7 @@ const startJobSchema = z.discriminatedUnion("kind", [
   projectStyleSchema,
   transcribeVideoSchema,
   batchTranscribeSchema,
+  hotlistRefreshSchema,
   engagementSchema
 ]);
 

@@ -1,6 +1,7 @@
 import type { Draft, Platform } from "./types";
 
 export type WriteCopyScopeInput = {
+  action?: "create" | "revise";
   targetType?: "account" | "project";
   platform?: Platform;
   accountId?: string;
@@ -11,10 +12,16 @@ export type WriteCopyScopeInput = {
   supportDocLinks?: string;
   brief?: string;
   useWebResearch?: boolean;
+  parentDraftId?: string;
+  currentContent?: string;
+  revisionInstruction?: string;
+  revisionScope?: "full" | "selection";
+  selectedText?: string;
 };
 
 export function writeCopySourceKey(input: WriteCopyScopeInput) {
   return stableScopeHash(JSON.stringify({
+    action: input.action || "create",
     targetType: input.targetType || "account",
     platform: input.platform || "",
     accountId: input.accountId || "",
@@ -24,7 +31,12 @@ export function writeCopySourceKey(input: WriteCopyScopeInput) {
     sourceText: normalizeScopeText(input.sourceText),
     supportDocLinks: normalizeScopeLinks(input.supportDocLinks),
     brief: normalizeScopeText(input.brief),
-    useWebResearch: Boolean(input.useWebResearch)
+    useWebResearch: Boolean(input.useWebResearch),
+    parentDraftId: input.parentDraftId || "",
+    currentContent: normalizeScopeText(input.currentContent),
+    revisionInstruction: normalizeScopeText(input.revisionInstruction),
+    revisionScope: input.revisionScope || "full",
+    selectedText: normalizeScopeText(input.selectedText)
   }));
 }
 
@@ -35,6 +47,7 @@ export function engagementSourceKey(input: {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
+  generationMode?: "quick" | "reference";
 } | {
   sourceType: "url";
   url: string;
@@ -42,14 +55,28 @@ export function engagementSourceKey(input: {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
+  generationMode?: "quick" | "reference";
+} | {
+  sourceType: "record";
+  recordId: string;
+  includeComments?: boolean;
+  commentCount?: number;
+  includeDanmaku?: boolean;
+  danmakuCount?: number;
+  generationMode?: "quick" | "reference";
 }) {
   return stableScopeHash(JSON.stringify({
     sourceType: input.sourceType,
-    source: input.sourceType === "url" ? normalizeScopeText(input.url) : normalizeScopeText(input.text),
+    source: input.sourceType === "url"
+      ? normalizeScopeText(input.url)
+      : input.sourceType === "record"
+        ? input.recordId
+        : normalizeScopeText(input.text),
     includeComments: input.includeComments ?? true,
-    commentCount: input.commentCount ?? 100,
+    commentCount: input.commentCount ?? 50,
     includeDanmaku: input.includeDanmaku ?? false,
-    danmakuCount: input.danmakuCount ?? 50
+    danmakuCount: input.danmakuCount ?? 50,
+    generationMode: input.generationMode || "quick"
   }));
 }
 

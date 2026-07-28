@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import type { Draft } from "@/lib/types";
@@ -21,6 +22,12 @@ type DraftContextMenu = {
   y: number;
 };
 
+type DraftSession = {
+  id: string;
+  drafts: Draft[];
+  latest: Draft;
+};
+
 export function WriterHistoryPanel({
   drafts,
   loading,
@@ -38,10 +45,16 @@ export function WriterHistoryPanel({
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [manageMode, setManageMode] = useState(false);
   const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
+  const [expandedSessionIds, setExpandedSessionIds] = useState<string[]>([]);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const skipBlurSubmitRef = useRef(false);
+  const sessions = useMemo(() => groupDraftSessions(drafts), [drafts]);
+  const selectedSessionId = useMemo(
+    () => sessions.find((session) => session.drafts.some((draft) => draft.id === selectedDraftId))?.id || "",
+    [selectedDraftId, sessions]
+  );
 
   useEffect(() => {
     if (!editingDraftId) return;
@@ -53,11 +66,18 @@ export function WriterHistoryPanel({
     if (!drafts.length) {
       setManageMode(false);
       setSelectedDraftIds([]);
+      setExpandedSessionIds([]);
       return;
     }
 
     setSelectedDraftIds((current) => current.filter((id) => drafts.some((draft) => draft.id === id)));
-  }, [drafts]);
+    setExpandedSessionIds((current) => current.filter((id) => sessions.some((session) => session.id === id)));
+  }, [drafts, sessions]);
+
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    setExpandedSessionIds((current) => current.includes(selectedSessionId) ? current : [...current, selectedSessionId]);
+  }, [selectedSessionId]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -66,7 +86,6 @@ export function WriterHistoryPanel({
       if (contextMenuRef.current?.contains(event.target as Node)) return;
       setContextMenu(null);
     };
-
     const handleScroll = () => setContextMenu(null);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setContextMenu(null);
@@ -112,7 +131,6 @@ export function WriterHistoryPanel({
   const handleSubmitRename = async (draft: Draft) => {
     if (renameBusy) return;
     const nextTitle = editingTitle.replace(/\s+/g, " ").trim();
-
     if (!nextTitle || nextTitle === draft.title) {
       setEditingDraftId("");
       setEditingTitle("");
@@ -172,6 +190,12 @@ export function WriterHistoryPanel({
     setSelectedDraftIds(allDraftsSelected ? [] : drafts.map((draft) => draft.id));
   };
 
+  const toggleSession = (sessionId: string) => {
+    setExpandedSessionIds((current) =>
+      current.includes(sessionId) ? current.filter((id) => id !== sessionId) : [...current, sessionId]
+    );
+  };
+
   const handleConfirmBulkDelete = async () => {
     if (!selectedDrafts.length || deleteBusy) return;
     setDeleteBusy(true);
@@ -185,17 +209,109 @@ export function WriterHistoryPanel({
     }
   };
 
+  const renderDraftRow = (draft: Draft, nested: boolean) => {
+    const active = selectedDraftId === draft.id;
+    const editing = editingDraftId === draft.id;
+    const versionLabel = `V${draft.version?.revision || 1}`;
+    const versionDetail = draft.version?.instruction || (draft.version?.origin === "manual_edit" ? "手动编辑" : "初稿");
+    const meta = nested
+      ? `${versionDetail} · ${formatDate(draft.createdAt)}`
+      : `${getDraftReferenceLabel(draft)} · ${formatDate(draft.createdAt)}`;
+
+    if (editing) {
+      return (
+        <div
+          aria-current={active ? "true" : undefined}
+          className={`list-button writer-history-editing ${nested ? "nested" : ""} ${active ? "active" : ""}`}
+          key={draft.id}
+        >
+          <span className="writer-history-copy">
+            <input
+              aria-label="草稿名称"
+              autoComplete="off"
+              className="writer-history-title-input"
+              disabled={renameBusy}
+              maxLength={40}
+              onBlur={() => {
+                if (skipBlurSubmitRef.current) {
+                  skipBlurSubmitRef.current = false;
+                  return;
+                }
+                void handleSubmitRename(draft);
+              }}
+              onChange={(event) => setEditingTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleSubmitRename(draft);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  handleCancelRename();
+                }
+              }}
+              ref={inputRef}
+              value={editingTitle}
+            />
+            <span className="list-meta">{meta}</span>
+          </span>
+          <span className="status-pill done">{renameBusy ? "保存中" : versionLabel}</span>
+        </div>
+      );
+    }
+
+    return (
+      <button
+        aria-current={active ? "true" : undefined}
+        aria-pressed={manageMode ? selectedDraftIds.includes(draft.id) : undefined}
+        className={`list-button ${nested ? "nested" : ""} ${active ? "active" : ""} ${manageMode && selectedDraftIds.includes(draft.id) ? "checked" : ""}`}
+        key={draft.id}
+        onClick={() => {
+          if (manageMode) {
+            toggleDraftSelection(draft.id);
+            return;
+          }
+          onSelectDraft(draft);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          if (manageMode) return;
+          setContextMenu({ draft, x: event.clientX, y: event.clientY });
+        }}
+        type="button"
+      >
+        {manageMode ? (
+          <span className="writer-history-check" aria-hidden="true">
+            {selectedDraftIds.includes(draft.id) ? "✓" : ""}
+          </span>
+        ) : null}
+        <span
+          className="writer-history-copy"
+          onDoubleClick={(event) => {
+            if (manageMode) return;
+            event.preventDefault();
+            handleStartRename(draft);
+          }}
+          title="双击重命名，右键删除此版本"
+        >
+          <span className="list-title">{draft.title}</span>
+          <span className="list-meta">{meta}</span>
+        </span>
+        <span className="status-pill done">{versionLabel}</span>
+      </button>
+    );
+  };
+
   return (
     <>
       <aside className="panel writer-history-panel">
         <div className="writer-history-shell">
           <div className="writer-history-header">
             <div>
-              <h2>历史记录</h2>
-              <p className="pane-subtitle">全部账号和项目</p>
+              <h2>写作会话</h2>
+              <p className="pane-subtitle">按会话查看版本</p>
             </div>
             <div className="writer-history-header-actions">
-              <span className="stat-pill">{loading ? "读取中" : `${drafts.length} 条`}</span>
+              <span className="stat-pill">{loading ? "读取中" : `${sessions.length} 组 · ${drafts.length} 版`}</span>
               <button className="btn compact" disabled={!drafts.length || loading} onClick={toggleManageMode} type="button">
                 {manageMode ? "取消" : "批量"}
               </button>
@@ -204,17 +320,12 @@ export function WriterHistoryPanel({
 
           <div className="writer-history-body">
             {manageMode ? (
-              <div className="writer-history-toolbar" role="toolbar" aria-label="历史记录批量操作">
+              <div className="writer-history-toolbar" role="toolbar" aria-label="历史版本批量操作">
                 <button className="btn compact" onClick={toggleSelectAll} type="button">
                   {allDraftsSelected ? "取消全选" : "全选"}
                 </button>
                 <span>{selectedDraftIds.length} 已选</span>
-                <button
-                  className="btn danger compact"
-                  disabled={!selectedDraftIds.length}
-                  onClick={() => setBulkDeleteOpen(true)}
-                  type="button"
-                >
+                <button className="btn danger compact" disabled={!selectedDraftIds.length} onClick={() => setBulkDeleteOpen(true)} type="button">
                   删除
                 </button>
               </div>
@@ -222,117 +333,43 @@ export function WriterHistoryPanel({
 
             {loading ? (
               <HistoryLoadingRows />
-            ) : drafts.length ? (
+            ) : sessions.length ? (
               <div className="writer-history-list">
-                {drafts.map((draft) => {
-                  const active = selectedDraftId === draft.id;
-                  const editing = editingDraftId === draft.id;
-                  return editing ? (
-                    <div
-                      aria-current={active ? "true" : undefined}
-                      className={`list-button writer-history-editing ${active ? "active" : ""}`}
-                      key={draft.id}
-                    >
-                      <span className="writer-history-copy">
-                        <input
-                          aria-label="草稿名称"
-                          autoComplete="off"
-                          className="writer-history-title-input"
-                          disabled={renameBusy}
-                          maxLength={40}
-                          onBlur={() => {
-                            if (skipBlurSubmitRef.current) {
-                              skipBlurSubmitRef.current = false;
-                              return;
-                            }
-                            void handleSubmitRename(draft);
-                          }}
-                          onChange={(event) => setEditingTitle(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              void handleSubmitRename(draft);
-                              return;
-                            }
-
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              handleCancelRename();
-                            }
-                          }}
-                          ref={inputRef}
-                          value={editingTitle}
-                        />
-                        <span className="list-meta">
-                          {getDraftReferenceLabel(draft)} · {formatDate(draft.createdAt)}
-                        </span>
-                      </span>
-                      <span className="status-pill done">{renameBusy ? "保存中" : draft.mode === "topic" ? "主题" : "改写"}</span>
-                    </div>
-                  ) : (
-                    <button
-                      aria-current={active ? "true" : undefined}
-                      aria-pressed={manageMode ? selectedDraftIds.includes(draft.id) : undefined}
-                      className={`list-button ${active ? "active" : ""} ${manageMode && selectedDraftIds.includes(draft.id) ? "checked" : ""}`}
-                      key={draft.id}
-                      onClick={() => {
-                        if (manageMode) {
-                          toggleDraftSelection(draft.id);
-                          return;
-                        }
-
-                        onSelectDraft(draft);
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        if (manageMode) return;
-                        setContextMenu(null);
-                        setContextMenu({
-                          draft,
-                          x: event.clientX,
-                          y: event.clientY
-                        });
-                      }}
-                      type="button"
-                    >
-                      {manageMode ? (
-                        <span className="writer-history-check" aria-hidden="true">
-                          {selectedDraftIds.includes(draft.id) ? "✓" : ""}
-                        </span>
-                      ) : null}
-                      <span
-                        className="writer-history-copy"
-                        onDoubleClick={(event) => {
-                          if (manageMode) return;
-                          event.preventDefault();
-                          handleStartRename(draft);
-                        }}
-                        title="双击重命名草稿，右键可删除"
+                {sessions.map((session) => {
+                  if (session.drafts.length === 1) return renderDraftRow(session.latest, false);
+                  const expanded = expandedSessionIds.includes(session.id);
+                  return (
+                    <section className={`writer-history-session ${selectedSessionId === session.id ? "active" : ""}`} key={session.id}>
+                      <button
+                        aria-expanded={expanded}
+                        className="writer-history-session-toggle"
+                        onClick={() => toggleSession(session.id)}
+                        type="button"
                       >
-                        <span className="list-title">{draft.title}</span>
-                        <span className="list-meta">
-                          {getDraftReferenceLabel(draft)} · {formatDate(draft.createdAt)}
+                        {expanded ? <ChevronDown aria-hidden="true" size={16} /> : <ChevronRight aria-hidden="true" size={16} />}
+                        <span>
+                          <strong>{session.latest.title}</strong>
+                          <small>{getDraftReferenceLabel(session.latest)} · {session.drafts.length} 个版本</small>
                         </span>
-                      </span>
-                      <span className="status-pill done">{draft.mode === "topic" ? "主题" : "改写"}</span>
-                    </button>
+                      </button>
+                      {expanded ? (
+                        <div className="writer-history-revisions">
+                          {session.drafts.map((draft) => renderDraftRow(draft, true))}
+                        </div>
+                      ) : null}
+                    </section>
                   );
                 })}
               </div>
             ) : (
-              <p className="subtle">还没有历史记录。生成后的内容会保存在这里。</p>
+              <p className="subtle">还没有写作会话。首稿和后续修改会按版本保存在这里。</p>
             )}
           </div>
         </div>
       </aside>
 
       {contextMenu ? (
-        <div
-          className="history-context-menu"
-          ref={contextMenuRef}
-          role="menu"
-          style={contextMenuStyle}
-        >
+        <div className="history-context-menu" ref={contextMenuRef} role="menu" style={contextMenuStyle}>
           <button
             className="history-context-menu-item danger"
             onClick={() => {
@@ -341,17 +378,17 @@ export function WriterHistoryPanel({
             }}
             type="button"
           >
-            删除草稿
+            删除此版本
           </button>
         </div>
       ) : null}
 
       {deleteTarget ? (
         <ConfirmDialog
-          body={`删除后这条历史记录会从本地移除，无法恢复。确认删除“${deleteTarget.title}”吗？`}
+          body={`删除后这个版本会从本地移除，无法恢复；同一会话里的其他版本会保留。确认删除“${deleteTarget.title}”吗？`}
           busy={deleteBusy}
           confirmLabel="删除"
-          title="删除草稿"
+          title="删除版本"
           onCancel={() => {
             if (!deleteBusy) setDeleteTarget(null);
           }}
@@ -361,10 +398,10 @@ export function WriterHistoryPanel({
 
       {bulkDeleteOpen ? (
         <ConfirmDialog
-          body={`将从本地移除 ${selectedDrafts.length} 条历史记录，删除后无法恢复。确认继续吗？`}
+          body={`将从本地移除 ${selectedDrafts.length} 个版本，删除后无法恢复。确认继续吗？`}
           busy={deleteBusy}
           confirmLabel="删除"
-          title="批量删除草稿"
+          title="批量删除版本"
           onCancel={() => {
             if (!deleteBusy) setBulkDeleteOpen(false);
           }}
@@ -373,6 +410,26 @@ export function WriterHistoryPanel({
       ) : null}
     </>
   );
+}
+
+function groupDraftSessions(drafts: Draft[]): DraftSession[] {
+  const grouped = new Map<string, Draft[]>();
+  for (const draft of drafts) {
+    const sessionId = draft.version?.sessionId || draft.id;
+    const sessionDrafts = grouped.get(sessionId) || [];
+    sessionDrafts.push(draft);
+    grouped.set(sessionId, sessionDrafts);
+  }
+
+  return [...grouped.entries()]
+    .map(([id, sessionDrafts]) => {
+      const ordered = [...sessionDrafts].sort((left, right) => {
+        const revisionDelta = (right.version?.revision || 1) - (left.version?.revision || 1);
+        return revisionDelta || +new Date(right.createdAt) - +new Date(left.createdAt);
+      });
+      return { id, drafts: ordered, latest: ordered[0] };
+    })
+    .sort((left, right) => +new Date(right.latest.createdAt) - +new Date(left.latest.createdAt));
 }
 
 function HistoryLoadingRows() {

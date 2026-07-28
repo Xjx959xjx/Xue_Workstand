@@ -26,6 +26,11 @@
   --amber-soft: oklch(0.95 0.052 86);
   --rose: oklch(0.55 0.16 24);
   --rose-soft: oklch(0.95 0.036 24);
+  --hotlist-rising: oklch(0.62 0.16 56);
+  --hotlist-rising-soft: oklch(0.95 0.055 64);
+  --hotlist-rising-accent: oklch(0.69 0.15 48);
+  --hotlist-rising-strong: oklch(0.5 0.14 48);
+  --hotlist-rising-border: oklch(0.67 0.11 54);
   --danger: var(--rose);
   --shadow: 0 18px 42px color-mix(in oklch, var(--text-strong) 4%, transparent);
   --shadow-sm: 0 10px 24px color-mix(in oklch, var(--text-strong) 4.5%, transparent);

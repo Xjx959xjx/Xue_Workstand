@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, type CSSProperties, type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -20,18 +20,20 @@ import {
   addDouyinHotlistAccount,
   getCachedDouyinHotlist,
   getDouyinHotlist,
-  refreshDouyinHotlist,
   removeDouyinHotlistAccount
 } from "@/lib/client";
+import { buildDouyinVideoUrl } from "@/lib/platform-links";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
+import { useScopedTasks } from "@/components/TaskProvider";
 import type {
   DouyinHotlistAccount,
   DouyinHotlistItem,
   DouyinHotlistRefreshAccountResult,
+  DouyinHotlistRefreshJobResult,
   DouyinHotlistResponse,
-  Platform,
-  VideoListItem
+  JobRecord,
+  Platform
 } from "@/lib/types";
 
 const DEFAULT_WINDOW = "3d";
@@ -43,7 +45,7 @@ const MAX_REFRESH_LOGS = 6;
 const MAX_REFRESH_LOG_DETAILS = 6;
 const REFRESH_LOG_STORAGE_KEY = "douyin-hotlist-refresh-logs";
 
-type BusyState = "" | "load" | "add" | "refresh" | `remove:${string}`;
+type BusyState = "" | "load" | "add" | `remove:${string}`;
 type AccountSelection = "all" | string;
 type MetricTone = "views" | "likes" | "comments" | "favorites" | "shares";
 type SortMode = "heat" | "likes" | "comments" | "saves" | "recent";
@@ -105,9 +107,18 @@ const logTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 export default function DouyinHotlistPage() {
+  return (
+    <Suspense fallback={<DouyinHotlistFallback />}>
+      <DouyinHotlistPageContent />
+    </Suspense>
+  );
+}
+
+function DouyinHotlistPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const tasks = useScopedTasks({ href: "/douyin-hotlist", kinds: ["hotlist-refresh"] });
   const initialWindowFilter = parseWindowFilter(searchParams.get("window"));
   const [snapshot, setSnapshot] = useState<DouyinHotlistResponse | null>(() => getCachedDouyinHotlist({ window: initialWindowFilter }));
   const [query, setQuery] = useState("");
@@ -118,18 +129,23 @@ export default function DouyinHotlistPage() {
   const [busy, setBusy] = useState<BusyState>(() => getCachedDouyinHotlist({ window: initialWindowFilter }) ? "" : "load");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [refreshOrigin, setRefreshOrigin] = useState<"" | "automatic" | "manual">("");
   const [removeTarget, setRemoveTarget] = useState<DouyinHotlistAccount | null>(null);
   const [accountDrawerOpen, setAccountDrawerOpen] = useState(false);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLogEntry[]>([]);
   const [refreshLogsReady, setRefreshLogsReady] = useState(false);
   const busyRef = useRef<BusyState>(busy);
   const accountCountRef = useRef(snapshot?.accounts.length ?? 0);
-  const lastRefreshedAtRef = useRef<string | undefined>(snapshot?.summary.lastRefreshedAt);
+  const lastFullRefreshAttemptAtRef = useRef<string | undefined>(snapshot?.summary.lastFullRefreshAttemptAt);
   const lastAutoRefreshAttemptAtRef = useRef(0);
   const autoRefreshReadyAtRef = useRef(0);
-  const refreshInFlightRef = useRef(false);
+  const activeRefreshJobRef = useRef<JobRecord | null>(null);
+  const refreshJobsReadyRef = useRef(false);
+  const trackedRefreshJobIdsRef = useRef<Set<string>>(new Set());
+  const handledRefreshJobIdsRef = useRef<Set<string>>(new Set());
+  const loadRequestIdRef = useRef(0);
   const refreshHotlistRef = useRef<(options?: RefreshHotlistOptions) => Promise<void>>(async () => {});
+  const activeRefreshJob = tasks.activeJobs[0] || null;
+  const refreshing = Boolean(activeRefreshJob);
 
   const appendRefreshLog = useCallback((entry: Omit<RefreshLogEntry, "id" | "at">) => {
     const at = new Date().toISOString();
@@ -161,8 +177,12 @@ export default function DouyinHotlistPage() {
 
   useEffect(() => {
     accountCountRef.current = snapshot?.accounts.length ?? 0;
-    lastRefreshedAtRef.current = snapshot?.summary.lastRefreshedAt;
-  }, [snapshot?.accounts.length, snapshot?.summary.lastRefreshedAt]);
+    lastFullRefreshAttemptAtRef.current = snapshot?.summary.lastFullRefreshAttemptAt;
+  }, [snapshot?.accounts.length, snapshot?.summary.lastFullRefreshAttemptAt]);
+
+  useEffect(() => {
+    activeRefreshJobRef.current = activeRefreshJob;
+  }, [activeRefreshJob]);
 
   const loadHotlist = useCallback(async (options: { force?: boolean } = {}) => {
     const cached = options.force ? null : getCachedDouyinHotlist({ window: windowFilter });
@@ -173,16 +193,23 @@ export default function DouyinHotlistPage() {
       return;
     }
 
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     busyRef.current = "load";
     setBusy("load");
     setError("");
     try {
-      setSnapshot(await getDouyinHotlist({ window: windowFilter }));
+      const next = await getDouyinHotlist({ force: options.force, window: windowFilter });
+      if (loadRequestIdRef.current === requestId) setSnapshot(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "读取视频热榜失败");
+      if (loadRequestIdRef.current === requestId) {
+        setError(err instanceof Error ? err.message : "读取视频热榜失败");
+      }
     } finally {
-      busyRef.current = "";
-      setBusy("");
+      if (loadRequestIdRef.current === requestId) {
+        busyRef.current = "";
+        setBusy("");
+      }
     }
   }, [windowFilter]);
 
@@ -250,11 +277,10 @@ export default function DouyinHotlistPage() {
   }, [selectedAccountId, selectedPlatform, snapshot, sortMode]);
 
   const summary = snapshot?.summary;
-  const canAdd = Boolean(query.trim()) && busy !== "add" && busy !== "refresh";
+  const operationBusy = Boolean(busy) || refreshing;
+  const canAdd = Boolean(query.trim()) && !operationBusy;
   const canRefresh = Boolean(selectedPlatform ? selectedPlatformAccounts.length : snapshot?.accounts.length) &&
-    busy !== "refresh" &&
-    busy !== "add" &&
-    !busy.startsWith("remove:");
+    !operationBusy;
   const initialLoading = busy === "load" && !snapshot;
   const windowLabel = getWindowLabel(summary?.windowKey || windowFilter);
   const selectedPlatformLabel = selectedPlatform ? getPlatformLabel(selectedPlatform) : "";
@@ -262,17 +288,18 @@ export default function DouyinHotlistPage() {
   const refreshLabel = selectedAccount ? "抓取当前账号" : selectedPlatform ? `抓取${selectedPlatformLabel}${windowLabel}` : `抓取全部${windowLabel}`;
   const rankTitle = selectedAccount ? selectedAccount.name : selectedPlatform ? `${selectedPlatformLabel}热度榜` : "实时热度榜";
   const activePlatformFilter: Platform | "all" = selectedPlatform || selectedAccount?.platform || "all";
+  const lastFullRefreshLabel = summary?.lastFullRefreshAt || summary?.lastFullRefreshAttemptAt;
   const rankSubtitle = selectedAccount
     ? `${getPlatformLabel(selectedAccount.platform)} · ${selectedAccount.recentVideoCount} 条${windowLabel}内容 · 总榜中筛选${
-        summary?.lastRefreshedAt ? ` · 最近刷新 ${formatDate(summary.lastRefreshedAt)}` : ""
+        lastFullRefreshLabel ? ` · 最近全量检查 ${formatDate(lastFullRefreshLabel)}` : ""
       }`
     : selectedPlatform
       ? `${selectedPlatformAccounts.length} 个${selectedPlatformLabel}账号 · ${windowLabel} ${selectedPlatformRecentVideoCount} 条 · 最近刷新 ${
-          summary?.lastRefreshedAt ? formatDate(summary.lastRefreshedAt) : "未刷新"
+          lastFullRefreshLabel ? formatDate(lastFullRefreshLabel) : "未检查"
         }`
     : summary
       ? `${summary.accountCount} 个账号 · ${windowLabel} ${summary.recentVideoCount} 条 · 最近刷新 ${
-          summary.lastRefreshedAt ? formatDate(summary.lastRefreshedAt) : "未刷新"
+          lastFullRefreshLabel ? formatDate(lastFullRefreshLabel) : "未检查"
         }`
       : "跨账号排序，按互动强度和发布时间综合判断。";
 
@@ -285,7 +312,7 @@ export default function DouyinHotlistPage() {
     setMessage("");
     setError("");
     try {
-      const next = await addDouyinHotlistAccount({ platform: accountPlatform, query });
+      const next = await addDouyinHotlistAccount({ platform: accountPlatform, query, window: windowFilter });
       setSnapshot(next);
       setQuery("");
       setMessage(`已加入${getPlatformLabel(accountPlatform)}视频热榜账号池。`);
@@ -310,7 +337,7 @@ export default function DouyinHotlistPage() {
       return;
     }
 
-    if (refreshInFlightRef.current || busyRef.current === "refresh" || busyRef.current === "add" || busyRef.current.startsWith("remove:")) {
+    if (activeRefreshJobRef.current || busyRef.current) {
       if (automatic) {
         appendRefreshLog({
           automatic,
@@ -321,39 +348,28 @@ export default function DouyinHotlistPage() {
       return;
     }
 
-    refreshInFlightRef.current = true;
-    busyRef.current = "refresh";
-    setBusy("refresh");
-    setRefreshOrigin(automatic ? "automatic" : "manual");
     setMessage("");
     setError("");
     try {
-      const next = await refreshDouyinHotlist({
-        accountIds: automatic
-          ? undefined
-          : selectedAccount
-            ? [selectedAccount.id]
-            : selectedPlatform
-              ? selectedPlatformAccounts.map((account) => account.id)
-              : undefined,
-        limit: REFRESH_LIMIT,
-        window: windowFilter
+      const job = await tasks.startTask({
+        kind: "hotlist-refresh",
+        href: "/douyin-hotlist",
+        input: {
+          accountIds: automatic
+            ? undefined
+            : selectedAccount
+              ? [selectedAccount.id]
+              : selectedPlatform
+                ? selectedPlatformAccounts.map((account) => account.id)
+                : undefined,
+          automatic,
+          limit: REFRESH_LIMIT,
+          window: windowFilter
+        }
       });
-      setSnapshot(next);
-      const failedText = next.refresh.failed ? `，${next.refresh.failed} 个失败` : "";
-      const retryCount = next.refresh.accounts.filter((account) => account.retried).length;
-      const retryText = retryCount ? `，${retryCount} 个触发重试` : "";
-      appendRefreshLog({
-        automatic,
-        status: next.refresh.completed === 0 ? "failed" : next.refresh.failed ? "warning" : "success",
-        text: `${automatic ? "自动" : "手动"}刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}${retryText} · ${next.summary.windowLabel}`,
-        details: describeRefreshLogDetails(next.refresh.accounts)
-      });
-      if (isAllRefreshFailed(next.refresh)) {
-        setError(buildRefreshFailureMessage(next.refresh.accounts));
-      } else if (!automatic) {
-        setMessage(`已刷新 ${next.refresh.completed}/${next.refresh.requested} 个账号${failedText}${retryText}。`);
-      }
+      trackedRefreshJobIdsRef.current.add(job.id);
+      activeRefreshJobRef.current = job;
+      if (!automatic) setMessage("刷新任务已开始，可在任务中心查看进度或停止。");
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "未知错误";
       const refreshBusy = isRefreshBusyMessage(errorMessage);
@@ -367,13 +383,40 @@ export default function DouyinHotlistPage() {
       } else {
         setError(errorMessage);
       }
-    } finally {
-      refreshInFlightRef.current = false;
-      busyRef.current = "";
-      setBusy("");
-      setRefreshOrigin("");
     }
-  }, [appendRefreshLog, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, windowFilter]);
+  }, [appendRefreshLog, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, tasks, windowFilter]);
+
+  useEffect(() => {
+    if (tasks.loading) return;
+
+    if (!refreshJobsReadyRef.current) {
+      tasks.activeJobs.forEach((job) => trackedRefreshJobIdsRef.current.add(job.id));
+      tasks.jobs.filter(isTerminalRefreshJob).forEach((job) => handledRefreshJobIdsRef.current.add(job.id));
+      refreshJobsReadyRef.current = true;
+      return;
+    }
+
+    tasks.activeJobs.forEach((job) => trackedRefreshJobIdsRef.current.add(job.id));
+    const completedJobs = tasks.jobs.filter(
+      (job) =>
+        isTerminalRefreshJob(job) &&
+        trackedRefreshJobIdsRef.current.has(job.id) &&
+        !handledRefreshJobIdsRef.current.has(job.id)
+    );
+    if (!completedJobs.length) return;
+
+    completedJobs.forEach((job) => handledRefreshJobIdsRef.current.add(job.id));
+    void (async () => {
+      for (const job of completedJobs) {
+        await handleRefreshJobSettled(job, {
+          appendRefreshLog,
+          loadHotlist,
+          setError,
+          setMessage
+        });
+      }
+    })();
+  }, [appendRefreshLog, loadHotlist, tasks.activeJobs, tasks.jobs, tasks.loading]);
 
   useEffect(() => {
     refreshHotlistRef.current = refreshHotlist;
@@ -386,7 +429,7 @@ export default function DouyinHotlistPage() {
     const now = Date.now();
     if (autoRefreshReadyAtRef.current && now < autoRefreshReadyAtRef.current) return;
 
-    const lastCompletedRefreshAt = getTimeValue(lastRefreshedAtRef.current);
+    const lastCompletedRefreshAt = getTimeValue(lastFullRefreshAttemptAtRef.current);
     const lastAutoRefreshAttemptAt = lastAutoRefreshAttemptAtRef.current;
     const lastAutoRefreshBaseline = Math.max(lastCompletedRefreshAt, lastAutoRefreshAttemptAt);
     if (lastAutoRefreshBaseline && now - lastAutoRefreshBaseline < AUTO_REFRESH_INTERVAL_MS) return;
@@ -423,7 +466,7 @@ export default function DouyinHotlistPage() {
     setMessage("");
     setError("");
     try {
-      setSnapshot(await removeDouyinHotlistAccount(accountId));
+      setSnapshot(await removeDouyinHotlistAccount(accountId, { window: windowFilter }));
       setRemoveTarget(null);
       if (selectedAccountId === accountId) {
         setSelectedAccountId("all");
@@ -458,13 +501,13 @@ export default function DouyinHotlistPage() {
             管理账号
           </button>
           <RefreshLogMenu logs={refreshLogs} />
-          <button className="btn" disabled={busy === "load"} onClick={() => void loadHotlist({ force: true })} type="button">
+          <button className="btn" aria-busy={busy === "load"} disabled={operationBusy} onClick={() => void loadHotlist({ force: true })} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             重载
           </button>
-          <button className="btn primary" disabled={!canRefresh} onClick={() => void handleRefresh()} type="button">
+          <button className="btn primary" aria-busy={refreshing} disabled={!canRefresh} onClick={() => void handleRefresh()} type="button">
             <TrendingUp aria-hidden="true" size={16} />
-            {busy === "refresh" ? (refreshOrigin === "automatic" ? "自动抓取中" : "正在抓取") : refreshLabel}
+            {activeRefreshJob ? `抓取中 ${Math.round(activeRefreshJob.progress)}%` : refreshLabel}
           </button>
         </div>
       </header>
@@ -481,18 +524,18 @@ export default function DouyinHotlistPage() {
             </div>
             <div className="douyin-hotlist-rank-actions">
               <WindowFilterControl
-                disabled={busy === "load" || busy === "refresh"}
+                disabled={operationBusy}
                 onChange={setWindowFilter}
                 value={windowFilter}
               />
               <PlatformFilterControl
-                disabled={initialLoading || !snapshot?.accounts.length}
+                disabled={operationBusy || initialLoading || !snapshot?.accounts.length}
                 onChange={(platform) => setSelectedAccountId(platform === "all" ? "all" : getPlatformAccountSelection(platform))}
                 value={activePlatformFilter}
               />
               <AccountFilter
                 accounts={snapshot?.accounts || []}
-                disabled={initialLoading || !snapshot?.accounts.length}
+                disabled={operationBusy || initialLoading || !snapshot?.accounts.length}
                 onChange={setSelectedAccountId}
                 value={selectedAccountId}
               />
@@ -500,6 +543,7 @@ export default function DouyinHotlistPage() {
                 <span>排序</span>
                 <select
                   aria-label="榜单排序"
+                  disabled={operationBusy}
                   onChange={(event) => setSortMode(event.target.value as SortMode)}
                   value={sortMode}
                 >
@@ -508,7 +552,9 @@ export default function DouyinHotlistPage() {
                   ))}
                 </select>
               </label>
-              <span className={`status-pill ${initialLoading ? "pending" : "completed"}`}>{initialLoading ? "读取中" : `${visibleItems.length} 条`}</span>
+              <span className={`status-pill ${initialLoading || refreshing ? "pending" : "completed"}`}>
+                {initialLoading ? "读取中" : refreshing ? `刷新 ${Math.round(activeRefreshJob?.progress || 0)}%` : `${visibleItems.length} 条`}
+              </span>
             </div>
           </div>
 
@@ -517,7 +563,7 @@ export default function DouyinHotlistPage() {
           ) : visibleItems.length ? (
             <HotlistTable items={visibleItems} showGlobalRank={selectedAccountId !== "all" || sortMode !== "heat"} />
           ) : (
-            <EmptyHotlist selectedAccount={selectedAccount?.name} windowLabel={windowLabel} />
+            <EmptyHotlist hasAccounts={Boolean(snapshot?.accounts.length)} selectedAccount={selectedAccount?.name} windowLabel={windowLabel} />
           )}
         </section>
       </section>
@@ -527,6 +573,7 @@ export default function DouyinHotlistPage() {
           accountPlatform={accountPlatform}
           busy={busy}
           canAdd={canAdd}
+          disabled={operationBusy}
           initialLoading={initialLoading}
           query={query}
           selectedAccountId={selectedAccountId}
@@ -552,6 +599,18 @@ export default function DouyinHotlistPage() {
           onConfirm={() => void handleRemoveAccount(removeTarget.id)}
         />
       ) : null}
+    </div>
+  );
+}
+
+function DouyinHotlistFallback() {
+  return (
+    <div className="page douyin-hotlist-page workbench-frame-page">
+      <section className="douyin-hotlist-workspace workbench-frame-workspace">
+        <section className="pane douyin-hotlist-rank-pane">
+          <HotlistLoadingRows />
+        </section>
+      </section>
     </div>
   );
 }
@@ -716,6 +775,7 @@ function AccountManagementDrawer({
   accountPlatform,
   busy,
   canAdd,
+  disabled,
   initialLoading,
   query,
   selectedAccountId,
@@ -732,6 +792,7 @@ function AccountManagementDrawer({
   accountPlatform: Platform;
   busy: BusyState;
   canAdd: boolean;
+  disabled: boolean;
   initialLoading: boolean;
   query: string;
   selectedAccountId: AccountSelection;
@@ -787,13 +848,14 @@ function AccountManagementDrawer({
         <form className="douyin-hotlist-drawer-add-form" onSubmit={onAddAccount}>
           <label htmlFor="douyin-hotlist-drawer-query">账号名 / 主页链接</label>
           <PlatformSwitch
-            disabled={busy === "add"}
+            disabled={disabled}
             onChange={onPlatformChange}
             value={accountPlatform}
           />
           <div className="douyin-hotlist-add-row">
             <input
               autoComplete="off"
+              disabled={disabled}
               id="douyin-hotlist-drawer-query"
               name="query"
               onChange={(event) => onQueryChange(event.target.value)}
@@ -824,7 +886,7 @@ function AccountManagementDrawer({
                 <AccountRow
                   account={account}
                   active={selectedAccountId === account.id}
-                  busy={busy === `remove:${account.id}`}
+                  busy={disabled || busy === `remove:${account.id}`}
                   key={account.id}
                   windowLabel={windowLabel}
                   onRemove={() => onRemoveAccount(account)}
@@ -1062,7 +1124,7 @@ function HotlistTable({
               <div className="douyin-hotlist-item-head">
                 <HotlistCover item={item} />
                 <div className="douyin-hotlist-item-main">
-                  <h3>{item.video.title}</h3>
+                  <h3 title={item.video.title}>{item.video.title}</h3>
                   <div className="douyin-hotlist-item-meta">
                     <span className="douyin-hotlist-account-meta">
                       <span
@@ -1095,7 +1157,7 @@ function HotlistTable({
                     </div>
                   ) : null}
                 </div>
-                <a className="btn icon-only compact" href={item.video.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.video.title}`}>
+                <a className="btn icon-only compact" href={getVideoExternalUrl(item.video)} target="_blank" rel="noreferrer" aria-label={`打开 ${item.video.title}`}>
                   <ExternalLink aria-hidden="true" size={15} />
                 </a>
               </div>
@@ -1222,7 +1284,7 @@ function Metric({
   );
 }
 
-function getMetricItems(video: VideoListItem): Array<{ label: string; tone: MetricTone; value: number }> {
+function getMetricItems(video: DouyinHotlistItem["video"]): Array<{ label: string; tone: MetricTone; value: number }> {
   if (video.platform === "bilibili") {
     return [
       { label: "播放", tone: "views", value: video.stats.views },
@@ -1240,13 +1302,33 @@ function getMetricItems(video: VideoListItem): Array<{ label: string; tone: Metr
   ];
 }
 
-function EmptyHotlist({ selectedAccount, windowLabel }: { selectedAccount?: string; windowLabel: string }) {
+function getVideoExternalUrl(video: DouyinHotlistItem["video"]) {
+  if (video.platform === "douyin") {
+    return buildDouyinVideoUrl(video.id) || video.url;
+  }
+
+  return video.url;
+}
+
+function EmptyHotlist({
+  hasAccounts,
+  selectedAccount,
+  windowLabel
+}: {
+  hasAccounts: boolean;
+  selectedAccount?: string;
+  windowLabel: string;
+}) {
   return (
     <div className="empty-state-panel douyin-hotlist-empty-rank">
       <Flame aria-hidden="true" size={18} />
       <h2>暂无{windowLabel}内容</h2>
       <p className="subtle">
-        {selectedAccount ? `${selectedAccount} ${windowLabel}还没有可排序内容。` : "添加账号后抓取，榜单会按跨账号热度排序。"}
+        {selectedAccount
+          ? `${selectedAccount} ${windowLabel}还没有可排序内容，可切换时间范围或重新抓取。`
+          : hasAccounts
+            ? `${windowLabel}暂时没有可排序内容，可切换时间范围或重新抓取。`
+            : "添加账号后抓取，榜单会按跨账号热度排序。"}
       </p>
     </div>
   );
@@ -1328,14 +1410,19 @@ function getRefreshLogStatusLabel(status: RefreshLogStatus) {
 }
 
 function describeRefreshLogDetails(accounts: DouyinHotlistRefreshAccountResult[]) {
-  const issueAccounts = accounts.filter((account) => account.status === "failed" || account.retried);
+  const issueAccounts = accounts.filter((account) => account.status === "failed" || account.status === "unchanged" || account.retried);
   const details = issueAccounts.slice(0, MAX_REFRESH_LOG_DETAILS).map(describeRefreshAccountResult);
   const omitted = issueAccounts.length - details.length;
-  if (omitted > 0) details.push(`还有 ${omitted} 个账号也触发了重试或失败。`);
+  if (omitted > 0) details.push(`还有 ${omitted} 个账号也无更新、触发了重试或失败。`);
   return details;
 }
 
 function describeRefreshAccountResult(account: DouyinHotlistRefreshAccountResult) {
+  if (account.status === "unchanged") {
+    const countText = formatRefreshCountText(account);
+    return `${account.name}：无更新${countText}${account.error ? `，${compactRefreshError(account.error)}` : ""}`;
+  }
+
   if (account.status === "failed") {
     const retryText = account.retried ? "重试后未更新" : "失败";
     const countText = formatRefreshCountText(account);
@@ -1347,18 +1434,12 @@ function describeRefreshAccountResult(account: DouyinHotlistRefreshAccountResult
 }
 
 function formatRefreshCountText(account: DouyinHotlistRefreshAccountResult) {
-  if (account.savedCount !== undefined) return `，保存 ${account.savedCount} 条`;
+  if (account.changedCount !== undefined && account.observedCount !== undefined) {
+    return `，观察 ${account.observedCount} 条，变更 ${account.changedCount} 条`;
+  }
+  if (account.savedCount !== undefined) return `，变更 ${account.savedCount} 条`;
   if (account.rawCount !== undefined) return `，抓到 ${account.rawCount} 条`;
   return "";
-}
-
-function isAllRefreshFailed(refresh: { accounts: DouyinHotlistRefreshAccountResult[] }) {
-  return refresh.accounts.length > 0 && refresh.accounts.every((account) => account.status === "failed");
-}
-
-function buildRefreshFailureMessage(accounts: DouyinHotlistRefreshAccountResult[]) {
-  const details = describeRefreshLogDetails(accounts);
-  return details.length ? `刷新失败：${details.join("；")}` : "刷新失败：所有账号都没有抓到可用结果。";
 }
 
 function compactRefreshError(message: string) {
@@ -1399,4 +1480,69 @@ function getSelectionPlatform(value: AccountSelection): Platform | null {
 
 function getAccountInputPlaceholder(platform: Platform) {
   return platform === "bilibili" ? "输入 B站账号名、UID 或主页链接…" : "输入抖音账号名、sec_uid 或主页链接…";
+}
+
+function isTerminalRefreshJob(job: JobRecord) {
+  return job.kind === "hotlist-refresh" && !["queued", "running"].includes(job.status);
+}
+
+function getRefreshJobResult(job: JobRecord): DouyinHotlistRefreshJobResult | null {
+  if (!job.result || typeof job.result !== "object") return null;
+  const result = job.result as Partial<DouyinHotlistRefreshJobResult>;
+  if (!result.refresh || !result.summary || typeof result.automatic !== "boolean") return null;
+  return result as DouyinHotlistRefreshJobResult;
+}
+
+async function handleRefreshJobSettled(
+  job: JobRecord,
+  handlers: {
+    appendRefreshLog: (entry: Omit<RefreshLogEntry, "id" | "at">) => void;
+    loadHotlist: (options?: { force?: boolean }) => Promise<void>;
+    setError: (value: string) => void;
+    setMessage: (value: string) => void;
+  }
+) {
+  const result = getRefreshJobResult(job);
+  const automatic = result?.automatic ?? job.title.startsWith("自动");
+
+  if (job.status === "completed") {
+    await handlers.loadHotlist({ force: true });
+    if (!result) {
+      const message = job.error || "刷新已完成，但任务明细暂未同步。";
+      handlers.appendRefreshLog({ automatic, status: job.error ? "warning" : "success", text: message });
+      if (job.error) handlers.setError(message);
+      else if (!automatic) handlers.setMessage(message);
+      return;
+    }
+    const summaryText = buildRefreshSummaryText(result.refresh);
+    handlers.appendRefreshLog({
+      automatic,
+      status: result.refresh.failed ? "warning" : "success",
+      text: `${automatic ? "自动" : "手动"}刷新：${summaryText} · ${result.summary.windowLabel}`,
+      details: describeRefreshLogDetails(result.refresh.accounts)
+    });
+    if (!automatic) handlers.setMessage(summaryText);
+    return;
+  }
+
+  if (job.status === "cancelled" || job.status === "interrupted") {
+    const message = job.status === "cancelled" ? "刷新任务已停止。" : "刷新任务因服务重启中断，请重新发起。";
+    handlers.appendRefreshLog({ automatic, status: "skipped", text: `${automatic ? "自动" : "手动"}${message}` });
+    if (!automatic) handlers.setMessage(message);
+    return;
+  }
+
+  const errorMessage = job.error || job.message || "视频热榜刷新失败";
+  handlers.appendRefreshLog({ automatic, status: "failed", text: `${automatic ? "自动" : "手动"}刷新失败：${errorMessage}` });
+  handlers.setError(errorMessage);
+}
+
+function buildRefreshSummaryText(refresh: DouyinHotlistRefreshJobResult["refresh"]) {
+  const handledCount = refresh.completed + refresh.unchanged + refresh.failed;
+  const changedVideoCount = refresh.accounts.reduce((sum, account) => sum + (account.changedCount || 0), 0);
+  const parts = [`已处理 ${handledCount}/${refresh.requested} 个账号`];
+  if (refresh.completed) parts.push(`${refresh.completed} 个有更新${changedVideoCount ? `（${changedVideoCount} 条内容）` : ""}`);
+  if (refresh.unchanged) parts.push(`${refresh.unchanged} 个无变化`);
+  if (refresh.failed) parts.push(`${refresh.failed} 个失败`);
+  return `${parts.join("，")}。`;
 }

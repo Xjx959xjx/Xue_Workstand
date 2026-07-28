@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, CircleAlert, Play, RefreshCw, Search, Settings2, X } from "lucide-react";
+import { CheckCircle2, CircleAlert, Play, RefreshCw, Search, Settings2, SlidersHorizontal, X } from "lucide-react";
 import type { getHealth } from "@/lib/client";
 import type { CollectOrder, Platform } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
@@ -53,6 +53,7 @@ export function LibraryQuickStartPanel({
   onTimeRangeChange
 }: LibraryQuickStartPanelProps) {
   const [environmentOpen, setEnvironmentOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const environmentPanelRef = useRef<HTMLDivElement>(null);
   const checkedThisOpenRef = useRef(false);
 
@@ -69,10 +70,17 @@ export function LibraryQuickStartPanel({
 
   return (
     <>
-      <section className="panel library-quick-start workbench-leading-panel" aria-label="账号采集">
-        <div className="library-quick-form">
+      <section className={`panel library-quick-start workbench-leading-panel ${advancedOpen ? "advanced-open" : ""}`} aria-label="账号采集">
+        <form
+          className="library-quick-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (canSubmit) onCollect();
+          }}
+        >
           <div className="library-quick-fields">
             <CollectControls
+              advancedOpen={advancedOpen}
               activeOrderOptions={activeOrderOptions}
               customFromDate={customFromDate}
               customToDate={customToDate}
@@ -91,9 +99,19 @@ export function LibraryQuickStartPanel({
             />
           </div>
           <div className="library-quick-actions">
-            <button className="btn primary library-collect-submit" disabled={!canSubmit} onClick={onCollect} type="button">
+            <button className="btn primary library-collect-submit" aria-busy={busy === "collect"} disabled={!canSubmit} type="submit">
               <Play aria-hidden="true" size={16} />
               {busy === "collect" ? "正在采集" : "开始采集"}
+            </button>
+            <button
+              aria-controls="library-collect-advanced"
+              aria-expanded={advancedOpen}
+              className="btn ghost compact library-advanced-trigger"
+              onClick={() => setAdvancedOpen((current) => !current)}
+              type="button"
+            >
+              <SlidersHorizontal aria-hidden="true" size={15} />
+              {advancedOpen ? "收起设置" : `${limit} 条 · ${activeOrderOptions.find((option) => option.value === order)?.label || "默认排序"}`}
             </button>
             <button
               aria-label="检查运行环境"
@@ -106,7 +124,7 @@ export function LibraryQuickStartPanel({
               <Settings2 aria-hidden="true" size={16} />
             </button>
           </div>
-        </div>
+        </form>
       </section>
       {environmentOpen ? (
         <EnvironmentModal
@@ -122,6 +140,7 @@ export function LibraryQuickStartPanel({
 }
 
 function CollectControls({
+  advancedOpen,
   activeOrderOptions,
   customFromDate,
   customToDate,
@@ -154,7 +173,7 @@ function CollectControls({
   | "onOrderChange"
   | "onPlatformChange"
   | "onTimeRangeChange"
->) {
+> & { advancedOpen: boolean }) {
   return (
     <>
       <div className="field library-platform-field">
@@ -192,65 +211,51 @@ function CollectControls({
           />
         </div>
       </div>
-      <div className="field">
-        <label htmlFor="collect-limit">数量</label>
-        <input
-          autoComplete="off"
-          id="collect-limit"
-          inputMode="numeric"
-          max={50}
-          min={1}
-          name="limit"
-          onChange={(event) => updateBoundedNumber(event.target.value, 1, 50, onLimitChange)}
-          type="number"
-          value={limit}
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="collect-order">采集排序</label>
-        <select id="collect-order" name="order" onChange={(event) => onOrderChange(event.target.value as CollectOrder)} value={order}>
-          {activeOrderOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label htmlFor="collect-time-range">采集时间</label>
-        <select id="collect-time-range" name="timeRange" onChange={(event) => onTimeRangeChange(event.target.value as TimeRange)} value={timeRange}>
-          {timeRangeOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      {timeRange === "custom" ? (
-        <>
+      {advancedOpen ? (
+        <div className="library-quick-advanced" id="library-collect-advanced">
           <div className="field">
-            <label htmlFor="collect-from-date">开始日期</label>
-            <input
-              autoComplete="off"
-              id="collect-from-date"
-              name="fromDate"
-              onChange={(event) => onCustomFromDateChange(event.target.value)}
-              type="date"
-              value={customFromDate}
-            />
+            <label htmlFor="collect-limit">数量</label>
+            <input autoComplete="off" id="collect-limit" inputMode="numeric" max={50} min={1} name="limit" onChange={(event) => updateBoundedNumber(event.target.value, 1, 50, onLimitChange)} type="number" value={limit} />
           </div>
           <div className="field">
-            <label htmlFor="collect-to-date">结束日期</label>
-            <input
-              autoComplete="off"
-              id="collect-to-date"
-              name="toDate"
-              onChange={(event) => onCustomToDateChange(event.target.value)}
-              type="date"
-              value={customToDate}
-            />
+            <label htmlFor="collect-order">采集排序</label>
+            <select id="collect-order" name="order" onChange={(event) => onOrderChange(event.target.value as CollectOrder)} value={order}>
+              {activeOrderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
           </div>
-        </>
+          <div className="field">
+            <label htmlFor="collect-time-range">采集时间</label>
+            <select id="collect-time-range" name="timeRange" onChange={(event) => onTimeRangeChange(event.target.value as TimeRange)} value={timeRange}>
+              {timeRangeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+          {timeRange === "custom" ? (
+            <>
+              <div className="field">
+                <label htmlFor="collect-from-date">开始日期</label>
+                <input
+                  autoComplete="off"
+                  id="collect-from-date"
+                  name="fromDate"
+                  onChange={(event) => onCustomFromDateChange(event.target.value)}
+                  type="date"
+                  value={customFromDate}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="collect-to-date">结束日期</label>
+                <input
+                  autoComplete="off"
+                  id="collect-to-date"
+                  name="toDate"
+                  onChange={(event) => onCustomToDateChange(event.target.value)}
+                  type="date"
+                  value={customToDate}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
       ) : null}
     </>
   );

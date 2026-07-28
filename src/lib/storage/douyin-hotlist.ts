@@ -9,6 +9,7 @@ import {
   shouldRetainHotlistSurgeState
 } from "../douyin-hotlist-surge";
 import type { Account, Platform, Video, VideoHotlistSurgeState, VideoHotlistTrend } from "../types";
+import { calculateHotlistBaseScore, HOTLIST_SCORE_VERSION } from "../douyin-hotlist-score";
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { readJsonFile, writeJsonFile } from "./fs";
@@ -22,7 +23,24 @@ type DouyinHotlistWatchlist = {
   accountIds: string[];
   updatedAt: string;
   lastRefreshedAt?: string;
+  lastFullRefreshAttemptAt?: string;
+  lastFullRefreshAt?: string;
 };
+
+type HotlistVideoCacheEntry = {
+  mtimeMs: number;
+  videos: Video[];
+};
+
+const globalHotlistStorage = globalThis as typeof globalThis & {
+  __styleWorkbenchHotlistVideoCache?: Map<string, HotlistVideoCacheEntry>;
+};
+
+const hotlistVideoCache = globalHotlistStorage.__styleWorkbenchHotlistVideoCache ?? new Map<string, HotlistVideoCacheEntry>();
+globalHotlistStorage.__styleWorkbenchHotlistVideoCache = hotlistVideoCache;
+
+let hotlistWatchlistQueue: Promise<unknown> = Promise.resolve();
+let hotlistMutationQueue: Promise<unknown> = Promise.resolve();
 
 function hotlistPath() {
   return path.join(libraryRoot(), HOTLIST_DIR);
@@ -61,6 +79,10 @@ async function ensureDouyinHotlistAccountDirs(slug: string) {
 }
 
 export async function readDouyinHotlistWatchlist(): Promise<DouyinHotlistWatchlist> {
+  return withHotlistWatchlistLock(readDouyinHotlistWatchlistUnlocked);
+}
+
+async function readDouyinHotlistWatchlistUnlocked(): Promise<DouyinHotlistWatchlist> {
   await ensureDouyinHotlistDirs();
   const file = await readJsonFile<Partial<DouyinHotlistWatchlist>>(watchlistPath());
   if (!file) {
@@ -76,7 +98,9 @@ export async function readDouyinHotlistWatchlist(): Promise<DouyinHotlistWatchli
     version: 1,
     accountIds: normalizeDouyinHotlistAccountIds(migrated.accountIds),
     updatedAt: file.updatedAt || nowIso(),
-    lastRefreshedAt: file.lastRefreshedAt
+    lastRefreshedAt: file.lastRefreshedAt,
+    lastFullRefreshAttemptAt: file.lastFullRefreshAttemptAt,
+    lastFullRefreshAt: file.lastFullRefreshAt
   };
 
   if (migrated.changed || next.accountIds.length !== (file.accountIds || []).length) {
@@ -88,37 +112,55 @@ export async function readDouyinHotlistWatchlist(): Promise<DouyinHotlistWatchli
 }
 
 export async function addDouyinHotlistAccountRef(accountId: string) {
-  const current = await readDouyinHotlistWatchlist();
-  const next = {
-    ...current,
-    accountIds: normalizeDouyinHotlistAccountIds([...current.accountIds, accountId]),
-    updatedAt: nowIso()
-  };
-  await writeJsonFile(watchlistPath(), next);
-  return next;
+  return withHotlistWatchlistLock(async () => {
+    const current = await readDouyinHotlistWatchlistUnlocked();
+    const next = {
+      ...current,
+      accountIds: normalizeDouyinHotlistAccountIds([...current.accountIds, accountId]),
+      updatedAt: nowIso()
+    };
+    await writeJsonFile(watchlistPath(), next);
+    return next;
+  });
 }
 
 export async function removeDouyinHotlistAccountRefs(accountIds: string[]) {
-  const removed = new Set(normalizeDouyinHotlistAccountIds(accountIds));
-  const current = await readDouyinHotlistWatchlist();
-  const next = {
-    ...current,
-    accountIds: current.accountIds.filter((accountId) => !removed.has(accountId)),
-    updatedAt: nowIso()
-  };
-  await writeJsonFile(watchlistPath(), next);
-  return next;
+  return withHotlistWatchlistLock(async () => {
+    const removed = new Set(normalizeDouyinHotlistAccountIds(accountIds));
+    const current = await readDouyinHotlistWatchlistUnlocked();
+    const next = {
+      ...current,
+      accountIds: current.accountIds.filter((accountId) => !removed.has(accountId)),
+      updatedAt: nowIso()
+    };
+    await writeJsonFile(watchlistPath(), next);
+    return next;
+  });
 }
 
-export async function markDouyinHotlistRefreshed(refreshedAt = nowIso()) {
-  const current = await readDouyinHotlistWatchlist();
-  const next = {
-    ...current,
-    updatedAt: refreshedAt,
-    lastRefreshedAt: refreshedAt
-  };
-  await writeJsonFile(watchlistPath(), next);
-  return next;
+export async function recordDouyinHotlistRefresh(input: {
+  attemptedAt?: string;
+  changed: boolean;
+  full: boolean;
+  successful: boolean;
+}) {
+  return withHotlistWatchlistLock(async () => {
+    const current = await readDouyinHotlistWatchlistUnlocked();
+    const attemptedAt = input.attemptedAt || nowIso();
+    const next: DouyinHotlistWatchlist = {
+      ...current,
+      updatedAt: attemptedAt,
+      ...(input.changed ? { lastRefreshedAt: attemptedAt } : {}),
+      ...(input.full ? { lastFullRefreshAttemptAt: attemptedAt } : {}),
+      ...(input.full && input.successful ? { lastFullRefreshAt: attemptedAt } : {})
+    };
+    await writeJsonFile(watchlistPath(), next);
+    return next;
+  });
+}
+
+export function withDouyinHotlistMutationLock<T>(run: () => Promise<T>) {
+  return enqueueSerial("mutation", run);
 }
 
 export async function resolveDouyinHotlistAccount(accountIdOrSlug: string) {
@@ -188,8 +230,13 @@ export async function upsertDouyinHotlistAccount(input: {
   return account;
 }
 
-export async function getDouyinHotlistAccountVideos(account: Account) {
+export async function getDouyinHotlistAccountVideos(account: Account, options: { force?: boolean } = {}) {
   await ensureDouyinHotlistAccountDirs(account.slug);
+  const videosPath = hotlistVideosPath(account.slug);
+  const initialStat = await fs.stat(videosPath);
+  const cached = hotlistVideoCache.get(account.slug);
+  if (!options.force && cached?.mtimeMs === initialStat.mtimeMs) return cached.videos;
+
   let files = await fs.readdir(hotlistVideosPath(account.slug)).catch(() => []);
   if (!files.some((file) => file.endsWith(".json"))) {
     await migrateLegacyAccountVideos(account);
@@ -203,7 +250,10 @@ export async function getDouyinHotlistAccountVideos(account: Account) {
     )
   ).filter(Boolean) as Video[];
 
-  return videos.sort((left, right) => right.hotScore - left.hotScore);
+  const sorted = videos.sort((left, right) => right.hotScore - left.hotScore);
+  const finalStat = await fs.stat(videosPath);
+  hotlistVideoCache.set(account.slug, { mtimeMs: finalStat.mtimeMs, videos: sorted });
+  return sorted;
 }
 
 export async function saveDouyinHotlistVideos(account: Account, incoming: Video[]) {
@@ -212,12 +262,14 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
     incoming.reduce((sum, video) => sum + (video.stats.views || 0), 0) /
       Math.max(incoming.filter((video) => video.stats.views > 0).length, 1) || 0;
   const saved: Video[] = [];
+  let changedCount = 0;
 
   for (const video of incoming) {
     const id = safeSegment(video.id, shortHash(`${video.title}-${video.url}`));
     const existing = await readJsonFile<Video>(hotlistVideoJsonPath(account.slug, id));
     const mergedStats = mergeVideoStats(existing, video);
-    const hotScore = calculateStoredHotScore({ ...video, stats: mergedStats });
+    const hotScore = calculateHotlistBaseScore({ ...video, stats: mergedStats });
+    if (hasMeaningfulVideoChange(existing, video, mergedStats)) changedCount += 1;
     const updatedAt = nowIso();
     const hotlistTrend = buildHotlistTrend(existing, hotScore, updatedAt);
     const nextBase: Video = {
@@ -228,6 +280,7 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
       platform: account.platform,
       stats: mergedStats,
       hotScore,
+      hotScoreVersion: HOTLIST_SCORE_VERSION,
       relativeViewRate:
         mergedStats.views > 0 && averageViews > 0 ? Number((mergedStats.views / averageViews).toFixed(2)) : 0,
       transcriptStatus: existing?.transcriptStatus ?? video.transcriptStatus,
@@ -246,7 +299,12 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
     saved.push(next);
   }
 
-  return saved.sort((left, right) => right.hotScore - left.hotScore);
+  hotlistVideoCache.delete(account.slug);
+  return {
+    videos: saved.sort((left, right) => right.hotScore - left.hotScore),
+    changedCount,
+    observedCount: incoming.length
+  };
 }
 
 async function readDouyinHotlistAccountSlugs() {
@@ -291,7 +349,7 @@ function pickPreferredMetric(existing?: number, incoming?: number) {
 }
 
 function buildHotlistTrend(existing: Video | null, currentHotScore: number, updatedAt: string): VideoHotlistTrend | undefined {
-  if (!existing?.updatedAt) return undefined;
+  if (!existing?.updatedAt || existing.hotScoreVersion !== HOTLIST_SCORE_VERSION) return undefined;
 
   const previousTime = new Date(existing.updatedAt).getTime();
   const currentTime = new Date(updatedAt).getTime();
@@ -299,7 +357,7 @@ function buildHotlistTrend(existing: Video | null, currentHotScore: number, upda
     return undefined;
   }
 
-  const previousHotScore = Number.isFinite(existing.hotScore) ? existing.hotScore : calculateStoredHotScore(existing);
+  const previousHotScore = Number.isFinite(existing.hotScore) ? existing.hotScore : calculateHotlistBaseScore(existing);
   const intervalHours = (currentTime - previousTime) / 3_600_000;
 
   return {
@@ -348,14 +406,43 @@ function getVideoAgeHours(video: Video, referenceIso: string) {
   return Math.max(0, (referenceTime - publishedTime) / 3_600_000);
 }
 
-function calculateStoredHotScore(video: Video) {
+function hasMeaningfulVideoChange(existing: Video | null, incoming: Video, stats: Video["stats"]) {
+  if (!existing) return true;
   return (
-    video.stats.views +
-    video.stats.likes * 20 +
-    video.stats.comments * 60 +
-    video.stats.favorites * 80 +
-    (video.stats.shares ?? 0) * 50
+    existing.title !== incoming.title ||
+    existing.url !== incoming.url ||
+    existing.coverUrl !== incoming.coverUrl ||
+    existing.publishedAt !== incoming.publishedAt ||
+    existing.stats.views !== stats.views ||
+    existing.stats.likes !== stats.likes ||
+    existing.stats.comments !== stats.comments ||
+    existing.stats.favorites !== stats.favorites ||
+    (existing.stats.shares ?? 0) !== (stats.shares ?? 0)
   );
+}
+
+function withHotlistWatchlistLock<T>(run: () => Promise<T>) {
+  return enqueueSerial("watchlist", run);
+}
+
+async function enqueueSerial<T>(queue: "watchlist" | "mutation", run: () => Promise<T>) {
+  const previous = queue === "watchlist" ? hotlistWatchlistQueue : hotlistMutationQueue;
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.then(() => current, () => current);
+  if (queue === "watchlist") hotlistWatchlistQueue = next;
+  else hotlistMutationQueue = next;
+
+  try {
+    await previous.catch(() => undefined);
+    return await run();
+  } finally {
+    release();
+    if (queue === "watchlist" && hotlistWatchlistQueue === next) hotlistWatchlistQueue = Promise.resolve();
+    if (queue === "mutation" && hotlistMutationQueue === next) hotlistMutationQueue = Promise.resolve();
+  }
 }
 
 function roundTo(value: number, digits: number) {

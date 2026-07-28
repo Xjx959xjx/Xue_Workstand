@@ -62,10 +62,19 @@ export type Video = {
   duration?: string | number;
   stats: VideoStats;
   hotScore: number;
+  hotScoreVersion?: number;
   relativeViewRate: number;
   transcriptStatus: TranscriptStatus;
   transcriptPath?: string;
+  transcriptRevision?: string;
   transcriptSource?: "platform_subtitle" | "siliconflow" | "volcengine" | "manual";
+  statsHydration?: {
+    status: "unknown" | "partial" | "complete" | "failed";
+    source?: "collect" | "opencli";
+    checkedAt?: string;
+    missingFields?: Array<keyof VideoStats>;
+    error?: string;
+  };
   downloadUrl?: string;
   topComments?: string[];
   danmakuSamples?: string[];
@@ -85,6 +94,19 @@ export type DraftDanmakuAsset = {
   id: string;
   timeSec: number;
   text: string;
+};
+
+export const engagementGenerationModes = ["quick", "reference"] as const;
+
+export type EngagementGenerationMode = (typeof engagementGenerationModes)[number];
+
+export type EngagementGenerationTimings = {
+  sourceMs: number;
+  briefMs: number;
+  researchMs: number;
+  generationMs: number;
+  totalMs: number;
+  cacheHits: Array<"source" | "brief" | "research">;
 };
 
 export type DraftCoverReference = {
@@ -116,6 +138,11 @@ export type DraftAssets = {
   comments?: {
     generatedAt: string;
     requestedCount: number;
+    actualCount?: number;
+    partial?: boolean;
+    generationMode?: EngagementGenerationMode;
+    engineVersion?: string;
+    timings?: EngagementGenerationTimings;
     usedModel: string;
     fallback: boolean;
     fallbackReason?: string;
@@ -240,6 +267,8 @@ export type DraftAssets = {
           model: string;
           fallback: boolean;
           fallbackReason?: string;
+          status?: "completed" | "failed";
+          attempts?: number;
         }[];
       };
     };
@@ -260,6 +289,20 @@ export type DraftAssets = {
   };
 };
 
+export type WriteAction = "create" | "revise";
+
+export type WriteRevisionScope = "full" | "selection";
+
+export type DraftVersion = {
+  sessionId: string;
+  parentDraftId?: string;
+  revision: number;
+  instruction?: string;
+  contextFingerprint: string;
+  promptVersion: string;
+  origin: "generated" | "revision" | "manual_edit";
+};
+
 type DraftBase = {
   id: string;
   title: string;
@@ -268,7 +311,9 @@ type DraftBase = {
   input?: string;
   supportDocLinks?: string;
   brief?: string;
+  research?: string;
   sourceDigest?: WriteSourceDigest;
+  version?: DraftVersion;
   content: string;
   assets?: DraftAssets;
   createdAt: string;
@@ -342,7 +387,17 @@ export type VideoListItem = Omit<Video, "raw" | "hotlistTrend" | "hotlistSurge">
 export type AccountListItem = Account & {
   videoCount: number;
   transcriptCount: number;
+  missingTranscriptCount: number;
   draftCount: number;
+  styleStatus: "not_generated" | "ready" | "fallback" | "manual";
+  styleUpdatedAt?: string;
+};
+
+export type TranscriptVersion = {
+  id: string;
+  createdAt: string;
+  revision: string;
+  preview: string;
 };
 
 export type AccountSummary = Account & {
@@ -411,6 +466,21 @@ export type CopySource = {
 
 export type EngagementSourceType = "draft" | "text" | "url";
 
+export type EngagementGenerationOptions = {
+  includeComments: boolean;
+  commentCount: number;
+  includeDanmaku: boolean;
+  danmakuCount: number;
+  generationMode?: EngagementGenerationMode;
+};
+
+export type EngagementGenerationRequest = EngagementGenerationOptions & (
+  | { sourceType: "draft"; draftId: string }
+  | { sourceType: "text"; title?: string; text: string }
+  | { sourceType: "url"; url: string }
+  | { sourceType: "record"; recordId: string }
+);
+
 export type EngagementRecord = {
   id: string;
   sourceType: EngagementSourceType;
@@ -426,6 +496,7 @@ export type EngagementRecord = {
     commentCount: number;
     includeDanmaku: boolean;
     danmakuCount: number;
+    generationMode?: EngagementGenerationMode;
   };
   comments?: NonNullable<DraftAssets["comments"]>;
   danmaku?: NonNullable<DraftAssets["danmaku"]>;
@@ -571,6 +642,9 @@ export type GrossMarginLibrary = {
   tables: GrossMarginPriceTable[];
   templates: GrossMarginReviewTemplate[];
   accounts: GrossMarginAccountPrice[];
+  accountSource: "wecom" | "local";
+  accountSourceWarning?: string;
+  accountSourceFetchedAt?: string;
   monitorRecords: GrossMarginMonitorRecord[];
   monitorProjects: Array<{
     id: string;
@@ -657,10 +731,15 @@ export type DouyinHotlistAccount = Pick<
   recentVideoCount: number;
 };
 
+export type DouyinHotlistVideo = Pick<
+  Video,
+  "id" | "platform" | "title" | "url" | "coverUrl" | "publishedAt" | "stats" | "hotScore"
+>;
+
 export type DouyinHotlistItem = {
   rank: number;
   account: Pick<Account, "id" | "platform" | "name" | "uid" | "avatarUrl">;
-  video: VideoListItem;
+  video: DouyinHotlistVideo;
   heatScore: number;
   ageHours?: number;
   tags: string[];
@@ -688,10 +767,11 @@ export type DouyinHotlistSummary = {
   totalVideoCount: number;
   recentVideoCount: number;
   lastRefreshedAt?: string;
+  lastFullRefreshAttemptAt?: string;
+  lastFullRefreshAt?: string;
 };
 
 export type DouyinHotlistResponse = {
-  root: string;
   accounts: DouyinHotlistAccount[];
   items: DouyinHotlistItem[];
   summary: DouyinHotlistSummary;
@@ -700,9 +780,11 @@ export type DouyinHotlistResponse = {
 export type DouyinHotlistRefreshAccountResult = {
   accountId: string;
   name: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "unchanged";
   rawCount?: number;
   savedCount?: number;
+  observedCount?: number;
+  changedCount?: number;
   error?: string;
   mode?: "batch" | "single";
   retried?: boolean;
@@ -713,9 +795,150 @@ export type DouyinHotlistRefreshResult = DouyinHotlistResponse & {
   refresh: {
     requested: number;
     completed: number;
+    unchanged: number;
     failed: number;
     limit: number;
     accounts: DouyinHotlistRefreshAccountResult[];
+  };
+};
+
+export type DouyinHotlistRefreshJobResult = Pick<DouyinHotlistRefreshResult, "refresh" | "summary"> & {
+  automatic: boolean;
+};
+
+export const hotspotSourceTypes = ["official", "news", "video", "community", "social"] as const;
+
+export type HotspotSourceType = (typeof hotspotSourceTypes)[number];
+
+export const hotspotBoards = ["entertainment", "game", "esports", "ai"] as const;
+
+export type HotspotBoard = (typeof hotspotBoards)[number];
+
+export const hotspotMonitorTypes = ["operations", "official", "esports", "breakout"] as const;
+
+export type HotspotMonitorType = (typeof hotspotMonitorTypes)[number];
+
+export type HotspotScoutStatus = "running" | "queued" | "paused" | "failed";
+
+export type HotspotScout = {
+  id: string;
+  board: HotspotBoard;
+  name: string;
+  scope: string;
+  cadence: string;
+  sources: string[];
+  status: HotspotScoutStatus;
+  coverage: number;
+  itemCount: number;
+  lastCheckedAt?: string;
+  error?: string;
+};
+
+export type HotspotSignal = {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  sourceType: HotspotSourceType;
+  board: HotspotBoard;
+  title: string;
+  url?: string;
+  game: string;
+  category: string;
+  capturedAt: string;
+  publishedAt?: string;
+  heat: number;
+  trend: string;
+  tags: string[];
+  summary?: string;
+};
+
+export type HotspotStatus = "ready" | "watch" | "risk";
+
+export type HotspotDisplayInfo = {
+  kind: HotspotMonitorType;
+  subject: string;
+  headline: string;
+  statusLine: string;
+  timeLabel: string;
+  sourceLine: string;
+  facts: string[];
+  primaryAction: string;
+};
+
+export type HotspotEvent = {
+  id: string;
+  board: HotspotBoard;
+  monitorType: HotspotMonitorType;
+  monitorLabel: string;
+  triggerMode: string;
+  thresholdHint: string;
+  actionWindow: string;
+  priorityLabel: string;
+  scopeMatches: string[];
+  title: string;
+  game: string;
+  category: string;
+  displayInfo: HotspotDisplayInfo;
+  status: HotspotStatus;
+  score: number;
+  freshness: string;
+  sources: number;
+  summary: string;
+  whyNow: string;
+  playerFocus: string[];
+  angles: string[];
+  evidence: string[];
+  research: string[];
+  risks: string[];
+  accounts: string[];
+  signalIds: string[];
+};
+
+export type HotspotBoardStat = {
+  board: HotspotBoard;
+  sourceCount: number;
+  completedSourceCount: number;
+  failedSourceCount: number;
+  signalCount: number;
+  hotspotCount: number;
+  readyCount: number;
+  averageScore: number;
+  topScore: number;
+};
+
+export type HotspotRadarSummary = {
+  sourceCount: number;
+  completedSourceCount: number;
+  failedSourceCount: number;
+  signalCount: number;
+  hotspotCount: number;
+  readyCount: number;
+  averageScore: number;
+  boardStats: HotspotBoardStat[];
+  generatedAt: string;
+};
+
+export type HotspotRadarResponse = {
+  generatedAt: string;
+  scouts: HotspotScout[];
+  signals: HotspotSignal[];
+  hotspots: HotspotEvent[];
+  summary: HotspotRadarSummary;
+};
+
+export type HotspotRadarRefreshResult = HotspotRadarResponse & {
+  refresh: {
+    requested: number;
+    completed: number;
+    failed: number;
+    sources: Array<{
+      id: string;
+      board: HotspotBoard;
+      name: string;
+      status: "completed" | "failed";
+      itemCount: number;
+      error?: string;
+    }>;
   };
 };
 
@@ -723,6 +946,7 @@ export type WriteResult = {
   content: string;
   brief?: string;
   research?: string;
+  contextFingerprint?: string;
   sourceDigest?: WriteSourceDigest;
   draft?: Draft;
   usedModel: string;
@@ -733,6 +957,7 @@ export type WriteResult = {
 export type WriteBriefResult = {
   brief: string;
   research?: string;
+  contextFingerprint: string;
   sourceDigest: WriteSourceDigest;
   targetTitle: string;
   usedModel: string;
@@ -775,7 +1000,8 @@ export const jobKinds = [
   "project-style",
   "transcribe-video",
   "batch-transcribe",
-  "engagement"
+  "engagement",
+  "hotlist-refresh"
 ] as const;
 
 export type JobKind = (typeof jobKinds)[number];
@@ -797,12 +1023,13 @@ export type JobEvent = {
 };
 
 export type JobScope = {
-  targetType?: "account" | "project" | "draft" | "url" | "text";
+  targetType?: "account" | "project" | "draft" | "engagement" | "url" | "text" | "hotlist";
   platform?: Platform;
   accountId?: string;
   projectId?: string;
   videoId?: string;
   draftId?: string;
+  engagementRecordId?: string;
   sourceKey?: string;
 };
 
@@ -839,6 +1066,7 @@ export type JobStartInput =
       inputSummary?: string;
       href?: string;
       input: {
+        action?: WriteAction;
         targetType?: "account" | "project";
         platform?: Platform;
         accountId?: string;
@@ -848,8 +1076,15 @@ export type JobStartInput =
         sourceText?: string;
         supportDocLinks?: string;
         brief?: string;
+        preparedResearch?: string;
+        preparedContextFingerprint?: string;
         save?: boolean;
         useWebResearch?: boolean;
+        parentDraftId?: string;
+        currentContent?: string;
+        revisionInstruction?: string;
+        revisionScope?: WriteRevisionScope;
+        selectedText?: string;
       };
     }
   | {
@@ -897,7 +1132,20 @@ export type JobStartInput =
         platform: Platform;
         accountId: string;
         limit: number | "all";
+        videoIds?: string[];
         updateStyle?: boolean;
+      };
+    }
+  | {
+      kind: "hotlist-refresh";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        accountIds?: string[];
+        limit?: number;
+        window: string;
+        automatic?: boolean;
       };
     }
   | {
@@ -905,30 +1153,5 @@ export type JobStartInput =
       title?: string;
       inputSummary?: string;
       href?: string;
-      input:
-        | {
-            sourceType: "draft";
-            draftId: string;
-            includeComments: boolean;
-            commentCount: number;
-            includeDanmaku: boolean;
-            danmakuCount: number;
-          }
-        | {
-            sourceType: "text";
-            title?: string;
-            text: string;
-            includeComments: boolean;
-            commentCount: number;
-            includeDanmaku: boolean;
-            danmakuCount: number;
-          }
-        | {
-            sourceType: "url";
-            url: string;
-            includeComments: boolean;
-            commentCount: number;
-            includeDanmaku: boolean;
-            danmakuCount: number;
-          };
+      input: EngagementGenerationRequest;
     };

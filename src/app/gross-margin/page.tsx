@@ -221,7 +221,7 @@ export default function GrossMarginPage() {
   async function handleRefresh() {
     setBusy("refresh");
     try {
-      const result = await getGrossMarginLibrary();
+      const result = await getGrossMarginLibrary({ fresh: true });
       setLibrary(result);
       const nextTable = result.tables.find((item) => item.platform === platform) || result.tables[0] || null;
       if (nextTable) {
@@ -416,12 +416,14 @@ export default function GrossMarginPage() {
             <div className="page-title-copy">
               <h1>数据维护</h1>
               <p className="subtle">单价、数量、毛利。</p>
+              {library?.accountSourceWarning ? <p className="field-hint warning">{library.accountSourceWarning}</p> : null}
             </div>
           </div>
         </div>
         <div className="page-header-meta">
           <span className="stat-pill">2 个平台</span>
           <span className="stat-pill">{configuredPriceCount} 个单价已填</span>
+          <span className="stat-pill">账号源：{library?.accountSource === "wecom" ? "企业微信在线表" : "本地缓存"}</span>
           <button className="btn ghost" disabled={busy === "refresh"} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             {busy === "refresh" ? "刷新中" : "刷新"}

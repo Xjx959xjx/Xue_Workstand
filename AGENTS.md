@@ -98,6 +98,11 @@ style-library/
     <source-id>.json
     <source-id>.txt
   engagement/
+    .cache/
+      source/
+      brief/
+      research/
+    <record-id>.json
   douyin-hotlist/
     watchlist.json
     accounts/<account-slug>/
@@ -110,9 +115,12 @@ style-library/
 存储规则：
 
 - `src/lib/storage.ts` 是账号、项目、草稿、素材、总览的主编排；`src/lib/storage/fs.ts` 负责原子写；`src/lib/storage/core.ts` 负责根目录和路径段校验；`src/lib/storage/gross-margin.ts` 负责毛利数据。
+- 毛利账号配对可通过 `WECOM_ACCOUNT_SHEET_URL` 直接读取企业微信在线表；解析失败时只允许显式可见的本地缓存回退，不得静默覆盖或丢失账号数据。
 - JSON / 文本 / 二进制写入优先使用 `writeJsonFile`、`writeTextFileAtomic`、`writeFileAtomic`，保持临时文件 + `rename` 原子落盘。
 - 路径段必须经过 `normalizeStorageSegment` / 现有 normalize 函数；不要把 URL、标题、用户输入直接拼进路径。
 - `style.md`、转写稿、草稿、`*.assets` 是用户资产。不要无意义重排、截断、重新生成或批量改写。
+- `style-library/engagement/.cache` 只保存评论链路的链接文稿、素材锚点和热评研究派生缓存；评论历史仍是 `engagement/*.json`，清理缓存不得删除历史记录。
+- 转写稿覆盖与恢复必须走现有 per-video 串行锁和 revision 校验；旧稿归档在 `transcripts/.history/<video-id>/`。revision 冲突应返回 409 并要求重新读取，不能覆盖并发编辑或绕过历史归档。
 - 读缺失文件可以返回空状态；损坏 JSON、写入失败、路径越界必须显式报错。
 - `getLibraryOverview()` 会剥离重字段；改总览类型或缓存时避免把全文转写、素材正文、资产列表重新塞进首页响应。
 
@@ -128,12 +136,14 @@ style-library/
 ## 业务链路
 
 - 采集：`src/lib/opencli.ts`、`src/lib/opencli-bilibili.ts`、`src/lib/opencli-douyin-scripts.ts`。
-- 视频热榜：`src/app/douyin-hotlist/**`、`src/app/api/douyin-hotlist/route.ts`、`src/lib/douyin-hotlist.ts`、`src/lib/storage/douyin-hotlist.ts`；路径和存储目录沿用 `douyin-hotlist`，账号池支持抖音和 B站，热榜账号和视频独立保存在 `style-library/douyin-hotlist/accounts`，不要写入主账号库。
+- 视频热榜：`src/app/douyin-hotlist/**`、`src/app/api/douyin-hotlist/route.ts`、`src/lib/douyin-hotlist.ts`、`src/lib/storage/douyin-hotlist.ts`；路径和存储目录沿用 `douyin-hotlist`，账号池支持抖音和 B站，热榜账号和视频独立保存在 `style-library/douyin-hotlist/accounts`，不要写入主账号库。刷新统一使用 `hotlist-refresh` 后台任务；watchlist 写入必须走现有串行锁，自动刷新基准使用全量检查时间，不能被局部刷新覆盖。
 - opencli 执行：统一走 `src/lib/opencli-runtime.ts` 的 `execFile` 封装，传数组参数，支持 timeout / abort signal / timing；不要拼 shell 字符串执行用户输入。
-- 转写：`src/lib/transcription.ts`、`src/lib/batch-transcribe.ts`、`src/lib/transcript-cleaning.ts`。
+- 转写：`src/lib/transcription.ts`、`src/lib/batch-transcribe.ts`、`src/lib/transcript-cleaning.ts`；账号库支持按筛选结果批量转写和选择指定 `videoIds`，必须先筛待转写项再应用数量上限。重新转写失败时已有稿仍保持可用状态。
 - 模型 / 写作 / 风格：`src/lib/ai.ts`、`src/lib/write-validation.ts`。
+- 对话模型配置支持主模型、`CHAT_FALLBACK_*` 和按序尝试的 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`；扩展容灾时复用 `src/lib/model-runtime.ts` 的统一配置链，不要在业务模块里单独请求中转站。
+- 对话写作：首稿、续改和手动编辑都保存为不可变草稿版本；`Draft.version.sessionId` 聚合同一会话，`parentDraftId` 记录父版本。旧草稿缺少 `version` 时按单版本会话读取，不要批量迁移。续改必须复用父稿已保存的 Brief / research / sourceDigest，只读取当前风格卡，不重复转写链接、抓支持文档或联网；模型失败应显式失败，不能用通用本地模板覆盖当前稿。
 - 项目素材：`src/lib/source-transcription.ts`、`src/lib/source-extraction.ts`、`src/lib/material-analysis.ts`。
-- 评论 / 弹幕：`src/lib/engagement.ts`、`src/lib/engagement-export.ts`。
+- 评论 / 弹幕：`src/lib/engagement.ts`、`src/lib/engagement-export.ts`。输入中只要包含支持的视频链接（包括整段分享文案）就必须先转写取得视频文稿，前端识别和引擎入口都要保留该约束。评论默认 `50` 条，快速模式只省略外部热评和模型素材 Brief，不得省略链接转写；参考模式最多单次热评查询。评论最多 `40` 条一批并发生成，允许保存部分成功结果并原位补齐同一记录；补齐草稿来源记录时同步更新草稿资产。
 - 封面：`src/lib/cover.ts`。
 - 飞书：`src/lib/feishu.ts`。
 - 毛利：`src/app/gross-margin/**`、`src/app/api/gross-margin/route.ts`、`src/lib/storage/gross-margin.ts`、`src/lib/gross-margin-monitor-template.ts`。

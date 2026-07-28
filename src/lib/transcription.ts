@@ -28,7 +28,7 @@ import {
   sortRemoteAudioMediaUrls,
   videoMediaUrlScore
 } from "./platform-links";
-import { getVideo, markTranscriptFailed, saveTranscript } from "./storage";
+import { getTranscriptSnapshot, getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
 
@@ -133,6 +133,7 @@ export async function transcribeVideo(input: {
   const timings: Timing[] = [];
   const totalStartedAt = Date.now();
   const { account, video } = await getVideo(input.platform, input.accountId, input.videoId);
+  const transcriptSnapshot = await getTranscriptSnapshot(input.platform, input.accountId, input.videoId);
   timings.push({ stage: "load-video", ms: Date.now() - totalStartedAt });
   const cleanupTargets: string[] = [];
   let hadBilibiliSubtitle = false;
@@ -162,7 +163,8 @@ export async function transcribeVideo(input: {
           accountId: input.accountId,
           videoId: input.videoId,
           text: cleaned.text,
-          source: "platform_subtitle"
+          source: "platform_subtitle",
+          expectedRevision: transcriptSnapshot.revision
         })),
         usedProvider: "bilibili-subtitle",
         transcriptCleaning: {
@@ -270,7 +272,8 @@ export async function transcribeVideo(input: {
         accountId: input.accountId,
         videoId: input.videoId,
         text: cleaned.text,
-        source: "volcengine"
+        source: "volcengine",
+        expectedRevision: transcriptSnapshot.revision
       });
       timings.push({ stage: "save-transcript", ms: Date.now() - saveStartedAt });
       return {

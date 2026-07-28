@@ -30,7 +30,7 @@ export function useBilibiliStatsHydration({
     if (!selectedAccount || selectedAccount.platform !== "bilibili") return;
 
     const missingStats = selectedAccount.videos
-      .filter((video) => video.stats.likes === 0 || video.stats.comments === 0 || video.stats.favorites === 0)
+      .filter((video) => !video.statsHydration || video.statsHydration.status === "unknown")
       .slice(0, 10);
     if (!missingStats.length) return;
 

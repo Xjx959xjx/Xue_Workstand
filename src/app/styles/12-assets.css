@@ -105,6 +105,31 @@
   gap: 8px;
 }
 
+.engagement-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.engagement-mode-row .field-label {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.engagement-mode-segmented {
+  width: min(100%, 260px);
+}
+
+.engagement-mode-segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .engagement-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) 76px;
@@ -147,6 +172,7 @@
 .engagement-option strong {
   color: var(--text-strong);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .engagement-option small {
@@ -204,6 +230,8 @@
 .engagement-export-row {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .engagement-diagnostics {
@@ -278,6 +306,10 @@
   animation: progress-indeterminate 1.15s ease-out infinite;
 }
 
+.engagement-generator-pane .progress-fill:not(.indeterminate) {
+  transition: width var(--motion-base) var(--ease-apple);
+}
+
 @keyframes progress-indeterminate {
   0% {
     transform: translateX(-110%);
@@ -328,13 +360,34 @@
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1380px) {
   .assets-workspace {
     grid-template-columns: 260px minmax(0, 1fr);
   }
 
   .engagement-workbench {
-    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .engagement-history-pane {
+    max-height: min(440px, 60vh);
+  }
+}
+
+@media (min-width: 1181px) and (max-width: 1380px) {
+  .page.assets-page {
+    grid-template-rows: auto auto;
+    height: auto;
+    min-height: var(--workspace-page-height);
+  }
+
+  .assets-page > .engagement-workbench {
+    height: auto;
+  }
+
+  .engagement-content-grid {
+    height: auto;
+    min-height: calc(100vh - 244px);
   }
 }
 
@@ -348,6 +401,15 @@
 
   .engagement-option {
     grid-template-columns: auto minmax(0, 1fr) 72px;
+  }
+
+  .engagement-mode-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .engagement-mode-segmented {
+    width: 100%;
   }
 }
 

@@ -8,11 +8,13 @@ import type {
   AccountDraftInput,
   AccountListItem,
   Draft,
+  DraftVersion,
   JobRecord,
   JobStartInput,
   ProjectDraftInput,
   ProjectListItem,
-  WriteResult
+  WriteResult,
+  WriteRevisionScope
 } from "@/lib/types";
 
 type DraftSaveBase = Omit<AccountDraftInput, "assets" | "content"> | Omit<ProjectDraftInput, "assets" | "content">;
@@ -22,6 +24,8 @@ type UseWriterGenerationInput = {
   activeJobs: JobRecord[];
   activeTitle?: string;
   brief: string;
+  briefContextFingerprint: string;
+  briefResearch: string;
   busy: string;
   hasTaskInput: boolean;
   mode: Draft["mode"];
@@ -30,8 +34,12 @@ type UseWriterGenerationInput = {
   preparedSourceText: string;
   supportDocLinks: string;
   recentJobs: JobRecord[];
+  revisionInstruction: string;
+  revisionScope: WriteRevisionScope;
+  selectedText: string;
   onGenerationResult?: (result: WriteResult) => void;
   onDraftSaved?: (draft: Draft) => void;
+  onRevisionCompleted?: () => void;
   cancelTask: (jobId: string) => Promise<JobRecord>;
   refresh: () => Promise<void>;
   routerPush: (href: string) => void;
@@ -49,6 +57,8 @@ export function useWriterGeneration({
   activeJobs,
   activeTitle,
   brief,
+  briefContextFingerprint,
+  briefResearch,
   busy,
   hasTaskInput,
   mode,
@@ -57,8 +67,12 @@ export function useWriterGeneration({
   preparedSourceText,
   supportDocLinks,
   recentJobs,
+  revisionInstruction,
+  revisionScope,
+  selectedText,
   onGenerationResult,
   onDraftSaved,
+  onRevisionCompleted,
   cancelTask,
   refresh,
   routerPush,
@@ -79,11 +93,13 @@ export function useWriterGeneration({
   const [generateStage, setGenerateStage] = useState("");
   const [generateProgress, setGenerateProgress] = useState(0);
   const [activeWriteJobId, setActiveWriteJobId] = useState("");
+  const generationBaseContentRef = useRef("");
   const handledWriteJobsRef = useRef<Set<string>>(new Set());
   const reportedHydrationErrorsRef = useRef<Set<string>>(new Set());
   const writeJobSourceKey = useMemo(
     () =>
       writeCopySourceKey({
+        action: "create",
         targetType,
         platform: targetType === "account" ? selectedAccount?.platform : undefined,
         accountId: targetType === "account" ? selectedAccount?.id : undefined,
@@ -116,25 +132,24 @@ export function useWriterGeneration({
   );
   const activeWriteJob = useMemo(() => {
     const tracked = writeJobCandidates.find((job) => job.id === activeWriteJobId);
-    if (tracked && isCurrentWriteJob(tracked, targetType, selectedAccount?.id, selectedProject?.id)) return tracked;
+    if (tracked) return tracked;
     return writeJobCandidates.find((job) =>
       isActiveJob(job) && isCurrentWriteJob(job, targetType, selectedAccount?.id, selectedProject?.id, writeJobSourceKey)
     ) || null;
   }, [activeWriteJobId, selectedAccount?.id, selectedProject?.id, targetType, writeJobCandidates, writeJobSourceKey]);
-  const activeWriteJobIdMismatch = useMemo(() => {
-    if (!activeWriteJobId) return false;
-    const tracked = writeJobCandidates.find((job) => job.id === activeWriteJobId);
-    return Boolean(tracked && !isCurrentWriteJob(tracked, targetType, selectedAccount?.id, selectedProject?.id));
-  }, [activeWriteJobId, selectedAccount?.id, selectedProject?.id, targetType, writeJobCandidates]);
-  const isGenerating = Boolean(activeWriteJob && (activeWriteJob.status === "queued" || activeWriteJob.status === "running"));
+  const isGenerating = Boolean(activeWriteJob && isActiveJob(activeWriteJob));
   const canGenerate = Boolean(hasTaskInput && !busy && !isGenerating && (targetType === "project" ? selectedProject : selectedAccount));
+  const canRevise = Boolean(
+    lastDraftId &&
+    lastDraftBase &&
+    lastContent.trim() &&
+    revisionInstruction.trim() &&
+    !busy &&
+    !isGenerating &&
+    (revisionScope === "full" || selectedText.trim())
+  );
   const canStopGenerate = Boolean(activeWriteJobId && isGenerating);
-
-  useEffect(() => {
-    if (!activeWriteJobIdMismatch || busy !== "generate") return;
-    setActiveWriteJobId("");
-    setBusy("");
-  }, [activeWriteJobIdMismatch, busy, setBusy]);
+  const hasUnsavedChanges = Boolean(lastDraftId && lastContent !== lastSavedContent);
 
   useEffect(() => {
     if (!activeWriteJob) return;
@@ -143,7 +158,7 @@ export function useWriterGeneration({
     setGenerateProgress(activeWriteJob.progress || 0);
     if (activeWriteJob.partialText) setLastContent(activeWriteJob.partialText);
 
-    if (activeWriteJob.status === "running" || activeWriteJob.status === "queued") {
+    if (isActiveJob(activeWriteJob)) {
       setBusy("generate");
       return;
     }
@@ -152,6 +167,7 @@ export function useWriterGeneration({
     const isWaitingForHydratedResult = activeWriteJob.status === "completed" && !result && Boolean((activeWriteJob as { hasResult?: boolean }).hasResult);
     if (isWaitingForHydratedResult) {
       if (activeWriteJob.error) {
+        restoreGenerationBase();
         setBusy("");
         setGenerateStage("结果同步失败");
         setGenerateProgress(100);
@@ -172,6 +188,7 @@ export function useWriterGeneration({
 
     if (activeWriteJob.status === "completed") {
       if (result) {
+        generationBaseContentRef.current = "";
         setLastContent(result.content);
         setLastResearch(result.research || "");
         setLastSavedContent(result.draft ? result.content : "");
@@ -181,12 +198,14 @@ export function useWriterGeneration({
         if (result.draft) {
           onDraftSaved?.(result.draft);
           routerReplace(buildWriterDraftHref(result.draft), { scroll: false });
+          if (result.draft.version?.origin === "revision") onRevisionCompleted?.();
           void refresh();
         }
         setNotice(
-          `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到历史记录。`
+          `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到版本历史。`
         );
       } else {
+        generationBaseContentRef.current = "";
         setNotice("文案生成完成。");
       }
       setGenerateStage("生成完成");
@@ -195,6 +214,7 @@ export function useWriterGeneration({
     }
 
     if (activeWriteJob.status === "failed") {
+      restoreGenerationBase();
       setNotice(activeWriteJob.error || "生成失败，请检查模型配置、代理或输入内容后重试。");
       setGenerateStage("生成失败");
       setGenerateProgress(100);
@@ -202,14 +222,22 @@ export function useWriterGeneration({
     }
 
     if (activeWriteJob.status === "cancelled") {
-      setNotice("已停止本次生成，历史记录不会新增未完成内容。");
+      restoreGenerationBase();
+      setNotice("已停止本次生成，版本历史不会新增未完成内容。");
       setGenerateStage("已停止");
       setGenerateProgress(Math.max(0, activeWriteJob.progress || 0));
     }
-  }, [activeWriteJob, onDraftSaved, onGenerationResult, refresh, routerReplace, setBusy, setNotice, useWebResearch]);
+
+    function restoreGenerationBase() {
+      if (!generationBaseContentRef.current) return;
+      setLastContent(generationBaseContentRef.current);
+      generationBaseContentRef.current = "";
+    }
+  }, [activeWriteJob, onDraftSaved, onGenerationResult, onRevisionCompleted, refresh, routerReplace, setBusy, setNotice, useWebResearch]);
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;
+    generationBaseContentRef.current = "";
     setBusy("generate");
     setNotice("");
     setGenerateStage("准备写作任务");
@@ -224,6 +252,7 @@ export function useWriterGeneration({
         inputSummary: activeTitle ? `${activeTitle} · ${mode === "topic" ? "自由输入" : "素材改写"}` : undefined,
         href: "/writer",
         input: {
+          action: "create",
           targetType,
           platform: targetType === "account" ? selectedAccount?.platform : undefined,
           accountId: targetType === "account" ? selectedAccount?.id : undefined,
@@ -233,6 +262,8 @@ export function useWriterGeneration({
           sourceText: preparedSourceText || normalizedSourceText,
           supportDocLinks: supportDocLinks.trim() || undefined,
           brief: brief.trim() || undefined,
+          preparedResearch: briefResearch.trim() || undefined,
+          preparedContextFingerprint: briefContextFingerprint || undefined,
           save: true,
           useWebResearch
         }
@@ -250,20 +281,79 @@ export function useWriterGeneration({
     }
   }, [
     activeTitle,
+    brief,
+    briefContextFingerprint,
+    briefResearch,
     canGenerate,
     mode,
     normalizedPrompt,
     normalizedSourceText,
     preparedSourceText,
-    brief,
-    supportDocLinks,
     selectedAccount,
     selectedProject,
     setBusy,
     setNotice,
     startTask,
+    supportDocLinks,
     targetType,
     useWebResearch
+  ]);
+
+  const handleRevise = useCallback(async () => {
+    if (!canRevise || !lastDraftBase) return;
+    generationBaseContentRef.current = lastContent;
+    setBusy("generate");
+    setNotice("");
+    setGenerateStage("准备续改任务");
+    setGenerateProgress(6);
+
+    const isProject = lastDraftBase.targetType === "project";
+    try {
+      const job = await startTask({
+        kind: "write-copy",
+        title: "继续修改文案",
+        inputSummary: `V${(lastDraftBase.version?.revision || 1) + 1} · ${revisionScope === "selection" ? "选中段落" : "全文"}`,
+        href: "/writer",
+        input: {
+          action: "revise",
+          targetType: isProject ? "project" : "account",
+          platform: isProject ? undefined : lastDraftBase.platform,
+          accountId: isProject ? undefined : lastDraftBase.accountId,
+          projectId: isProject ? lastDraftBase.projectId : undefined,
+          mode: lastDraftBase.mode,
+          prompt: lastDraftBase.prompt,
+          sourceText: lastDraftBase.input,
+          save: true,
+          parentDraftId: lastDraftId,
+          currentContent: lastContent,
+          revisionInstruction: revisionInstruction.trim(),
+          revisionScope,
+          selectedText: revisionScope === "selection" ? selectedText : undefined
+        }
+      });
+      setActiveWriteJobId(job.id);
+      setGenerateStage(job.message);
+      setGenerateProgress(job.progress);
+      setNotice("续改任务已开始，完成后会新增一个版本。");
+    } catch (err) {
+      generationBaseContentRef.current = "";
+      setNotice(err instanceof Error ? err.message : "续改任务启动失败，请稍后重试。");
+      setGenerateStage("任务启动失败");
+      setGenerateProgress(0);
+      setActiveWriteJobId("");
+      setBusy("");
+    }
+  }, [
+    canRevise,
+    lastContent,
+    lastDraftBase,
+    lastDraftId,
+    revisionInstruction,
+    revisionScope,
+    selectedText,
+    setBusy,
+    setNotice,
+    startTask
   ]);
 
   const handleStopGenerate = useCallback(async () => {
@@ -276,37 +366,52 @@ export function useWriterGeneration({
     }
   }, [activeWriteJobId, cancelTask, setNotice]);
 
+  const saveCurrentContent = useCallback(async () => {
+    if (!lastContent || !lastDraftBase) return null;
+    if (lastDraftId && lastSavedContent === lastContent) return { draftId: lastDraftId, draft: null };
+
+    const version = nextManualDraftVersion(lastDraftBase, lastDraftId);
+    const payload: DraftSaveInput = lastDraftBase.targetType === "project"
+      ? { ...lastDraftBase, version, content: lastContent }
+      : { ...lastDraftBase, version, content: lastContent };
+    const draft = await saveDraft(payload);
+    setLastDraftId(draft.id);
+    setLastSavedContent(lastContent);
+    setLastDraftBase(draftToSaveBase(draft));
+    onDraftSaved?.(draft);
+    routerReplace(buildWriterDraftHref(draft), { scroll: false });
+    await refresh();
+    return { draftId: draft.id, draft };
+  }, [lastContent, lastDraftBase, lastDraftId, lastSavedContent, onDraftSaved, refresh, routerReplace]);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!hasUnsavedChanges) return;
+    setBusy("save-draft");
+    setNotice("");
+    try {
+      const saved = await saveCurrentContent();
+      if (saved?.draft) setNotice(`手动编辑已保存为 V${saved.draft.version?.revision || 1}。`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "保存编辑失败，请稍后重试。");
+    } finally {
+      setBusy("");
+    }
+  }, [hasUnsavedChanges, saveCurrentContent, setBusy, setNotice]);
+
   const handleOpenAssets = useCallback(async () => {
     if (!lastContent || !lastDraftBase) return;
     setBusy("assets");
     setNotice("");
     try {
-      let draftId = lastDraftId;
-      if (!draftId || lastSavedContent !== lastContent) {
-        const payload: DraftSaveInput =
-          lastDraftBase.targetType === "project"
-            ? {
-                ...lastDraftBase,
-                content: lastContent
-              }
-            : {
-                ...lastDraftBase,
-                content: lastContent
-              };
-        const draft = await saveDraft(payload);
-        draftId = draft.id;
-        setLastDraftId(draft.id);
-        setLastSavedContent(lastContent);
-        onDraftSaved?.(draft);
-        await refresh();
-      }
-      routerPush(`/assets?draftId=${encodeURIComponent(draftId)}`);
+      const saved = await saveCurrentContent();
+      if (!saved?.draftId) throw new Error("当前稿件尚未保存");
+      routerPush(`/assets?draftId=${encodeURIComponent(saved.draftId)}`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "打开评论生成失败，请先保存当前结果后重试。");
     } finally {
       setBusy("");
     }
-  }, [lastContent, lastDraftBase, lastDraftId, lastSavedContent, onDraftSaved, refresh, routerPush, setBusy, setNotice]);
+  }, [lastContent, lastDraftBase, routerPush, saveCurrentContent, setBusy, setNotice]);
 
   const copyLast = useCallback(async () => {
     if (!lastContent) return;
@@ -315,8 +420,9 @@ export function useWriterGeneration({
   }, [lastContent, setNotice]);
 
   const loadDraftResult = useCallback((draft: Draft) => {
+    generationBaseContentRef.current = "";
     setLastContent(draft.content);
-    setLastResearch("");
+    setLastResearch(draft.research || "");
     setLastSavedContent(draft.content);
     setLastDraftId(draft.id);
     setLastDraftBase(draftToSaveBase(draft));
@@ -325,6 +431,7 @@ export function useWriterGeneration({
   }, []);
 
   const clearDraftResult = useCallback(() => {
+    generationBaseContentRef.current = "";
     setLastContent("");
     setLastResearch("");
     setLastSavedContent("");
@@ -337,50 +444,68 @@ export function useWriterGeneration({
 
   return {
     canGenerate,
+    canRevise,
     canStopGenerate,
     clearDraftResult,
     copyLast,
     generateProgress,
     generateStage,
+    handleContentChange: setLastContent,
     handleGenerate,
     handleOpenAssets,
+    handleRevise,
+    handleSaveEdit,
     handleStopGenerate,
+    hasUnsavedChanges,
     lastContent,
     lastDraftBase,
     lastDraftId,
+    lastDraftVersion: lastDraftBase?.version,
     lastResearch,
     loadDraftResult
   };
 }
 
-function draftToSaveBase(draft: Draft): DraftSaveBase {
-  if (draft.targetType === "project") {
-    return {
-      targetType: "project",
-      projectId: draft.projectId,
-      projectName: draft.projectName,
-      title: draft.title,
-      mode: draft.mode,
-      prompt: draft.prompt,
-      input: draft.input,
-      supportDocLinks: draft.supportDocLinks,
-      brief: draft.brief,
-      sourceDigest: draft.sourceDigest,
-      styleRef: draft.styleRef
-    };
-  }
-
+function nextManualDraftVersion(base: DraftSaveBase, parentDraftId: string): DraftVersion {
   return {
-    platform: draft.platform,
-    accountId: draft.accountId,
-    accountName: draft.accountName,
+    sessionId: base.version?.sessionId || parentDraftId,
+    parentDraftId,
+    revision: (base.version?.revision || 1) + 1,
+    instruction: "手动编辑",
+    contextFingerprint: base.version?.contextFingerprint || `legacy-${parentDraftId}`,
+    promptVersion: base.version?.promptVersion || "writer-v2",
+    origin: "manual_edit"
+  };
+}
+
+function draftToSaveBase(draft: Draft): DraftSaveBase {
+  const shared = {
     title: draft.title,
     mode: draft.mode,
     prompt: draft.prompt,
     input: draft.input,
     supportDocLinks: draft.supportDocLinks,
     brief: draft.brief,
+    research: draft.research,
     sourceDigest: draft.sourceDigest,
+    version: draft.version
+  };
+
+  if (draft.targetType === "project") {
+    return {
+      ...shared,
+      targetType: "project",
+      projectId: draft.projectId,
+      projectName: draft.projectName,
+      styleRef: draft.styleRef
+    };
+  }
+
+  return {
+    ...shared,
+    platform: draft.platform,
+    accountId: draft.accountId,
+    accountName: draft.accountName,
     styleRef: draft.styleRef
   };
 }

@@ -13,11 +13,20 @@ export type AccountTranscriptExport = {
   transcriptCount: number;
 };
 
-export async function createAccountTranscriptDocx(platform: Platform, accountId: string): Promise<AccountTranscriptExport> {
+export async function createAccountTranscriptDocx(
+  platform: Platform,
+  accountId: string,
+  videoIds?: string[]
+): Promise<AccountTranscriptExport> {
   const account = await getAccountDetail(platform, accountId);
+  const selectedIds = videoIds?.length ? new Set(videoIds) : null;
+  const videos = selectedIds ? account.videos.filter((video) => selectedIds.has(video.id)) : account.videos;
+  if (selectedIds && videos.length !== selectedIds.size) {
+    throw new Error("部分所选视频已不存在，请刷新列表后重试。");
+  }
   const items = (
     await Promise.all(
-      account.videos.map(async (video) => ({
+      videos.map(async (video) => ({
         video,
         transcript: await readTranscript(platform, account.id, video.id)
       }))
@@ -51,7 +60,7 @@ export async function createAccountTranscriptDocx(platform: Platform, accountId:
 
   return {
     buffer: await Packer.toBuffer(doc),
-    fileName: `${safeFileName(account.name)}-全部转写稿.docx`,
+    fileName: `${safeFileName(account.name)}-${selectedIds ? "所选" : "全部"}转写稿.docx`,
     transcriptCount: items.length
   };
 }

@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { randomUUID } from "crypto";
 import path from "path";
 import type { Response as UndiciResponse } from "undici";
 import {
@@ -28,6 +29,7 @@ import {
   readProjectStyleMeta,
   readStyle,
   resolveAccount,
+  resolveDraft,
   resolveProject,
   saveDraft,
   saveAccountStyleSampleAnalysis,
@@ -90,6 +92,7 @@ export type ChatCompletionResult = {
 };
 
 export type WriteCopyInput = {
+  action?: "create" | "revise";
   platform?: Platform;
   accountId?: string;
   targetType?: "account" | "project";
@@ -99,8 +102,15 @@ export type WriteCopyInput = {
   sourceText?: string;
   supportDocLinks?: string;
   brief?: string;
+  preparedResearch?: string;
+  preparedContextFingerprint?: string;
   save?: boolean;
   useWebResearch?: boolean;
+  parentDraftId?: string;
+  currentContent?: string;
+  revisionInstruction?: string;
+  revisionScope?: "full" | "selection";
+  selectedText?: string;
 };
 
 export type PreparedWriteContext = {
@@ -113,7 +123,9 @@ export type PreparedWriteContext = {
   briefFallbackReason?: string;
   briefModel: string;
   research?: string;
+  contextFingerprint: string;
   sourceDigest: WriteSourceDigest;
+  allowLocalFallback?: boolean;
   draftBase?: Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
 };
 
@@ -201,6 +213,7 @@ const WRITE_BRIEF_REASONING_EFFORT: ChatReasoningEffort = "medium";
 export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "medium";
 export const WRITE_COPY_MAX_OUTPUT_TOKENS = 2600;
 const WRITE_BRIEF_MAX_OUTPUT_TOKENS = 1400;
+const WRITE_PROMPT_VERSION = "writer-v2";
 const WRITE_ACCOUNT_SAMPLE_LIMIT = 8;
 const WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT = 4;
 const WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS = 4200;
@@ -281,7 +294,7 @@ function formatStrictChatError(error: unknown) {
 
 function strictChatFailureAction(kind: ModelErrorKind) {
   if (kind === "not_configured") return "请配置 CHAT_API_KEY / OPENAI_API_KEY、CHAT_BASE_URL 和 CHAT_MODEL。";
-  if (kind === "auth") return "请检查 CHAT_API_KEY / OPENAI_API_KEY；如果使用备用模型，也检查 CHAT_FALLBACK_API_KEY / FHL_API_KEY。";
+  if (kind === "auth") return "请检查主模型或 CHAT_FALLBACK_* 备用模型的 API Key。";
   if (kind === "quota") return "请检查模型额度是否不足，必要时补余额或切换到可用的备用对话模型。";
   if (kind === "endpoint") return "请检查 CHAT_BASE_URL、CHAT_WIRE_API、CHAT_RESPONSES_URL 或 CHAT_COMPLETIONS_URL。";
   if (kind === "network") return "请检查网络、中转站地址和 CHAT_PROXY_URL。";
@@ -2382,13 +2395,14 @@ export async function writeCopy(input: WriteCopyInput, options: { signal?: Abort
     maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS
   });
   throwIfAborted(options.signal);
-  const content = result.text || buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
+  const content = resolvePreparedWriteContent(prepared, result);
   const draft = await savePreparedDraft(input, prepared, content);
 
   return {
     content,
     brief: prepared.brief,
     research: prepared.research,
+    contextFingerprint: prepared.contextFingerprint,
     sourceDigest: prepared.sourceDigest,
     draft,
     usedModel: result.model,
@@ -2404,19 +2418,14 @@ export async function completePreparedWriteCopy(input: {
   signal?: AbortSignal;
 }): Promise<WriteResult> {
   throwIfAborted(input.signal);
-  const content =
-    input.result.text ||
-    buildFallbackCopy(
-      input.prepared.fallbackName,
-      input.prepared.fallbackStyle,
-      input.prepared.fallbackInput
-    );
+  const content = resolvePreparedWriteContent(input.prepared, input.result);
   const draft = await savePreparedDraft({ save: input.save }, input.prepared, content);
 
   return {
     content,
     brief: input.prepared.brief,
     research: input.prepared.research,
+    contextFingerprint: input.prepared.contextFingerprint,
     sourceDigest: input.prepared.sourceDigest,
     draft,
     usedModel: input.result.model,
@@ -2432,6 +2441,7 @@ export async function prepareWriteBrief(input: WriteCopyInput, options: { signal
   return {
     brief: prepared.brief,
     research: prepared.research,
+    contextFingerprint: prepared.contextFingerprint,
     sourceDigest: prepared.sourceDigest,
     targetTitle: prepared.draftBase?.title || makeTitleFromPrompt(input.prompt),
     usedModel: prepared.briefModel,
@@ -2442,6 +2452,10 @@ export async function prepareWriteBrief(input: WriteCopyInput, options: { signal
 
 export async function prepareWriteCopyContext(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<PreparedWriteContext> {
   throwIfAborted(options.signal);
+  if (input.action === "revise") {
+    return prepareWriteRevisionContext(input, options);
+  }
+
   const normalizedInput = await normalizeWriteCopyInput(input, options);
   throwIfAborted(options.signal);
 
@@ -2462,9 +2476,15 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
     normalizedInput.mode === "topic"
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
       : `请按账号风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
-  const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
-  const webContext = normalizedInput.useWebResearch ? await buildWebResearchContext(normalizedInput, options) : "未启用联网检索。";
-  const research = buildReferenceSummary({
+  const contextFingerprint = buildWriteContextFingerprint(normalizedInput);
+  const preparedResearch = reusablePreparedResearch(normalizedInput, contextFingerprint);
+  const supportDocContext = preparedResearch || await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
+  const webContext = preparedResearch
+    ? "已复用准备 Brief 时取得的外部资料。"
+    : normalizedInput.useWebResearch
+      ? await buildWebResearchContext(normalizedInput, options)
+      : "未启用联网检索。";
+  const research = preparedResearch || buildReferenceSummary({
     supportDocLinks: normalizedInput.supportDocLinks,
     supportDocContext,
     useWebResearch: normalizedInput.useWebResearch,
@@ -2523,6 +2543,7 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
     briefFallbackReason: briefResult.fallbackReason,
     briefModel: briefResult.model,
     research,
+    contextFingerprint,
     sourceDigest,
     draftBase: {
       platform: normalizedInput.platform,
@@ -2534,7 +2555,9 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
       input: normalizedInput.sourceText,
       supportDocLinks: normalizedInput.supportDocLinks,
       brief: writingBrief,
+      research,
       sourceDigest,
+      version: createInitialDraftVersion(contextFingerprint),
       styleRef: {
         platform: normalizedInput.platform,
         accountId: normalizedInput.accountId,
@@ -2542,6 +2565,135 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
         videoIds: samples.map((sample) => sample.video.id)
       }
     }
+  };
+}
+
+async function prepareWriteRevisionContext(
+  input: WriteCopyInput,
+  options: { signal?: AbortSignal } = {}
+): Promise<PreparedWriteContext> {
+  throwIfAborted(options.signal);
+  if (!input.parentDraftId) throw new Error("请选择要继续修改的稿件版本");
+
+  const instruction = input.revisionInstruction?.trim() || "";
+  if (!instruction) throw new Error("请填写本轮修改要求");
+
+  const currentContent = input.currentContent?.trim() || "";
+  if (!currentContent) throw new Error("当前稿件内容为空，无法继续修改");
+
+  const scope = input.revisionScope === "selection" ? "selection" : "full";
+  const selectedText = input.selectedText?.trim() || "";
+  if (scope === "selection" && !selectedText) {
+    throw new Error("请先在稿件中选中需要修改的段落");
+  }
+
+  const resolved = await resolveDraft(input.parentDraftId);
+  const parent = resolved.draft;
+  const isProject = parent.targetType === "project";
+  const [targetName, style] = isProject
+    ? [parent.projectName, await readProjectStyle(parent.projectId)]
+    : [parent.accountName, await readStyle(parent.platform, parent.accountId)];
+  const contextFingerprint = parent.version?.contextFingerprint || buildWriteContextFingerprint({
+    action: "create",
+    targetType: isProject ? "project" : "account",
+    platform: isProject ? undefined : parent.platform,
+    accountId: isProject ? undefined : parent.accountId,
+    projectId: isProject ? parent.projectId : undefined,
+    mode: parent.mode,
+    prompt: parent.prompt,
+    sourceText: parent.input,
+    supportDocLinks: parent.supportDocLinks,
+    useWebResearch: parent.sourceDigest?.webResearchEnabled
+  });
+  const sourceDigest = parent.sourceDigest || buildWriteSourceDigest({
+    mode: parent.mode,
+    prompt: parent.prompt,
+    sourceText: parent.input
+  });
+  const version = {
+    sessionId: parent.version?.sessionId || parent.id,
+    parentDraftId: parent.id,
+    revision: (parent.version?.revision || 1) + 1,
+    instruction,
+    contextFingerprint,
+    promptVersion: WRITE_PROMPT_VERSION,
+    origin: "revision" as const
+  };
+  const scopeInstruction = scope === "selection"
+    ? `只重写下面选中的段落，并把修改后的段落放回原位置。除必要衔接外，其他段落保持不变。\n\n选中段落：\n${selectedText}`
+    : "按本轮要求修改全文；没有被要求调整的事实、结构和表达尽量保持不变。";
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: [
+        "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
+        "只输出修改后的完整成稿，不解释修改过程，不输出差异说明。",
+        "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
+        "不得添加原稿、原始素材、Brief 或已保存参考资料中没有依据的新事实。"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: [
+        `参考对象：${targetName}`,
+        `当前版本：V${parent.version?.revision || 1}`,
+        `本轮修改要求：\n${instruction}`,
+        `修改范围：\n${scopeInstruction}`,
+        `写作 Brief：\n${clampText(parent.brief || "未保存 Brief，请以当前稿件为准。", 12_000)}`,
+        `风格卡：\n${clampText(style, 12_000)}`,
+        parent.input ? `原始素材：\n${clampText(parent.input, 16_000)}` : "原始素材：未保存",
+        parent.research ? `已保存参考资料：\n${clampText(parent.research, 16_000)}` : "已保存参考资料：无",
+        `当前完整稿件：\n${clampText(currentContent, 70_000)}`,
+        [
+          "输出检查：",
+          "1. 输出必须是完整成稿，不能只返回局部段落。",
+          "2. 本轮要求优先级最高，但不得突破已有事实边界。",
+          "3. 修改范围外的内容不要无故换词、换结构或删减。",
+          "4. 保留可直接口播的短句、停顿和自然互动。"
+        ].join("\n")
+      ].join("\n\n")
+    }
+  ];
+  const sharedDraftBase = {
+    title: parent.title,
+    mode: parent.mode,
+    prompt: parent.prompt,
+    input: parent.input,
+    supportDocLinks: parent.supportDocLinks,
+    brief: parent.brief,
+    research: parent.research,
+    sourceDigest,
+    version
+  };
+  const draftBase: PreparedWriteContext["draftBase"] = isProject
+    ? {
+        ...sharedDraftBase,
+        targetType: "project",
+        projectId: parent.projectId,
+        projectName: parent.projectName,
+        styleRef: parent.styleRef
+      }
+    : {
+        ...sharedDraftBase,
+        platform: parent.platform,
+        accountId: parent.accountId,
+        accountName: parent.accountName,
+        styleRef: parent.styleRef
+      };
+
+  return {
+    messages,
+    fallbackName: targetName,
+    fallbackStyle: style,
+    fallbackInput: { mode: "rewrite", prompt: instruction, sourceText: currentContent },
+    brief: parent.brief || "",
+    briefFallback: false,
+    briefModel: "revision-context",
+    research: parent.research,
+    contextFingerprint,
+    sourceDigest,
+    allowLocalFallback: false,
+    draftBase
   };
 }
 
@@ -2579,9 +2731,15 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
     input.mode === "topic"
       ? `请基于这个主题生成文案：\n${input.prompt}`
       : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文素材：\n${input.sourceText || ""}`;
-  const supportDocContext = await buildSupportDocumentContext(input.supportDocLinks, options);
-  const webContext = input.useWebResearch ? await buildWebResearchContext(input, options) : "未启用联网检索。";
-  const research = buildReferenceSummary({
+  const contextFingerprint = buildWriteContextFingerprint(input);
+  const preparedResearch = reusablePreparedResearch(input, contextFingerprint);
+  const supportDocContext = preparedResearch || await buildSupportDocumentContext(input.supportDocLinks, options);
+  const webContext = preparedResearch
+    ? "已复用准备 Brief 时取得的外部资料。"
+    : input.useWebResearch
+      ? await buildWebResearchContext(input, options)
+      : "未启用联网检索。";
+  const research = preparedResearch || buildReferenceSummary({
     supportDocLinks: input.supportDocLinks,
     supportDocContext,
     useWebResearch: input.useWebResearch,
@@ -2644,6 +2802,7 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
     briefFallbackReason: briefResult.fallbackReason,
     briefModel: briefResult.model,
     research,
+    contextFingerprint,
     sourceDigest,
     draftBase: {
       targetType: "project",
@@ -2655,7 +2814,9 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
       input: input.sourceText,
       supportDocLinks: input.supportDocLinks,
       brief: writingBrief,
+      research,
       sourceDigest,
+      version: createInitialDraftVersion(contextFingerprint),
       styleRef: {
         projectId: project.id,
         projectName: project.name,
@@ -2936,6 +3097,39 @@ function buildLocalWritingBrief(input: {
   ].join("\n\n");
 }
 
+function buildWriteContextFingerprint(input: WriteCopyInput) {
+  return shortHash(JSON.stringify({
+    targetType: input.targetType || (input.projectId ? "project" : "account"),
+    platform: input.platform || "",
+    accountId: input.accountId || "",
+    projectId: input.projectId || "",
+    mode: input.mode,
+    prompt: input.prompt.trim(),
+    sourceText: input.sourceText?.trim() || "",
+    supportDocLinks: (input.supportDocLinks || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n"),
+    useWebResearch: Boolean(input.useWebResearch)
+  }));
+}
+
+function reusablePreparedResearch(input: WriteCopyInput, contextFingerprint: string) {
+  if (input.preparedContextFingerprint !== contextFingerprint) return undefined;
+  return input.preparedResearch?.trim() || undefined;
+}
+
+function createInitialDraftVersion(contextFingerprint: string) {
+  return {
+    sessionId: `writing-${randomUUID()}`,
+    revision: 1,
+    contextFingerprint,
+    promptVersion: WRITE_PROMPT_VERSION,
+    origin: "generated" as const
+  };
+}
+
 function buildWriteSourceDigest(input: WriteCopyInput): WriteSourceDigest {
   const sourceText = input.sourceText || "";
   const extracted = extractRewriteSourceMaterial(sourceText);
@@ -3090,6 +3284,17 @@ async function normalizeRewriteSourceText(sourceText: string, options: { signal?
 
 function isNormalizedMaterialText(sourceText: string) {
   return /^素材\s*\d+\s*[：:]/m.test(sourceText);
+}
+
+function resolvePreparedWriteContent(prepared: PreparedWriteContext, result: ChatCompletionResult) {
+  if (prepared.allowLocalFallback === false && !result.ok) {
+    throw new Error(result.userMessage || result.fallbackReason || "续改没有返回完整内容，请检查模型配置后重试。");
+  }
+  if (result.text.trim()) return result.text;
+  if (prepared.allowLocalFallback === false) {
+    throw new Error(result.fallbackReason || "续改没有返回可用内容，请检查模型配置后重试。");
+  }
+  return buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
 }
 
 async function savePreparedDraft(

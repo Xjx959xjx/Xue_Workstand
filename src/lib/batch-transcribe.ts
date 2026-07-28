@@ -12,6 +12,7 @@ export type BatchTranscribeInput = {
   platform: Platform;
   accountId: string;
   limit: number | "all";
+  videoIds?: string[];
   updateStyle?: boolean;
 };
 
@@ -51,8 +52,7 @@ export async function runBatchTranscribe(
 
   const account = await resolveAccount(input.platform, input.accountId);
   const summary = await getAccountSummary(account);
-  const limit = input.limit === "all" ? summary.videos.length : Math.min(input.limit, summary.videos.length);
-  const candidates = summary.videos.slice(0, limit);
+  const candidates = selectCandidates(summary.videos, input);
 
   const result: BatchTranscribeResult = {
     account: summary,
@@ -95,6 +95,22 @@ export async function runBatchTranscribe(
   pushTiming(result, "total", totalStartedAt);
   hooks.onFinalize?.();
   return result;
+}
+
+function selectCandidates(videos: Video[], input: BatchTranscribeInput) {
+  if (input.videoIds?.length) {
+    const requestedIds = [...new Set(input.videoIds)];
+    const byId = new Map(videos.map((video) => [video.id, video]));
+    const missingIds = requestedIds.filter((videoId) => !byId.has(videoId));
+    if (missingIds.length) {
+      throw new Error(`有 ${missingIds.length} 条视频不属于当前账号，请刷新列表后重试。`);
+    }
+    return requestedIds.map((videoId) => byId.get(videoId)!);
+  }
+
+  const pendingVideos = videos.filter((video) => !videoHasTranscript(video));
+  const limit = input.limit === "all" ? pendingVideos.length : Math.min(input.limit, pendingVideos.length);
+  return pendingVideos.slice(0, limit);
 }
 
 async function processVideos(

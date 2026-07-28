@@ -50,7 +50,7 @@ export function ConfirmDialog({
           </div>
           <div>
             <h2 id="confirm-dialog-title">{title}</h2>
-            <p>{body}</p>
+            <div className="confirm-dialog-content">{body}</div>
           </div>
         </div>
         <div className="confirm-dialog-actions">
@@ -69,7 +69,7 @@ export function ConfirmDialog({
 function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onClose: () => void, onConfirm: () => void) {
   if (event.key === "Escape") {
     event.preventDefault();
-    onClose();
+    if (!busy) onClose();
     return;
   }
 

@@ -9,6 +9,29 @@ const disallowedDraftAssetsSchema = z.never({
   invalid_type_error: "草稿资产只能通过评论、弹幕或封面资产接口维护。"
 }).optional();
 
+const draftContextFields = {
+  brief: z.string().optional(),
+  research: z.string().max(120_000).optional(),
+  sourceDigest: z.object({
+    resolvedSourceText: z.string().optional(),
+    materialCount: z.number().int().min(0),
+    linkCount: z.number().int().min(0),
+    textMaterialCount: z.number().int().min(0),
+    onlyLinkCount: z.number().int().min(0),
+    supportDocProvided: z.boolean().optional(),
+    webResearchEnabled: z.boolean().optional()
+  }).optional(),
+  version: z.object({
+    sessionId: z.string().min(1),
+    parentDraftId: z.string().min(1).optional(),
+    revision: z.number().int().min(1),
+    instruction: z.string().max(4_000).optional(),
+    contextFingerprint: z.string().min(1).max(80),
+    promptVersion: z.string().min(1).max(80),
+    origin: z.enum(["generated", "revision", "manual_edit"])
+  }).optional()
+};
+
 const accountDraftSchema = z.object({
   targetType: z.literal("account").optional(),
   platform: z.enum(platforms),
@@ -19,6 +42,7 @@ const accountDraftSchema = z.object({
   prompt: z.string().min(1),
   input: z.string().optional(),
   supportDocLinks: z.string().optional(),
+  ...draftContextFields,
   content: z.string().min(1),
   assets: disallowedDraftAssetsSchema,
   styleRef: z.object({
@@ -38,6 +62,7 @@ const projectDraftSchema = z.object({
   prompt: z.string().min(1),
   input: z.string().optional(),
   supportDocLinks: z.string().optional(),
+  ...draftContextFields,
   content: z.string().min(1),
   assets: disallowedDraftAssetsSchema,
   styleRef: z.object({

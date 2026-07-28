@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, RefreshCw } from "lucide-react";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
@@ -13,35 +13,48 @@ import { makePreview } from "./_components/library-view-utils";
 import { useBilibiliStatsHydration } from "./_hooks/useBilibiliStatsHydration";
 import { useLibraryAccountDetail } from "./_hooks/useLibraryAccountDetail";
 import { useLibraryMutations } from "./_hooks/useLibraryMutations";
-import { useLibrarySelection } from "./_hooks/useLibrarySelection";
+import { useLibraryAccountSelection, useLibraryVideoSelection } from "./_hooks/useLibrarySelection";
 import { useLibraryTaskActions } from "./_hooks/useLibraryTaskActions";
 import { useLibraryTaskEffects } from "./_hooks/useLibraryTaskEffects";
 import { useLibraryTranscriptActions } from "./_hooks/useLibraryTranscriptActions";
 import { useRestoreFocus } from "./_hooks/useRestoreFocus";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
-import { useFeedback } from "@/components/FeedbackProvider";
+import { useFeedback, type FeedbackTone } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
 import { collectAccount, exportAccountTranscripts, getHealth } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import type { CollectOrder, Platform } from "@/lib/types";
+import type { AccountListItem, CollectOrder, Platform, VideoListItem } from "@/lib/types";
+
+type ConfirmIntent =
+  | { kind: "accounts"; ids: string[]; accounts: AccountListItem[]; projectNames: string[] }
+  | { kind: "videos"; platform: Platform; accountId: string; accountName: string; videos: VideoListItem[]; deletingActiveVideo: boolean }
+  | { kind: "retranscribe"; accountName: string; video: VideoListItem };
 
 export default function LibraryPage() {
+  return (
+    <Suspense fallback={<LibraryPageFallback />}>
+      <LibraryPageContent />
+    </Suspense>
+  );
+}
+
+function LibraryPageContent() {
   const { library, loading, error, refresh } = useLibrary();
   const { activeJobs, recentJobs, startTask } = useScopedTasks({
     href: "/library",
     kinds: ["account-style", "transcribe-video", "batch-transcribe"]
   });
   const { notify } = useFeedback();
-  const [selectedAccountId, setSelectedAccountId] = useState("");
-  const [selectedVideoId, setSelectedVideoId] = useState("");
   const [styleDraft, setStyleDraft] = useState("");
   const [styleLoading, setStyleLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const batchLimit = "all" as const;
+  const [notice, setNotice] = useState<{ message: string; tone: FeedbackTone } | null>(null);
+  const setMessage = useCallback((message: string, tone: FeedbackTone = "info") => {
+    setNotice(message ? { message, tone } : null);
+  }, []);
   const [openModal, setOpenModal] = useState<"" | "transcript" | "style">("");
-  const [deleteTarget, setDeleteTarget] = useState<"" | "accounts" | "videos">("");
+  const [confirmIntent, setConfirmIntent] = useState<ConfirmIntent | null>(null);
   const [collectPlatform, setCollectPlatform] = useState<Platform>("bilibili");
   const [collectName, setCollectName] = useState("");
   const [collectLimit, setCollectLimit] = useState(20);
@@ -51,15 +64,35 @@ export default function LibraryPage() {
   const [customToDate, setCustomToDate] = useState("");
   const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null);
   const [healthBusy, setHealthBusy] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
   const [lastCollect, setLastCollect] = useState<Awaited<ReturnType<typeof collectAccount>> | null>(null);
   const editModalRef = useRef<HTMLDivElement>(null);
 
   const accounts = useMemo(() => library?.accounts || [], [library?.accounts]);
   const initialLibraryLoading = loading && !library;
-  const selectedAccountMeta = useMemo(() => {
-    const first = accounts[0];
-    return accounts.find((account) => account.id === selectedAccountId) || first || null;
-  }, [accounts, selectedAccountId]);
+  const {
+    accountFilter,
+    accountManageMode,
+    accountSort,
+    filteredAccounts,
+    platformFilter,
+    selectedAccountIds,
+    selectedAccountMeta,
+    statusFilter,
+    totalMissingStyleCount,
+    totalPendingTranscriptCount,
+    totalTranscriptCount,
+    clearAccountFilters,
+    selectAccount,
+    setAccountFilter,
+    setAccountManageMode,
+    setAccountPlatformFilter,
+    setAccountSort,
+    setAccountStatusFilter,
+    setSelectedAccountIds,
+    toggleAccountManage,
+    toggleManagedAccount
+  } = useLibraryAccountSelection(accounts);
 
   const {
     accountDetail,
@@ -73,61 +106,66 @@ export default function LibraryPage() {
   const selectedAccount = accountDetail?.id === selectedAccountMeta?.id ? accountDetail : null;
 
   const {
-    accountFilter,
-    accountManageMode,
     completedCount,
+    changeSortMode,
     effectiveSortMode,
-    filteredAccounts,
+    failedCount,
     maxPrimaryMetric,
     pendingCount,
-    selectAccount,
     selectVideo,
-    selectedAccountIds,
     selectedVideo,
     selectedVideoIds,
     selectedVideoOpenUrl,
-    setAccountFilter,
-    setAccountManageMode,
-    setSelectedAccountIds,
     setSelectedVideoIds,
-    setSortMode,
+    setVideoFilter,
     setVideoManageMode,
+    setVideoStatusFilter,
+    sortDirection,
     sortedVideos,
-    totalTranscriptCount,
-    toggleAccountManage,
-    toggleManagedAccount,
     toggleVideoManage,
-    videoManageMode
-  } = useLibrarySelection({
-    accounts,
-    selectedAccount,
-    selectedAccountMeta,
-    selectedVideoId,
-    setSelectedAccountId,
-    setSelectedVideoId
-  });
-  const accountFilterHasNoMatch = Boolean(accountFilter.trim() && !filteredAccounts.length);
-  const visibleSelectedAccountMeta = accountFilterHasNoMatch ? null : selectedAccountMeta;
-  const visibleSelectedAccount = accountFilterHasNoMatch ? null : selectedAccount;
-  const visibleSelectedVideo = accountFilterHasNoMatch ? null : selectedVideo;
-  const visibleSortedVideos = accountFilterHasNoMatch ? [] : sortedVideos;
+    videoFilter,
+    videoManageMode,
+    videoStatusFilter
+  } = useLibraryVideoSelection(selectedAccount);
 
   const openTranscriptEditor = useCallback(() => setOpenModal("transcript"), []);
-  const closeDeleteDialog = useCallback(() => setDeleteTarget(""), []);
+  const closeDeleteDialog = useCallback(() => setConfirmIntent(null), []);
   const closeEditorModal = useCallback(() => setOpenModal(""), []);
-  const requestDeleteAccounts = useCallback(() => setDeleteTarget("accounts"), []);
-  const requestDeleteVideos = useCallback(() => setDeleteTarget("videos"), []);
+  const requestDeleteAccounts = useCallback(() => {
+    const selected = accounts.filter((account) => selectedAccountIds.includes(account.id));
+    if (!selected.length) return;
+    const selectedIds = new Set(selected.map((account) => account.id));
+    const projectNames = (library?.projects || [])
+      .filter((project) => project.sourceAccountIds.some((accountId) => selectedIds.has(accountId)))
+      .map((project) => project.name);
+    setConfirmIntent({ kind: "accounts", ids: selected.map((account) => account.id), accounts: selected, projectNames });
+  }, [accounts, library?.projects, selectedAccountIds]);
+  const requestDeleteVideos = useCallback(() => {
+    if (!selectedAccount) return;
+    const videos = selectedAccount.videos.filter((video) => selectedVideoIds.includes(video.id));
+    if (!videos.length) return;
+    setConfirmIntent({
+      kind: "videos",
+      platform: selectedAccount.platform,
+      accountId: selectedAccount.id,
+      accountName: selectedAccount.name,
+      videos,
+      deletingActiveVideo: Boolean(selectedVideo && videos.some((video) => video.id === selectedVideo.id))
+    });
+  }, [selectedAccount, selectedVideo, selectedVideoIds]);
 
   const {
     activeTranscript,
     clearTranscript,
+    handleRestoreTranscript,
     handleSaveTranscript,
+    invalidateTranscript,
     openTranscriptModal,
     selectedVideoHasTranscript,
-    setTranscript,
-    setTranscriptVideoId,
     transcriptLoading,
+    transcriptRestoring,
     transcriptPreview,
+    transcriptVersions,
     updateTranscriptDraft
   } = useLibraryTranscriptActions({
     refresh,
@@ -159,15 +197,13 @@ export default function LibraryPage() {
     reloadSelectedAccountDetail,
     selectedAccount,
     selectedVideo,
+    invalidateTranscript,
     setAccountDetail,
     setMessage,
-    setStyleDraft,
-    setTranscript,
-    setTranscriptVideoId
+    setStyleDraft
   });
 
-  const { generateBatchStyle, handleGenerateStyle, handleTranscribe } = useLibraryTaskActions({
-    batchLimit,
+  const { generateBatchStyle, handleBatchTranscribe, handleGenerateStyle, handleTranscribe } = useLibraryTaskActions({
     refresh,
     reloadSelectedAccountDetail,
     selectedAccount,
@@ -194,31 +230,20 @@ export default function LibraryPage() {
     refresh,
     reloadSelectedAccountDetail,
     selectedAccount,
-    selectedAccountIds,
-    selectedVideo,
-    selectedVideoIds,
     setAccountDetail,
     setAccountManageMode,
     setBusy,
     setMessage,
-    setSelectedAccountId,
     setSelectedAccountIds,
-    setSelectedVideoId,
     setSelectedVideoIds,
     setVideoManageMode,
     styleDraft
   });
 
-  const selectedVideoIdForTable = visibleSelectedVideo?.id || "";
+  const selectedVideoIdForTable = selectedVideo?.id || "";
   const styleLoaded = Boolean(selectedAccount && (typeof selectedAccount.style === "string" || styleDraft));
   const stylePreview = useMemo(() => makePreview(styleDraft || selectedAccount?.style || ""), [selectedAccount?.style, styleDraft]);
-  const visibleActiveTranscript = accountFilterHasNoMatch ? "" : activeTranscript;
-  const visibleSelectedVideoHasTranscript = accountFilterHasNoMatch ? false : selectedVideoHasTranscript;
-  const visibleTranscriptPreview = accountFilterHasNoMatch ? "" : transcriptPreview;
-  const visibleStyleLoaded = accountFilterHasNoMatch ? false : styleLoaded;
-  const visibleStylePreview = accountFilterHasNoMatch ? "" : stylePreview;
-  const visibleMessage = message && message !== error ? message : "";
-  const visibleMessageIsError = isErrorMessage(visibleMessage);
+  const visibleMessage = notice?.message && notice.message !== error ? notice.message : "";
   const collectDateFilter = useMemo(() => getDateFilter(collectTimeRange, customFromDate, customToDate), [
     collectTimeRange,
     customFromDate,
@@ -234,11 +259,11 @@ export default function LibraryPage() {
   useEffect(() => {
     if (!visibleMessage || isTaskProgressMessage(visibleMessage)) return;
     notify({
-      tone: visibleMessageIsError ? "error" : "success",
+      tone: notice?.tone || "info",
       message: visibleMessage,
-      action: lastCollect && visibleMessage.startsWith("采集完成") && !visibleMessageIsError ? { label: "整理账号", href: "/library" } : undefined
+      action: lastCollect && visibleMessage.startsWith("采集完成") && notice?.tone !== "error" ? { label: "整理账号", href: "/library" } : undefined
     });
-  }, [lastCollect, notify, visibleMessage, visibleMessageIsError]);
+  }, [lastCollect, notice?.tone, notify, visibleMessage]);
 
   useEffect(() => {
     if (!selectedAccount) return;
@@ -261,7 +286,7 @@ export default function LibraryPage() {
       setStyleDraft(detail.style || "");
       setOpenModal("style");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "读取账号风格卡失败");
+      setMessage(err instanceof Error ? err.message : "读取账号风格卡失败", "error");
     } finally {
       setStyleLoading(false);
     }
@@ -269,7 +294,8 @@ export default function LibraryPage() {
     reloadSelectedAccountDetail,
     selectedAccount?.style,
     selectedAccountDetailId,
-    selectedAccountDetailPlatform
+    selectedAccountDetailPlatform,
+    setMessage
   ]);
 
   const saveTranscriptDraft = useCallback(() => {
@@ -285,19 +311,33 @@ export default function LibraryPage() {
     );
   }, []);
 
+  const handleRefresh = useCallback(async () => {
+    if (refreshBusy) return;
+    setRefreshBusy(true);
+    try {
+      await refresh();
+      if (selectedAccount) await reloadSelectedAccountDetail({ force: true });
+      setMessage("账号库已刷新。", "success");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "刷新账号库失败", "error");
+    } finally {
+      setRefreshBusy(false);
+    }
+  }, [refresh, refreshBusy, reloadSelectedAccountDetail, selectedAccount, setMessage]);
+
   const handleHealthCheck = useCallback(async () => {
     setHealthBusy(true);
     setMessage("");
     setLastCollect(null);
     try {
       setHealth(await getHealth());
-      setMessage("环境检查完成。");
+      setMessage("环境检查完成。", "success");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "环境检查失败，请确认 opencli、模型或飞书配置后重试。");
+      setMessage(err instanceof Error ? err.message : "环境检查失败，请确认 opencli、模型或飞书配置后重试。", "error");
     } finally {
       setHealthBusy(false);
     }
-  }, []);
+  }, [setMessage]);
 
   const handleCollect = useCallback(async () => {
     if (!canCollect) return;
@@ -313,10 +353,10 @@ export default function LibraryPage() {
         ...collectDateFilter
       });
       setLastCollect(result);
-      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder));
+      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder), "success");
       await refresh();
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "采集失败，请检查账号名、主页链接或 opencli 配置后重试。");
+      setMessage(err instanceof Error ? err.message : "采集失败，请检查账号名、主页链接或 opencli 配置后重试。", "error");
     } finally {
       setBusy("");
     }
@@ -329,25 +369,84 @@ export default function LibraryPage() {
     collectOrder,
     collectPlatform,
     refresh,
-    setBusy
+    setBusy,
+    setMessage
   ]);
 
-  const handleExportTranscripts = useCallback(async () => {
+  const handleExportTranscripts = useCallback(async (videoIds?: string[]) => {
     if (!selectedAccount) return;
     setBusy("export-transcripts");
     setMessage("");
     try {
       const result = await exportAccountTranscripts({
         platform: selectedAccount.platform,
-        accountId: selectedAccount.id
+        accountId: selectedAccount.id,
+        videoIds
       });
-      setMessage(`已导出 ${result.transcriptCount} 份转写稿：${result.fileName}`);
+      setMessage(`已导出 ${result.transcriptCount} 份转写稿：${result.fileName}`, "success");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "导出转写稿失败");
+      setMessage(err instanceof Error ? err.message : "导出转写稿失败", "error");
     } finally {
       setBusy("");
     }
-  }, [selectedAccount, setBusy]);
+  }, [selectedAccount, setBusy, setMessage]);
+
+  const handleRecollectSelectedAccount = useCallback(async () => {
+    if (!selectedAccount || busy) return;
+    setBusy("recollect");
+    setMessage("");
+    try {
+      const result = await collectAccount({
+        platform: selectedAccount.platform,
+        name: selectedAccount.sourceUrl || selectedAccount.uid || selectedAccount.name,
+        limit: collectLimit,
+        order: collectOrder,
+        ...collectDateFilter
+      });
+      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder), "success");
+      await refresh();
+      await reloadSelectedAccountDetail({ force: true });
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "更新账号失败，请检查主页链接或采集环境后重试。", "error");
+    } finally {
+      setBusy("");
+    }
+  }, [activeTimeLabel, busy, collectDateFilter, collectLimit, collectOrder, refresh, reloadSelectedAccountDetail, selectedAccount, setBusy, setMessage]);
+
+  const handleToggleAllAccounts = useCallback(() => {
+    const visibleIds = filteredAccounts.map((account) => account.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((accountId) => selectedAccountIds.includes(accountId));
+    setSelectedAccountIds(allSelected ? [] : visibleIds);
+  }, [filteredAccounts, selectedAccountIds, setSelectedAccountIds]);
+
+  const handleToggleAllVideos = useCallback(() => {
+    const visibleIds = sortedVideos.map((video) => video.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((videoId) => selectedVideoIds.includes(videoId));
+    setSelectedVideoIds(allSelected ? [] : visibleIds);
+  }, [selectedVideoIds, setSelectedVideoIds, sortedVideos]);
+
+  const handleBatchTranscribeSelected = useCallback(() => {
+    const pendingIds = sortedVideos
+      .filter((video) => selectedVideoIds.includes(video.id) && video.transcriptStatus !== "completed")
+      .map((video) => video.id);
+    if (pendingIds.length) void handleBatchTranscribe({ videoIds: pendingIds });
+  }, [handleBatchTranscribe, selectedVideoIds, sortedVideos]);
+
+  const handleExportSelected = useCallback(() => {
+    const completedIds = sortedVideos
+      .filter((video) => selectedVideoIds.includes(video.id) && video.transcriptStatus === "completed")
+      .map((video) => video.id);
+    if (completedIds.length) void handleExportTranscripts(completedIds);
+  }, [handleExportTranscripts, selectedVideoIds, sortedVideos]);
+
+  const handleTranscribeRequest = useCallback(() => {
+    if (!selectedAccount || !selectedVideo) return;
+    if (selectedVideoHasTranscript) {
+      setConfirmIntent({ kind: "retranscribe", accountName: selectedAccount.name, video: selectedVideo });
+      return;
+    }
+    void handleTranscribe();
+  }, [handleTranscribe, selectedAccount, selectedVideo, selectedVideoHasTranscript]);
 
   if (!loading && !library?.accounts.length) {
     return (
@@ -409,9 +508,9 @@ export default function LibraryPage() {
           </div>
         </div>
         <div className="page-header-meta">
-          <button className="btn ghost" onClick={() => void refresh()} type="button">
+          <button className="btn ghost" aria-busy={refreshBusy} disabled={refreshBusy} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
-            刷新
+            {refreshBusy ? "刷新中" : "刷新"}
           </button>
         </div>
       </header>
@@ -444,17 +543,31 @@ export default function LibraryPage() {
         <AccountSidebar
           accountFilter={accountFilter}
           accountManageMode={accountManageMode}
+          accountSort={accountSort}
           accounts={filteredAccounts}
           allAccountCount={accounts.length}
           busy={busy}
           loading={initialLibraryLoading}
-          selectedAccountId={visibleSelectedAccountMeta?.id || ""}
+          platformFilter={platformFilter}
+          selectedAccountId={selectedAccountMeta?.id || ""}
           selectedAccountIds={selectedAccountIds}
+          statusFilter={statusFilter}
+          totalMissingStyleCount={totalMissingStyleCount}
+          totalPendingTranscriptCount={totalPendingTranscriptCount}
           totalTranscriptCount={totalTranscriptCount}
           onAccountFilterChange={setAccountFilter}
+          onAccountSortChange={setAccountSort}
+          onClearFilters={clearAccountFilters}
+          onPlatformFilterChange={setAccountPlatformFilter}
           onRequestDeleteAccounts={requestDeleteAccounts}
           onSelectAccount={selectAccount}
-          onToggleAccountManage={toggleAccountManage}
+          onStatusFilterChange={setAccountStatusFilter}
+          onToggleAccountManage={() => {
+            setVideoManageMode(false);
+            setSelectedVideoIds([]);
+            toggleAccountManage();
+          }}
+          onToggleAllAccounts={handleToggleAllAccounts}
           onToggleManagedAccount={toggleManagedAccount}
         />
 
@@ -463,41 +576,58 @@ export default function LibraryPage() {
           busy={busy}
           completedCount={completedCount}
           effectiveSortMode={effectiveSortMode}
+          failedCount={failedCount}
           loading={initialLibraryLoading}
           maxPrimaryMetric={maxPrimaryMetric}
           pendingCount={pendingCount}
-          selectedAccount={visibleSelectedAccount}
-          selectedAccountMeta={visibleSelectedAccountMeta}
+          selectedAccount={selectedAccount}
+          selectedAccountMeta={selectedAccountMeta}
           selectedVideoId={selectedVideoIdForTable}
+          sortDirection={sortDirection}
+          videoFilter={videoFilter}
           selectedVideoIds={selectedVideoIds}
-          videos={visibleSortedVideos}
+          videos={sortedVideos}
           videoManageMode={videoManageMode}
+          videoStatusFilter={videoStatusFilter}
+          onBatchTranscribeSelected={handleBatchTranscribeSelected}
+          onExportSelected={handleExportSelected}
           onRequestDeleteVideos={requestDeleteVideos}
           onSelectVideo={selectVideo}
-          onSortModeChange={setSortMode}
-          onToggleVideoManage={toggleVideoManage}
+          onSortModeChange={changeSortMode}
+          onToggleAllVideos={handleToggleAllVideos}
+          onToggleVideoManage={() => {
+            setAccountManageMode(false);
+            setSelectedAccountIds([]);
+            toggleVideoManage();
+          }}
+          onVideoFilterChange={setVideoFilter}
+          onVideoStatusFilterChange={setVideoStatusFilter}
         />
 
         <LibraryDetailPane
-          activeTranscript={visibleActiveTranscript}
+          activeTranscript={activeTranscript}
           busy={busy}
           loading={initialLibraryLoading}
-          selectedAccount={visibleSelectedAccount}
-          selectedVideo={visibleSelectedVideo}
-          selectedVideoHasTranscript={visibleSelectedVideoHasTranscript}
+          selectedAccount={selectedAccount}
+          selectedVideo={selectedVideo}
+          selectedVideoHasTranscript={selectedVideoHasTranscript}
           selectedVideoOpenUrl={selectedVideoOpenUrl}
-          stylePreview={visibleStylePreview}
-          styleLoaded={visibleStyleLoaded}
+          stylePreview={stylePreview}
+          styleLoaded={styleLoaded}
           styleLoading={styleLoading}
+          styleProgress={styleProgress}
           transcriptLoading={transcriptLoading}
-          transcriptPreview={visibleTranscriptPreview}
+          transcriptPreview={transcriptPreview}
           transcribeProgress={transcribeProgress}
           transcribeStage={transcribeStage}
+          onBatchTranscribe={() => void handleBatchTranscribe()}
           onExportTranscripts={handleExportTranscripts}
           onGenerateBatchStyle={generateBatchStyle}
+          onGenerateStyle={handleGenerateStyle}
           onOpenStyleModal={openStyleModal}
           onOpenTranscriptModal={openTranscriptModal}
-          onTranscribe={handleTranscribe}
+          onRecollectAccount={handleRecollectSelectedAccount}
+          onTranscribe={handleTranscribeRequest}
         />
       </section>
 
@@ -506,8 +636,11 @@ export default function LibraryPage() {
           activeTranscript={activeTranscript}
           busy={busy}
           panelRef={editModalRef}
+          restoring={transcriptRestoring}
+          versions={transcriptVersions}
           onChange={updateTranscriptDraft}
           onClose={closeEditorModal}
+          onRestore={(versionId) => void handleRestoreTranscript(versionId)}
           onSave={saveTranscriptDraft}
         />
       ) : null}
@@ -524,32 +657,101 @@ export default function LibraryPage() {
           onSaveStyle={handleSaveStyle}
         />
       ) : null}
-      {deleteTarget === "accounts" ? (
+      {confirmIntent?.kind === "accounts" ? (
         <ConfirmDialog
-          body={`会删除 ${selectedAccountIds.length} 个账号的本地资料、视频记录和转写稿。`}
+          body={<AccountDeleteImpact intent={confirmIntent} />}
           busy={busy === "account-delete"}
-          confirmLabel="删除账号"
+          confirmLabel={`删除 ${confirmIntent.ids.length} 个账号`}
           title="确认删除账号？"
           onCancel={closeDeleteDialog}
-          onConfirm={handleDeleteSelectedAccounts}
+          onConfirm={() => void handleDeleteSelectedAccounts(confirmIntent.ids)}
         />
       ) : null}
-      {deleteTarget === "videos" ? (
+      {confirmIntent?.kind === "videos" ? (
         <ConfirmDialog
-          body={`会删除 ${selectedVideoIds.length} 条视频记录，并同步删除对应转写稿。`}
+          body={<VideoDeleteImpact intent={confirmIntent} />}
           busy={busy === "video-delete"}
-          confirmLabel="删除视频"
+          confirmLabel={`删除 ${confirmIntent.videos.length} 条视频`}
           title="确认删除视频？"
           onCancel={closeDeleteDialog}
-          onConfirm={handleDeleteSelectedVideos}
+          onConfirm={() => void handleDeleteSelectedVideos({
+            platform: confirmIntent.platform,
+            accountId: confirmIntent.accountId,
+            videoIds: confirmIntent.videos.map((video) => video.id),
+            deletingActiveVideo: confirmIntent.deletingActiveVideo
+          })}
+        />
+      ) : null}
+      {confirmIntent?.kind === "retranscribe" ? (
+        <ConfirmDialog
+          body={(
+            <>
+              <p>将重新转写「{confirmIntent.video.title}」。</p>
+              <p>现有稿会先保存为历史版本，任务完成前发生的其他编辑不会被覆盖。</p>
+            </>
+          )}
+          confirmLabel="重新转写"
+          title="确认重新转写？"
+          onCancel={closeDeleteDialog}
+          onConfirm={() => {
+            closeDeleteDialog();
+            void handleTranscribe();
+          }}
         />
       ) : null}
     </div>
   );
 }
 
-function isErrorMessage(message: string) {
-  return ["失败", "没有", "未配置", "未找到", "未更新", "无法", "异常", "超时"].some((keyword) => message.includes(keyword));
+function LibraryPageFallback() {
+  return (
+    <div className="page library-page workbench-frame-page">
+      <header className="page-header">
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">账号风格</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <FileText size={20} strokeWidth={2.1} />
+            </span>
+            <div className="page-title-copy">
+              <h1>账号库</h1>
+              <p className="subtle">正在读取本地风格库。</p>
+            </div>
+          </div>
+        </div>
+      </header>
+    </div>
+  );
+}
+
+function AccountDeleteImpact({ intent }: { intent: Extract<ConfirmIntent, { kind: "accounts" }> }) {
+  const videoCount = intent.accounts.reduce((sum, account) => sum + account.videoCount, 0);
+  const transcriptCount = intent.accounts.reduce((sum, account) => sum + account.transcriptCount, 0);
+  const draftCount = intent.accounts.reduce((sum, account) => sum + account.draftCount, 0);
+  return (
+    <>
+      <p>将永久删除：{summarizeNames(intent.accounts.map((account) => account.name))}。</p>
+      <p>包含 {videoCount} 条视频、{transcriptCount} 份转写稿和 {draftCount} 份账号草稿。</p>
+      {intent.projectNames.length ? <p>还会从 {intent.projectNames.length} 个项目移除引用：{summarizeNames(intent.projectNames)}。</p> : null}
+      <p>此操作无法撤销。</p>
+    </>
+  );
+}
+
+function VideoDeleteImpact({ intent }: { intent: Extract<ConfirmIntent, { kind: "videos" }> }) {
+  const transcriptCount = intent.videos.filter((video) => video.transcriptStatus === "completed").length;
+  return (
+    <>
+      <p>将从「{intent.accountName}」永久删除：{summarizeNames(intent.videos.map((video) => video.title))}。</p>
+      <p>同时删除其中 {transcriptCount} 份转写稿，并清理账号草稿里的视频引用。</p>
+      <p>此操作无法撤销。</p>
+    </>
+  );
+}
+
+function summarizeNames(names: string[]) {
+  const visible = names.slice(0, 3).map((name) => `「${name}」`).join("、");
+  return names.length > 3 ? `${visible} 等 ${names.length} 项` : visible;
 }
 
 function formatCollectMessage(

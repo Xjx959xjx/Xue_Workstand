@@ -344,8 +344,14 @@
   font-size: 16px;
 }
 
-.confirm-dialog-body p {
-  margin: 8px 0 0;
+.confirm-dialog-content {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.confirm-dialog-body .confirm-dialog-content p {
+  margin: 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.65;

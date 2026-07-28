@@ -19,7 +19,7 @@ import {
   getEngagementRecords,
   refreshEngagementRecords
 } from "@/lib/client";
-import type { EngagementRecord } from "@/lib/types";
+import type { EngagementGenerationMode, EngagementRecord } from "@/lib/types";
 
 export default function AssetsPage() {
   return <AssetsPageContent />;
@@ -31,8 +31,9 @@ function AssetsPageContent() {
   const [sourceInput, setSourceInput] = useState("");
   const [includeComments, setIncludeComments] = useState(true);
   const [includeDanmaku, setIncludeDanmaku] = useState(false);
-  const [commentCount, setCommentCount] = useState(100);
+  const [commentCount, setCommentCount] = useState(50);
   const [danmakuCount, setDanmakuCount] = useState(50);
+  const [generationMode, setGenerationMode] = useState<EngagementGenerationMode>("quick");
   const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
   const [records, setRecords] = useState<EngagementRecord[]>(() => getCachedEngagementRecords()?.records ?? []);
@@ -40,13 +41,23 @@ function AssetsPageContent() {
 
   const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持") || notice.includes("请");
 
-  const { activeTitle, canGenerate, handleGenerate, resultRecord, setResultRecord } = useEngagementGeneration({
+  const {
+    activeTitle,
+    canGenerate,
+    generationProgress,
+    handleGenerate,
+    handleSupplement,
+    previewComments,
+    resultRecord,
+    setResultRecord
+  } = useEngagementGeneration({
     activeJobs,
     busy,
     commentCount,
     danmakuCount,
     includeComments,
     includeDanmaku,
+    generationMode,
     recentJobs,
     setBusy,
     setNotice,
@@ -205,10 +216,13 @@ function AssetsPageContent() {
               danmakuCount={danmakuCount}
               includeComments={includeComments}
               includeDanmaku={includeDanmaku}
+              generationMode={generationMode}
+              generationProgress={generationProgress}
               sourceInput={sourceInput}
               onCommentCountChange={setCommentCount}
               onDanmakuCountChange={setDanmakuCount}
               onGenerate={handleGenerate}
+              onGenerationModeChange={setGenerationMode}
               onIncludeCommentsChange={setIncludeComments}
               onIncludeDanmakuChange={setIncludeDanmaku}
               onSourceInputChange={setSourceInput}
@@ -217,9 +231,11 @@ function AssetsPageContent() {
             <EngagementResultsPane
               busy={busy}
               includeDanmaku={includeDanmaku}
+              previewComments={previewComments}
               resultRecord={resultRecord}
               onCopyText={copyText}
               onExportWord={(record) => void handleExportRecord(record)}
+              onSupplement={(record) => void handleSupplement(record)}
               onPublishAssetText={handlePublishAssetText}
             />
           </div>

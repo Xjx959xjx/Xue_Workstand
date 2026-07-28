@@ -45,6 +45,8 @@ npm run dev
 - `OPENCLI_WINDOW`：opencli 浏览器窗口模式，Windows 专用包默认 `background`，减少刷新时反复弹出浏览器窗口。
 - `FFMPEG_BIN`：默认使用 `ffmpeg`，抖音和无字幕 B站回退转写时会先抽取音频。
 - `STYLE_LIBRARY_DIR`：本地风格库目录，默认 `./style-library`。
+- `WECOM_ACCOUNT_SHEET_URL`：可选。配置企业微信在线表格链接后，数据维护里的抖音 / B站账号配对和报价以在线表为准，通过 `wecom-cli` 读取；在线表暂时不可用时默认显示本地账号缓存并提示警告。
+- `WECOM_CLI_BIN`、`WECOM_ACCOUNT_SHEET_CACHE_TTL_MS`、`WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL`：在线账号表读取命令、缓存时长和本地回退开关。
 - `JOB_MAX_ACTIVE`：后台任务最大同时运行数，默认 `2`，允许 `1-6`；多任务会先排队再执行。
 - `JOB_HISTORY_LIMIT`：任务历史保留条数，默认 `200`，允许 `50-1000`，超出后自动清理更早的已结束任务。
 - `VOLCENGINE_ASR_API_KEY`：火山引擎录音文件识别 2.0 API Key。
@@ -56,7 +58,7 @@ npm run dev
 - `DOUYIN_TRANSCRIBE_CONCURRENCY`：抖音批量转写并发数，默认 `3`，建议保持在 `1-4`。
 - `DOUYIN_HOTLIST_REFRESH_CONCURRENCY`：视频热榜账号刷新并发数，默认 `5`，允许 `1-5`；OpenCLI、抖音或 B站页面不稳定时可调回 `1-2`。变量名沿用旧版抖音热榜配置。
 - `CHAT_API_KEY`、`CHAT_BASE_URL`、`CHAT_RESPONSES_URL`、`CHAT_COMPLETIONS_URL`、`CHAT_MODEL`、`CHAT_WIRE_API`、`CHAT_REASONING_EFFORT`、`CHAT_SERVICE_TIER`：主对话模型配置，用于自动提炼风格和生成文案。新中转站如果只兼容 OpenAI Chat Completions，可设 `CHAT_WIRE_API=chat_completions`；不确定时可设 `CHAT_WIRE_API=auto`，系统会在 Responses 不兼容时自动切到 Chat Completions。`CHAT_SERVICE_TIER=priority` 可显式请求中转站 / Codex 的快速服务层，和 `xhigh` 推理档位是两件事。`CHAT_BASE_URL` 可以填中转站根地址，也可以用 `CHAT_RESPONSES_URL` / `CHAT_COMPLETIONS_URL` 指定完整接口地址。`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 也会作为主模型配置读取。
-- `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：备用对话模型配置。默认备用地址和模型是旧配置 `https://www.fhl.mom` / `gpt-5.5` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。
+- `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：第一备用对话模型配置。默认备用地址和模型是旧配置 `https://www.fhl.mom` / `gpt-5.5` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。还可按相同后缀配置 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`，系统会依次尝试。
 - `CHAT_PROXY_URL`：可选。若 Node/Next 直连模型服务失败，可设为本机代理，例如 `http://127.0.0.1:7890`。
 - `CHAT_HEALTH_PROBE_TIMEOUT_MS`：对话模型健康检查探针超时，默认 `8000` 毫秒，允许 `2000-30000`。
 - `ENGAGEMENT_MODEL_CONCURRENCY`：评论生成并发批次数，默认 `4`，建议保持在 `1-4` 之间；中转站限流或超时时可先调回 `1`。
@@ -65,11 +67,15 @@ npm run dev
 
 如果没有配置对话模型，风格卡和写作链路会使用本地兜底模板生成可编辑结果，便于先跑通流程。评论 / 弹幕生成依赖可用的对话模型；鉴权、限流或模型未配置会直接失败，不会静默切到本地模板。
 
-评论生成页位于 `/assets`，可基于已保存草稿、粘贴文案或 B站 / 抖音视频链接生成观众评论，并可按需生成弹幕。评论和弹幕使用对话模型；链接提取沿用现有视频转写链路，普通网页内容请改用粘贴文案。当前默认会生成 `100` 条评论，评论高批量场景会按 `25` 条一批并发生成；如果模型中转站限流，可把 `ENGAGEMENT_MODEL_CONCURRENCY` 调低。
+账号库位于 `/library`，支持按平台、转写和风格状态筛选账号，并按标题、转写状态及数据指标筛选排序视频；筛选条件和当前选择会写入 URL，刷新后可恢复。批量模式可对当前筛选结果选择、转写或导出。手动保存、重新转写和历史恢复都使用 revision 冲突保护；覆盖前的旧稿归档到账号目录的 `transcripts/.history/<video-id>/`，可在转写稿编辑器中查看并恢复。
+
+对话写作页位于 `/writer`。首稿、模型续改和手动编辑都会保存为同一写作会话下的独立版本，可在右侧历史栏切换，不会覆盖上一版；旧草稿会按单版本会话继续读取。准备 Brief 后生成首稿会复用已经取得的支持文档和联网资料，续改则只读取当前稿件、已保存 Brief / 资料摘要和风格卡，不会重复转写链接或重新联网。选中稿件段落后可以只改局部，但模型仍会返回并保存完整新稿。
+
+评论生成页位于 `/assets`，可基于已保存草稿、粘贴文案或 B站 / 抖音视频链接生成观众评论，并可按需生成弹幕。评论和弹幕使用对话模型；输入中只要包含支持的视频链接（包括带标题、口令的整段分享文案），就必须先沿用现有视频转写链路取得文稿，不能把分享文案直接当正文生成；普通网页内容请改用粘贴文案。评论默认生成 `50` 条，可选“快速自然”或“参考热评”：快速模式在完成链接转写后直接从文稿提取本地锚点，不额外抓热评或调用模型做素材摘要；参考模式最多读取一组同类热评。评论按最多 `40` 条一批并发生成，单批失败时会保存其余可用结果，并可在结果区继续补齐原记录；如果模型中转站限流，可把 `ENGAGEMENT_MODEL_CONCURRENCY` 调低。链接文稿、评论锚点和热评研究会缓存在 `style-library/engagement/.cache/`，这些内容是可重新生成的派生缓存，不属于评论历史资产。
 
 抖音账号名采集会调用 `opencli douyin search <账号名> -f json` 解析 `sec_uid`；如果本机 opencli 暂未提供该适配器，可以先填写抖音主页链接或 `sec_uid` 采集。
 
-视频热榜页位于 `/douyin-hotlist`（历史路径保留）。它维护一个独立的本地对标账号池，可添加抖音或 B站账号；关注列表保存在 `style-library/douyin-hotlist/watchlist.json`，账号和抓取结果保存在 `style-library/douyin-hotlist/accounts/<account>/`；这里添加账号不会写入主账号库 `style-library/douyin/` 或 `style-library/bilibili/`。
+视频热榜页位于 `/douyin-hotlist`（历史路径保留）。它维护一个独立的本地对标账号池，可添加抖音或 B站账号；关注列表保存在 `style-library/douyin-hotlist/watchlist.json`，账号和抓取结果保存在 `style-library/douyin-hotlist/accounts/<account>/`；这里添加账号不会写入主账号库 `style-library/douyin/` 或 `style-library/bilibili/`。抓取通过任务中心在后台运行，可查看账号级进度或停止任务；自动刷新按最近一次全量检查计时，单账号手动抓取不会推迟全量刷新。
 
 抖音转写会优先复用已采集的媒体地址，必要时再调用 `opencli douyin user-videos` 刷新地址，然后由本机 `ffmpeg` 抽取 16kHz 单声道低码率 mp3，并通过火山引擎录音文件识别 2.0 的 `audio.data` 提交转写，避免火山服务端直接拉取带防盗链的抖音 URL。批量转写抖音视频时会先按账号预取一次媒体地址，再使用小并发转写，以减少重复 opencli 查询和火山任务排队带来的等待；如果本机网络、opencli、ffmpeg 或火山接口限流不稳定，可把 `DOUYIN_TRANSCRIBE_CONCURRENCY` 调回 `1`。B站视频仍优先使用公开字幕，没有字幕时会尝试下载后抽音频转写。
 

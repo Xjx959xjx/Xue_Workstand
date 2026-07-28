@@ -7,17 +7,25 @@ import {
 import {
   getAccountSummary,
   getProjectSummary,
+  readEngagementCache,
   resolveAccount,
   resolveDraft,
+  resolveEngagementRecord,
   resolveProject,
   saveEngagementRecord,
   saveVideoAssetFields,
-  updateDraftAssets
+  updateEngagementRecord,
+  updateDraftAssets,
+  writeEngagementCache
 } from "./storage";
+import { extractFirstLinkFromInput } from "./platform-links";
 import { transcribeLinkSource } from "./transcription";
 import {
   Draft,
   DraftCommentAsset,
+  EngagementGenerationMode,
+  EngagementGenerationRequest,
+  EngagementGenerationTimings,
   EngagementRecord,
   Platform
 } from "./types";
@@ -36,16 +44,25 @@ type EngagementOptions = {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
+  generationMode?: EngagementGenerationMode;
 };
 
-export type GenerateEngagementInput = EngagementOptions & (
-  | { sourceType: "draft"; draftId: string }
-  | { sourceType: "text"; title?: string; text: string }
-  | { sourceType: "url"; url: string }
-);
+type NormalizedEngagementOptions = EngagementRecord["options"] & {
+  generationMode: EngagementGenerationMode;
+};
+
+export type GenerateEngagementInput = EngagementGenerationRequest;
+
+export type EngagementGenerationProgress = {
+  stage: "source" | "brief" | "research" | "generate" | "filter";
+  message: string;
+  progress: number;
+  previewComments?: DraftCommentAsset[];
+};
 
 export type GenerateEngagementOptions = {
   signal?: AbortSignal;
+  onProgress?: (progress: EngagementGenerationProgress) => void | Promise<void>;
 };
 
 type SourceContext = {
@@ -112,19 +129,21 @@ type CommentEntityGuard = {
   allowedModelKeys: Set<string>;
 };
 
-const COMMENT_GENERATION_BATCH_SIZE = 25;
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v2";
+const COMMENT_GENERATION_BATCH_SIZE = 40;
 const COMMENT_PROMPT_VARIANTS = [
   "这批偏向第一反应式短评，多给共鸣、代入、随手接话的感觉；不要都写成完整判断句。",
-  "这批偏向挑具体卖点、配置、价格或使用场景接话，不要空泛夸好。",
+  "这批偏向挑具体细节、型号、画面、数字、配置、价格或使用场景接话，不要空泛夸好。",
   "这批偏向提问、追问、补充观点，让评论区像有人继续接话；问题句不要都用“会不会/是不是”。",
   "这批偏向经验对照和个人感受，像把自己的经历往里套一下。",
   "这批偏向轻度反转、意外点和细节观察，不要写成总结。",
   "这批偏向实用判断和真实取舍，像在评论区说自己会不会这么做。",
   "这批偏向真实观望和保留意见，可以问缺点、门槛、适不适合自己。",
-  "这批偏向围观感和讨论感，像在跟其他观众一起看热闹。"
+  "这批偏向围观感、圈内闲聊和轻度跑题，像在跟其他观众一起看热闹。"
 ] as const;
 const COMMENT_MODEL_CONCURRENCY = clampCount(Number.parseInt(process.env.ENGAGEMENT_MODEL_CONCURRENCY || "", 10), 1, 4, 4);
-const COMMENT_GENERATION_MAX_ROUNDS = 3;
+const COMMENT_GENERATION_MAX_ROUNDS = 2;
+const COMMENT_RESEARCH_QUERY_LIMIT = 1;
 const ENABLE_MODEL_COMMENT_GENERATION =
   getChatRuntimeConfig().configured && process.env.ENGAGEMENT_MODEL_COMMENTS !== "0";
 const KNOWN_ENGAGEMENT_TERM_CORRECTIONS: { pattern: RegExp; replacement: string }[] = [
@@ -142,16 +161,39 @@ const KNOWN_ENGAGEMENT_TERM_CORRECTIONS: { pattern: RegExp; replacement: string 
 ];
 
 export async function generateEngagement(input: GenerateEngagementInput, runOptions: GenerateEngagementOptions = {}) {
+  const totalStartedAt = Date.now();
   throwIfAborted(runOptions.signal);
-  const options = normalizeEngagementOptions(input);
+  const normalizedInput = normalizeEngagementSourceInput(input);
+  const options = normalizeEngagementOptions(normalizedInput);
   if (!options.includeComments && !options.includeDanmaku) {
     throw new Error("请至少选择评论或弹幕。");
   }
 
-  const prepared = await prepareEngagementSource(input, options, runOptions.signal);
+  await emitEngagementProgress(runOptions, {
+    stage: "source",
+    message: normalizedInput.sourceType === "url" ? "正在转写链接视频，取得文稿后再生成评论" : normalizedInput.sourceType === "record" ? "正在读取原评论记录" : "正在整理素材",
+    progress: 10
+  });
+  const sourceStartedAt = Date.now();
+  const prepared = await prepareEngagementSource(normalizedInput, options, runOptions.signal);
+  const sourceMs = Date.now() - sourceStartedAt;
+  await emitEngagementProgress(runOptions, {
+    stage: "brief",
+    message: options.generationMode === "reference" ? "正在整理素材并准备热评参考" : "正在提取评论锚点",
+    progress: 24
+  });
   throwIfAborted(runOptions.signal);
   const commentsPromise = options.includeComments
-    ? generateComments(prepared.content, prepared.contexts, options.commentCount, prepared.platform, runOptions.signal)
+    ? generateComments({
+        source: prepared.content,
+        contexts: prepared.contexts,
+        count: options.commentCount,
+        platform: prepared.platform,
+        generationMode: options.generationMode,
+        excludedComments: prepared.existingRecord?.comments?.items.map((item) => item.text) || [],
+        signal: runOptions.signal,
+        onProgress: runOptions.onProgress
+      })
     : Promise.resolve(null);
   const danmakuPromise = options.includeDanmaku
     ? generateDanmaku(prepared.content, prepared.contexts, options.danmakuCount, runOptions.signal)
@@ -159,21 +201,23 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
   const [comments, danmaku] = await Promise.all([commentsPromise, danmakuPromise]);
   throwIfAborted(runOptions.signal);
 
+  const timings: EngagementGenerationTimings = {
+    sourceMs,
+    briefMs: comments?.briefMs || 0,
+    researchMs: comments?.researchMs || 0,
+    generationMs: comments?.generationMs || 0,
+    totalMs: Date.now() - totalStartedAt,
+    cacheHits: uniqueCacheHits([...(prepared.cacheHits || []), ...(comments?.cacheHits || [])])
+  };
+  const savedComments = comments
+    ? buildSavedCommentAsset(comments, options.commentCount, options.generationMode, timings)
+    : undefined;
+
   let draft: Draft | undefined;
   if (prepared.draft) {
     draft = await updateDraftAssets(prepared.draft.id, (current) => ({
       ...current,
-      comments: comments
-        ? {
-            generatedAt: nowIso(),
-            requestedCount: options.commentCount,
-            usedModel: comments.usedModel,
-            fallback: comments.fallback,
-            fallbackReason: comments.fallbackReason,
-            diagnostics: comments.diagnostics,
-            items: comments.items
-          }
-        : current.comments,
+      comments: savedComments || current.comments,
       danmaku: danmaku
         ? {
             generatedAt: nowIso(),
@@ -187,42 +231,72 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
     }));
   }
 
-  const record = await saveEngagementRecord({
-    sourceType: input.sourceType,
-    title: prepared.content.title,
-    sourceAccountName: prepared.sourceAccountName,
-    sourceUrl: prepared.sourceUrl,
-    resolvedUrl: prepared.resolvedUrl,
-    platform: prepared.platform,
-    draftId: prepared.draft?.id,
-    sourceText: prepared.content.content,
-    options,
-    comments: comments
-      ? {
-          generatedAt: nowIso(),
-          requestedCount: options.commentCount,
-          usedModel: comments.usedModel,
-          fallback: comments.fallback,
-          fallbackReason: comments.fallbackReason,
-          diagnostics: comments.diagnostics,
-          items: comments.items
-        }
-      : undefined,
-    danmaku: danmaku
-      ? {
-          generatedAt: nowIso(),
-          requestedCount: options.danmakuCount,
-          usedModel: danmaku.usedModel,
-          fallback: danmaku.fallback,
-          fallbackReason: danmaku.fallbackReason,
-          items: danmaku.items
-        }
-      : undefined,
-    fallback: Boolean(comments?.fallback || danmaku?.fallback || prepared.fallback),
-    fallbackReason: [prepared.fallbackReason, comments?.fallbackReason, danmaku?.fallbackReason]
-      .filter(Boolean)
-      .join("；") || undefined
-  });
+  const generatedDanmaku = danmaku
+    ? {
+        generatedAt: nowIso(),
+        requestedCount: options.danmakuCount,
+        usedModel: danmaku.usedModel,
+        fallback: danmaku.fallback,
+        fallbackReason: danmaku.fallbackReason,
+        items: danmaku.items
+      }
+    : undefined;
+
+  const record = prepared.existingRecord
+    ? await updateEngagementRecord(prepared.existingRecord.id, (current) => {
+        const targetCount = current.comments?.requestedCount || current.options.commentCount;
+        const mergedItems = savedComments
+          ? mergeCommentItems(current.comments?.items || [], savedComments.items).slice(0, targetCount)
+          : current.comments?.items || [];
+        const nextComments = savedComments
+          ? {
+              ...savedComments,
+              requestedCount: targetCount,
+              actualCount: mergedItems.length,
+              partial: mergedItems.length < targetCount,
+              diagnostics: mergeSupplementDiagnostics(current.comments?.diagnostics, savedComments.diagnostics, mergedItems.length - (current.comments?.items.length || 0)),
+              items: mergedItems
+            }
+          : current.comments;
+        return {
+          ...current,
+          options: {
+            ...current.options,
+            generationMode: options.generationMode
+          },
+          comments: nextComments,
+          danmaku: generatedDanmaku || current.danmaku,
+          fallback: Boolean(nextComments?.fallback || generatedDanmaku?.fallback || current.fallback),
+          fallbackReason: [prepared.fallbackReason, nextComments?.fallbackReason, generatedDanmaku?.fallbackReason]
+            .filter(Boolean)
+            .join("；") || undefined
+        };
+      })
+    : await saveEngagementRecord({
+        sourceType: prepared.sourceType,
+        title: prepared.content.title,
+        sourceAccountName: prepared.sourceAccountName,
+        sourceUrl: prepared.sourceUrl,
+        resolvedUrl: prepared.resolvedUrl,
+        platform: prepared.platform,
+        draftId: prepared.draft?.id,
+        sourceText: prepared.content.content,
+        options,
+        comments: savedComments,
+        danmaku: generatedDanmaku,
+        fallback: Boolean(comments?.fallback || danmaku?.fallback || prepared.fallback),
+        fallbackReason: [prepared.fallbackReason, comments?.fallbackReason, danmaku?.fallbackReason]
+          .filter(Boolean)
+          .join("；") || undefined
+      });
+
+  if (prepared.existingRecord?.draftId && record.comments) {
+    const updatedDraft = await updateDraftAssets(prepared.existingRecord.draftId, (current) => ({
+      ...current,
+      comments: record.comments
+    }));
+    draft = updatedDraft.targetType === "account" || updatedDraft.targetType === "project" ? updatedDraft : draft;
+  }
 
   return {
     draft,
@@ -230,6 +304,73 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
     comments: record.comments,
     danmaku: record.danmaku
   };
+}
+
+async function emitEngagementProgress(
+  options: GenerateEngagementOptions,
+  progress: EngagementGenerationProgress
+) {
+  throwIfAborted(options.signal);
+  await options.onProgress?.(progress);
+}
+
+function buildSavedCommentAsset(
+  comments: Awaited<ReturnType<typeof generateComments>>,
+  requestedCount: number,
+  generationMode: EngagementGenerationMode,
+  timings: EngagementGenerationTimings
+) {
+  return {
+    generatedAt: nowIso(),
+    requestedCount,
+    actualCount: comments.items.length,
+    partial: comments.items.length < requestedCount,
+    generationMode,
+    engineVersion: ENGAGEMENT_ENGINE_VERSION,
+    timings,
+    usedModel: comments.usedModel,
+    fallback: comments.fallback,
+    fallbackReason: comments.fallbackReason,
+    diagnostics: comments.diagnostics,
+    items: comments.items
+  };
+}
+
+function mergeCommentItems(existing: DraftCommentAsset[], incoming: DraftCommentAsset[]) {
+  const seen = new Set(existing.map((item) => commentFingerprint(item.text)));
+  const merged = [...existing];
+  for (const item of incoming) {
+    const key = commentFingerprint(item.text);
+    if (!key || seen.has(key) || isNearDuplicateComment(item.text, merged.map((entry) => entry.text))) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged.map((item, index) => ({ ...item, id: `comment-${index + 1}-${shortHash(item.text)}` }));
+}
+
+function mergeSupplementDiagnostics(
+  existing: NonNullable<NonNullable<Draft["assets"]>["comments"]>["diagnostics"],
+  incoming: NonNullable<NonNullable<Draft["assets"]>["comments"]>["diagnostics"],
+  supplementedCount: number
+) {
+  if (!incoming) return existing;
+  const existingGeneration = existing?.generation;
+  const incomingGeneration = incoming.generation;
+  if (!incomingGeneration) return incoming;
+  const existingBatches = existingGeneration?.batches || [];
+  return {
+    ...incoming,
+    generation: {
+      ...incomingGeneration,
+      batchCount: existingBatches.length + incomingGeneration.batches.length,
+      supplementedCount: (existingGeneration?.supplementedCount || 0) + Math.max(supplementedCount, 0),
+      batches: [...existingBatches, ...incomingGeneration.batches].map((batch, index) => ({ ...batch, index }))
+    }
+  };
+}
+
+function uniqueCacheHits(values: EngagementGenerationTimings["cacheHits"]) {
+  return [...new Set(values)];
 }
 
 export async function generateDraftEngagement(input: {
@@ -245,7 +386,8 @@ export async function generateDraftEngagement(input: {
     includeComments: true,
     commentCount: input.commentCount,
     includeDanmaku: supportsDanmaku,
-    danmakuCount: input.danmakuCount
+    danmakuCount: input.danmakuCount,
+    generationMode: "quick"
   });
   const next = result.draft ?? resolved.draft;
   return {
@@ -269,18 +411,41 @@ async function buildSourceContexts(draft: Draft, options: { includeDanmaku: bool
   return [await buildAccountSourceContext(draft.platform, draft.accountId, draft.accountName, draft.styleRef.videoIds || [], options)];
 }
 
-async function prepareEngagementSource(input: GenerateEngagementInput, options: EngagementRecord["options"], signal?: AbortSignal): Promise<{
+async function prepareEngagementSource(input: GenerateEngagementInput, options: NormalizedEngagementOptions, signal?: AbortSignal): Promise<{
   content: EngagementContent;
   contexts: SourceContext[];
   platform: Platform | "unknown";
+  sourceType: EngagementRecord["sourceType"];
   draft?: Draft;
+  existingRecord?: EngagementRecord;
   sourceUrl?: string;
   resolvedUrl?: string;
   sourceAccountName?: string;
   fallback?: boolean;
   fallbackReason?: string;
+  cacheHits?: EngagementGenerationTimings["cacheHits"];
 }> {
   throwIfAborted(signal);
+  if (input.sourceType === "record") {
+    const existingRecord = await resolveEngagementRecord(input.recordId);
+    return {
+      content: {
+        id: existingRecord.id,
+        title: normalizeKnownEngagementTerms(existingRecord.title),
+        content: normalizeKnownEngagementTerms(existingRecord.sourceText),
+        input: existingRecord.sourceUrl || existingRecord.sourceText
+      },
+      contexts: [],
+      platform: existingRecord.platform,
+      sourceType: existingRecord.sourceType,
+      existingRecord,
+      sourceUrl: existingRecord.sourceUrl,
+      resolvedUrl: existingRecord.resolvedUrl,
+      sourceAccountName: existingRecord.sourceAccountName,
+      cacheHits: []
+    };
+  }
+
   if (input.sourceType === "draft") {
     const resolved = await resolveDraft(input.draftId);
     const draft = resolved.draft;
@@ -290,7 +455,9 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
       content: draftToEngagementContent(draft),
       contexts,
       platform,
-      draft
+      sourceType: "draft",
+      draft,
+      cacheHits: []
     };
   }
 
@@ -306,16 +473,33 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
         input: text
       },
       contexts: [],
-      platform: "unknown"
+      platform: "unknown",
+      sourceType: "text",
+      cacheHits: []
     };
   }
 
   const url = input.url.trim();
   if (!url) throw new Error("请填写视频链接。");
   try {
-    const result = await transcribeLinkSource({ url, signal });
+    const cacheKey = shortHash(`${ENGAGEMENT_ENGINE_VERSION}:source:${url}`);
+    const cached = await readEngagementCache<{
+      engineVersion: string;
+      result: Awaited<ReturnType<typeof transcribeLinkSource>>;
+    }>("source", cacheKey);
+    const cachedResult = cached?.engineVersion === ENGAGEMENT_ENGINE_VERSION && cached.result.text?.trim()
+      ? cached.result
+      : null;
+    const result = cachedResult || await transcribeLinkSource({ url, signal });
     if (result.source === "metadata" || !result.text.trim()) {
       throw new Error(result.fallbackReason || "只解析到视频标题，没有取得可用于评论生成的视频文稿。");
+    }
+    if (!cachedResult) {
+      await writeEngagementCache("source", cacheKey, {
+        engineVersion: ENGAGEMENT_ENGINE_VERSION,
+        cachedAt: nowIso(),
+        result
+      });
     }
     const content = {
       id: `url-${shortHash(result.resolvedUrl || result.url || url)}`,
@@ -328,11 +512,13 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
       content,
       contexts: [],
       platform: result.platform,
+      sourceType: "url",
       sourceUrl: result.url,
       resolvedUrl: result.resolvedUrl,
       sourceAccountName: result.sourceAccountName,
       fallback: result.fallback,
-      fallbackReason: result.fallbackReason
+      fallbackReason: result.fallbackReason,
+      cacheHits: cachedResult ? ["source"] : []
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "链接内容读取失败";
@@ -343,12 +529,29 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
   }
 }
 
-function normalizeEngagementOptions(input: EngagementOptions): EngagementRecord["options"] {
+function normalizeEngagementOptions(input: EngagementOptions): NormalizedEngagementOptions {
   return {
     includeComments: input.includeComments ?? true,
-    commentCount: clampCount(input.commentCount ?? 100, 1, 200, 100),
+    commentCount: clampCount(input.commentCount ?? 50, 1, 200, 50),
     includeDanmaku: input.includeDanmaku ?? false,
-    danmakuCount: clampCount(input.danmakuCount ?? 50, 1, 300, 50)
+    danmakuCount: clampCount(input.danmakuCount ?? 50, 1, 300, 50),
+    generationMode: input.generationMode === "reference" ? "reference" : "quick"
+  };
+}
+
+function normalizeEngagementSourceInput(input: GenerateEngagementInput): GenerateEngagementInput {
+  if (input.sourceType !== "text") return input;
+  const url = extractFirstLinkFromInput(input.text, { kind: "video" });
+  if (!url) return input;
+
+  return {
+    sourceType: "url",
+    url,
+    includeComments: input.includeComments,
+    commentCount: input.commentCount,
+    includeDanmaku: input.includeDanmaku,
+    danmakuCount: input.danmakuCount,
+    generationMode: input.generationMode
   };
 }
 
@@ -459,25 +662,46 @@ async function fetchBilibiliDanmaku(video: Awaited<ReturnType<typeof getAccountS
     .slice(0, 120);
 }
 
-async function generateComments(
-  source: EngagementContent,
-  contexts: SourceContext[],
-  count: number,
-  platform: Platform | "unknown",
-  signal?: AbortSignal
-) {
+async function generateComments(input: {
+  source: EngagementContent;
+  contexts: SourceContext[];
+  count: number;
+  platform: Platform | "unknown";
+  generationMode: EngagementGenerationMode;
+  excludedComments: string[];
+  signal?: AbortSignal;
+  onProgress?: GenerateEngagementOptions["onProgress"];
+}) {
   if (!ENABLE_MODEL_COMMENT_GENERATION) {
     throw new Error("当前未启用评论模型，已关闭本地兜底。请先配置对话模型后再生成评论。");
   }
+  const { source, contexts, count, platform, generationMode, excludedComments, signal, onProgress } = input;
   const parsed: string[] = [];
   const entityGuard = buildCommentEntityGuard(source);
-  const sourceBriefResult = await buildCommentSourceBrief(source, platform, entityGuard, signal);
+  const briefStartedAt = Date.now();
+  const sourceBriefResult = await prepareCommentSourceBrief(source, platform, entityGuard, generationMode, signal);
+  const briefMs = Date.now() - briefStartedAt;
   const sourceBrief = sourceBriefResult.brief;
-  const relatedResearchResult = normalizeCommentRelatedResearch(
-    await buildRelatedCommentResearch(sourceBrief, platform, entityGuard, signal),
-    entityGuard
-  );
+  await onProgress?.({
+    stage: generationMode === "reference" ? "research" : "generate",
+    message: generationMode === "reference" ? "正在读取热评参考" : "评论锚点已准备，正在并行生成",
+    progress: generationMode === "reference" ? 34 : 40
+  });
+
+  const researchStartedAt = Date.now();
+  const researchCacheKey = shortHash(`${ENGAGEMENT_ENGINE_VERSION}:research:${platform}:${sourceBrief.topic}:${sourceBrief.subjects.join("|")}`);
+  const cachedResearch = generationMode === "reference"
+    ? await readEngagementCache<CommentRelatedResearch>("research", researchCacheKey)
+    : null;
+  const rawResearch = generationMode === "reference"
+    ? cachedResearch || await buildRelatedCommentResearch(sourceBrief, platform, entityGuard, signal)
+    : makeEmptyRelatedResearch([]);
+  if (generationMode === "reference" && !cachedResearch) {
+    await writeEngagementCache("research", researchCacheKey, rawResearch);
+  }
+  const relatedResearchResult = normalizeCommentRelatedResearch(rawResearch, entityGuard);
   const relatedResearch = relatedResearchResult.research;
+  const researchMs = Date.now() - researchStartedAt;
   const batchResults: {
     index: number;
     requestedCount: number;
@@ -485,44 +709,39 @@ async function generateComments(
     model: string;
     fallback: boolean;
     fallbackReason?: string;
+    status: "completed" | "failed";
+    attempts: number;
   }[] = [];
   let usedModel = "model";
+  let lastBatchError: unknown;
   let nextBatchIndex = 0;
   let round = 0;
-  let selected = selectCommentSamples(parsed, sourceBrief, entityGuard, count);
+  let selected = selectCommentSamples(parsed, sourceBrief, entityGuard, count, excludedComments);
   const targetLongCommentCount = getTargetLongCommentCount(count);
   const targetIntentBuckets = buildTargetCommentIntentBuckets(count, relatedResearch);
+  const generationStartedAt = Date.now();
 
-  while (needsMoreCommentSamples(selected, count, targetLongCommentCount, targetIntentBuckets) && round < COMMENT_GENERATION_MAX_ROUNDS) {
+  while (selected.items.length < count && round < COMMENT_GENERATION_MAX_ROUNDS) {
     throwIfAborted(signal);
     const missingCount = Math.max(count - selected.items.length, 0);
-    const outputPreview = pickCommentSamplesForOutput(selected.items, count, targetLongCommentCount, targetIntentBuckets);
-    const missingLongCount = Math.max(targetLongCommentCount - countLongComments(outputPreview), 0);
-    const previewIntentBuckets = summarizeCommentIntentBuckets(outputPreview);
-    const forceLongComments = missingLongCount > 0 && (selected.items.length >= count || round >= 1);
-    const forceIntent = !forceLongComments && selected.items.length >= count
-      ? findMissingCommentIntent(previewIntentBuckets, targetIntentBuckets)
-      : undefined;
-    const requestCount = forceLongComments || forceIntent
-      ? Math.min(COMMENT_GENERATION_BATCH_SIZE, Math.max(missingLongCount + 8, 12))
-      : missingCount < COMMENT_GENERATION_BATCH_SIZE
-      ? Math.min(COMMENT_GENERATION_BATCH_SIZE, Math.max(missingCount + 8, 12))
-      : missingCount;
+    const reserveCount = round === 0
+      ? clampCount(Math.round(count * 0.12), 4, 20, 6)
+      : clampCount(Math.round(missingCount * 0.3), 3, 10, 4);
+    const requestCount = missingCount + reserveCount;
     const batches = buildCommentGenerationBatches(requestCount, nextBatchIndex);
 
     for (let start = 0; start < batches.length; start += COMMENT_MODEL_CONCURRENCY) {
       throwIfAborted(signal);
       const wave = batches.slice(start, start + COMMENT_MODEL_CONCURRENCY);
-      const recentComments = selected.items.slice(-120);
-      const waveResults = await Promise.all(
-        wave.map(async (batch, waveIndex) => {
+      const waveResults = await Promise.allSettled(
+        wave.map(async (batch) => {
           throwIfAborted(signal);
           const result = await chatCompleteStrict(
             [
               {
                 role: "system",
                 content:
-                  "你是中文短视频评论区里的随机路人，不是策划、评测师、客服或文案。评论要短中长混合、散、口语化；长一点的评论也要像路人把自己的顾虑、场景或圈内吹水顺手打出来，不像认真写作业。以给定素材和相关评论母题为边界，允许少量同品类/同圈层轻跑题，但不要编具体新闻、销量或真人经历，不要照抄真实评论，不要生成用户名，不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 数组，每项为字符串。"
+                  "你在模拟一群互不认识的中文短视频观众。每条评论来自不同的人，允许半句话、口头禅、没说完、只问一句、轻吐槽和少量跑题。不要写成评测总结、营销文案或整齐的观点清单。只能依据素材，不编造新闻、销量或使用经历；不要照抄参考评论，不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 字符串数组。"
               },
               {
                 role: "user",
@@ -532,18 +751,15 @@ async function generateComments(
                   entityGuard,
                   relatedResearch,
                   batchIndex: batch.index,
-                  batchOrder: start + waveIndex + 1,
-                  totalBatches: batches.length,
-                  batchCount: batch.count,
-                  existingComments: recentComments,
-                  forceLongComments,
-                  forceIntent,
-                  targetIntentBuckets
+                  batchCount: batch.count
                 })
               }
             ],
-            "low",
-            { signal }
+            "none",
+            {
+              signal,
+              maxOutputTokens: clampCount(batch.count * 88, 1400, 5200, 3200)
+            }
           );
           throwIfAborted(signal);
           if (result.fallback || !result.text.trim()) {
@@ -557,34 +773,69 @@ async function generateComments(
         })
       );
 
-      waveResults
-        .sort((left, right) => left.batch.index - right.batch.index)
-        .forEach(({ batch, batchParsed, result }) => {
+      waveResults.forEach((settled, index) => {
+        const batch = wave[index];
+        if (settled.status === "fulfilled") {
+          const { batchParsed, result } = settled.value;
           parsed.push(...batchParsed);
           usedModel = result.model || usedModel;
           batchResults.push({
             index: batch.index,
             requestedCount: batch.count,
-            parsedCount: batchParsed.length,
+            parsedCount: settled.value.batchParsed.length,
             model: result.model,
-            fallback: false
+            fallback: false,
+            status: "completed",
+            attempts: 1
           });
+          return;
+        }
+        lastBatchError = settled.reason;
+        batchResults.push({
+          index: batch.index,
+          requestedCount: batch.count,
+          parsedCount: 0,
+          model: "",
+          fallback: false,
+          fallbackReason: settled.reason instanceof Error ? settled.reason.message : "评论批次生成失败",
+          status: "failed",
+          attempts: 1
         });
+      });
+
+      selected = selectCommentSamples(parsed, sourceBrief, entityGuard, count, excludedComments);
+      const preview = selected.items.slice(0, count).map((text, index) =>
+        makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index)
+      );
+      await onProgress?.({
+        stage: "generate",
+        message: `首批结果已出，当前保留 ${preview.length}/${count} 条`,
+        progress: Math.min(88, 42 + Math.round((preview.length / count) * 44)),
+        previewComments: preview
+      });
     }
 
     nextBatchIndex += batches.length;
     round += 1;
-    selected = selectCommentSamples(parsed, sourceBrief, entityGuard, count);
-    if (!needsMoreCommentSamples(selected, count, targetLongCommentCount, targetIntentBuckets)) break;
+    selected = selectCommentSamples(parsed, sourceBrief, entityGuard, count, excludedComments);
   }
 
-  const selection = selectCommentSamples(parsed, sourceBrief, entityGuard, count);
-  const texts = pickCommentSamplesForOutput(selection.items, count, targetLongCommentCount, targetIntentBuckets);
-  if (texts.length < count) {
-    throw new Error(`模型只返回了 ${texts.length} 条可用评论，未达到 ${count} 条，请重试或更换模型。`);
+  const selection = selectCommentSamples(parsed, sourceBrief, entityGuard, count, excludedComments);
+  const texts = selection.items.slice(0, count);
+  if (!texts.length) {
+    throw lastBatchError instanceof Error ? lastBatchError : new Error("模型没有返回可用评论，请重试或更换模型。");
   }
+  const generationMs = Date.now() - generationStartedAt;
   const outputLengthBuckets = summarizeCommentLengthBuckets(texts.slice(0, count));
   const outputIntentBuckets = summarizeCommentIntentBuckets(texts.slice(0, count));
+  await onProgress?.({
+    stage: "filter",
+    message: texts.length < count ? `已保留 ${texts.length}/${count} 条，可在结果区补齐` : `已完成 ${texts.length} 条评论`,
+    progress: 94,
+    previewComments: texts.map((text, index) =>
+      makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index)
+    )
+  });
   const diagnostics = {
     sourceBrief: toCommentSourceBriefDiagnostics(sourceBrief),
     entityGuard: toCommentEntityGuardDiagnostics(entityGuard, [
@@ -599,7 +850,7 @@ async function generateComments(
       requestedCount: count,
       batchSize: COMMENT_GENERATION_BATCH_SIZE,
       batchCount: batchResults.length,
-      parsedCount: texts.length,
+      parsedCount: parsed.length,
       completedCount: texts.length,
       supplementedCount: 0,
       targetLongCommentCount,
@@ -619,6 +870,13 @@ async function generateComments(
     usedModel,
     fallback: false,
     fallbackReason: undefined,
+    briefMs,
+    researchMs,
+    generationMs,
+    cacheHits: [
+      ...(sourceBriefResult.cacheHit ? ["brief" as const] : []),
+      ...(cachedResearch ? ["research" as const] : [])
+    ],
     diagnostics,
     items: texts.slice(0, count).map((text, index) => makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index))
   };
@@ -641,13 +899,7 @@ function buildCommentBatchPrompt(input: {
   entityGuard: CommentEntityGuard;
   relatedResearch: CommentRelatedResearch;
   batchIndex: number;
-  batchOrder: number;
-  totalBatches: number;
   batchCount: number;
-  existingComments: string[];
-  forceLongComments: boolean;
-  forceIntent?: CommentIntent;
-  targetIntentBuckets: CommentIntentBuckets;
 }) {
   const variant = COMMENT_PROMPT_VARIANTS[input.batchIndex % COMMENT_PROMPT_VARIANTS.length];
   return `文案标题：${input.source.title}
@@ -662,38 +914,25 @@ ${formatCommentEntityGuard(input.entityGuard)}
 ${formatRelatedCommentResearch(input.relatedResearch)}
 
 原始文案节选（只用于核对，不要逐句复读）：
-${clampText(input.source.content, 2200)}
+${clampText(input.source.content, 2600)}
 
-请生成 ${input.batchCount} 条观众评论。这是当前一轮的第 ${input.batchOrder}/${input.totalBatches} 批，只输出本批 JSON 数组。
+请生成 ${input.batchCount} 条彼此独立的观众评论，只输出 JSON 数组。
 
 本批偏向：
 ${variant}
 
-本批形态配比：
-${buildCommentShapePlan(input.batchCount, { forceLongComments: input.forceLongComments })}
-
-评论角色配比参考：
-${formatCommentIntentBuckets(input.targetIntentBuckets)}
-${input.forceIntent ? `\n本批重点补：${formatForcedCommentIntent(input.forceIntent)}` : ""}
+形态方向：
+${buildCommentShapePlan(input.batchCount)}
 
 要求：
-1. 每条像真实网友在刷短视频时随手发的评论，不要每条都完整、工整、有结论。
-2. 绝大多数评论至少贴住一个具体锚点：产品/人物/事件名、数字、配置、价格、画面、场景、槽点或疑问；少量吹水可以先聊同品类/同圈层最近在卷什么，但要能回到一个锚点、场景或疑问。
-3. 短评要有半句、短问句、只接一个梗的碎片句；允许省主语、接上文、回复感和没头没尾的口水话。
-4. 长评要像真实观众补充自己的场景、顾虑或取舍，不要像评测总结。
-5. 不要把每条都写成“XX听着不错，但我这种人还要看YY”或“型号 + 有点/会不会/是不是”的工整句式。
-6. 语气自然，口语化，别像总结、复盘、客服、营销，也别像商详页复读。
-7. 不要全是夸，不要全都“种草/心动/真香”；可以有人担心缺点、质感、预算、适配场景。
-8. 不要机械重复标题里的词，不要每条都以“这”开头。
-9. 避免“这条”“这次信息量”“画面感”“莫名合理”“热梗现场”“产品力”“需求场景”“适合人群”这类明显模板味表达。
-10. 少用“确实、感觉、适合、路线、定位、配置、普通人、对我来说、我这种”这些词；要用也别连着用。
-11. 可以模拟目标观众的即时反应、犹豫、追问和轻吐槽；不要写“已下单/用了很久/回购”这类需要真实经历背书的话。
-12. 和其他批次拉开一点表达角度，不要像同一个人连续刷屏。
-13. 允许少量轻跑题吹水，比如键盘圈/外设圈/数码圈最近都在卷磁轴、铝坨坨、618 价格；不要写具体未证实新闻，不要把吹水写成科普段子。
-14. 英文数字型号只能使用“型号一致性约束”里的写法；不要凭感觉加 L、Pro、V2、Max 等源内没有的后缀。
-
-已生成评论，后续不要重复：
-${input.existingComments.join("\n") || "暂无"}`;
+1. 每条像不同网友随手发的，不追求语法完整，不要整批都像同一个人。
+2. 自然混入不同声部：使用场景、犹豫、吐槽、实际顾虑、轻度跑题、圈内闲聊、对比、观望、追问和围观；不要写出这些标签，也不要机械逐项打卡。
+3. 有些评论要落到素材里的具体细节、型号、画面或数字，有些只写第一反应；允许短句、半句、口头禅、问号和回复感，也允许少量稍长评论，但不要写成小作文或测评结论。
+4. 不要全夸，也不要每条都先夸再转折；别反复使用“确实、感觉、适合、定位、配置、我这种、对我来说”。
+5. 少复读标题，避免“产品力、需求场景、适合人群、这次信息量、画面感、莫名合理”等文案腔。
+6. 不得声称已经购买、长期使用、回购或亲历了素材没有说明的事情。
+7. 英文数字型号只能使用“型号一致性约束”里的写法，不自行添加 Pro、Max、V2 等后缀。
+8. 各条之间不要互相引用，也不要生成用户名。`;
 }
 
 async function generateDanmaku(source: EngagementContent, contexts: SourceContext[], count: number, signal?: AbortSignal) {
@@ -713,16 +952,13 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
         content: `文案：\n${clampText(source.content, 3000)}\n\n参考弹幕：\n${samples}\n\n请生成 ${count} 条弹幕，按正文节奏自然分布。`
       }
     ],
-    "low",
-    { signal }
+    "none",
+    { signal, maxOutputTokens: clampCount(count * 70, 1200, 5200, 3200) }
   );
   throwIfAborted(signal);
   const parsed = parseDanmakuArray(result.text);
   if (!parsed.length) {
     throw new Error(result.fallbackReason || "模型返回了内容，但没有解析到可用弹幕，请重试或更换模型。");
-  }
-  if (parsed.length < count) {
-    throw new Error(`模型只返回了 ${parsed.length} 条可用弹幕，未达到 ${count} 条，请重试或更换模型。`);
   }
   return {
     usedModel: result.model,
@@ -740,6 +976,107 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw new Error("任务已停止");
   }
+}
+
+async function prepareCommentSourceBrief(
+  source: EngagementContent,
+  platform: Platform | "unknown",
+  entityGuard: CommentEntityGuard,
+  generationMode: EngagementGenerationMode,
+  signal?: AbortSignal
+): Promise<{ brief: CommentSourceBrief; entityCorrections: CommentEntityCorrection[]; cacheHit: boolean }> {
+  throwIfAborted(signal);
+  const cacheKey = shortHash(
+    `${ENGAGEMENT_ENGINE_VERSION}:brief:${generationMode}:${platform}:${source.title}:${source.content}`
+  );
+  const cached = await readEngagementCache<{
+    engineVersion: string;
+    brief: CommentSourceBrief;
+  }>("brief", cacheKey);
+  if (cached?.engineVersion === ENGAGEMENT_ENGINE_VERSION && cached.brief?.summary) {
+    return { brief: cached.brief, entityCorrections: [], cacheHit: true };
+  }
+
+  const localResult = buildLocalCommentSourceBrief(source, entityGuard);
+  const needsModelBrief = generationMode === "reference" && (
+    localResult.brief.anchorTerms.length < 6 || source.content.length > 7000
+  );
+  const result = needsModelBrief
+    ? await buildCommentSourceBrief(source, platform, entityGuard, signal)
+    : localResult;
+
+  await writeEngagementCache("brief", cacheKey, {
+    engineVersion: ENGAGEMENT_ENGINE_VERSION,
+    cachedAt: nowIso(),
+    brief: result.brief
+  });
+  return { ...result, cacheHit: false };
+}
+
+function buildLocalCommentSourceBrief(
+  source: EngagementContent,
+  entityGuard: CommentEntityGuard
+): { brief: CommentSourceBrief; entityCorrections: CommentEntityCorrection[] } {
+  const sourceText = normalizeKnownEngagementTerms(buildCommentBriefSourceText(source));
+  const sentences = uniqueText(
+    sourceText
+      .split(/[\n。！？!?；;]/)
+      .map((value) => value.replace(/^[-*#\s]+/, "").trim())
+      .filter((value) => value.length >= 4 && value.length <= 120)
+  );
+  const factual = sentences.filter((value) =>
+    /\d|价格|优惠|配置|版本|画面|功能|活动|时间|地图|角色|玩法|体验|缺点|问题|支持|续航|重量|尺寸|帧|元|折/.test(value)
+  );
+  const skeptical = sentences.filter((value) =>
+    /[?？]|担心|怕|但是|不过|问题|缺点|贵|便宜|值不值|会不会|能不能|不一定|观望/.test(value)
+  );
+  const sceneSentences = sentences.filter((value) =>
+    /宿舍|办公室|家里|出门|开会|游戏|日常|通勤|学生|上班|桌面|手机|电脑|晚上|直播|剪辑/.test(value)
+  );
+  const titleTerms = source.title
+    .replace(/[#，。！？、；:：|]/g, " ")
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length >= 2 && value.length <= 18);
+  const anchorTerms = uniqueText([
+    ...entityGuard.allowedModels,
+    ...titleTerms,
+    ...extractSourceAnchorTerms(source.title),
+    ...factual.flatMap(extractSourceAnchorTerms),
+    ...sentences.slice(0, 8).flatMap(extractSourceAnchorTerms)
+  ]).slice(0, 30);
+  const subjects = uniqueText([
+    ...entityGuard.allowedModels,
+    ...titleTerms,
+    ...anchorTerms.filter((term) => /[A-Za-z0-9]|游戏|活动|产品|角色|地图|版本/.test(term))
+  ]).slice(0, 8);
+  const audiencePersonas = inferLocalAudiencePersonas(sourceText);
+
+  return {
+    brief: {
+      summary: makeEngagementTitle(sentences[0] || source.content, source.title),
+      topic: source.title,
+      subjects,
+      keyFacts: uniqueText([...factual, ...sentences]).slice(0, 12),
+      audiencePersonas,
+      viewerScenes: uniqueText(sceneSentences).slice(0, 6),
+      discussionAngles: uniqueText([...factual, ...skeptical, ...sentences]).slice(0, 10),
+      skepticalAngles: uniqueText(skeptical).slice(0, 6),
+      mustAvoid: ["素材没有说明的购买或长期使用经历", "素材没有出现的型号后缀、价格、销量或新闻"],
+      anchorTerms
+    },
+    entityCorrections: []
+  };
+}
+
+function inferLocalAudiencePersonas(sourceText: string) {
+  if (/游戏|玩家|版本|地图|角色|团本|竞技|PVE|PVP/i.test(sourceText)) {
+    return ["正在玩的玩家", "老玩家", "观望新版本的人", "看热闹的人", "机制和体验党"];
+  }
+  if (/价格|优惠|配置|型号|续航|参数|键盘|鼠标|耳机|摄像头|手机|电脑/.test(sourceText)) {
+    return ["预算党", "参数党", "实际使用党", "对比党", "先观望的人"];
+  }
+  return ["第一眼路人", "对细节好奇的人", "有类似场景的人", "观望和追问的人"];
 }
 
 async function buildCommentSourceBrief(
@@ -787,7 +1124,7 @@ ${clampText(buildCommentBriefSourceText(source), 9000)}
 - 如果素材信息很少，就如实输出少量锚点，不要补常识。`
       }
     ],
-    "medium",
+    "none",
     { signal }
   );
   throwIfAborted(signal);
@@ -1091,8 +1428,8 @@ async function buildRelatedCommentResearch(
     throwIfAborted(signal);
     try {
       const result = platform === "douyin"
-        ? await getDouyinRelatedTopicComments(query, { videoLimit: 2, commentLimit: 15 })
-        : await getBilibiliRelatedTopicComments(query, { videoLimit: 2, commentLimit: 15 });
+        ? await getDouyinRelatedTopicComments(query, { videoLimit: 2, commentLimit: 15, signal })
+        : await getBilibiliRelatedTopicComments(query, { videoLimit: 2, commentLimit: 15, signal });
       relatedVideoCount += result.videos.length;
       comments.push(...result.comments);
     } catch {
@@ -1113,7 +1450,7 @@ async function buildRelatedCommentResearch(
   }
 
   try {
-    const summarized = await summarizeRelatedCommentSamples(brief, queries, samples, signal);
+    const summarized = summarizeRelatedCommentSamples(brief, queries, samples);
     return {
       ...summarized,
       usedQueries: queries,
@@ -1165,7 +1502,7 @@ function buildRelatedCommentQueries(brief: CommentSourceBrief, entityGuard: Comm
   const queries: string[] = [];
 
   for (const term of candidates) {
-    if (queries.length >= 6) break;
+    if (queries.length >= COMMENT_RESEARCH_QUERY_LIMIT) break;
     if (/[A-Za-z0-9]/.test(term)) {
       queries.push(`${term} 评测`);
       if (/G87/i.test(term)) queries.push(`${term} 版本`);
@@ -1176,7 +1513,7 @@ function buildRelatedCommentQueries(brief: CommentSourceBrief, entityGuard: Comm
     queries.push(`${term} 评测`);
   }
 
-  return uniqueText(queries).slice(0, 6);
+  return uniqueText(queries).slice(0, COMMENT_RESEARCH_QUERY_LIMIT);
 }
 
 function buildRelatedCommentSearchTerms(brief: CommentSourceBrief, entityGuard: CommentEntityGuard) {
@@ -1377,88 +1714,47 @@ function formatCommentIntentBuckets(buckets: CommentIntentBuckets) {
   ].join(" / ");
 }
 
-function findMissingCommentIntent(current: CommentIntentBuckets, target: CommentIntentBuckets): CommentIntent | undefined {
-  const priority: CommentIntent[] = ["follow", "question", "experience", "skeptical", "comparison", "price", "chatter"];
-  return priority.find((intent) => current[intent] < getCommentIntentSoftMinimum(intent, target[intent]));
-}
-
-function getCommentIntentSoftMinimum(intent: CommentIntent, targetCount: number) {
-  if (targetCount <= 0) return 0;
-  if (intent === "follow" || intent === "comparison" || intent === "chatter") {
-    return targetCount >= 2 ? 1 : 0;
-  }
-  return Math.max(1, Math.floor(targetCount * 0.5));
-}
-
-function formatForcedCommentIntent(intent: CommentIntent) {
-  const descriptions: Record<CommentIntent, string> = {
-    reaction: "普通反应，像第一眼看到后的短句，不要太完整。",
-    question: "追问型评论，多问实际体验、版本、适配、缺点，不要自己回答。",
-    price: "价格党评论，围绕到手价、券、618、值不值、买贵没买贵。",
-    comparison: "对比党评论，拿同价位、旧键盘、其他型号或使用场景做取舍。",
-    skeptical: "观望质疑评论，担心翻车、声音、延迟、续航、做工、售后或广告味。",
-    experience: "场景经验评论，带宿舍、办公室、桌面、打游戏、码字、预算这些个人处境。",
-    follow: "插眼同问评论，比如蹲反馈、同问、有人买过吗、求实际到手价，允许低信息但要像真人。",
-    chatter: "圈内吹水/轻跑题评论，可以顺嘴聊同品类、键盘圈、外设圈、数码圈最近都在卷什么，但要回到本视频锚点或观众疑问，不要编具体新闻。"
-  };
-  return descriptions[intent];
-}
-
-async function summarizeRelatedCommentSamples(
+function summarizeRelatedCommentSamples(
   brief: CommentSourceBrief,
   queries: string[],
-  samples: string[],
-  signal?: AbortSignal
-): Promise<Pick<CommentRelatedResearch, "themes" | "phrases" | "questions" | "objections" | "longCommentPatterns" | "chatterAngles">> {
-  throwIfAborted(signal);
-  const result = await chatCompleteStrict(
-    [
-      {
-        role: "system",
-        content:
-          "你是评论区研究员。你只能从相关评论样本中提炼关注点、疑问、吐槽和口头表达，不要生成新评论，不要照抄原评论。只输出 JSON 对象。"
-      },
-      {
-        role: "user",
-        content: `原视频主题：${brief.summary}
-原视频对象：${brief.subjects.join("、") || "未知"}
-搜索词：
-${queries.map((query) => `- ${query}`).join("\n")}
-
-相关评论样本：
-${samples.slice(0, 80).map((comment) => `- ${comment}`).join("\n")}
-
-请输出 JSON 对象：
-{
-  "themes": ["评论区真实集中讨论的母题，8-12 条"],
-  "phrases": ["可借鉴的短口语词/圈内词，不要整句，10-20 个"],
-  "questions": ["适合冷启动评论里自然追问的问题，6-10 条"],
-  "objections": ["自然的观望/质疑/担心点，6-10 条"],
-  "longCommentPatterns": ["36字以上长评论常见结构，比如先说场景再问缺点/先报预算再比较/先吐槽再补充，6-10 条"],
-  "chatterAngles": ["评论区里轻跑题/圈内吹水的角度，比如最近都在卷什么、同品类热点、数码圈闲聊，4-8 条；不要编具体新闻"]
-}`
-      }
-    ],
-    "low",
-    { signal }
+  samples: string[]
+): Pick<CommentRelatedResearch, "themes" | "phrases" | "questions" | "objections" | "longCommentPatterns" | "chatterAngles"> {
+  const fragments = uniqueText(
+    samples.flatMap((sample) => sample.split(/[，,。！？!?；;：:、]/))
+      .map((value) => value.trim())
+      .filter((value) => value.length >= 2 && value.length <= 18)
   );
-  throwIfAborted(signal);
-  if (result.fallback || !result.text.trim()) {
-    throw new Error(result.fallbackReason || "相关评论母题提炼失败。");
-  }
-  const parsed = parseJsonFromText(result.text);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("相关评论母题没有解析到 JSON。");
-  }
-  const object = parsed as Record<string, unknown>;
+  const sourceAnchors = new Set(buildCommentAnchorTerms(brief));
+  const themes = uniqueText(samples.flatMap(extractSourceAnchorTerms))
+    .filter((value) => !sourceAnchors.size || sourceAnchors.has(value) || value.length <= 12)
+    .slice(0, 12);
+  const questions = samples
+    .filter((sample) => /[?？]|会不会|能不能|有没有|咋|怎么|多少|哪/.test(sample))
+    .map(toRelatedCommentExcerpt)
+    .slice(0, 10);
+  const objections = samples
+    .filter((sample) => /怕|担心|翻车|贵|便宜|观望|但是|不过|不太|别|问题|缺点/.test(sample))
+    .map(toRelatedCommentExcerpt)
+    .slice(0, 10);
+  const chatterAngles = samples
+    .filter(hasCommentChatterCue)
+    .map(toRelatedCommentExcerpt)
+    .slice(0, 8);
+  const hasLongSamples = samples.some((sample) => Array.from(sample).length >= 36);
   return {
-    themes: normalizeBriefList(object.themes, 12),
-    phrases: normalizeBriefList(object.phrases, 20),
-    questions: normalizeBriefList(object.questions, 10),
-    objections: normalizeBriefList(object.objections, 10),
-    longCommentPatterns: normalizeBriefList(object.longCommentPatterns, 10),
-    chatterAngles: normalizeBriefList(object.chatterAngles, 8)
+    themes: themes.length ? themes : uniqueText([...brief.subjects, ...queries]).slice(0, 12),
+    phrases: fragments.slice(0, 20),
+    questions: uniqueText(questions),
+    objections: uniqueText(objections),
+    longCommentPatterns: hasLongSamples
+      ? ["先说自己的处境，再顺手追问一个细节", "先轻吐槽，再补一句真实顾虑", "拿当前在用的东西或同类选择做取舍"]
+      : [],
+    chatterAngles: uniqueText(chatterAngles)
   };
+}
+
+function toRelatedCommentExcerpt(value: string) {
+  return Array.from(value.replace(/\s+/g, " ").trim()).slice(0, 28).join("");
 }
 
 function toRelatedCommentResearchDiagnostics(research: CommentRelatedResearch) {
@@ -1512,96 +1808,17 @@ function formatRelatedCommentResearch(research: CommentRelatedResearch) {
   ].filter(Boolean).join("\n");
 }
 
-function buildCommentShapePlan(count: number, options: { forceLongComments?: boolean } = {}) {
-  if (options.forceLongComments) {
-    const longCount = clampCount(Math.round(count * 0.72), 6, count, count);
-    return [
-      `- 这批是在补长评论，至少 ${longCount} 条 36-90 字。`,
-      "- 长评论必须像真实观众留言：先说自己的场景/预算/顾虑，或先顺嘴聊一句圈内最近在卷什么，再接一个具体锚点或问题。",
-      "- 允许一条里有两个逗号或一个反问，但不要分点、不要总结、不要像客服答疑。",
-      "- 其余可以是短句，用来打散节奏。"
-    ].join("\n");
-  }
-  const shortCount = clampCount(Math.round(count * 0.28), 3, 8, 4);
-  const questionCount = clampCount(Math.round(count * 0.22), 2, 7, 4);
-  const fragmentCount = clampCount(Math.round(count * 0.2), 2, 6, 4);
-  const skepticalCount = clampCount(Math.round(count * 0.16), 2, 5, 3);
-  const mediumCount = clampCount(Math.round(count * 0.28), 3, 8, 4);
-  const longCount = clampCount(Math.round(count * 0.2), 2, 7, 4);
+function buildCommentShapePlan(count: number) {
   return [
-    `- 至少 ${shortCount} 条 4-12 字短评，比如只接一个点、一个问号、一个吐槽。`,
-    `- 至少 ${mediumCount} 条 13-26 字中短句，要有具体锚点和一句口语判断。`,
-    `- 至少 ${longCount} 条 36-85 字长评论，写成真实观众的场景、顾虑、预算、对比或圈内吹水，不要写成评测结论。`,
-    `- 至少 ${questionCount} 条只问一句，不要自己回答。`,
-    `- 至少 ${fragmentCount} 条半句/碎片句，可以没句号，像评论区顺手打的。`,
-    `- 至少 ${skepticalCount} 条轻微不买账或先观望，不要全在帮视频卖货。`,
-    "- 短评里留一部分不写型号，只接视频语境或上一条评论的感觉，比如“这我真会看花”“买早的人沉默了”。",
-    "- 长评论也要口语，允许逗号和停顿，允许少量轻跑题，但不要出现分点、总分总、产品力这类写稿腔。",
-    "- 不要整批都短成关键词堆，也不要整批都像认真分析。",
-    "- 同一种开头最多用 2 次；同一个锚点不要连续刷。"
+    `- 这是 ${count} 条独立留言，不是同一个人的连续发言。`,
+    "- 让短句、半句、中等长度和少量长一点的评论自然混在一起，不要计算或展示比例。",
+    "- 允许有人只看一个细节，有人代入场景，有人犹豫、吐槽、对比、追问，也有人只是围观接话。",
+    "- 不必每条都写型号或完整结论，真实评论区本来就有信息密度差异。"
   ].join("\n");
 }
 
 function getTargetLongCommentCount(count: number) {
   return Math.max(1, Math.round(count * 0.18));
-}
-
-function needsMoreCommentSamples(
-  selection: CommentSelectionResult,
-  count: number,
-  targetLongCommentCount: number,
-  targetIntentBuckets: CommentIntentBuckets
-) {
-  if (selection.items.length < count) return true;
-  const outputPreview = pickCommentSamplesForOutput(selection.items, count, targetLongCommentCount, targetIntentBuckets);
-  if (countLongComments(outputPreview) < targetLongCommentCount) return true;
-  return Boolean(findMissingCommentIntent(summarizeCommentIntentBuckets(outputPreview), targetIntentBuckets));
-}
-
-function pickCommentSamplesForOutput(
-  items: string[],
-  count: number,
-  targetLongCommentCount: number,
-  targetIntentBuckets?: CommentIntentBuckets
-) {
-  const longItems = items.filter(isLongComment).slice(0, targetLongCommentCount);
-  const picked = new Set(longItems);
-  const output: string[] = [];
-  for (const item of items) {
-    if (picked.has(item) && output.length < targetLongCommentCount) {
-      output.push(item);
-    }
-  }
-  if (targetIntentBuckets) {
-    const intentOrder: CommentIntent[] = ["follow", "question", "experience", "skeptical", "comparison", "price", "chatter"];
-    for (const intent of intentOrder) {
-      const already = output.filter((item) => classifyCommentIntent(item) === intent).length;
-      const need = Math.max(getCommentIntentSoftMinimum(intent, targetIntentBuckets[intent]) - already, 0);
-      if (!need) continue;
-      let added = 0;
-      for (const item of items) {
-        if (output.length >= count || added >= need) break;
-        if (picked.has(item) || classifyCommentIntent(item) !== intent) continue;
-        picked.add(item);
-        output.push(item);
-        added += 1;
-      }
-    }
-  }
-  for (const item of items) {
-    if (output.length >= count) break;
-    if (picked.has(item)) continue;
-    output.push(item);
-  }
-  return output.slice(0, count);
-}
-
-function countLongComments(items: string[]) {
-  return items.filter(isLongComment).length;
-}
-
-function isLongComment(value: string) {
-  return Array.from(value).length >= 36;
 }
 
 type CommentSelectionResult = {
@@ -1624,12 +1841,14 @@ function selectCommentSamples(
   values: string[],
   sourceBrief: CommentSourceBrief | undefined,
   entityGuard: CommentEntityGuard,
-  targetCount: number
+  targetCount: number,
+  excludedValues: string[] = []
 ): CommentSelectionResult {
   const anchorTerms = sourceBrief ? buildCommentAnchorTerms(sourceBrief) : [];
-  const seen = new Set<string>();
+  const excluded = excludedValues.map((value) => value.trim()).filter(Boolean);
+  const seen = new Set(excluded.map(commentFingerprint));
   const styleCounts = new Map<string, number>();
-  const repeatedStyleLimit = clampCount(Math.round(targetCount * 0.08), 4, 12, 8);
+  const repeatedStyleLimit = clampCount(Math.round(targetCount * 0.16), 8, 24, 12);
   const output: string[] = [];
   let lowSignalRejectedCount = 0;
   let syntheticRejectedCount = 0;
@@ -1651,7 +1870,7 @@ function selectCommentSamples(
       unsupportedEntityRejectedCount += 1;
       continue;
     }
-    if (isLowSignalComment(value, anchorTerms)) {
+    if (isLowSignalComment(value)) {
       lowSignalRejectedCount += 1;
       continue;
     }
@@ -1660,7 +1879,7 @@ function selectCommentSamples(
       continue;
     }
     const key = commentFingerprint(value);
-    if (!key || seen.has(key) || isNearDuplicateComment(value, output)) {
+    if (!key || seen.has(key) || isNearDuplicateComment(value, [...excluded, ...output])) {
       nearDuplicateRejectedCount += 1;
       continue;
     }
@@ -1723,15 +1942,10 @@ function buildCommentAnchorTerms(brief: CommentSourceBrief) {
     .slice(0, 80);
 }
 
-function isLowSignalComment(value: string, anchorTerms: string[]) {
+function isLowSignalComment(value: string) {
   const normalized = normalizeCommentKey(value);
   if (!normalized) return true;
-  const hasAnchor = anchorTerms.some((term) => value.includes(term));
-  if (hasAnchor) return false;
-  if (/^(不错|可以|真香|种草了|心动了|学到了|安排了|冲了|支持|好用|太真实了|有点东西|笑死|哈哈哈|确实)$/i.test(value)) return true;
-  if (/^(这|这个|这波|感觉|真的|确实|有点|看完).{0,8}(不错|可以|实用|心动|种草|真香|离谱|合理|厉害|舒服)[。！!~～]*$/i.test(value)) return true;
-  if (/^(被种草了|已经心动了|太会了|狠狠心动|狠狠爱了)[。！!~～]*$/i.test(value)) return true;
-  return value.length <= 8 && /^(这|这个|这波|感觉|真的|确实|有点|太|很)/.test(value);
+  return /^(评论|占位|测试|示例|暂无|无内容|生成失败)[。！!~～]*$/i.test(value);
 }
 
 function isSyntheticComment(value: string, anchorTerms: string[]) {

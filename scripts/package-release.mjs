@@ -27,7 +27,7 @@ const zipArchivePath = `${releaseRoot}.zip`;
 const installerScriptPath = path.join(root, "dist", `${releaseName}.iss`);
 const installerOutputPath = path.join(root, "dist", `${releaseName}-setup.exe`);
 const presetConfig = getPresetConfig(preset);
-const bundledOpenCliVersion = "1.8.0";
+const bundledOpenCliVersion = "1.8.5";
 const openCliExtensionStoreUrl = "https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk";
 const openCliExtensionReleaseUrl = "https://github.com/jackwener/opencli/releases";
 

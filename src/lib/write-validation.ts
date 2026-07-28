@@ -3,6 +3,7 @@ import { platforms } from "./types";
 import { normalizeRewritePrompt } from "./source-extraction";
 
 export const writeCopyInputSchema = z.object({
+  action: z.enum(["create", "revise"]).optional().default("create"),
   targetType: z.enum(["account", "project"]).optional(),
   platform: z.enum(platforms).optional(),
   accountId: z.string().optional(),
@@ -12,9 +13,32 @@ export const writeCopyInputSchema = z.object({
   sourceText: z.string().optional(),
   supportDocLinks: z.string().optional(),
   brief: z.string().optional(),
+  preparedResearch: z.string().max(120_000).optional(),
+  preparedContextFingerprint: z.string().max(80).optional(),
   save: z.boolean().optional(),
-  useWebResearch: z.boolean().optional()
+  useWebResearch: z.boolean().optional(),
+  parentDraftId: z.string().min(1).optional(),
+  currentContent: z.string().max(120_000).optional(),
+  revisionInstruction: z.string().trim().max(4_000).optional(),
+  revisionScope: z.enum(["full", "selection"]).optional().default("full"),
+  selectedText: z.string().max(30_000).optional()
 }).superRefine((input, ctx) => {
+  if (input.action === "revise") {
+    if (!input.parentDraftId) {
+      ctx.addIssue({ code: "custom", message: "请选择要继续修改的稿件版本", path: ["parentDraftId"] });
+    }
+    if (!input.currentContent?.trim()) {
+      ctx.addIssue({ code: "custom", message: "当前稿件内容为空，无法继续修改", path: ["currentContent"] });
+    }
+    if (!input.revisionInstruction?.trim()) {
+      ctx.addIssue({ code: "custom", message: "请填写本轮修改要求", path: ["revisionInstruction"] });
+    }
+    if (input.revisionScope === "selection" && !input.selectedText?.trim()) {
+      ctx.addIssue({ code: "custom", message: "请先在稿件中选中需要修改的段落", path: ["selectedText"] });
+    }
+    return;
+  }
+
   const mode = input.mode;
   const prompt = normalizeRewritePrompt(input.mode, input.prompt, input.sourceText);
   const sourceText = input.sourceText?.trim() || "";

@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CircleStop, Copy, Eye, FileText, FileUp, Globe2, ListChecks, MessageSquarePlus, PenLine, RotateCcw, Send } from "lucide-react";
+import { CircleStop, Copy, Eye, FileText, FileUp, Globe2, ListChecks, MessageSquarePlus, PenLine, Save, Send } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -18,7 +18,7 @@ import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import { deleteDrafts, getCachedDrafts, getDrafts, prepareWriteBrief, renameDraft } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
-import type { Draft, WriteResult } from "@/lib/types";
+import type { Draft, WriteResult, WriteRevisionScope } from "@/lib/types";
 
 const BRIEF_PROGRESS_INITIAL = 8;
 const BRIEF_PROGRESS_CAP = 92;
@@ -51,6 +51,7 @@ function WriterPageContent() {
   const [useWebResearch, setUseWebResearch] = useState(false);
   const [brief, setBrief] = useState("");
   const [briefResearch, setBriefResearch] = useState("");
+  const [briefContextFingerprint, setBriefContextFingerprint] = useState("");
   const [briefSignature, setBriefSignature] = useState("");
   const [briefMeta, setBriefMeta] = useState<{
     usedModel: string;
@@ -61,6 +62,9 @@ function WriterPageContent() {
   const [briefStage, setBriefStage] = useState("");
   const [briefStartedAt, setBriefStartedAt] = useState<number | null>(null);
   const [preparedSourceText, setPreparedSourceText] = useState("");
+  const [revisionInstruction, setRevisionInstruction] = useState("");
+  const [revisionScope, setRevisionScope] = useState<WriteRevisionScope>("full");
+  const [selectedDraftText, setSelectedDraftText] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
@@ -123,7 +127,8 @@ function WriterPageContent() {
   const handleGenerationResult = useCallback(
     (result: WriteResult) => {
       if (result.brief) setBrief(result.brief);
-      if (result.research) setBriefResearch(result.research);
+      setBriefResearch(result.research || "");
+      setBriefContextFingerprint(result.contextFingerprint || result.draft?.version?.contextFingerprint || "");
       if (result.sourceDigest?.resolvedSourceText) {
         setPreparedSourceText(result.sourceDigest.resolvedSourceText);
       }
@@ -160,6 +165,7 @@ function WriterPageContent() {
       });
       setBrief(result.brief);
       setBriefResearch(result.research || "");
+      setBriefContextFingerprint(result.contextFingerprint);
       setPreparedSourceText(result.sourceDigest.resolvedSourceText || normalizedSourceText);
       setBriefSignature(writerInputSignature);
       setBriefMeta({
@@ -213,19 +219,31 @@ function WriterPageContent() {
     return () => window.clearInterval(timer);
   }, [briefStartedAt, busy, useWebResearch]);
 
+  const handleRevisionCompleted = useCallback(() => {
+    setRevisionInstruction("");
+    setRevisionScope("full");
+    setSelectedDraftText("");
+  }, []);
+
   const {
     canGenerate,
+    canRevise,
     canStopGenerate,
     clearDraftResult,
     copyLast,
     generateProgress,
     generateStage,
+    handleContentChange,
     handleGenerate,
     handleOpenAssets,
+    handleRevise,
+    handleSaveEdit,
     handleStopGenerate,
+    hasUnsavedChanges,
     lastContent,
     lastDraftBase,
     lastDraftId,
+    lastDraftVersion,
     lastResearch,
     loadDraftResult
   } = useWriterGeneration({
@@ -235,14 +253,20 @@ function WriterPageContent() {
     busy,
     hasTaskInput,
     brief: briefReady ? brief : "",
+    briefContextFingerprint: briefReady ? briefContextFingerprint : "",
+    briefResearch: briefReady ? briefResearch : "",
     mode: effectiveMode,
     normalizedPrompt,
     normalizedSourceText,
-    preparedSourceText,
+    preparedSourceText: briefReady ? preparedSourceText : "",
     supportDocLinks,
     recentJobs,
+    revisionInstruction,
+    revisionScope,
+    selectedText: selectedDraftText,
     onGenerationResult: handleGenerationResult,
     onDraftSaved: handleDraftSaved,
+    onRevisionCompleted: handleRevisionCompleted,
     refresh,
     routerPush: router.push,
     routerReplace: router.replace,
@@ -324,10 +348,14 @@ function WriterPageContent() {
       setSupportDocLinks(sourceDraft.supportDocLinks || "");
       setUseWebResearch(Boolean(sourceDraft.sourceDigest?.webResearchEnabled));
       setBrief(sourceDraft.brief || "");
-      setBriefResearch("");
+      setBriefResearch(sourceDraft.research || "");
+      setBriefContextFingerprint(sourceDraft.version?.contextFingerprint || "");
       setPreparedSourceText(sourceDraft.sourceDigest?.resolvedSourceText || sourceDraft.input || "");
       setBriefSignature(sourceDraft.brief ? makeDraftWriterInputSignature(sourceDraft) : "");
       setBriefMeta(sourceDraft.brief ? { usedModel: "历史记录", fallback: false } : null);
+      setRevisionInstruction("");
+      setRevisionScope("full");
+      setSelectedDraftText("");
       loadDraftResult(sourceDraft);
       return;
     }
@@ -355,9 +383,13 @@ function WriterPageContent() {
     setUseWebResearch(false);
     setBrief("");
     setBriefResearch("");
+    setBriefContextFingerprint("");
     setPreparedSourceText("");
     setBriefSignature("");
     setBriefMeta(null);
+    setRevisionInstruction("");
+    setRevisionScope("full");
+    setSelectedDraftText("");
     appliedSearchParamRef.current = searchKey;
   }, [allDrafts, historyLoading, loadDraftResult, searchParams]);
 
@@ -375,10 +407,14 @@ function WriterPageContent() {
       setSupportDocLinks(draft.supportDocLinks || "");
       setUseWebResearch(Boolean(draft.sourceDigest?.webResearchEnabled));
       setBrief(draft.brief || "");
-      setBriefResearch("");
+      setBriefResearch(draft.research || "");
+      setBriefContextFingerprint(draft.version?.contextFingerprint || "");
       setPreparedSourceText(draft.sourceDigest?.resolvedSourceText || draft.input || "");
       setBriefSignature(draft.brief ? makeDraftWriterInputSignature(draft) : "");
       setBriefMeta(draft.brief ? { usedModel: "历史记录", fallback: false } : null);
+      setRevisionInstruction("");
+      setRevisionScope("full");
+      setSelectedDraftText("");
       loadDraftResult(draft);
       router.replace(buildWriterDraftHref(draft), { scroll: false });
     },
@@ -387,14 +423,13 @@ function WriterPageContent() {
 
   const handleDeleteHistoryDraft = useCallback(
     async (draft: Draft) => {
-      const remainingDrafts = historyDrafts.filter((item) => item.id !== draft.id);
+      const replacement = findReplacementDraft(historyDrafts, new Set([draft.id]), draft);
 
       try {
         await deleteDrafts([draft.id]);
         setFullDrafts((current) => (current || []).filter((item) => item.id !== draft.id));
 
         if (draft.id === lastDraftId) {
-          const replacement = remainingDrafts[0] || null;
           if (replacement) {
             handleSelectHistoryDraft(replacement);
           } else {
@@ -406,9 +441,13 @@ function WriterPageContent() {
             setUseWebResearch(false);
             setBrief("");
             setBriefResearch("");
+            setBriefContextFingerprint("");
             setPreparedSourceText("");
             setBriefSignature("");
             setBriefMeta(null);
+            setRevisionInstruction("");
+            setRevisionScope("full");
+            setSelectedDraftText("");
             const params = new URLSearchParams({
               targetType,
               mode: effectiveMode
@@ -453,14 +492,14 @@ function WriterPageContent() {
     async (draftsToDelete: Draft[]) => {
       const draftIds = draftsToDelete.map((draft) => draft.id);
       const deletedIds = new Set(draftIds);
-      const remainingDrafts = historyDrafts.filter((item) => !deletedIds.has(item.id));
+      const currentDraft = historyDrafts.find((draft) => draft.id === lastDraftId);
+      const replacement = findReplacementDraft(historyDrafts, deletedIds, currentDraft);
 
       try {
         await deleteDrafts(draftIds);
         setFullDrafts((current) => (current || []).filter((item) => !deletedIds.has(item.id)));
 
         if (lastDraftId && deletedIds.has(lastDraftId)) {
-          const replacement = remainingDrafts[0] || null;
           if (replacement) {
             handleSelectHistoryDraft(replacement);
           } else {
@@ -472,9 +511,13 @@ function WriterPageContent() {
             setUseWebResearch(false);
             setBrief("");
             setBriefResearch("");
+            setBriefContextFingerprint("");
             setPreparedSourceText("");
             setBriefSignature("");
             setBriefMeta(null);
+            setRevisionInstruction("");
+            setRevisionScope("full");
+            setSelectedDraftText("");
             const params = new URLSearchParams({
               targetType,
               mode: effectiveMode
@@ -774,24 +817,34 @@ function WriterPageContent() {
 
             <div className="writer-result">
               <div className="section-title-row">
-                <h2>结果</h2>
+                <div className="writer-result-title">
+                  <h2>当前稿件</h2>
+                  {lastDraftId ? <span className="status-pill done">V{lastDraftVersion?.revision || 1}</span> : null}
+                  {hasUnsavedChanges ? <span className="status-pill pending">有未保存编辑</span> : null}
+                </div>
                 {lastContent ? (
                   <div className="button-row">
                     <button className="btn" onClick={copyLast} type="button">
                       <Copy aria-hidden="true" size={16} />
                       复制
                     </button>
-                    <button className="btn" disabled={busy === "feishu"} onClick={handlePublishFeishu} type="button">
+                    <button
+                      aria-busy={busy === "save-draft"}
+                      className="btn"
+                      disabled={!hasUnsavedChanges || Boolean(busy)}
+                      onClick={() => void handleSaveEdit()}
+                      type="button"
+                    >
+                      <Save aria-hidden="true" size={16} />
+                      {busy === "save-draft" ? "保存中" : "保存版本"}
+                    </button>
+                    <button className="btn" disabled={Boolean(busy)} onClick={handlePublishFeishu} type="button">
                       <FileUp aria-hidden="true" size={16} />
                       {busy === "feishu" ? "发布中…" : "飞书"}
                     </button>
-                    <button className="btn" disabled={!lastDraftBase || busy === "assets"} onClick={handleOpenAssets} type="button">
+                    <button className="btn" disabled={!lastDraftBase || Boolean(busy)} onClick={handleOpenAssets} type="button">
                       <MessageSquarePlus size={16} />
                       {busy === "assets" ? "准备中" : "评论"}
-                    </button>
-                    <button className="btn" disabled={!canGenerate} onClick={handleGenerate} type="button">
-                      <RotateCcw aria-hidden="true" size={16} />
-                      重写
                     </button>
                   </div>
                 ) : (
@@ -799,7 +852,7 @@ function WriterPageContent() {
                 )}
               </div>
               {busy === "generate" ? (
-                <div className="project-progress" role="status" aria-live="polite" style={{ marginBottom: 16 }}>
+                <div className="project-progress writer-generation-progress" role="status" aria-live="polite">
                   <div className="project-progress-copy">
                     <span>{generateStage || "正在生成"}</span>
                     <span className="button-row">
@@ -817,9 +870,86 @@ function WriterPageContent() {
                   </div>
                 </div>
               ) : null}
-              <div className={`result-box ${lastContent ? "" : "empty"}`}>
-                {busy === "generate" && !lastContent ? "等待内容。" : lastContent || "结果在这里。"}
-              </div>
+              <textarea
+                aria-label="当前稿件"
+                className={`result-box writer-draft-editor ${lastContent ? "" : "empty"}`}
+                onChange={(event) => {
+                  handleContentChange(event.target.value);
+                  setSelectedDraftText("");
+                  if (revisionScope === "selection") setRevisionScope("full");
+                }}
+                onKeyUp={(event) => {
+                  const field = event.currentTarget;
+                  setSelectedDraftText(field.value.slice(field.selectionStart, field.selectionEnd));
+                }}
+                onMouseUp={(event) => {
+                  const field = event.currentTarget;
+                  setSelectedDraftText(field.value.slice(field.selectionStart, field.selectionEnd));
+                }}
+                placeholder={busy === "generate" ? "等待内容。" : "生成结果会出现在这里。"}
+                readOnly={busy === "generate"}
+                spellCheck={false}
+                value={lastContent}
+              />
+              {lastContent ? (
+                <section className="writer-revision-composer" aria-labelledby="writer-revision-title">
+                  <div className="writer-revision-head">
+                    <div>
+                      <h3 id="writer-revision-title">继续修改</h3>
+                      <p>{selectedDraftText ? `已选中 ${selectedDraftText.length} 字` : "基于当前版本生成下一版"}</p>
+                    </div>
+                    <div aria-label="修改范围" className="segmented writer-revision-scope" role="group">
+                      <button
+                        aria-pressed={revisionScope === "full"}
+                        className={revisionScope === "full" ? "active" : ""}
+                        onClick={() => setRevisionScope("full")}
+                        type="button"
+                      >
+                        全文
+                      </button>
+                      <button
+                        aria-pressed={revisionScope === "selection"}
+                        className={revisionScope === "selection" ? "active" : ""}
+                        disabled={!selectedDraftText}
+                        onClick={() => setRevisionScope("selection")}
+                        type="button"
+                      >
+                        选中段落
+                      </button>
+                    </div>
+                  </div>
+                  <label className="writer-field">
+                    <span>本轮修改要求</span>
+                    <textarea
+                      aria-label="本轮修改要求"
+                      className="writer-textarea revision"
+                      disabled={busy === "generate"}
+                      onChange={(event) => setRevisionInstruction(event.target.value)}
+                      onKeyDown={(event) => {
+                        if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRevise) {
+                          event.preventDefault();
+                          void handleRevise();
+                        }
+                      }}
+                      placeholder="例如：开头压到 80 字，产品参数和结尾互动保持不变。"
+                      value={revisionInstruction}
+                    />
+                  </label>
+                  <div className="writer-revision-actions">
+                    <span>{revisionScope === "selection" ? "只调整选中内容，并返回完整新稿。" : "未点名部分会尽量保持不变。"}</span>
+                    <button
+                      aria-busy={busy === "generate"}
+                      className="btn primary"
+                      disabled={!canRevise}
+                      onClick={() => void handleRevise()}
+                      type="button"
+                    >
+                      <Send aria-hidden="true" size={16} />
+                      {busy === "generate" ? "生成中" : `生成 V${(lastDraftVersion?.revision || 1) + 1}`}
+                    </button>
+                  </div>
+                </section>
+              ) : null}
               {displayResearch ? (
                 <details className="style-reference">
                   <summary>
@@ -883,6 +1013,23 @@ function mergeDraftLists(...groups: Draft[][]) {
 
 function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
   return +new Date(right.createdAt) - +new Date(left.createdAt);
+}
+
+function findReplacementDraft(drafts: Draft[], deletedIds: Set<string>, currentDraft?: Draft) {
+  const remaining = drafts.filter((draft) => !deletedIds.has(draft.id));
+  if (!currentDraft) return remaining[0] || null;
+
+  const sessionId = currentDraft.version?.sessionId || currentDraft.id;
+  const currentRevision = currentDraft.version?.revision || 1;
+  const sameSession = remaining
+    .filter((draft) => (draft.version?.sessionId || draft.id) === sessionId)
+    .sort((left, right) => {
+      const leftDistance = Math.abs((left.version?.revision || 1) - currentRevision);
+      const rightDistance = Math.abs((right.version?.revision || 1) - currentRevision);
+      return leftDistance - rightDistance || compareCreatedAtDesc(left, right);
+    });
+
+  return sameSession[0] || remaining[0] || null;
 }
 
 function getBriefProgressStage(elapsedMs: number, useWebResearch: boolean) {

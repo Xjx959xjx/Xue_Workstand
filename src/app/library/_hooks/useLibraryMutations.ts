@@ -1,13 +1,10 @@
 "use client";
 
 import { useCallback, type Dispatch, type SetStateAction } from "react";
-import {
-  deleteAccounts,
-  deleteVideos,
-  saveStyle
-} from "@/lib/client";
+import { deleteAccounts, deleteVideos, saveStyle } from "@/lib/client";
 import { invalidateAccountDetail } from "@/lib/detail-cache";
-import type { AccountDetail, Platform, VideoListItem } from "@/lib/types";
+import type { AccountDetail, Platform } from "@/lib/types";
+import type { LibraryMessageSetter } from "../_components/library-view-utils";
 
 type ReloadAccountDetail = (options?: { includeStyle?: boolean; force?: boolean }) => Promise<AccountDetail | null>;
 
@@ -17,16 +14,11 @@ type UseLibraryMutationsInput = {
   refresh: () => Promise<void>;
   reloadSelectedAccountDetail: ReloadAccountDetail;
   selectedAccount: AccountDetail | null;
-  selectedAccountIds: string[];
-  selectedVideo: VideoListItem | null;
-  selectedVideoIds: string[];
   setAccountDetail: Dispatch<SetStateAction<AccountDetail | null>>;
   setAccountManageMode: Dispatch<SetStateAction<boolean>>;
   setBusy: (value: string) => void;
-  setMessage: Dispatch<SetStateAction<string>>;
-  setSelectedAccountId: Dispatch<SetStateAction<string>>;
+  setMessage: LibraryMessageSetter;
   setSelectedAccountIds: Dispatch<SetStateAction<string[]>>;
-  setSelectedVideoId: Dispatch<SetStateAction<string>>;
   setSelectedVideoIds: Dispatch<SetStateAction<string[]>>;
   setVideoManageMode: Dispatch<SetStateAction<boolean>>;
   styleDraft: string;
@@ -38,16 +30,11 @@ export function useLibraryMutations({
   refresh,
   reloadSelectedAccountDetail,
   selectedAccount,
-  selectedAccountIds,
-  selectedVideo,
-  selectedVideoIds,
   setAccountDetail,
   setAccountManageMode,
   setBusy,
   setMessage,
-  setSelectedAccountId,
   setSelectedAccountIds,
-  setSelectedVideoId,
   setSelectedVideoIds,
   setVideoManageMode,
   styleDraft
@@ -58,83 +45,81 @@ export function useLibraryMutations({
     setMessage("");
     try {
       await saveStyle(selectedAccount.platform, selectedAccount.id, styleDraft);
-      setMessage("风格卡已保存。");
+      setMessage("风格卡已保存。", "success");
       await refresh();
       await reloadSelectedAccountDetail({ includeStyle: true });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "保存失败");
+      setMessage(err instanceof Error ? err.message : "保存失败", "error");
     } finally {
       setBusy("");
     }
   }, [refresh, reloadSelectedAccountDetail, selectedAccount, setBusy, setMessage, styleDraft]);
 
-  const handleDeleteSelectedAccounts = useCallback(async () => {
-    if (!selectedAccountIds.length) return;
-    const deletingSelectedAccount = Boolean(selectedAccount && selectedAccountIds.includes(selectedAccount.id));
+  const handleDeleteSelectedAccounts = useCallback(async (accountIds: string[]) => {
+    if (!accountIds.length) return;
+    const deletingActiveAccount = Boolean(selectedAccount && accountIds.includes(selectedAccount.id));
 
     setBusy("account-delete");
     setMessage("");
     try {
-      const result = await deleteAccounts(selectedAccountIds);
-      selectedAccountIds.forEach((accountId) => {
+      const result = await deleteAccounts(accountIds);
+      accountIds.forEach((accountId) => {
         const [platform] = accountId.split(":") as [Platform, string];
         invalidateAccountDetail(platform, accountId);
       });
-      if (deletingSelectedAccount) {
-        setSelectedAccountId("");
-        setSelectedVideoId("");
-      }
       setSelectedAccountIds([]);
       setSelectedVideoIds([]);
       setAccountManageMode(false);
       closeDeleteDialog();
-      setMessage(`已删除 ${result.deleted.length} 个账号。`);
+      setMessage(`已删除 ${result.deleted.length} 个账号。`, "success");
       await refresh();
-      if (deletingSelectedAccount) setAccountDetail(null);
+      if (deletingActiveAccount) {
+        clearTranscript();
+        setAccountDetail(null);
+      }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "删除账号失败");
+      setMessage(err instanceof Error ? err.message : "删除账号失败", "error");
     } finally {
       setBusy("");
     }
   }, [
+    clearTranscript,
     closeDeleteDialog,
     refresh,
     selectedAccount,
-    selectedAccountIds,
     setAccountDetail,
     setAccountManageMode,
     setBusy,
     setMessage,
-    setSelectedAccountId,
     setSelectedAccountIds,
-    setSelectedVideoId,
     setSelectedVideoIds
   ]);
 
-  const handleDeleteSelectedVideos = useCallback(async () => {
-    if (!selectedAccount || !selectedVideoIds.length) return;
-    const deletingSelectedVideo = Boolean(selectedVideo && selectedVideoIds.includes(selectedVideo.id));
+  const handleDeleteSelectedVideos = useCallback(async (input: {
+    platform: Platform;
+    accountId: string;
+    videoIds: string[];
+    deletingActiveVideo: boolean;
+  }) => {
+    if (!input.videoIds.length) return;
 
     setBusy("video-delete");
     setMessage("");
     try {
       const result = await deleteVideos({
-        platform: selectedAccount.platform,
-        accountId: selectedAccount.id,
-        videoIds: selectedVideoIds
+        platform: input.platform,
+        accountId: input.accountId,
+        videoIds: input.videoIds
       });
-      if (deletingSelectedVideo) {
-        setSelectedVideoId("");
-        clearTranscript();
-      }
+      if (input.deletingActiveVideo) clearTranscript();
       setSelectedVideoIds([]);
       setVideoManageMode(false);
       closeDeleteDialog();
-      setMessage(`已删除 ${result.deleted.length} 条视频。`);
+      setMessage(`已删除 ${result.deleted.length} 条视频。`, "success");
       await refresh();
-      await reloadSelectedAccountDetail();
+      await reloadSelectedAccountDetail({ force: true });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "删除视频失败");
+      setMessage(err instanceof Error ? err.message : "删除视频失败", "error");
     } finally {
       setBusy("");
     }
@@ -143,12 +128,8 @@ export function useLibraryMutations({
     closeDeleteDialog,
     refresh,
     reloadSelectedAccountDetail,
-    selectedAccount,
-    selectedVideo,
-    selectedVideoIds,
     setBusy,
     setMessage,
-    setSelectedVideoId,
     setSelectedVideoIds,
     setVideoManageMode
   ]);

@@ -17,16 +17,22 @@ export async function POST(request: Request) {
     const input = await parseJsonBody(request, writeCopyInputSchema);
 
     const stream = createNdjsonStream(async (emit, signal) => {
-      emit({ type: "stage", stage: "prepare", message: "正在读取风格卡和代表样本", progress: 10 });
-      if (input.mode === "rewrite" && /https?:\/\//i.test(input.sourceText || "")) {
+      const isRevision = input.action === "revise";
+      emit({
+        type: "stage",
+        stage: "prepare",
+        message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡和代表样本",
+        progress: 10
+      });
+      if (!isRevision && input.mode === "rewrite" && /https?:\/\//i.test(input.sourceText || "")) {
         emit({ type: "stage", stage: "transcribe-links", message: "正在转写链接里的视频文稿", progress: 18 });
       }
-      if (hasFeishuDocLink(input.supportDocLinks)) {
+      if (!isRevision && hasFeishuDocLink(input.supportDocLinks)) {
         emit({ type: "stage", stage: "fetch-support-docs", message: "正在读取商单支持文档", progress: 24 });
       }
       const prepared = await prepareWriteCopyContext(input, { signal });
 
-      if (input.useWebResearch) {
+      if (!isRevision && input.useWebResearch) {
         const researchUnavailable = prepared.research?.startsWith("联网资料：模型联网暂时不可用");
         emit({
           type: "stage",
@@ -39,7 +45,12 @@ export async function POST(request: Request) {
         }
       }
 
-      emit({ type: "stage", stage: "generate", message: "正在生成文案", progress: 55 });
+      emit({
+        type: "stage",
+        stage: "generate",
+        message: isRevision ? "正在按本轮要求生成新版本" : "正在生成文案",
+        progress: 55
+      });
       const result = await streamResponseTextWithFallback({
         messages: prepared.messages,
         reasoningEffort: WRITE_COPY_REASONING_EFFORT,
@@ -50,7 +61,7 @@ export async function POST(request: Request) {
         }
       });
 
-      if (!result.text.trim()) {
+      if (!isRevision && !result.text.trim()) {
         emit({ type: "stage", stage: "fallback", message: "正在切换到本地模板", progress: 76 });
       }
 

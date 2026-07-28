@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, type Dispatch, type SetStateAction } from "react";
-import type { BatchLimit } from "../_components/library-view-utils";
 import type { AccountDetail, JobRecord, JobStartInput, VideoListItem } from "@/lib/types";
+import type { LibraryMessageSetter } from "../_components/library-view-utils";
 
 type ReloadAccountDetail = (options?: { includeStyle?: boolean; force?: boolean }) => Promise<AccountDetail | null>;
 
 type UseLibraryTaskActionsInput = {
-  batchLimit: BatchLimit;
   refresh: () => Promise<void>;
   reloadSelectedAccountDetail: ReloadAccountDetail;
   selectedAccount: AccountDetail | null;
@@ -16,7 +15,7 @@ type UseLibraryTaskActionsInput = {
   setActiveStyleJobId: Dispatch<SetStateAction<string>>;
   setActiveTranscribeJobId: Dispatch<SetStateAction<string>>;
   setBusy: (value: string) => void;
-  setMessage: Dispatch<SetStateAction<string>>;
+  setMessage: LibraryMessageSetter;
   setStyleProgress: Dispatch<SetStateAction<number>>;
   setStyleStage: Dispatch<SetStateAction<string>>;
   setTranscribeProgress: Dispatch<SetStateAction<number>>;
@@ -25,7 +24,6 @@ type UseLibraryTaskActionsInput = {
 };
 
 export function useLibraryTaskActions({
-  batchLimit,
   refresh,
   reloadSelectedAccountDetail,
   selectedAccount,
@@ -67,7 +65,7 @@ export function useLibraryTaskActions({
       setStyleStage("任务启动失败");
       setStyleProgress(0);
       setBusy("");
-      setMessage(err instanceof Error ? err.message : "自动总结失败");
+      setMessage(err instanceof Error ? err.message : "自动总结失败", "error");
     }
   }, [selectedAccount, setActiveStyleJobId, setBusy, setMessage, setStyleProgress, setStyleStage, startTask]);
 
@@ -100,12 +98,12 @@ export function useLibraryTaskActions({
       setTranscribeStage("任务启动失败");
       setTranscribeProgress(0);
       setBusy("");
-      setMessage(message);
+      setMessage(message, "error");
       try {
         await refresh();
         await reloadSelectedAccountDetail({ force: true });
       } catch (refreshErr) {
-        setMessage(`${message}；刷新页面状态失败：${refreshErr instanceof Error ? refreshErr.message : "请手动刷新后再试。"}`);
+        setMessage(`${message}；刷新页面状态失败：${refreshErr instanceof Error ? refreshErr.message : "请手动刷新后再试。"}`, "error");
       }
     }
   }, [
@@ -121,8 +119,10 @@ export function useLibraryTaskActions({
     startTask
   ]);
 
-  const handleBatchTranscribe = useCallback(async (updateStyle = false) => {
+  const handleBatchTranscribe = useCallback(async (options: { updateStyle?: boolean; videoIds?: string[] } = {}) => {
     if (!selectedAccount) return;
+    const updateStyle = Boolean(options.updateStyle);
+    const selectedCount = options.videoIds?.length || 0;
     setBusy(updateStyle ? "batch-style" : "batch");
     setTranscribeProgress(8);
     setTranscribeStage("正在读取候选视频");
@@ -131,12 +131,13 @@ export function useLibraryTaskActions({
       const job = await startTask({
         kind: "batch-transcribe",
         title: updateStyle ? "批量转写并更新风格" : "批量转写",
-        inputSummary: `${selectedAccount.name} · ${batchLimit === "all" ? "全部视频" : `${batchLimit} 条视频`}`,
+        inputSummary: `${selectedAccount.name} · ${selectedCount ? `所选 ${selectedCount} 条` : "全部待转写视频"}`,
         href: "/library",
         input: {
           platform: selectedAccount.platform,
           accountId: selectedAccount.id,
-          limit: batchLimit,
+          limit: "all",
+          videoIds: options.videoIds,
           updateStyle
         }
       });
@@ -150,16 +151,15 @@ export function useLibraryTaskActions({
       setTranscribeStage("任务启动失败");
       setTranscribeProgress(0);
       setBusy("");
-      setMessage(message);
+      setMessage(message, "error");
       try {
         await refresh();
         await reloadSelectedAccountDetail({ force: true });
       } catch (refreshErr) {
-        setMessage(`${message}；刷新页面状态失败：${refreshErr instanceof Error ? refreshErr.message : "请手动刷新后再试。"}`);
+        setMessage(`${message}；刷新页面状态失败：${refreshErr instanceof Error ? refreshErr.message : "请手动刷新后再试。"}`, "error");
       }
     }
   }, [
-    batchLimit,
     refresh,
     reloadSelectedAccountDetail,
     selectedAccount,
@@ -172,11 +172,12 @@ export function useLibraryTaskActions({
   ]);
 
   const generateBatchStyle = useCallback(() => {
-    void handleBatchTranscribe(true);
+    void handleBatchTranscribe({ updateStyle: true });
   }, [handleBatchTranscribe]);
 
   return {
     generateBatchStyle,
+    handleBatchTranscribe,
     handleGenerateStyle,
     handleTranscribe
   };

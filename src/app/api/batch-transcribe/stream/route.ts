@@ -10,6 +10,7 @@ const schema = z.object({
   platform: z.enum(platforms),
   accountId: z.string().min(1),
   limit: z.union([z.number().int().min(1), z.literal("all")]).default(5),
+  videoIds: z.array(z.string().min(1)).min(1).optional(),
   updateStyle: z.boolean().optional()
 });
 

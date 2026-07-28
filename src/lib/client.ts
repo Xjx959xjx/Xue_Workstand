@@ -1,6 +1,5 @@
 import {
   AccountDraftInput,
-  AccountSummary,
   AccountDetail,
   BatchTranscribeResult,
   CollectOrder,
@@ -10,6 +9,7 @@ import {
   DraftCoverReference,
   DouyinHotlistRefreshResult,
   DouyinHotlistResponse,
+  EngagementGenerationRequest,
   EngagementRecord,
   GrossMarginLibrary,
   GrossMarginMonitorRecord,
@@ -17,6 +17,8 @@ import {
   GrossMarginPriceTableSaveItem,
   GrossMarginReviewTemplate,
   GrossMarginServiceKind,
+  HotspotRadarRefreshResult,
+  HotspotRadarResponse,
   JobListItem,
   JobRecord,
   JobStartInput,
@@ -26,8 +28,11 @@ import {
   ProjectDraftInput,
   ProjectDetail,
   ProjectSummary,
+  TranscriptVersion,
   Video,
+  WriteAction,
   WriteBriefResult,
+  WriteRevisionScope,
   WriteResult
 } from "./types";
 import type { LinkTranscriptionResult } from "./transcription";
@@ -48,8 +53,32 @@ const DEFAULT_DOUYIN_HOTLIST_WINDOW = "3d";
 const douyinHotlistCache = new Map<string, DouyinHotlistResponse>();
 const douyinHotlistRequests = new Map<string, Promise<DouyinHotlistResponse>>();
 let douyinHotlistCacheRevision = 0;
+let hotspotRadarCache: HotspotRadarResponse | null = null;
+let hotspotRadarRequest: Promise<HotspotRadarResponse> | null = null;
 
 type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
+
+type WriteCopyRequest = {
+  action?: WriteAction;
+  targetType?: "account" | "project";
+  platform?: Platform;
+  accountId?: string;
+  projectId?: string;
+  mode: Draft["mode"];
+  prompt?: string;
+  sourceText?: string;
+  supportDocLinks?: string;
+  brief?: string;
+  preparedResearch?: string;
+  preparedContextFingerprint?: string;
+  save?: boolean;
+  useWebResearch?: boolean;
+  parentDraftId?: string;
+  currentContent?: string;
+  revisionInstruction?: string;
+  revisionScope?: WriteRevisionScope;
+  selectedText?: string;
+};
 
 async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   let response: Response;
@@ -361,8 +390,8 @@ export function getLibraryOverview() {
   return requestJson<LibraryOverviewResponse>("/api/library/overview");
 }
 
-export function getGrossMarginLibrary() {
-  if (grossMarginLibraryCache) return Promise.resolve(grossMarginLibraryCache);
+export function getGrossMarginLibrary(options: { fresh?: boolean } = {}) {
+  if (!options.fresh && grossMarginLibraryCache) return Promise.resolve(grossMarginLibraryCache);
   if (grossMarginLibraryRequest) return grossMarginLibraryRequest;
 
   grossMarginLibraryRequest = requestJson<GrossMarginLibrary>("/api/gross-margin")
@@ -500,8 +529,9 @@ export function getAccountDetail(input: { platform: Platform; accountId: string;
   return requestJson<AccountDetail>(`/api/accounts?${params.toString()}`);
 }
 
-export async function exportAccountTranscripts(input: { platform: Platform; accountId: string }) {
-  const params = new URLSearchParams(input);
+export async function exportAccountTranscripts(input: { platform: Platform; accountId: string; videoIds?: string[] }) {
+  const params = new URLSearchParams({ platform: input.platform, accountId: input.accountId });
+  input.videoIds?.forEach((videoId) => params.append("videoId", videoId));
   const response = await fetch(`/api/accounts/transcripts-export?${params.toString()}`, {
     cache: "no-store"
   }).catch((error) => {
@@ -569,8 +599,9 @@ export function collectAccount(input: {
   });
 }
 
-export function getDouyinHotlist(input: { windowDays?: number; window?: string } = {}) {
+export function getDouyinHotlist(input: { force?: boolean; windowDays?: number; window?: string } = {}) {
   const windowKey = getDouyinHotlistWindowKey(input);
+  if (input.force) resetDouyinHotlistCache();
   const cached = douyinHotlistCache.get(windowKey);
   if (cached) return Promise.resolve(cached);
 
@@ -579,6 +610,7 @@ export function getDouyinHotlist(input: { windowDays?: number; window?: string }
 
   const params = new URLSearchParams();
   params.set("window", windowKey);
+  if (input.force) params.set("force", "1");
   const cacheRevision = douyinHotlistCacheRevision;
   const request = requestJson<DouyinHotlistResponse>(`/api/douyin-hotlist?${params.toString()}`)
     .then((result) => {
@@ -598,7 +630,7 @@ export function getCachedDouyinHotlist(input: { windowDays?: number; window?: st
   return douyinHotlistCache.get(getDouyinHotlistWindowKey(input)) || null;
 }
 
-export function addDouyinHotlistAccount(input: { platform: Platform; query: string }) {
+export function addDouyinHotlistAccount(input: { platform: Platform; query: string; window?: string }) {
   return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
     method: "POST",
     body: JSON.stringify({ action: "addAccount", ...input })
@@ -608,10 +640,10 @@ export function addDouyinHotlistAccount(input: { platform: Platform; query: stri
   });
 }
 
-export function removeDouyinHotlistAccount(accountId: string) {
+export function removeDouyinHotlistAccount(accountId: string, input: { window?: string } = {}) {
   return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
     method: "POST",
-    body: JSON.stringify({ action: "removeAccount", accountId })
+    body: JSON.stringify({ action: "removeAccount", accountId, ...input })
   }).then((result) => {
     resetDouyinHotlistCache(result);
     return result;
@@ -633,10 +665,28 @@ export function refreshDouyinHotlist(input: {
   });
 }
 
-export function createAccount(input: { platform: Platform; name: string; uidOrUrl?: string }) {
-  return requestJson<AccountSummary>("/api/accounts", {
+export function getHotspotRadar() {
+  if (hotspotRadarCache) return Promise.resolve(hotspotRadarCache);
+  if (hotspotRadarRequest) return hotspotRadarRequest;
+
+  hotspotRadarRequest = requestJson<HotspotRadarResponse>("/api/hotspots")
+    .then((result) => {
+      hotspotRadarCache = result;
+      return result;
+    })
+    .finally(() => {
+      hotspotRadarRequest = null;
+    });
+  return hotspotRadarRequest;
+}
+
+export function refreshHotspotRadar() {
+  return requestJson<HotspotRadarRefreshResult>("/api/hotspots", {
     method: "POST",
-    body: JSON.stringify(input)
+    body: JSON.stringify({ action: "refresh" })
+  }).then((result) => {
+    hotspotRadarCache = result;
+    return result;
   });
 }
 
@@ -671,6 +721,7 @@ export function batchTranscribe(input: {
   platform: Platform;
   accountId: string;
   limit: number | "all";
+  videoIds?: string[];
   updateStyle?: boolean;
 }) {
   return requestJson<BatchTranscribeResult>("/api/batch-transcribe", {
@@ -684,6 +735,7 @@ export async function streamBatchTranscribe(
     platform: Platform;
     accountId: string;
     limit: number | "all";
+    videoIds?: string[];
     updateStyle?: boolean;
   },
   handlers: {
@@ -726,7 +778,7 @@ export async function streamBatchTranscribe(
 
 export function getTranscript(input: { platform: Platform; accountId: string; videoId: string }) {
   const params = new URLSearchParams(input);
-  return requestJson<{ transcript: string }>(`/api/transcripts?${params.toString()}`);
+  return requestJson<{ transcript: string; revision: string | null; versions: TranscriptVersion[] }>(`/api/transcripts?${params.toString()}`);
 }
 
 export function saveTranscript(input: {
@@ -734,9 +786,33 @@ export function saveTranscript(input: {
   accountId: string;
   videoId: string;
   transcript: string;
+  expectedRevision: string | null;
 }) {
-  return requestJson<{ transcript: string }>("/api/transcripts", {
+  return requestJson<{
+    transcript: string;
+    revision: string | null;
+    previousVersionCreated: boolean;
+    versions: TranscriptVersion[];
+  }>("/api/transcripts", {
     method: "PUT",
+    body: JSON.stringify(input)
+  });
+}
+
+export function restoreTranscriptVersion(input: {
+  platform: Platform;
+  accountId: string;
+  videoId: string;
+  versionId: string;
+  expectedRevision: string | null;
+}) {
+  return requestJson<{
+    transcript: string;
+    revision: string | null;
+    previousVersionCreated: boolean;
+    versions: TranscriptVersion[];
+  }>("/api/transcripts", {
+    method: "PATCH",
     body: JSON.stringify(input)
   });
 }
@@ -1035,37 +1111,14 @@ export function saveStyle(platform: Platform, accountId: string, content: string
   });
 }
 
-export function writeCopy(input: {
-  targetType?: "account" | "project";
-  platform?: Platform;
-  accountId?: string;
-  projectId?: string;
-  mode: Draft["mode"];
-  prompt?: string;
-  sourceText?: string;
-  supportDocLinks?: string;
-  brief?: string;
-  save?: boolean;
-  useWebResearch?: boolean;
-}) {
+export function writeCopy(input: WriteCopyRequest) {
   return requestJson<WriteResult>("/api/write", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export function prepareWriteBrief(input: {
-  targetType?: "account" | "project";
-  platform?: Platform;
-  accountId?: string;
-  projectId?: string;
-  mode: Draft["mode"];
-  prompt?: string;
-  sourceText?: string;
-  supportDocLinks?: string;
-  brief?: string;
-  useWebResearch?: boolean;
-}) {
+export function prepareWriteBrief(input: WriteCopyRequest) {
   return requestJson<WriteBriefResult>("/api/write/brief", {
     method: "POST",
     body: JSON.stringify(input)
@@ -1073,19 +1126,7 @@ export function prepareWriteBrief(input: {
 }
 
 export async function streamWriteCopy(
-  input: {
-    targetType?: "account" | "project";
-    platform?: Platform;
-    accountId?: string;
-    projectId?: string;
-    mode: Draft["mode"];
-    prompt?: string;
-    sourceText?: string;
-    supportDocLinks?: string;
-    brief?: string;
-    save?: boolean;
-    useWebResearch?: boolean;
-  },
+  input: WriteCopyRequest,
   handlers: {
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
     onDelta?: (delta: string) => void;
@@ -1121,6 +1162,7 @@ export async function streamWriteCopy(
           content: event.data.content,
           brief: event.data.brief,
           research: event.data.research,
+          contextFingerprint: event.data.contextFingerprint,
           sourceDigest: event.data.sourceDigest,
           draft: event.data.draft,
           usedModel: event.data.usedModel,
@@ -1259,33 +1301,7 @@ export function generateDraftEngagement(input: {
   });
 }
 
-export function generateEngagement(input:
-  | {
-      sourceType: "draft";
-      draftId: string;
-      includeComments: boolean;
-      commentCount: number;
-      includeDanmaku: boolean;
-      danmakuCount: number;
-    }
-  | {
-      sourceType: "text";
-      title?: string;
-      text: string;
-      includeComments: boolean;
-      commentCount: number;
-      includeDanmaku: boolean;
-      danmakuCount: number;
-    }
-  | {
-      sourceType: "url";
-      url: string;
-      includeComments: boolean;
-      commentCount: number;
-      includeDanmaku: boolean;
-      danmakuCount: number;
-    }
-) {
+export function generateEngagement(input: EngagementGenerationRequest) {
   return requestJson<{
     draft?: Draft;
     record: EngagementRecord;

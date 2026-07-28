@@ -14,9 +14,10 @@ const urlSchema = z.preprocess(
 
 const optionsSchema = {
   includeComments: z.boolean().optional().default(true),
-  commentCount: z.number().int().min(1).max(200).optional().default(100),
+  commentCount: z.number().int().min(1).max(200).optional().default(50),
   includeDanmaku: z.boolean().optional().default(false),
-  danmakuCount: z.number().int().min(1).max(300).optional().default(50)
+  danmakuCount: z.number().int().min(1).max(300).optional().default(50),
+  generationMode: z.enum(["quick", "reference"]).optional().default("quick")
 };
 
 const schema = z.discriminatedUnion("sourceType", [
@@ -34,6 +35,11 @@ const schema = z.discriminatedUnion("sourceType", [
   z.object({
     sourceType: z.literal("url"),
     url: urlSchema,
+    ...optionsSchema
+  }),
+  z.object({
+    sourceType: z.literal("record"),
+    recordId: z.string().min(1),
     ...optionsSchema
   })
 ]);
