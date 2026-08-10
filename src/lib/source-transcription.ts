@@ -1,4 +1,9 @@
-import { extractRewriteSourceMaterial, RewriteSourceExtraction, SourceMaterial } from "./source-extraction";
+import {
+  extractRewriteSourceMaterial,
+  RewriteSourceExtraction,
+  sourceMaterialNeedsTranscription,
+  SourceMaterial
+} from "./source-extraction";
 import { isSupportedVideoSourceLink, transcribeLinkSource, LinkTranscriptionResult } from "./transcription";
 
 type ResolveRewriteSourceMaterialOptions = {
@@ -15,7 +20,7 @@ export async function resolveRewriteSourceMaterial(
 
   const materials = await Promise.all(
     extracted.materials.map(async (material) => {
-      if (!material.urls.length) return material;
+      if (!sourceMaterialNeedsTranscription(material)) return material;
 
       const transcriptBlocks: string[] = [];
       const errors: string[] = [];

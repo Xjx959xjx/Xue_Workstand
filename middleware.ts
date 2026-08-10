@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 const grossMarginAllowedPrefixes = [
   "/gross-margin",
   "/api/gross-margin",
+  "/api/jobs",
+  "/api/remote/status",
   "/_next",
   "/favicon.ico"
 ];

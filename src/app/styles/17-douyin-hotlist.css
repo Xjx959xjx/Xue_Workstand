@@ -17,23 +17,24 @@
 
 .douyin-hotlist-page .page-title-eyebrow {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 680;
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-label);
+  line-height: var(--line-height-caption);
 }
 
 .douyin-hotlist-page .page-title-copy h1 {
   font-size: var(--text-page-title);
-  font-weight: 760;
+  font-weight: var(--font-weight-page-title);
   letter-spacing: 0;
-  line-height: 1.06;
+  line-height: var(--line-height-page-title);
 }
 
 .douyin-hotlist-page .page-header .subtle {
   max-width: 58ch;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.32;
+  font-size: var(--text-meta);
+  line-height: var(--line-height-meta);
 }
 
 .douyin-hotlist-page .page-header-meta {
@@ -187,7 +188,7 @@
 .douyin-hotlist-workspace {
   display: grid;
   min-height: 0;
-  height: clamp(640px, calc(100vh - 116px), 960px);
+  height: 100%;
 }
 
 @media (min-width: 1181px) {
@@ -350,6 +351,16 @@
   padding: 10px;
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--blue-soft) 24%, transparent) 0%, transparent 128px);
+}
+
+.douyin-hotlist-load-more {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 10px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .douyin-hotlist-item {
@@ -1278,7 +1289,7 @@
   }
 }
 
-@media (max-width: 780px) {
+@media (max-width: 900px) {
   .douyin-hotlist-page .page-header {
     min-height: auto;
   }

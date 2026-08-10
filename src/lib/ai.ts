@@ -9,14 +9,18 @@ import {
   CopySource,
   ProjectDraftInput,
   ProjectSummary,
-  WriteBriefResult,
   WriteResult,
   WriteSourceDigest,
   platforms
 } from "./types";
 import { clampText, makeTitleFromPrompt, nowIso, shortHash } from "./utils";
-import { fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
 import { openCliRows, parseOpenCliJsonish, runOpenCli, stringField } from "./opencli-runtime";
+import {
+  fetchSupportDocuments,
+  hasPlainSupportText,
+  hasSupportDocumentReference,
+  supportDocumentProviderLabel
+} from "./support-documents";
 import {
   getTopTranscriptSamples,
   getProjectSummary,
@@ -41,15 +45,17 @@ import {
   upsertProject,
   type StyleSampleAnalysisCache
 } from "./storage";
-import { extractRewriteSourceMaterial, normalizeRewritePrompt } from "./source-extraction";
+import { extractRewriteSourceMaterial, normalizeRewritePrompt, splitWriterSourceInput } from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
 import {
   buildChatFallbackReason,
   chatCompletionPayload,
   classifyModelFailure,
   getConfiguredChatConfigs,
+  getConfiguredWebResearchConfigs,
   getChatConfig,
   getChatRuntimeConfig as getModelRuntimeConfig,
+  getWebResearchRuntimeConfig as getModelWebResearchRuntimeConfig,
   postModelRequest,
   responseReasoning,
   shouldRetryResponsesAsChatCompletions,
@@ -101,9 +107,6 @@ export type WriteCopyInput = {
   prompt: string;
   sourceText?: string;
   supportDocLinks?: string;
-  brief?: string;
-  preparedResearch?: string;
-  preparedContextFingerprint?: string;
   save?: boolean;
   useWebResearch?: boolean;
   parentDraftId?: string;
@@ -115,17 +118,9 @@ export type WriteCopyInput = {
 
 export type PreparedWriteContext = {
   messages: ChatMessage[];
-  fallbackName: string;
-  fallbackStyle: string;
-  fallbackInput: { mode: Draft["mode"]; prompt: string; sourceText?: string };
-  brief: string;
-  briefFallback: boolean;
-  briefFallbackReason?: string;
-  briefModel: string;
   research?: string;
   contextFingerprint: string;
   sourceDigest: WriteSourceDigest;
-  allowLocalFallback?: boolean;
   draftBase?: Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
 };
 
@@ -206,14 +201,13 @@ export type AccountStyleGenerationResult = {
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
 const STYLE_REASONING_EFFORT: ChatReasoningEffort = "xhigh";
-const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = 8;
+const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 1, 1, 4);
+const STYLE_ONE_SHOT_MAX_INPUT_CHARS = boundedEnvInteger("STYLE_ONE_SHOT_MAX_INPUT_CHARS", 50_000, 10_000, 200_000);
 const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = 2;
 const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 1200;
-const WRITE_BRIEF_REASONING_EFFORT: ChatReasoningEffort = "medium";
-export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "medium";
+export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "high";
 export const WRITE_COPY_MAX_OUTPUT_TOKENS = 2600;
-const WRITE_BRIEF_MAX_OUTPUT_TOKENS = 1400;
-const WRITE_PROMPT_VERSION = "writer-v2";
+const WRITE_PROMPT_VERSION = "writer-v4";
 const WRITE_ACCOUNT_SAMPLE_LIMIT = 8;
 const WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT = 4;
 const WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS = 4200;
@@ -239,6 +233,29 @@ function chatConfig() {
 
 export function getChatRuntimeConfig() {
   return getModelRuntimeConfig();
+}
+
+export function getWebResearchCapability() {
+  const runtime = getModelWebResearchRuntimeConfig();
+  if (runtime.configured) {
+    return {
+      available: true,
+      wireApi: "responses" as const,
+      model: runtime.model,
+      source: runtime.source
+    } as const;
+  }
+
+  const chat = getChatRuntimeConfig();
+  return {
+    available: false,
+    wireApi: "responses" as const,
+    model: runtime.model,
+    source: runtime.source,
+    reason: chat.configured
+      ? "当前写作模型使用 Chat Completions；请配置独立的 WEB_RESEARCH_* Responses 接口。"
+      : "尚未配置独立的 WEB_RESEARCH_* Responses 联网接口。"
+  } as const;
 }
 
 function configuredChatConfigs() {
@@ -1293,8 +1310,15 @@ function extractResponseErrorMessage(data: unknown) {
   return "";
 }
 
+type WebResearchInput = {
+  mode: Draft["mode"];
+  prompt: string;
+  sourceText?: string;
+  supportDocContext?: string;
+};
+
 async function buildWebResearchContext(
-  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  input: WebResearchInput,
   options: { signal?: AbortSignal } = {}
 ) {
   throwIfAborted(options.signal);
@@ -1357,13 +1381,16 @@ function summarizeWebResearchFailure(error: unknown) {
 }
 
 async function buildNativeWebResearchContext(
-  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  input: WebResearchInput,
   options: { signal?: AbortSignal } = {}
 ) {
+  const supportMaterial = input.supportDocContext?.trim() && input.supportDocContext !== "未提供支持文档。"
+    ? `\n\n已读取的支持文档（请据此确定检索对象和关键词）：\n${clampText(input.supportDocContext, 3_500)}`
+    : "";
   const researchTask =
     input.mode === "topic"
-      ? `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${input.prompt}`
-      : `请围绕这次改写任务联网检索相关最新事实，并整理成写作参考。\n改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
+      ? `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${input.prompt}${supportMaterial}`
+      : `请围绕这次改写任务联网检索相关最新事实，并整理成写作参考。\n改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}${supportMaterial}`;
 
   const messages: ChatMessage[] = [
     {
@@ -1379,9 +1406,8 @@ async function buildNativeWebResearchContext(
 
   const result = await withWebResearchTimeout(
     (signal) =>
-      streamResponseText({
+      streamWebResearchResponseText({
         messages,
-        reasoningEffort: "medium",
         tools: [{ type: "web_search" }],
         maxOutputTokens: WEB_RESEARCH_MAX_OUTPUT_TOKENS,
         signal,
@@ -1408,8 +1434,35 @@ async function buildNativeWebResearchContext(
   return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${text}`;
 }
 
+async function streamWebResearchResponseText(input: {
+  messages: ChatMessage[];
+  reasoningEffort?: ChatReasoningEffort;
+  tools: ChatTool[];
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
+  onDelta: (delta: string) => void;
+}) {
+  throwIfAborted(input.signal);
+  const configs = getConfiguredWebResearchConfigs();
+  if (!configs.length) {
+    throw new Error("尚未配置独立的 WEB_RESEARCH_* Responses 联网接口");
+  }
+
+  let lastError: unknown;
+  for (const config of configs) {
+    try {
+      return await streamResponseTextForConfig(config, input);
+    } catch (error) {
+      if (isAbortError(error) || error instanceof StreamResponseTextError) throw error;
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Responses 联网接口暂时不可用");
+}
+
 async function buildOpenCliWebResearchContext(
-  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  input: WebResearchInput,
   nativeError: unknown,
   options: { signal?: AbortSignal } = {}
 ) {
@@ -1456,11 +1509,26 @@ async function buildOpenCliWebResearchContext(
   ].join("\n\n");
 }
 
-function buildOpenCliSearchQuery(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
-  const source = input.mode === "topic"
-    ? input.prompt
-    : [input.prompt, input.sourceText].filter(Boolean).join("\n");
+function buildOpenCliSearchQuery(input: WebResearchInput) {
+  const supportSource = input.supportDocContext && input.supportDocContext !== "未提供支持文档。"
+    ? buildSupportResearchSeed(input.supportDocContext)
+    : "";
+  const source = [
+    supportSource,
+    input.prompt,
+    input.mode === "rewrite" ? input.sourceText : ""
+  ].filter(Boolean).join("\n");
   return clampText(source.replace(/https?:\/\/\S+/gi, " ").replace(/\s+/g, " ").trim(), 180);
+}
+
+function buildSupportResearchSeed(context: string) {
+  return context
+    .replace(/^用户补充资料原文：\s*$/gim, "")
+    .replace(/^文档\s+\d+｜/gim, "")
+    .replace(/^(?:类型|来源|读取失败)：.*$/gim, "")
+    .replace(/[-#>*_`|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeOpenCliSearchResults(rows: unknown[]) {
@@ -1526,6 +1594,12 @@ function describeErrorForLog(error: unknown) {
 
 type AccountStyleSample = Awaited<ReturnType<typeof getTopTranscriptSamples>>[number];
 
+function boundedEnvInteger(name: string, fallback: number, min: number, max: number) {
+  const parsed = Number.parseInt(process.env[name] || "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
 function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
   const sampleFingerprints = samples.map(({ video, transcript }) => ({
     videoId: video.id,
@@ -1541,6 +1615,72 @@ function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
     sampleVideoIds: sampleFingerprints.map((sample) => sample.videoId),
     sampleHash: shortHash(JSON.stringify(sampleFingerprints))
   };
+}
+
+function accountStyleInputChars(samples: AccountStyleSample[]) {
+  return samples.reduce((total, sample) => total + sample.transcript.length, 0);
+}
+
+function shouldGenerateAccountStyleOneShot(samples: AccountStyleSample[]) {
+  return accountStyleInputChars(samples) <= STYLE_ONE_SHOT_MAX_INPUT_CHARS;
+}
+
+function buildAccountTranscriptCorpus(samples: AccountStyleSample[]) {
+  return samples
+    .map((sample, index) => [
+      `<<< 样本 ${index + 1} 开始 >>>`,
+      `视频 ID：${sample.video.id}`,
+      `标题：${sample.video.title}`,
+      `播放:${sample.video.stats.views} 点赞:${sample.video.stats.likes} 评论:${sample.video.stats.comments} 收藏:${sample.video.stats.favorites} 分享:${sample.video.stats.shares ?? 0}`,
+      `完整转写（${sample.transcript.length} 字）：`,
+      sample.transcript,
+      `<<< 样本 ${index + 1} 结束 >>>`
+    ].join("\n"))
+    .join("\n\n");
+}
+
+function buildAccountOneShotStyleMessages(input: {
+  accountName: string;
+  platform: Platform;
+  samples: AccountStyleSample[];
+  currentStyle: string;
+  generationMode: "full" | "incremental";
+  changedSampleCount: number;
+}): ChatMessage[] {
+  const transcriptCorpus = buildAccountTranscriptCorpus(input.samples);
+  const baseline = input.currentStyle
+    ? `已有风格卡（只作为修订基线，完整样本是最终依据）：\n${input.currentStyle}`
+    : "已有风格卡：无";
+
+  return [
+    {
+      role: "system",
+      content: [
+        "你是短视频账号中文文案风格分析师。你会一次收到该账号的全部完整转写，必须逐条完整阅读后直接输出最终 Markdown 风格卡。",
+        "不要先输出逐条分析，不要用摘要替代阅读；要区分跨样本稳定规律和只出现一次的偶发现象。",
+        "所有结论必须能由样本支撑，不得编造账号定位、事实或口头禅。",
+        "输出结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌、证据摘录、样本覆盖说明。"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: [
+        `账号：${input.accountName}`,
+        `平台：${input.platform}`,
+        `处理方式：全量单次分析；样本数 ${input.samples.length}；完整转写总字数 ${accountStyleInputChars(input.samples)}`,
+        input.generationMode === "incremental" ? `本次新增或变化样本数：${input.changedSampleCount}` : "本次为全量生成。",
+        baseline,
+        `全部完整样本：\n${transcriptCorpus}`,
+        [
+          "输出要求：",
+          "1. 直接输出一份完整可复用的账号风格卡，不要输出分析过程或逐样本报告。",
+          "2. 关键结论用样本标题或短原话举证，避免泛泛模板。",
+          "3. 样本之间存在冲突时，说明主流倾向和例外，不要强行归纳。",
+          "4. 若有已有风格卡，只保留仍被全量样本支持的内容。"
+        ].join("\n")
+      ].join("\n\n")
+    }
+  ];
 }
 
 type StyleAnalysisStats = {
@@ -1665,7 +1805,7 @@ function buildAccountSampleAnalysisMessages(platform: Platform, sample: AccountS
     {
       role: "system",
       content:
-        "你是短视频中文文案风格分析师。你必须完整阅读用户提供的单条完整转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌、证据摘录、样本覆盖说明。只基于这条样本，不要泛泛套模板。"
+        "你是短视频中文文案风格分析师。你必须完整阅读用户提供的单条完整转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌、证据摘录、样本覆盖说明。只基于这条样本，不要泛泛套模板。"
     },
     {
       role: "user",
@@ -1697,7 +1837,7 @@ function buildCopySourceSampleAnalysisMessages(source: CopySource): ChatMessage[
     {
       role: "system",
       content:
-        "你是项目级短视频素材风格分析师。你必须完整阅读用户提供的单条完整素材转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾 CTA、写作禁忌、证据摘录、样本覆盖说明。只基于这条素材，不要泛泛套模板。"
+        "你是项目级短视频素材风格分析师。你必须完整阅读用户提供的单条完整素材转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾方式、写作禁忌、证据摘录、样本覆盖说明。只基于这条素材，不要泛泛套模板。"
     },
     {
       role: "user",
@@ -1932,6 +2072,35 @@ export async function prepareAccountStyleContext(
     ? selectIncrementalAccountStyleSamples(samples, sampleState.sampleFingerprints, styleMeta?.sampleFingerprints)
     : { samples, canIncremental: false };
   const generationMode = incremental.canIncremental ? "incremental" : "full";
+  if (shouldGenerateAccountStyleOneShot(samples)) {
+    const inputChars = accountStyleInputChars(samples);
+    return {
+      platform,
+      accountId,
+      accountName: account.name,
+      messages: buildAccountOneShotStyleMessages({
+        accountName: account.name,
+        platform,
+        samples,
+        currentStyle,
+        generationMode,
+        changedSampleCount: incremental.samples.length
+      }),
+      fallback: generationMode === "incremental"
+        ? currentStyle
+        : buildFallbackStyle(account.name, buildAccountTranscriptCorpus(samples)),
+      ...sampleState,
+      generationMode,
+      analysisStats: {
+        analysisCount: samples.length,
+        analysisGeneratedCount: samples.length,
+        analysisCachedCount: 0,
+        analysisConcurrency: 1,
+        inputChars
+      }
+    };
+  }
+
   const analysis = await resolveStyleSampleAnalyses(
     buildAccountStyleAnalysisTasks(platform, accountId, samples),
     options
@@ -1955,7 +2124,7 @@ export async function prepareAccountStyleContext(
             [
               "输出要求：",
               "1. 输出完整风格卡，不要只输出差异说明。",
-              "2. 结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。",
+              "2. 结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌。",
               "3. 不要编造样本没有体现的新定位或事实。"
             ].join("\n")
           ].join("\n\n")
@@ -1965,7 +2134,7 @@ export async function prepareAccountStyleContext(
         {
           role: "system",
           content:
-            "你是短视频账号风格分析师。请根据全量样本分析提炼可复用的中文文案风格卡。每条样本分析都来自完整转写阅读结果；输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾 CTA、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
+            "你是短视频账号风格分析师。请根据全量样本分析提炼可复用的中文文案风格卡。每条样本分析都来自完整转写阅读结果；输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
         },
         {
           role: "user",
@@ -2255,7 +2424,7 @@ export async function prepareProjectStyleContext(
       {
         role: "system",
         content:
-          "你是项目级中文短视频风格策略师。请把参考账号风格卡、全量样本分析、项目案例素材分析，以及素材里已经保存的画面描述融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾 CTA、写作禁忌。只使用参考素材里已经存在的信息，不要假装看到了未提供的视频画面。结论要具体贴合参考素材，不要输出泛泛模板。"
+          "你是项目级中文短视频风格策略师。请把参考账号风格卡、全量样本分析、项目案例素材分析，以及素材里已经保存的画面描述融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾方式、写作禁忌。只使用参考素材里已经存在的信息，不要假装看到了未提供的视频画面。结论要具体贴合参考素材，不要输出泛泛模板。"
       },
       {
         role: "user",
@@ -2395,12 +2564,11 @@ export async function writeCopy(input: WriteCopyInput, options: { signal?: Abort
     maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS
   });
   throwIfAborted(options.signal);
-  const content = resolvePreparedWriteContent(prepared, result);
+  const content = resolvePreparedWriteContent(result);
   const draft = await savePreparedDraft(input, prepared, content);
 
   return {
     content,
-    brief: prepared.brief,
     research: prepared.research,
     contextFingerprint: prepared.contextFingerprint,
     sourceDigest: prepared.sourceDigest,
@@ -2418,35 +2586,18 @@ export async function completePreparedWriteCopy(input: {
   signal?: AbortSignal;
 }): Promise<WriteResult> {
   throwIfAborted(input.signal);
-  const content = resolvePreparedWriteContent(input.prepared, input.result);
+  const content = resolvePreparedWriteContent(input.result);
   const draft = await savePreparedDraft({ save: input.save }, input.prepared, content);
 
   return {
     content,
-    brief: input.prepared.brief,
     research: input.prepared.research,
     contextFingerprint: input.prepared.contextFingerprint,
     sourceDigest: input.prepared.sourceDigest,
     draft,
     usedModel: input.result.model,
-    fallback: input.result.fallback || !input.result.text.trim(),
-    fallbackReason:
-      input.result.fallbackReason ||
-      (!input.result.text.trim() ? "模型没有返回可用内容，已自动切换到本地模板。" : undefined)
-  };
-}
-
-export async function prepareWriteBrief(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteBriefResult> {
-  const prepared = await prepareWriteCopyContext(input, options);
-  return {
-    brief: prepared.brief,
-    research: prepared.research,
-    contextFingerprint: prepared.contextFingerprint,
-    sourceDigest: prepared.sourceDigest,
-    targetTitle: prepared.draftBase?.title || makeTitleFromPrompt(input.prompt),
-    usedModel: prepared.briefModel,
-    fallback: prepared.briefFallback,
-    fallbackReason: prepared.briefFallbackReason
+    fallback: input.result.fallback,
+    fallbackReason: input.result.fallbackReason
   };
 }
 
@@ -2454,6 +2605,10 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
   throwIfAborted(options.signal);
   if (input.action === "revise") {
     return prepareWriteRevisionContext(input, options);
+  }
+  if (input.useWebResearch) {
+    const capability = getWebResearchCapability();
+    if (!capability.available) throw new Error(capability.reason);
   }
 
   const normalizedInput = await normalizeWriteCopyInput(input, options);
@@ -2477,71 +2632,46 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
       : `请按账号风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
   const contextFingerprint = buildWriteContextFingerprint(normalizedInput);
-  const preparedResearch = reusablePreparedResearch(normalizedInput, contextFingerprint);
-  const supportDocContext = preparedResearch || await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
-  const webContext = preparedResearch
-    ? "已复用准备 Brief 时取得的外部资料。"
-    : normalizedInput.useWebResearch
-      ? await buildWebResearchContext(normalizedInput, options)
-      : "未启用联网检索。";
-  const research = preparedResearch || buildReferenceSummary({
+  const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
+  const webContext = normalizedInput.useWebResearch
+    ? await buildWebResearchContext({ ...normalizedInput, supportDocContext }, options)
+    : "未启用联网检索。";
+  const research = buildReferenceSummary({
     supportDocLinks: normalizedInput.supportDocLinks,
     supportDocContext,
     useWebResearch: normalizedInput.useWebResearch,
     webContext
   });
   const sourceDigest = buildWriteSourceDigest(normalizedInput);
-  const briefResult = await buildAccountWritingBrief({
-    accountName: account.name,
-    platform: normalizedInput.platform,
-    style,
-    sampleContext,
-    input: normalizedInput,
-    supportDocContext,
-    webContext,
-    signal: options.signal
-  });
-  const writingBrief = briefResult.text.trim();
 
   return {
     messages: [
       {
         role: "system",
         content:
-          "你是中文短视频爆款文案写手。严格按账号写作 brief 成稿，不要解释创作思路，不要输出审稿意见。必须保留用户给出的具体梗和事实线索，把它们写成能直接口播的短视频文案。"
+          "你是中文短视频文案写手。直接根据用户任务、账号风格卡、代表样本和已核验资料完成成稿，不要输出中间策划过程、创作思路或审稿意见。账号风格卡和代表样本决定表达方式，不得套用跨账号通用的短视频结构。"
       },
       {
         role: "user",
         content: [
           `参考账号：${account.name}`,
           `平台：${normalizedInput.platform}`,
-          `账号写作 brief：\n${writingBrief}`,
           `账号风格卡：\n${style}`,
           `代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}`,
-          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
           `支持文档资料：\n${supportDocContext}`,
           `联网检索资料：\n${webContext}`,
           `任务：\n${userTask}`,
           [
-            "成稿硬性要求：",
+            "写作边界：",
             "1. 只输出可直接使用的成稿，不解释创作思路。",
-            "2. 开头必须先给明确钩子或反差判断，不能铺垫背景。",
-            "3. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
-            "4. 保留用户给出的具体梗、场景、原话和事实线索。",
-            "5. 优先模仿账号的句法、转折和停顿，不要只堆口癖。",
-            "6. 句子短，口播感强，少用抽象形容词。",
-            "7. 结尾给一个自然的评论区问题或行动引导。"
+            "2. 开头方式、句长、节奏、具象程度和结尾方式完全服从当前账号风格卡与代表样本，不自行补统一模板。",
+            "3. 风格卡与样本出现差异时，以多个代表样本反复出现的表达模式为准。",
+            "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
+            "5. 保留用户给出的具体梗、场景、原话和事实线索。"
           ].join("\n")
         ].join("\n\n")
       }
     ],
-    fallbackName: account.name,
-    fallbackStyle: style,
-    fallbackInput: normalizedInput,
-    brief: writingBrief,
-    briefFallback: briefResult.fallback,
-    briefFallbackReason: briefResult.fallbackReason,
-    briefModel: briefResult.model,
     research,
     contextFingerprint,
     sourceDigest,
@@ -2554,7 +2684,6 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
       prompt: normalizedInput.prompt,
       input: normalizedInput.sourceText,
       supportDocLinks: normalizedInput.supportDocLinks,
-      brief: writingBrief,
       research,
       sourceDigest,
       version: createInitialDraftVersion(contextFingerprint),
@@ -2629,7 +2758,8 @@ async function prepareWriteRevisionContext(
         "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
         "只输出修改后的完整成稿，不解释修改过程，不输出差异说明。",
         "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
-        "不得添加原稿、原始素材、Brief 或已保存参考资料中没有依据的新事实。"
+        "表达方式以当前风格卡和原稿为准，不要补入跨账号通用结构。",
+        "不得添加原稿、原始素材、历史策划备注或已保存参考资料中没有依据的新事实。"
       ].join("\n")
     },
     {
@@ -2639,7 +2769,7 @@ async function prepareWriteRevisionContext(
         `当前版本：V${parent.version?.revision || 1}`,
         `本轮修改要求：\n${instruction}`,
         `修改范围：\n${scopeInstruction}`,
-        `写作 Brief：\n${clampText(parent.brief || "未保存 Brief，请以当前稿件为准。", 12_000)}`,
+        ...(parent.brief ? [`历史策划备注：\n${clampText(parent.brief, 12_000)}`] : []),
         `风格卡：\n${clampText(style, 12_000)}`,
         parent.input ? `原始素材：\n${clampText(parent.input, 16_000)}` : "原始素材：未保存",
         parent.research ? `已保存参考资料：\n${clampText(parent.research, 16_000)}` : "已保存参考资料：无",
@@ -2649,7 +2779,7 @@ async function prepareWriteRevisionContext(
           "1. 输出必须是完整成稿，不能只返回局部段落。",
           "2. 本轮要求优先级最高，但不得突破已有事实边界。",
           "3. 修改范围外的内容不要无故换词、换结构或删减。",
-          "4. 保留可直接口播的短句、停顿和自然互动。"
+          "4. 保持当前账号或项目原有的句法、停顿、段落长度和收尾方式。"
         ].join("\n")
       ].join("\n\n")
     }
@@ -2683,16 +2813,9 @@ async function prepareWriteRevisionContext(
 
   return {
     messages,
-    fallbackName: targetName,
-    fallbackStyle: style,
-    fallbackInput: { mode: "rewrite", prompt: instruction, sourceText: currentContent },
-    brief: parent.brief || "",
-    briefFallback: false,
-    briefModel: "revision-context",
     research: parent.research,
     contextFingerprint,
     sourceDigest,
-    allowLocalFallback: false,
     draftBase
   };
 }
@@ -2732,75 +2855,46 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
       ? `请基于这个主题生成文案：\n${input.prompt}`
       : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文素材：\n${input.sourceText || ""}`;
   const contextFingerprint = buildWriteContextFingerprint(input);
-  const preparedResearch = reusablePreparedResearch(input, contextFingerprint);
-  const supportDocContext = preparedResearch || await buildSupportDocumentContext(input.supportDocLinks, options);
-  const webContext = preparedResearch
-    ? "已复用准备 Brief 时取得的外部资料。"
-    : input.useWebResearch
-      ? await buildWebResearchContext(input, options)
-      : "未启用联网检索。";
-  const research = preparedResearch || buildReferenceSummary({
+  const supportDocContext = await buildSupportDocumentContext(input.supportDocLinks, options);
+  const webContext = input.useWebResearch
+    ? await buildWebResearchContext({ ...input, supportDocContext }, options)
+    : "未启用联网检索。";
+  const research = buildReferenceSummary({
     supportDocLinks: input.supportDocLinks,
     supportDocContext,
     useWebResearch: input.useWebResearch,
     webContext
   });
   const sourceDigest = buildWriteSourceDigest(input);
-  const briefResult = await buildProjectWritingBrief({
-    projectName: project.name,
-    projectDescription: project.description,
-    style,
-    referenceContext,
-    input,
-    supportDocContext,
-    webContext,
-    signal: options.signal
-  });
-  const writingBrief = briefResult.text.trim();
 
   return {
     messages: [
       {
         role: "system",
         content:
-          "你是中文短视频文案助手。严格参考给定项目风格卡和样本话术，但不要照抄原转写稿。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实；资料不足时说明需要用户补充更明确关键词。输出可以直接使用的成稿，必要时给出标题、正文、口播节奏和结尾互动。"
+          "你是中文短视频文案写手。直接根据用户任务、项目风格卡、代表样本和已核验资料完成成稿，不要输出中间策划过程、创作思路或审稿意见，也不要照抄原转写稿。项目风格卡和代表样本决定表达方式，不得套用跨项目通用的短视频结构。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实。"
       },
       {
         role: "user",
         content: [
           `参考项目：${project.name}`,
           `项目说明：${project.description || "暂无"}`,
-          `项目写作 brief：\n${writingBrief}`,
           `项目风格卡：\n${style}`,
           `代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}`,
-          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
           `支持文档资料：\n${supportDocContext}`,
           `联网检索资料：\n${webContext}`,
           `任务：\n${userTask}`,
           [
-            "成稿硬性要求：",
+            "写作边界：",
             "1. 只输出可直接使用的成稿，不解释创作思路。",
-            "2. 开头必须先给明确钩子或反差判断，不能铺垫背景。",
-            "3. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
-            "4. 保留用户给出的具体梗、场景、原话和事实线索。",
-            "5. 优先模仿项目样本的句法、转折和停顿，不要只堆口癖。",
-            "6. 句子短，口播感强，少用抽象形容词。",
-            "7. 结尾给一个自然的评论区问题或行动引导。"
+            "2. 开头方式、句长、节奏、具象程度和结尾方式完全服从当前项目风格卡与代表样本，不自行补统一模板。",
+            "3. 风格卡与样本出现差异时，以多个代表样本反复出现的表达模式为准。",
+            "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
+            "5. 保留用户给出的具体梗、场景、原话和事实线索。"
           ].join("\n")
         ].join("\n\n")
       }
     ],
-    fallbackName: project.name,
-    fallbackStyle: style,
-    fallbackInput: {
-      mode: input.mode,
-      prompt: input.prompt,
-      sourceText: input.sourceText
-    },
-    brief: writingBrief,
-    briefFallback: briefResult.fallback,
-    briefFallbackReason: briefResult.fallbackReason,
-    briefModel: briefResult.model,
     research,
     contextFingerprint,
     sourceDigest,
@@ -2813,7 +2907,6 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
       prompt: input.prompt,
       input: input.sourceText,
       supportDocLinks: input.supportDocLinks,
-      brief: writingBrief,
       research,
       sourceDigest,
       version: createInitialDraftVersion(contextFingerprint),
@@ -2827,278 +2920,9 @@ async function prepareProjectWriteContext(input: WriteCopyInput, options: { sign
   };
 }
 
-async function buildAccountWritingBrief(input: {
-  accountName: string;
-  platform: Platform;
-  style: string;
-  sampleContext: string;
-  input: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-  signal?: AbortSignal;
-}) {
-  throwIfAborted(input.signal);
-  const manualBrief = input.input.brief?.trim();
-  if (manualBrief) {
-    return {
-      text: manualBrief,
-      model: "edited-brief",
-      fallback: false,
-      ok: true
-    } satisfies ChatCompletionResult;
-  }
-
-  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
-  const userTask =
-    input.input.mode === "topic"
-      ? input.input.prompt
-      : `${input.input.prompt}\n\n${sourceText}`;
-
-  const result = await completeWriteBriefGeneration(
-    [
-      {
-        role: "system",
-        content:
-          "你是短视频文案策划。你的任务是把账号风格、代表样本和用户输入压缩成写作 brief，供下一步直接成稿使用。不要生成正文，不要解释过程。"
-      },
-      {
-        role: "user",
-        content: [
-          `参考账号：${input.accountName}`,
-          `平台：${input.platform}`,
-          `任务：\n${userTask}`,
-          `账号风格卡：\n${input.style}`,
-          `代表样本：\n${input.sampleContext || "暂无样本"}`,
-          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
-          `支持文档资料：\n${input.supportDocContext}`,
-          `联网检索资料：\n${input.webContext}`,
-          [
-            "请只输出以下结构：",
-            "## 核心事件",
-            "## 可见画面/具体细节",
-            "## 声音指纹",
-            "## 账号化切入",
-            "## 梗和映射",
-            "## 成稿路线",
-            "## 避坑"
-          ].join("\n")
-        ].join("\n\n")
-      }
-    ],
-    { signal: input.signal }
-  );
-
-  return requireWriteBriefResult(result, () =>
-    buildLocalAccountWritingBrief({
-      ...input,
-      userTask
-    })
-  );
-}
-
-async function buildProjectWritingBrief(input: {
-  projectName: string;
-  projectDescription?: string;
-  style: string;
-  referenceContext: string;
-  input: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-  signal?: AbortSignal;
-}) {
-  throwIfAborted(input.signal);
-  const manualBrief = input.input.brief?.trim();
-  if (manualBrief) {
-    return {
-      text: manualBrief,
-      model: "edited-brief",
-      fallback: false,
-      ok: true
-    } satisfies ChatCompletionResult;
-  }
-
-  const sourceText = input.input.sourceText?.trim() || "暂无原文素材";
-  const userTask =
-    input.input.mode === "topic"
-      ? input.input.prompt
-      : `${input.input.prompt}\n\n${sourceText}`;
-
-  const result = await completeWriteBriefGeneration(
-    [
-      {
-        role: "system",
-        content:
-          "你是短视频项目文案策划。你的任务是把项目风格、案例素材和用户输入压缩成写作 brief，供下一步直接成稿使用。不要生成正文，不要解释过程。"
-      },
-      {
-        role: "user",
-        content: [
-          `参考项目：${input.projectName}`,
-          `项目说明：${input.projectDescription || "暂无"}`,
-          `任务：\n${userTask}`,
-          `项目风格卡：\n${input.style}`,
-          `代表样本和案例素材：\n${input.referenceContext || "暂无样本"}`,
-          `声音指纹要求：\n${buildVoiceFingerprintInstruction()}`,
-          `支持文档资料：\n${input.supportDocContext}`,
-          `联网检索资料：\n${input.webContext}`,
-          [
-            "请只输出以下结构：",
-            "## 核心事件",
-            "## 可见画面/具体细节",
-            "## 声音指纹",
-            "## 项目化切入",
-            "## 梗和映射",
-            "## 成稿路线",
-            "## 避坑"
-          ].join("\n")
-        ].join("\n\n")
-      }
-    ],
-    { signal: input.signal }
-  );
-
-  return requireWriteBriefResult(result, () =>
-    buildLocalProjectWritingBrief({
-      ...input,
-      userTask
-    })
-  );
-}
-
-function completeWriteBriefGeneration(messages: ChatMessage[], options: { signal?: AbortSignal } = {}) {
-  return streamResponseText({
-    messages,
-    reasoningEffort: WRITE_BRIEF_REASONING_EFFORT,
-    maxOutputTokens: WRITE_BRIEF_MAX_OUTPUT_TOKENS,
-    signal: options.signal,
-    onDelta() {
-      // Keep the brief bounded without surfacing intermediate planning text to the UI.
-    }
-  });
-}
-
-function requireWriteBriefResult(result: ChatCompletionResult, buildLocalBrief?: () => string) {
-  const text = result.text.trim();
-  if (text) return { ...result, text };
-
-  if (buildLocalBrief) {
-    return {
-      ...result,
-      text: buildLocalBrief(),
-      fallback: true,
-      fallbackReason: result.fallbackReason || "模型没有返回可用写作 Brief，已使用本地结构整理。",
-      ok: false,
-      errorKind: result.errorKind || "empty",
-      userMessage: result.userMessage || "对话模型没有返回可用内容"
-    };
-  }
-
-  throw new Error(result.fallbackReason || "对话模型没有返回可用写作 Brief，请稍后重试或检查模型配置。");
-}
-
-function buildLocalAccountWritingBrief(input: {
-  accountName: string;
-  platform: Platform;
-  style: string;
-  sampleContext: string;
-  input: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-  userTask: string;
-}) {
-  return buildLocalWritingBrief({
-    targetLabel: `参考账号：${input.accountName}｜${input.platform}`,
-    angleHeading: "账号化切入",
-    style: input.style,
-    referenceContext: input.sampleContext,
-    copyInput: input.input,
-    supportDocContext: input.supportDocContext,
-    webContext: input.webContext,
-    userTask: input.userTask
-  });
-}
-
-function buildLocalProjectWritingBrief(input: {
-  projectName: string;
-  projectDescription?: string;
-  style: string;
-  referenceContext: string;
-  input: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-  userTask: string;
-}) {
-  return buildLocalWritingBrief({
-    targetLabel: `参考项目：${input.projectName}${input.projectDescription ? `｜${input.projectDescription}` : ""}`,
-    angleHeading: "项目化切入",
-    style: input.style,
-    referenceContext: input.referenceContext,
-    copyInput: input.input,
-    supportDocContext: input.supportDocContext,
-    webContext: input.webContext,
-    userTask: input.userTask
-  });
-}
-
-function buildLocalWritingBrief(input: {
-  targetLabel: string;
-  angleHeading: string;
-  style: string;
-  referenceContext: string;
-  copyInput: WriteCopyInput;
-  supportDocContext: string;
-  webContext: string;
-  userTask: string;
-}) {
-  const prompt = input.copyInput.prompt.trim();
-  const sourceText = input.copyInput.sourceText?.trim();
-  const coreEvent = input.copyInput.mode === "topic" ? prompt : sourceText || prompt;
-  const reference = input.referenceContext.trim() || input.style.trim();
-  const externalContext = [input.supportDocContext, input.webContext]
-    .filter((section) => section && !/^未(提供|启用)/.test(section.trim()))
-    .join("\n\n");
-
-  return [
-    "## 核心事件",
-    coreEvent || input.userTask,
-    "## 可见画面/具体细节",
-    [
-      sourceText ? `- 原文线索：${sourceText}` : "- 暂无原文素材，围绕主题提取可口播的具体场景。",
-      reference ? `- 参考样本/风格线索：${reference}` : "- 样本不足时，只使用用户输入里的事实和场景。"
-    ].join("\n"),
-    "## 声音指纹",
-    [
-      "- 先模仿句法、停顿、转折方式和判断习惯，再少量使用原账号口癖。",
-      "- 避免套话开场、万能鸡汤、连续排比和过度完整的书面句。",
-      "- 每段至少落一个可看见的动作、场景、物件、数字或原话。"
-    ].join("\n"),
-    `## ${input.angleHeading}`,
-    [
-      `- ${input.targetLabel}`,
-      "- 开头先给明确判断、反差或问题，避免背景铺垫。",
-      "- 句子短，口播感强，每段只推进一个信息点。"
-    ].join("\n"),
-    "## 梗和映射",
-    "- 优先保留用户输入中的梗、原话、场景、数字和事实线索；没有来源支持的事实不要新增。",
-    "## 成稿路线",
-    [
-      "1. 钩子：一句话点出冲突、反差或判断。",
-      "2. 展开：用具体场景或原文线索解释为什么成立。",
-      "3. 转折：补一层反常识或观众容易忽略的点。",
-      "4. 收束：给出清晰态度、行动建议或评论区问题。"
-    ].join("\n"),
-    "## 避坑",
-    [
-      "- 不编造人物、数据、产品信息或最新事实。",
-      "- 不照抄样本文案和原文表达。",
-      "- 不输出空泛鸡汤、抽象形容词堆叠或解释创作过程。",
-      externalContext ? `- 外部资料只采用已提供内容：${externalContext}` : "- 未提供外部资料时，不写需要外部事实支撑的结论。"
-    ].join("\n")
-  ].join("\n\n");
-}
-
 function buildWriteContextFingerprint(input: WriteCopyInput) {
   return shortHash(JSON.stringify({
+    promptVersion: WRITE_PROMPT_VERSION,
     targetType: input.targetType || (input.projectId ? "project" : "account"),
     platform: input.platform || "",
     accountId: input.accountId || "",
@@ -3113,11 +2937,6 @@ function buildWriteContextFingerprint(input: WriteCopyInput) {
       .join("\n"),
     useWebResearch: Boolean(input.useWebResearch)
   }));
-}
-
-function reusablePreparedResearch(input: WriteCopyInput, contextFingerprint: string) {
-  if (input.preparedContextFingerprint !== contextFingerprint) return undefined;
-  return input.preparedResearch?.trim() || undefined;
 }
 
 function createInitialDraftVersion(contextFingerprint: string) {
@@ -3149,13 +2968,17 @@ async function buildSupportDocumentContext(input?: string, options: { signal?: A
   const trimmed = input?.trim() || "";
   if (!trimmed) return "未提供支持文档。";
 
-  if (!hasFeishuDocLink(trimmed)) {
+  if (!hasSupportDocumentReference(trimmed)) {
     return `用户粘贴的支持资料：\n${trimmed}`;
   }
 
-  const documents = await fetchFeishuSupportDocuments(trimmed, { signal: options.signal });
-  if (!documents.length) {
-    return `用户粘贴的支持资料：\n${trimmed}`;
+  const documents = await fetchSupportDocuments(trimmed, { signal: options.signal });
+  const readableDocuments = documents.filter((document) => document.content?.trim());
+  if (!readableDocuments.length && !hasPlainSupportText(trimmed)) {
+    const reasons = documents.length
+      ? documents.map((document) => `${supportDocumentProviderLabel(document.provider)}：${document.error || "没有返回可用正文"}`)
+      : ["没有识别到可读取的文档链接"];
+    throw new Error(`支持文档读取失败：${reasons.join("；")}。请确认链接已开放查看权限，或直接粘贴正文。`);
   }
 
   const blocks: string[] = [];
@@ -3165,24 +2988,14 @@ async function buildSupportDocumentContext(input?: string, options: { signal?: A
 
   blocks.push(...documents.map((document, index) => {
     const title = document.title?.trim() || `文档 ${index + 1}`;
+    const provider = supportDocumentProviderLabel(document.provider);
     if (document.content?.trim()) {
-      return `文档 ${index + 1}｜${title}\n来源：${document.url}\n${document.content}`;
+      return `文档 ${index + 1}｜${title}\n类型：${provider}\n来源：${document.url}\n${document.content}`;
     }
-    return `文档 ${index + 1}｜${title}\n来源：${document.url}\n读取失败：${document.error || "没有返回可用正文"}`;
+    return `文档 ${index + 1}｜${title}\n类型：${provider}\n来源：${document.url}\n读取失败：${document.error || "没有返回可用正文"}`;
   }));
 
-  return blocks.join("\n\n---\n\n");
-}
-
-function hasPlainSupportText(input: string) {
-  const withoutUrls = input
-    .replace(/https?:\/\/\S+/gi, " ")
-    .replace(/(?:[a-z0-9-]+\.)*(?:feishu\.cn|larksuite\.com|feishu-boe\.cn)\/\S+/gi, " ")
-    .replace(/\b(?:docxcn|doxcn|doccn|wikcn)[A-Za-z0-9_-]{8,}\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return /[\u4e00-\u9fff]/.test(withoutUrls) || withoutUrls.length >= 20;
+  return clampText(blocks.join("\n\n---\n\n"), 20_000);
 }
 
 function buildReferenceSummary(input: {
@@ -3246,33 +3059,28 @@ function formatWriteSampleContext(samples: AccountStyleSample[]) {
     .join("\n\n---\n\n");
 }
 
-function buildVoiceFingerprintInstruction() {
-  return [
-    "1. 先抓句法和节奏：开头如何下判断、怎样转折、每句话多长、停顿在哪里。",
-    "2. 再抓表达习惯：反问、类比、吐槽、提示观众的方式，只保留样本里真的出现过的倾向。",
-    "3. 不要把风格理解成堆口癖；同一个口头词最多自然出现一次。",
-    "4. 避免通用 AI 腔：不要用“在这个快节奏时代”“不仅是…更是…”“你是否也…”这类万能句。",
-    "5. 每 2-3 句必须落到一个具体画面、动作、物件、数字或原话。"
-  ].join("\n");
-}
-
 async function normalizeWriteCopyInput(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteCopyInput> {
-  const prompt = normalizeRewritePrompt(input.mode, input.prompt, input.sourceText);
+  const combinedSourceInput = [input.sourceText?.trim(), input.supportDocLinks?.trim()].filter(Boolean).join("\n\n");
+  const separatedInput = splitWriterSourceInput(input.sourceText || "", input.supportDocLinks || "");
+  const prompt = normalizeRewritePrompt(input.mode, input.prompt, combinedSourceInput);
   throwIfAborted(options.signal);
 
   if (input.mode !== "rewrite") {
     return {
       ...input,
-      prompt
+      prompt,
+      sourceText: separatedInput.sourceText || undefined,
+      supportDocLinks: separatedInput.supportDocLinks || undefined
     };
   }
 
-  const sourceText = await normalizeRewriteSourceText(input.sourceText || "", options);
+  const sourceText = await normalizeRewriteSourceText(separatedInput.sourceText, options);
 
   return {
     ...input,
     prompt,
-    sourceText
+    sourceText,
+    supportDocLinks: separatedInput.supportDocLinks || undefined
   };
 }
 
@@ -3286,15 +3094,12 @@ function isNormalizedMaterialText(sourceText: string) {
   return /^素材\s*\d+\s*[：:]/m.test(sourceText);
 }
 
-function resolvePreparedWriteContent(prepared: PreparedWriteContext, result: ChatCompletionResult) {
-  if (prepared.allowLocalFallback === false && !result.ok) {
-    throw new Error(result.userMessage || result.fallbackReason || "续改没有返回完整内容，请检查模型配置后重试。");
+function resolvePreparedWriteContent(result: ChatCompletionResult) {
+  if (!result.ok) {
+    throw new Error(result.userMessage || result.fallbackReason || "模型没有返回完整文案，请检查模型配置后重试。");
   }
   if (result.text.trim()) return result.text;
-  if (prepared.allowLocalFallback === false) {
-    throw new Error(result.fallbackReason || "续改没有返回可用内容，请检查模型配置后重试。");
-  }
-  return buildFallbackCopy(prepared.fallbackName, prepared.fallbackStyle, prepared.fallbackInput);
+  throw new Error(result.fallbackReason || "模型没有返回可用文案，请检查模型配置后重试。");
 }
 
 async function savePreparedDraft(
@@ -3323,57 +3128,11 @@ function buildFallbackStyle(accountName: string, corpus: string) {
   const shortCorpus = corpus.replace(/\s+/g, " ").slice(0, 500);
   return `# ${accountName} 风格卡
 
-## 内容定位
-- 根据现有爆款转写稿，围绕账号已验证的话题与表达方式输出。
-
-## 开头方式
-- 先抛出明确判断或问题，用一句话制造继续看的理由。
-
-## 句式与节奏
-- 短句优先，观点先行，再用例子或细节补足。
-- 每段只推进一个信息点，避免长铺垫。
-
-## 常用话术
-- “你会发现...”
-- “真正关键的是...”
-- “这件事别只看表面...”
-
-## 叙事结构
-- 钩子开头 → 场景/问题 → 关键观点 → 具体展开 → 结尾互动。
-
-## 结尾 CTA
-- 用一个低门槛问题引导评论或收藏。
-
-## 写作禁忌
-- 不要照搬原文。
-- 不要堆砌抽象形容词。
+## 分析状态
+- 模型没有返回可用的风格分析，本卡不添加统一开头、句长、结构或结尾模板。
+- 生成文案前请优先重新分析完整样本；当前仅保留一段原始语料供人工判断。
 
 ## 样本线索
 ${shortCorpus || "- 暂无可提取线索。"}
 `;
-}
-
-function buildFallbackCopy(
-  accountName: string,
-  style: string,
-  input: { mode: Draft["mode"]; prompt: string; sourceText?: string }
-) {
-  const task = input.mode === "topic" ? input.prompt : input.sourceText || input.prompt;
-  return `标题：${task.slice(0, 26)}
-
-开头：
-你可能也遇到过这个问题：${task}
-
-正文：
-先别急着下结论。真正影响结果的，往往不是表面那个动作，而是背后的判断方式。
-
-第一，把问题拆小。先看它到底卡在目标、素材、表达，还是执行节奏。
-第二，找到一个可复用的参照。像「${accountName}」这类账号，核心不是某一句话术，而是它每次都能快速建立场景、给出判断，再把观众带到一个具体行动。
-第三，落到一个明确动作。不要泛泛地说“提升质量”，而是直接写出下一步要做什么。
-
-结尾：
-如果你也在做类似内容，可以先从这个角度改一版，效果通常会更清楚。
-
-参考风格摘要：
-${style.slice(0, 500)}`;
 }

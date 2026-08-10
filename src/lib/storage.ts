@@ -13,7 +13,9 @@ import {
   DraftCoverImage,
   DraftCoverReference,
   DraftInput,
+  DraftSummary,
   EngagementRecord,
+  EngagementRecordSummary,
   LibraryOverviewResponse,
   LibraryState,
   Platform,
@@ -65,7 +67,7 @@ const DEFAULT_STYLE = `# 风格卡
 ## 常用话术
 - 暂未总结。
 
-## 结尾 CTA
+## 结尾方式
 - 暂未总结。
 `;
 
@@ -764,6 +766,28 @@ export async function getEngagementRecords() {
   ).filter(Boolean) as EngagementRecord[];
 
   return records.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export async function getEngagementRecordSummaries() {
+  return (await getEngagementRecords()).map(toEngagementRecordSummary);
+}
+
+export function toEngagementRecordSummary(record: EngagementRecord): EngagementRecordSummary {
+  return {
+    id: record.id,
+    sourceType: record.sourceType,
+    title: record.title,
+    sourceAccountName: record.sourceAccountName,
+    sourceUrl: record.sourceUrl,
+    platform: record.platform,
+    draftId: record.draftId,
+    fallback: record.fallback,
+    fallbackReason: record.fallbackReason,
+    commentCount: record.comments?.items.length || 0,
+    danmakuCount: record.danmaku?.items.length || 0,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
 }
 
 export async function resolveEngagementRecord(recordId: string) {
@@ -1764,6 +1788,38 @@ export async function getDrafts() {
     getAllProjectDrafts()
   ]);
   return [...accountDrafts, ...projectDrafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+}
+
+export async function getDraftSummaries() {
+  return (await getDrafts()).map(toDraftSummary);
+}
+
+export function toDraftSummary(draft: Draft): DraftSummary {
+  const base = {
+    id: draft.id,
+    title: draft.title,
+    mode: draft.mode,
+    version: draft.version,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt
+  };
+
+  if (draft.targetType === "project") {
+    return {
+      ...base,
+      targetType: "project",
+      projectId: draft.projectId,
+      projectName: draft.projectName
+    };
+  }
+
+  return {
+    ...base,
+    targetType: draft.targetType,
+    platform: draft.platform,
+    accountId: draft.accountId,
+    accountName: draft.accountName
+  };
 }
 
 export async function getLibraryOverview(options: { includeAuxiliary?: boolean } = {}): Promise<LibraryOverviewResponse> {

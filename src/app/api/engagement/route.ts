@@ -2,7 +2,7 @@ import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { generateEngagement } from "@/lib/engagement";
 import { createUrlPreprocessor } from "@/lib/platform-links";
-import { deleteEngagementRecords, getEngagementRecords } from "@/lib/storage";
+import { deleteEngagementRecords, getEngagementRecordSummaries, resolveEngagementRecord } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,7 +17,8 @@ const optionsSchema = {
   commentCount: z.number().int().min(1).max(200).optional().default(50),
   includeDanmaku: z.boolean().optional().default(false),
   danmakuCount: z.number().int().min(1).max(300).optional().default(50),
-  generationMode: z.enum(["quick", "reference"]).optional().default("quick")
+  generationMode: z.enum(["quick", "reference"]).optional().default("quick"),
+  targetPlatform: z.enum(["bilibili", "douyin"]).optional()
 };
 
 const schema = z.discriminatedUnion("sourceType", [
@@ -47,8 +48,12 @@ const deleteSchema = z.object({
   recordIds: z.array(z.string().min(1)).min(1)
 });
 
-export async function GET() {
-  return apiJson(async () => ({ records: await getEngagementRecords() }), {
+export async function GET(request: Request) {
+  return apiJson(async () => {
+    const recordId = new URL(request.url).searchParams.get("recordId")?.trim();
+    if (recordId) return { record: await resolveEngagementRecord(recordId) };
+    return { records: await getEngagementRecordSummaries() };
+  }, {
     fallbackMessage: "读取互动素材历史失败"
   });
 }

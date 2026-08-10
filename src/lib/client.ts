@@ -6,11 +6,13 @@ import {
   CollectResult,
   CopySource,
   Draft,
+  DraftSummary,
   DraftCoverReference,
   DouyinHotlistRefreshResult,
   DouyinHotlistResponse,
   EngagementGenerationRequest,
   EngagementRecord,
+  EngagementRecordSummary,
   GrossMarginLibrary,
   GrossMarginMonitorRecord,
   GrossMarginPriceTable,
@@ -28,26 +30,31 @@ import {
   ProjectDraftInput,
   ProjectDetail,
   ProjectSummary,
+  RemoteStatusResponse,
   TranscriptVersion,
   Video,
   WriteAction,
-  WriteBriefResult,
   WriteRevisionScope,
-  WriteResult
+  WriteResult,
+  WriterSourceFileImport
 } from "./types";
 import type { LinkTranscriptionResult } from "./transcription";
 import type { PublishCopyInput, PublishCopyResult } from "./publish-copy-types";
 
-let draftsCache: { drafts: Draft[] } | null = null;
-let draftsRequest: Promise<{ drafts: Draft[] }> | null = null;
+let draftsCache: { drafts: DraftSummary[] } | null = null;
+let draftsRequest: Promise<{ drafts: DraftSummary[] }> | null = null;
+let draftsCacheRevision = 0;
 const draftOverrides = new Map<string, Draft>();
 const deletedDraftIds = new Set<string>();
 let copySourcesCache: { sources: CopySource[] } | null = null;
 let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
-let engagementRecordsCache: { records: EngagementRecord[] } | null = null;
-let engagementRecordsRequest: Promise<{ records: EngagementRecord[] }> | null = null;
+let engagementRecordsCache: { records: EngagementRecordSummary[] } | null = null;
+let engagementRecordsRequest: Promise<{ records: EngagementRecordSummary[] }> | null = null;
+let engagementRecordsCacheRevision = 0;
+const engagementRecordOverrides = new Map<string, EngagementRecord>();
 let grossMarginLibraryCache: GrossMarginLibrary | null = null;
 let grossMarginLibraryRequest: Promise<GrossMarginLibrary> | null = null;
+let grossMarginLibraryCacheRevision = 0;
 const DEFAULT_DOUYIN_HOTLIST_WINDOW_DAYS = 3;
 const DEFAULT_DOUYIN_HOTLIST_WINDOW = "3d";
 const douyinHotlistCache = new Map<string, DouyinHotlistResponse>();
@@ -55,6 +62,7 @@ const douyinHotlistRequests = new Map<string, Promise<DouyinHotlistResponse>>();
 let douyinHotlistCacheRevision = 0;
 let hotspotRadarCache: HotspotRadarResponse | null = null;
 let hotspotRadarRequest: Promise<HotspotRadarResponse> | null = null;
+let hotspotRadarCacheRevision = 0;
 
 type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
 
@@ -68,9 +76,6 @@ type WriteCopyRequest = {
   prompt?: string;
   sourceText?: string;
   supportDocLinks?: string;
-  brief?: string;
-  preparedResearch?: string;
-  preparedContextFingerprint?: string;
   save?: boolean;
   useWebResearch?: boolean;
   parentDraftId?: string;
@@ -269,27 +274,41 @@ function rememberDrafts(drafts: Draft[]) {
   if (!activeDrafts.length) return;
   for (const draft of activeDrafts) draftOverrides.set(draft.id, draft);
   draftsCache = {
-    drafts: mergeDraftOverrides(draftsCache?.drafts ?? [])
+    drafts: mergeDraftOverrides(draftsCache?.drafts ?? [], activeDrafts.map(draftSummaryFromDraft))
   };
 }
 
-function rememberDraftList(drafts: Draft[]) {
+function rememberDraftList(drafts: DraftSummary[]) {
   draftsCache = {
     drafts: mergeDraftOverrides(drafts)
   };
   return draftsCache;
 }
 
-function mergeDraftOverrides(drafts: Draft[]) {
+function mergeDraftOverrides(drafts: DraftSummary[], additions: DraftSummary[] = []) {
   const byId = new Map(
-    drafts
+    [...drafts, ...additions]
       .filter((draft) => !deletedDraftIds.has(draft.id))
       .map((draft) => [draft.id, draft])
   );
   for (const [draftId, draft] of draftOverrides) {
-    if (!deletedDraftIds.has(draftId)) byId.set(draftId, draft);
+    if (!deletedDraftIds.has(draftId)) byId.set(draftId, draftSummaryFromDraft(draft));
   }
   return [...byId.values()].sort(compareCreatedAtDesc);
+}
+
+export function draftSummaryFromDraft(draft: Draft): DraftSummary {
+  const base = {
+    id: draft.id,
+    title: draft.title,
+    mode: draft.mode,
+    version: draft.version,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt
+  };
+  return draft.targetType === "project"
+    ? { ...base, targetType: "project", projectId: draft.projectId, projectName: draft.projectName }
+    : { ...base, targetType: draft.targetType, platform: draft.platform, accountId: draft.accountId, accountName: draft.accountName };
 }
 
 function rememberDraftFromJob(job: JobRecord) {
@@ -302,6 +321,13 @@ function rememberDraftFromJob(job: JobRecord) {
   rememberDrafts([draft as Draft]);
 }
 
+function rememberEngagementRecordFromJob(job: JobRecord) {
+  if (job.kind !== "engagement" || !job.result || typeof job.result !== "object") return;
+  const record = (job.result as { record?: EngagementRecord }).record;
+  if (!record || typeof record.id !== "string") return;
+  rememberEngagementRecords([record]);
+}
+
 function rememberCopySources(sources: CopySource[]) {
   if (!sources.length || !copySourcesCache) return;
   copySourcesCache = {
@@ -310,9 +336,55 @@ function rememberCopySources(sources: CopySource[]) {
 }
 
 function rememberEngagementRecords(records: EngagementRecord[]) {
-  if (!records.length || !engagementRecordsCache) return;
+  if (!records.length) return;
+  for (const record of records) {
+    const current = engagementRecordOverrides.get(record.id);
+    if (!current || recordUpdatedAt(record) >= recordUpdatedAt(current)) {
+      engagementRecordOverrides.set(record.id, record);
+    }
+  }
+  const rememberedRecords = records
+    .map((record) => engagementRecordOverrides.get(record.id))
+    .filter((record): record is EngagementRecord => Boolean(record));
   engagementRecordsCache = {
-    records: mergeById(records, engagementRecordsCache.records, compareCreatedAtDesc)
+    records: mergeById(rememberedRecords.map(engagementSummaryFromRecord), engagementRecordsCache?.records ?? [], compareCreatedAtDesc)
+  };
+}
+
+function rememberEngagementRecordList(records: EngagementRecordSummary[]) {
+  for (const record of records) {
+    const current = engagementRecordOverrides.get(record.id);
+    if (current && recordUpdatedAt(record) > recordUpdatedAt(current)) {
+      engagementRecordOverrides.delete(record.id);
+    }
+  }
+  const completedRecords = [...engagementRecordOverrides.values()].map(engagementSummaryFromRecord);
+  engagementRecordsCache = {
+    records: mergeById(completedRecords, records, compareCreatedAtDesc)
+  };
+  return engagementRecordsCache;
+}
+
+function recordUpdatedAt(record: Pick<EngagementRecord, "updatedAt"> | Pick<EngagementRecordSummary, "updatedAt">) {
+  const value = Date.parse(record.updatedAt);
+  return Number.isFinite(value) ? value : 0;
+}
+
+export function engagementSummaryFromRecord(record: EngagementRecord): EngagementRecordSummary {
+  return {
+    id: record.id,
+    sourceType: record.sourceType,
+    title: record.title,
+    sourceAccountName: record.sourceAccountName,
+    sourceUrl: record.sourceUrl,
+    platform: record.platform,
+    draftId: record.draftId,
+    fallback: record.fallback,
+    fallbackReason: record.fallbackReason,
+    commentCount: record.comments?.items.length || 0,
+    danmakuCount: record.danmaku?.items.length || 0,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
   };
 }
 
@@ -341,6 +413,10 @@ function resetDouyinHotlistCache(snapshot?: DouyinHotlistResponse) {
   douyinHotlistCache.clear();
   douyinHotlistRequests.clear();
   if (snapshot) rememberDouyinHotlist(snapshot);
+}
+
+export function invalidateDouyinHotlistCache() {
+  resetDouyinHotlistCache();
 }
 
 function mergeById<T extends { id: string }>(
@@ -394,15 +470,29 @@ export function getGrossMarginLibrary(options: { fresh?: boolean } = {}) {
   if (!options.fresh && grossMarginLibraryCache) return Promise.resolve(grossMarginLibraryCache);
   if (grossMarginLibraryRequest) return grossMarginLibraryRequest;
 
-  grossMarginLibraryRequest = requestJson<GrossMarginLibrary>("/api/gross-margin")
+  const suffix = options.fresh ? "?refreshAccounts=1" : "";
+  const cacheRevision = grossMarginLibraryCacheRevision;
+  const request = requestJson<GrossMarginLibrary>(`/api/gross-margin${suffix}`)
     .then((library) => {
-      rememberGrossMarginLibrary(library);
+      if (cacheRevision === grossMarginLibraryCacheRevision) rememberGrossMarginLibrary(library);
       return library;
     })
     .finally(() => {
-      grossMarginLibraryRequest = null;
+      if (grossMarginLibraryRequest === request) grossMarginLibraryRequest = null;
     });
+  grossMarginLibraryRequest = request;
   return grossMarginLibraryRequest;
+}
+
+export function invalidateGrossMarginLibraryCache() {
+  grossMarginLibraryCacheRevision += 1;
+  grossMarginLibraryCache = null;
+  grossMarginLibraryRequest = null;
+}
+
+export function refreshGrossMarginLibraryCache() {
+  invalidateGrossMarginLibraryCache();
+  return getGrossMarginLibrary();
 }
 
 export function saveGrossMarginPriceTable(input: { platform: GrossMarginPriceTable["platform"]; items: GrossMarginPriceTableSaveItem[] }) {
@@ -566,6 +656,7 @@ export function getJobs() {
 export function getJob(jobId: string) {
   return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`).then((result) => {
     rememberDraftFromJob(result.job);
+    rememberEngagementRecordFromJob(result.job);
     return result;
   });
 }
@@ -669,15 +760,23 @@ export function getHotspotRadar() {
   if (hotspotRadarCache) return Promise.resolve(hotspotRadarCache);
   if (hotspotRadarRequest) return hotspotRadarRequest;
 
-  hotspotRadarRequest = requestJson<HotspotRadarResponse>("/api/hotspots")
+  const cacheRevision = hotspotRadarCacheRevision;
+  const request = requestJson<HotspotRadarResponse>("/api/hotspots")
     .then((result) => {
-      hotspotRadarCache = result;
+      if (cacheRevision === hotspotRadarCacheRevision) hotspotRadarCache = result;
       return result;
     })
     .finally(() => {
-      hotspotRadarRequest = null;
+      if (hotspotRadarRequest === request) hotspotRadarRequest = null;
     });
+  hotspotRadarRequest = request;
   return hotspotRadarRequest;
+}
+
+export function invalidateHotspotRadarCache() {
+  hotspotRadarCacheRevision += 1;
+  hotspotRadarCache = null;
+  hotspotRadarRequest = null;
 }
 
 export function refreshHotspotRadar() {
@@ -846,20 +945,38 @@ export function getEngagementRecords() {
   if (engagementRecordsCache) return Promise.resolve(engagementRecordsCache);
   if (engagementRecordsRequest) return engagementRecordsRequest;
 
-  engagementRecordsRequest = requestJson<{ records: EngagementRecord[] }>("/api/engagement")
+  const cacheRevision = engagementRecordsCacheRevision;
+  const request = requestJson<{ records: EngagementRecordSummary[] }>("/api/engagement")
     .then((result) => {
-      engagementRecordsCache = result;
-      return result;
+      return cacheRevision === engagementRecordsCacheRevision
+        ? rememberEngagementRecordList(result.records)
+        : result;
     })
     .finally(() => {
-      engagementRecordsRequest = null;
+      if (engagementRecordsRequest === request) engagementRecordsRequest = null;
     });
+  engagementRecordsRequest = request;
   return engagementRecordsRequest;
 }
 
-export function refreshEngagementRecords() {
+export function getEngagementRecord(recordId: string, options: { fresh?: boolean } = {}) {
+  const cached = engagementRecordOverrides.get(recordId);
+  if (cached && !options.fresh) return Promise.resolve(cached);
+  return requestJson<{ record: EngagementRecord }>(`/api/engagement?recordId=${encodeURIComponent(recordId)}`)
+    .then(({ record }) => {
+      rememberEngagementRecords([record]);
+      return record;
+    });
+}
+
+export function invalidateEngagementRecordsCache() {
+  engagementRecordsCacheRevision += 1;
   engagementRecordsCache = null;
   engagementRecordsRequest = null;
+}
+
+export function refreshEngagementRecords() {
+  invalidateEngagementRecordsCache();
   return getEngagementRecords();
 }
 
@@ -1118,11 +1235,22 @@ export function writeCopy(input: WriteCopyRequest) {
   });
 }
 
-export function prepareWriteBrief(input: WriteCopyRequest) {
-  return requestJson<WriteBriefResult>("/api/write/brief", {
+export async function uploadWriterSourceFiles(files: File[]) {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+
+  const response = await fetch("/api/write/file", {
     method: "POST",
-    body: JSON.stringify(input)
+    body: formData,
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
   });
+
+  if (!response.ok) {
+    throw new Error(await readApiErrorResponse(response));
+  }
+  return response.json() as Promise<{ files: WriterSourceFileImport[] }>;
 }
 
 export async function streamWriteCopy(
@@ -1160,7 +1288,6 @@ export async function streamWriteCopy(
       if (event.type === "result" && typeof event.data.content === "string" && typeof event.data.usedModel === "string") {
         handlers.onResult?.({
           content: event.data.content,
-          brief: event.data.brief,
           research: event.data.research,
           contextFingerprint: event.data.contextFingerprint,
           sourceDigest: event.data.sourceDigest,
@@ -1198,19 +1325,36 @@ export function getDrafts() {
   if (draftsCache) return Promise.resolve(draftsCache);
   if (draftsRequest) return draftsRequest;
 
-  draftsRequest = requestJson<{ drafts: Draft[] }>("/api/drafts")
+  const cacheRevision = draftsCacheRevision;
+  const request = requestJson<{ drafts: DraftSummary[] }>("/api/drafts")
     .then((result) => {
-      return rememberDraftList(result.drafts);
+      return cacheRevision === draftsCacheRevision ? rememberDraftList(result.drafts) : result;
     })
     .finally(() => {
-      draftsRequest = null;
+      if (draftsRequest === request) draftsRequest = null;
     });
+  draftsRequest = request;
   return draftsRequest;
 }
 
-export function refreshDrafts() {
+export function getDraft(draftId: string, options: { fresh?: boolean } = {}) {
+  const cached = draftOverrides.get(draftId);
+  if (cached && !options.fresh) return Promise.resolve(cached);
+  return requestJson<{ draft: Draft }>(`/api/drafts?draftId=${encodeURIComponent(draftId)}`)
+    .then(({ draft }) => {
+      rememberDrafts([draft]);
+      return draft;
+    });
+}
+
+export function invalidateDraftsCache() {
+  draftsCacheRevision += 1;
   draftsCache = null;
   draftsRequest = null;
+}
+
+export function refreshDrafts() {
+  invalidateDraftsCache();
   return getDrafts();
 }
 
@@ -1242,6 +1386,7 @@ export function deleteEngagementRecords(recordIds: string[]) {
     method: "DELETE",
     body: JSON.stringify({ recordIds })
   }).then((result) => {
+    for (const recordId of result.deleted) engagementRecordOverrides.delete(recordId);
     if (engagementRecordsCache) {
       const deleted = new Set(result.deleted);
       engagementRecordsCache = {
@@ -1503,6 +1648,15 @@ export async function getHealth(): Promise<HealthResponse> {
     throw new Error(formatApiErrorResponse(response, data));
   }
   return data as HealthResponse;
+}
+
+export function getRemoteStatus(options: { fresh?: boolean; signal?: AbortSignal } = {}) {
+  const params = new URLSearchParams();
+  if (options.fresh) params.set("fresh", "1");
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return requestJson<RemoteStatusResponse>(`/api/remote/status${suffix}`, {
+    signal: options.signal
+  });
 }
 
 function isGrossMarginHealthResponse(value: unknown): value is GrossMarginHealthResponse {

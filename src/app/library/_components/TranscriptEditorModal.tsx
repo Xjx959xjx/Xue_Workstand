@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { History, Save } from "lucide-react";
 import type { TranscriptVersion } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
@@ -29,6 +29,12 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
   onSave
 }: TranscriptEditorModalProps) {
   const [selectedVersionId, setSelectedVersionId] = useState(versions[0]?.id || "");
+  const initialTranscriptRef = useRef(activeTranscript);
+  const dirty = activeTranscript !== initialTranscriptRef.current;
+  const handleClose = useCallback(() => {
+    if (dirty && !window.confirm("转写稿还有未保存修改，确定关闭吗？")) return;
+    onClose();
+  }, [dirty, onClose]);
 
   useEffect(() => {
     if (!versions.some((version) => version.id === selectedVersionId)) {
@@ -37,10 +43,16 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
   }, [selectedVersionId, versions]);
 
   return (
-    <LibraryEditorModal labelledBy="library-transcript-modal-title" panelRef={panelRef} onClose={onClose}>
+    <LibraryEditorModal
+      labelledBy="library-transcript-modal-title"
+      panelClassName="transcript-editor-modal"
+      panelRef={panelRef}
+      unsavedChanges={dirty}
+      onClose={handleClose}
+    >
       <div className="modal-header">
         <h2 id="library-transcript-modal-title">转写稿全文</h2>
-        <button className="btn" onClick={onClose} type="button">
+        <button className="btn" onClick={handleClose} type="button">
           关闭
         </button>
       </div>

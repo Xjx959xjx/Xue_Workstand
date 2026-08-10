@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Copy, FileUp } from "lucide-react";
 
 type AssetTextListProps = {
@@ -7,6 +8,7 @@ type AssetTextListProps = {
   items: string[];
   empty: string;
   onCopy: () => void;
+  leadingActions?: ReactNode;
   onPublish?: () => void;
   publishDisabled?: boolean;
   publishing?: boolean;
@@ -17,6 +19,7 @@ export function AssetTextList({
   items,
   empty,
   onCopy,
+  leadingActions,
   onPublish,
   publishDisabled,
   publishing
@@ -26,14 +29,28 @@ export function AssetTextList({
       <div className="section-title-row">
         <h3>{title}</h3>
         <div className="button-row">
-          <button className="btn" disabled={!items.length} onClick={onCopy} type="button">
+          {leadingActions}
+          <button
+            aria-label={`复制${title}`}
+            className="btn compact icon-only"
+            disabled={!items.length}
+            onClick={onCopy}
+            title={`复制${title}`}
+            type="button"
+          >
             <Copy aria-hidden="true" size={16} />
-            复制
           </button>
           {onPublish ? (
-            <button className="btn" disabled={!items.length || publishDisabled} onClick={onPublish} type="button">
+            <button
+              aria-busy={publishing}
+              aria-label={publishing ? `正在导出${title}到飞书` : `导出${title}到飞书`}
+              className="btn compact icon-only"
+              disabled={!items.length || publishDisabled}
+              onClick={onPublish}
+              title={publishing ? "正在导出到飞书" : "导出到飞书"}
+              type="button"
+            >
               <FileUp aria-hidden="true" size={16} />
-              {publishing ? "导出中…" : "飞书文档"}
             </button>
           ) : null}
         </div>

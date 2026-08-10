@@ -61,6 +61,10 @@ function grossMarginAccountsPath() {
   return path.join(grossMarginPath(), "accounts.json");
 }
 
+function grossMarginWecomAccountsCachePath() {
+  return path.join(grossMarginPath(), "accounts.wecom-cache.json");
+}
+
 function normalizeGrossMarginCategoryId(categoryId: string) {
   return normalizeStorageSegment(categoryId, "毛利类目 ID");
 }
@@ -121,7 +125,7 @@ async function writeJson(target: string, value: unknown) {
   return writeJsonFile(target, value);
 }
 
-export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
+export async function getGrossMarginLibrary(options: { refreshAccounts?: boolean } = {}): Promise<GrossMarginLibrary> {
   await ensureGrossMarginDirs();
   const tables = await Promise.all(
     grossMarginTablePlatforms.map(async (platform) => {
@@ -131,7 +135,15 @@ export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
   );
   const templates = await Promise.all(grossMarginTablePlatforms.map((platform) => getGrossMarginReviewTemplate(platform)));
   const monitorRecords = await getGrossMarginMonitorRecords();
-  const accountSource = await resolveGrossMarginAccounts(await readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath()) || []);
+  const [localAccounts, persistedAccountSource] = await Promise.all([
+    readJson<GrossMarginAccountPrice[]>(grossMarginAccountsPath()),
+    readJson<import("../wecom-account-source").AccountSourceResult>(grossMarginWecomAccountsCachePath())
+  ]);
+  const accountSource = await resolveGrossMarginAccounts(localAccounts || [], {
+    persisted: persistedAccountSource,
+    refresh: options.refreshAccounts,
+    onFresh: (result) => writeJson(grossMarginWecomAccountsCachePath(), result)
+  });
 
   return {
     root: grossMarginPath(),
@@ -141,6 +153,7 @@ export async function getGrossMarginLibrary(): Promise<GrossMarginLibrary> {
     accountSource: accountSource.source,
     accountSourceWarning: accountSource.warning,
     accountSourceFetchedAt: accountSource.fetchedAt,
+    accountSourceRefreshing: accountSource.refreshing,
     monitorRecords,
     monitorProjects: buildGrossMarginMonitorProjects(monitorRecords)
   };

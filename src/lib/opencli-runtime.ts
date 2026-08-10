@@ -3,6 +3,7 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
+const OPENCLI_BROWSER_CONNECT_RETRY_DELAY_MS = 1_200;
 
 type OpenCliBrowserWindowMode = "foreground" | "background";
 
@@ -50,24 +51,31 @@ export function resolveOpenCliCommand() {
 }
 
 export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
-  let stdout: string;
-  let stderr: string;
+  let stdout = "";
+  let stderr = "";
   const runtime = resolveOpenCliCommand();
   const startedAt = Date.now();
   let timingRecorded = false;
 
-  try {
-    const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024 * 20,
-      timeout: options.timeout,
-      signal: options.signal
-    });
-    stdout = result.stdout;
-    stderr = result.stderr;
-  } catch (error) {
-    recordTiming(options, startedAt, false, undefined, error);
-    throw wrapOpenCliError(error);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
+        ...HIDDEN_CHILD_PROCESS_OPTIONS,
+        maxBuffer: 1024 * 1024 * 20,
+        timeout: options.timeout,
+        signal: options.signal
+      });
+      stdout = result.stdout;
+      stderr = result.stderr;
+      break;
+    } catch (error) {
+      if (attempt === 0 && isOpenCliBrowserConnectError(error) && !options.signal?.aborted) {
+        await waitForOpenCliRetry(OPENCLI_BROWSER_CONNECT_RETRY_DELAY_MS, options.signal);
+        continue;
+      }
+      recordTiming(options, startedAt, false, undefined, error);
+      throw wrapOpenCliError(error);
+    }
   }
 
   if (stderr && stderr.toLowerCase().includes("error")) {
@@ -232,4 +240,33 @@ function isMissingExecutableError(error: unknown) {
   const code = "code" in error ? (error as { code?: unknown }).code : undefined;
   const message = "message" in error ? String((error as { message?: unknown }).message || "") : "";
   return code === "ENOENT" || /not found|enoent/i.test(message);
+}
+
+function isOpenCliBrowserConnectError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const message = "message" in error ? String((error as { message?: unknown }).message || "") : "";
+  const stderr = "stderr" in error ? String((error as { stderr?: unknown }).stderr || "") : "";
+  return /BROWSER_CONNECT|browser profile .*not connected|extension .*not connected/i.test(`${message}\n${stderr}`);
+}
+
+function waitForOpenCliRetry(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject(createAbortError());
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function createAbortError() {
+  const error = new Error("任务已停止");
+  error.name = "AbortError";
+  return error;
 }

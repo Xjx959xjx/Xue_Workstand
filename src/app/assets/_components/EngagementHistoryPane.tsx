@@ -3,26 +3,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/components/Formatters";
-import type { EngagementRecord } from "@/lib/types";
+import type { EngagementRecord, EngagementRecordSummary } from "@/lib/types";
 import { formatSourceType } from "./asset-view-utils";
 
 type EngagementHistoryPaneProps = {
   loading: boolean;
-  records: EngagementRecord[];
+  records: EngagementRecordSummary[];
   resultRecord: EngagementRecord | null;
-  onDeleteRecord: (record: EngagementRecord) => Promise<void>;
-  onExportRecord: (record: EngagementRecord) => void;
-  onSelectRecord: (record: EngagementRecord) => void;
+  openingRecordId: string;
+  onDeleteRecord: (record: EngagementRecordSummary) => Promise<void>;
+  onExportRecord: (record: EngagementRecordSummary) => void;
+  onSelectRecord: (record: EngagementRecordSummary) => Promise<void>;
 };
 
 type RecordContextMenu = {
-  record: EngagementRecord;
+  record: EngagementRecordSummary;
   x: number;
   y: number;
 };
 
 export function EngagementHistoryPane({
   loading,
+  openingRecordId,
   records,
   resultRecord,
   onDeleteRecord,
@@ -30,7 +32,7 @@ export function EngagementHistoryPane({
   onSelectRecord
 }: EngagementHistoryPaneProps) {
   const [contextMenu, setContextMenu] = useState<RecordContextMenu | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<EngagementRecord | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EngagementRecordSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
@@ -101,8 +103,9 @@ export function EngagementHistoryPane({
               <button
                 aria-current={resultRecord?.id === record.id ? "true" : undefined}
                 className={`list-button ${resultRecord?.id === record.id ? "active" : ""}`}
+                disabled={Boolean(openingRecordId)}
                 key={record.id}
-                onClick={() => onSelectRecord(record)}
+                onClick={() => void onSelectRecord(record)}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setContextMenu({
@@ -120,7 +123,9 @@ export function EngagementHistoryPane({
                     {formatSourceType(record.sourceType)} · {formatDate(record.createdAt)}
                   </span>
                 </span>
-                <span className="status-pill done">{record.comments?.items.length || 0}/{record.danmaku?.items.length || 0}</span>
+                <span className="status-pill done">
+                  {openingRecordId === record.id ? "读取中" : `${record.commentCount}/${record.danmakuCount}`}
+                </span>
               </button>
             ))
           ) : (
@@ -147,7 +152,7 @@ export function EngagementHistoryPane({
             导出 Word
           </button>
           <button
-            className="history-context-menu-item danger"
+            className="history-context-menu-item danger mobile-destructive-action"
             onClick={() => {
               setDeleteTarget(contextMenu.record);
               setContextMenu(null);

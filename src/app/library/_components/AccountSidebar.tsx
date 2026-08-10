@@ -74,7 +74,7 @@ export const AccountSidebar = memo(function AccountSidebar({
         </div>
         <div className="account-manage-actions">
           <button
-            className={`btn icon-btn icon-only ${accountManageMode ? "primary" : ""}`}
+            className={`btn icon-btn icon-only mobile-destructive-action ${accountManageMode ? "primary" : ""}`}
             aria-label={accountManageMode ? "退出账号选择" : "批量选择账号"}
             onClick={onToggleAccountManage}
             title={accountManageMode ? "退出选择" : "批量选择"}
@@ -93,7 +93,7 @@ export const AccountSidebar = memo(function AccountSidebar({
             <strong>已选 {selectedAccountIds.length} 个</strong>
           </div>
           <button
-            className="btn danger compact"
+            className="btn danger compact mobile-destructive-action"
             disabled={!selectedAccountIds.length || busy === "account-delete"}
             onClick={onRequestDeleteAccounts}
             type="button"
@@ -104,7 +104,7 @@ export const AccountSidebar = memo(function AccountSidebar({
         </div>
       ) : null}
       <div className="pane-search account-filter-stack">
-        <div className="search-control">
+        <div className="search-control filter-search">
           <Search aria-hidden="true" size={15} />
           <input
             aria-label="搜索账号"
@@ -117,17 +117,17 @@ export const AccountSidebar = memo(function AccountSidebar({
           />
         </div>
         <div className="account-filter-row">
-          <select aria-label="筛选账号平台" onChange={(event) => onPlatformFilterChange(event.target.value as AccountPlatformFilter)} value={platformFilter}>
+          <select className="filter-select" aria-label="筛选账号平台" onChange={(event) => onPlatformFilterChange(event.target.value as AccountPlatformFilter)} value={platformFilter}>
             <option value="all">全部平台</option>
             <option value="bilibili">B站</option>
             <option value="douyin">抖音</option>
           </select>
-          <select aria-label="筛选账号状态" onChange={(event) => onStatusFilterChange(event.target.value as AccountStatusFilter)} value={statusFilter}>
+          <select className="filter-select" aria-label="筛选账号状态" onChange={(event) => onStatusFilterChange(event.target.value as AccountStatusFilter)} value={statusFilter}>
             <option value="all">全部状态</option>
             <option value="pending">待转写</option>
             <option value="missing-style">待风格</option>
           </select>
-          <select aria-label="账号排序" onChange={(event) => onAccountSortChange(event.target.value as AccountSortMode)} value={accountSort}>
+          <select className="filter-select" aria-label="账号排序" onChange={(event) => onAccountSortChange(event.target.value as AccountSortMode)} value={accountSort}>
             <option value="recent">最近采集</option>
             <option value="pending">待转写最多</option>
             <option value="videos">视频最多</option>

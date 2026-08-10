@@ -19,25 +19,21 @@ import type {
 
 type DraftSaveBase = Omit<AccountDraftInput, "assets" | "content"> | Omit<ProjectDraftInput, "assets" | "content">;
 type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
+const PENDING_WRITE_JOB_STORAGE_KEY = "style-workbench-pending-write-job";
 
 type UseWriterGenerationInput = {
   activeJobs: JobRecord[];
   activeTitle?: string;
-  brief: string;
-  briefContextFingerprint: string;
-  briefResearch: string;
   busy: string;
   hasTaskInput: boolean;
   mode: Draft["mode"];
   normalizedPrompt: string;
   normalizedSourceText: string;
-  preparedSourceText: string;
   supportDocLinks: string;
   recentJobs: JobRecord[];
   revisionInstruction: string;
   revisionScope: WriteRevisionScope;
   selectedText: string;
-  onGenerationResult?: (result: WriteResult) => void;
   onDraftSaved?: (draft: Draft) => void;
   onRevisionCompleted?: () => void;
   cancelTask: (jobId: string) => Promise<JobRecord>;
@@ -56,21 +52,16 @@ type UseWriterGenerationInput = {
 export function useWriterGeneration({
   activeJobs,
   activeTitle,
-  brief,
-  briefContextFingerprint,
-  briefResearch,
   busy,
   hasTaskInput,
   mode,
   normalizedPrompt,
   normalizedSourceText,
-  preparedSourceText,
   supportDocLinks,
   recentJobs,
   revisionInstruction,
   revisionScope,
   selectedText,
-  onGenerationResult,
   onDraftSaved,
   onRevisionCompleted,
   cancelTask,
@@ -92,7 +83,7 @@ export function useWriterGeneration({
   const [lastDraftId, setLastDraftId] = useState("");
   const [generateStage, setGenerateStage] = useState("");
   const [generateProgress, setGenerateProgress] = useState(0);
-  const [activeWriteJobId, setActiveWriteJobId] = useState("");
+  const [activeWriteJobId, setActiveWriteJobId] = useState(readPendingWriteJobId);
   const generationBaseContentRef = useRef("");
   const handledWriteJobsRef = useRef<Set<string>>(new Set());
   const reportedHydrationErrorsRef = useRef<Set<string>>(new Set());
@@ -106,17 +97,14 @@ export function useWriterGeneration({
         projectId: targetType === "project" ? selectedProject?.id : undefined,
         mode,
         prompt: normalizedPrompt,
-        sourceText: preparedSourceText || normalizedSourceText,
+        sourceText: normalizedSourceText,
         supportDocLinks,
-        brief,
         useWebResearch
       }),
     [
-      brief,
       mode,
       normalizedPrompt,
       normalizedSourceText,
-      preparedSourceText,
       selectedAccount?.id,
       selectedAccount?.platform,
       selectedProject?.id,
@@ -184,6 +172,8 @@ export function useWriterGeneration({
 
     if (handledWriteJobsRef.current.has(activeWriteJob.id)) return;
     handledWriteJobsRef.current.add(activeWriteJob.id);
+    clearPendingWriteJobId(activeWriteJob.id);
+    setActiveWriteJobId("");
     setBusy("");
 
     if (activeWriteJob.status === "completed") {
@@ -194,7 +184,6 @@ export function useWriterGeneration({
         setLastSavedContent(result.draft ? result.content : "");
         setLastDraftId(result.draft?.id || "");
         setLastDraftBase(result.draft ? draftToSaveBase(result.draft) : null);
-        onGenerationResult?.(result);
         if (result.draft) {
           onDraftSaved?.(result.draft);
           routerReplace(buildWriterDraftHref(result.draft), { scroll: false });
@@ -233,7 +222,7 @@ export function useWriterGeneration({
       setLastContent(generationBaseContentRef.current);
       generationBaseContentRef.current = "";
     }
-  }, [activeWriteJob, onDraftSaved, onGenerationResult, onRevisionCompleted, refresh, routerReplace, setBusy, setNotice, useWebResearch]);
+  }, [activeWriteJob, onDraftSaved, onRevisionCompleted, refresh, routerReplace, setBusy, setNotice, useWebResearch]);
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;
@@ -259,15 +248,13 @@ export function useWriterGeneration({
           projectId: targetType === "project" ? selectedProject?.id : undefined,
           mode,
           prompt: normalizedPrompt,
-          sourceText: preparedSourceText || normalizedSourceText,
+          sourceText: normalizedSourceText,
           supportDocLinks: supportDocLinks.trim() || undefined,
-          brief: brief.trim() || undefined,
-          preparedResearch: briefResearch.trim() || undefined,
-          preparedContextFingerprint: briefContextFingerprint || undefined,
           save: true,
           useWebResearch
         }
       });
+      rememberPendingWriteJobId(job.id);
       setActiveWriteJobId(job.id);
       setGenerateStage(job.message);
       setGenerateProgress(job.progress);
@@ -281,14 +268,10 @@ export function useWriterGeneration({
     }
   }, [
     activeTitle,
-    brief,
-    briefContextFingerprint,
-    briefResearch,
     canGenerate,
     mode,
     normalizedPrompt,
     normalizedSourceText,
-    preparedSourceText,
     selectedAccount,
     selectedProject,
     setBusy,
@@ -331,6 +314,7 @@ export function useWriterGeneration({
           selectedText: revisionScope === "selection" ? selectedText : undefined
         }
       });
+      rememberPendingWriteJobId(job.id);
       setActiveWriteJobId(job.id);
       setGenerateStage(job.message);
       setGenerateProgress(job.progress);
@@ -439,8 +423,9 @@ export function useWriterGeneration({
     setLastDraftId("");
     setGenerateStage("");
     setGenerateProgress(0);
+    clearPendingWriteJobId(activeWriteJobId);
     setActiveWriteJobId("");
-  }, []);
+  }, [activeWriteJobId]);
 
   return {
     canGenerate,
@@ -525,4 +510,21 @@ function isCurrentWriteJob(
 
 function isActiveJob(job: JobRecord) {
   return job.status === "queued" || job.status === "running";
+}
+
+function readPendingWriteJobId() {
+  if (typeof window === "undefined") return "";
+  return window.sessionStorage.getItem(PENDING_WRITE_JOB_STORAGE_KEY) || "";
+}
+
+function rememberPendingWriteJobId(jobId: string) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(PENDING_WRITE_JOB_STORAGE_KEY, jobId);
+}
+
+function clearPendingWriteJobId(jobId: string) {
+  if (typeof window === "undefined" || !jobId) return;
+  if (window.sessionStorage.getItem(PENDING_WRITE_JOB_STORAGE_KEY) === jobId) {
+    window.sessionStorage.removeItem(PENDING_WRITE_JOB_STORAGE_KEY);
+  }
 }

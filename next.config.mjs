@@ -15,6 +15,9 @@ const nextConfig = {
   reactStrictMode: true,
   devIndicators: false,
   output: "standalone",
+  turbopack: {
+    moduleIds: "named"
+  },
   webpack(config, { dev }) {
     if (!dev) return config;
 

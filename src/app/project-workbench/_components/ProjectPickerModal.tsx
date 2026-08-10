@@ -34,6 +34,8 @@ export function ProjectPickerModal({
   onSaveProject,
   onSelectProject
 }: ProjectPickerModalProps) {
+  const formTitle = selectedProjectId ? "编辑当前项目" : "新建项目";
+
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") onClose();
   }
@@ -43,8 +45,8 @@ export function ProjectPickerModal({
       <div aria-labelledby="project-picker-title" aria-modal="true" className="modal-panel project-picker-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>
-            <h2 id="project-picker-title">项目</h2>
-            <p className="pane-subtitle">选择项目，或编辑当前项目资料。</p>
+            <h2 id="project-picker-title">选择项目</h2>
+            <p className="pane-subtitle">切换已有项目，或在下方新建。</p>
           </div>
           <div className="button-row">
             <button className="btn" onClick={onNewProject} type="button">
@@ -59,7 +61,7 @@ export function ProjectPickerModal({
 
         <div className="project-picker-body">
           <div className="project-picker-column">
-            <h3>项目列表</h3>
+            <h3>已有项目</h3>
             <div className="project-picker-list" aria-label="项目列表">
               {projects.map((project) => (
                 <button
@@ -77,7 +79,7 @@ export function ProjectPickerModal({
           </div>
 
           <div className="project-picker-form">
-            <h3>项目信息</h3>
+            <h3>{formTitle}</h3>
             <label className="field">
               <span>名称</span>
               <input autoComplete="off" name="projectName" value={projectName} onChange={(event) => onProjectNameChange(event.target.value)} placeholder="项目名…" />
@@ -86,10 +88,12 @@ export function ProjectPickerModal({
               <span>说明</span>
               <textarea autoComplete="off" name="projectDescription" value={projectDescription} onChange={(event) => onProjectDescriptionChange(event.target.value)} placeholder="用途、受众、方向…" />
             </label>
-            <button className="btn primary" disabled={!canSaveProject} onClick={onSaveProject} type="button">
-              <Save aria-hidden="true" size={16} />
-              {busy === "save" ? "保存中" : "保存"}
-            </button>
+            <div className="project-picker-save">
+              <button className="btn primary" disabled={!canSaveProject} onClick={onSaveProject} type="button">
+                <Save aria-hidden="true" size={16} />
+                {busy === "save" ? "保存中" : "保存项目"}
+              </button>
+            </div>
           </div>
         </div>
       </div>

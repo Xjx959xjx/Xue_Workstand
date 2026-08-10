@@ -44,6 +44,14 @@ export async function POST(request: Request) {
         onVideoResult(event) {
           emit({ type: "result", data: event });
         },
+        onTranscribeComplete({ completed, failed }) {
+          emit({
+            type: "stage",
+            stage: "transcripts-saved",
+            message: `转写已同步：新增 ${completed}，失败 ${failed}`,
+            progress: 86
+          });
+        },
         onStyleStart() {
           emit({ type: "stage", stage: "style", message: "正在更新账号风格卡", progress: 88 });
         },

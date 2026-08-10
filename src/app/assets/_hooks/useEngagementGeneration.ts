@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { engagementSourceKey } from "@/lib/job-scope";
 import { extractFirstLinkFromInput } from "@/lib/platform-links";
-import type { EngagementGenerationMode, EngagementRecord, JobRecord, JobStartInput } from "@/lib/types";
+import type { EngagementGenerationMode, EngagementRecord, JobRecord, JobStartInput, Platform } from "@/lib/types";
 import type { BusyState } from "../_components/asset-view-utils";
 
 type EngagementJobInput = Extract<JobStartInput, { kind: "engagement" }>["input"];
@@ -15,6 +15,8 @@ type UseEngagementGenerationInput = {
   includeComments: boolean;
   includeDanmaku: boolean;
   generationMode: EngagementGenerationMode;
+  onRecordCompleted: (record: EngagementRecord) => void;
+  targetPlatform: Platform;
   recentJobs: JobRecord[];
   sourceInput: string;
   startTask: (input: JobStartInput) => Promise<JobRecord>;
@@ -31,6 +33,8 @@ export function useEngagementGeneration({
   includeComments,
   includeDanmaku,
   generationMode,
+  onRecordCompleted,
+  targetPlatform,
   recentJobs,
   setBusy,
   setNotice,
@@ -50,10 +54,11 @@ export function useEngagementGeneration({
             commentCount,
             includeDanmaku,
             danmakuCount,
-            generationMode
+            generationMode,
+            targetPlatform
           })
       : null,
-    [commentCount, danmakuCount, generationMode, includeComments, includeDanmaku, trimmedSource]
+    [commentCount, danmakuCount, generationMode, includeComments, includeDanmaku, targetPlatform, trimmedSource]
   );
   const engagementJobCandidates = useMemo(
     () => [...activeJobs, ...recentJobs].filter((job) => job.kind === "engagement"),
@@ -101,6 +106,7 @@ export function useEngagementGeneration({
       const result = engagementJob.result as { record?: EngagementRecord } | undefined;
       if (result?.record) {
         setResultRecord(result.record);
+        onRecordCompleted(result.record);
         setNotice(buildSuccessMessage(result.record));
       } else {
         setNotice("互动素材已生成。");
@@ -110,7 +116,7 @@ export function useEngagementGeneration({
     if (engagementJob.status === "failed") {
       setNotice(engagementJob.error || "生成评论失败，请检查输入和模型配置。");
     }
-  }, [engagementJob, handledEngagementJobIds, setBusy, setNotice]);
+  }, [engagementJob, handledEngagementJobIds, onRecordCompleted, setBusy, setNotice]);
 
   const handleGenerate = useCallback(async () => {
     if (!includeComments && !includeDanmaku) {
@@ -129,7 +135,8 @@ export function useEngagementGeneration({
       commentCount,
       includeDanmaku,
       danmakuCount,
-      generationMode
+      generationMode,
+      targetPlatform
     });
 
     setBusy("generate");
@@ -158,49 +165,15 @@ export function useEngagementGeneration({
     setNotice,
     setResultRecord,
     startTask,
+    targetPlatform,
     trimmedSource
   ]);
-
-  const handleSupplement = useCallback(async (record: EngagementRecord) => {
-    const requestedCount = record.comments?.requestedCount || record.options.commentCount;
-    const actualCount = record.comments?.items.length || 0;
-    const missingCount = Math.max(requestedCount - actualCount, 0);
-    if (!missingCount) {
-      setNotice("当前评论数量已经补齐。");
-      return;
-    }
-
-    setBusy("generate");
-    setNotice("");
-    try {
-      const job = await startTask({
-        kind: "engagement",
-        title: "补齐评论素材",
-        inputSummary: `${record.title} · 缺 ${missingCount} 条`,
-        href: "/assets",
-        input: {
-          sourceType: "record",
-          recordId: record.id,
-          includeComments: true,
-          commentCount: missingCount,
-          includeDanmaku: false,
-          danmakuCount: 1,
-          generationMode: record.options.generationMode || generationMode
-        }
-      });
-      setActiveEngagementJobId(job.id);
-    } catch (err) {
-      setBusy("");
-      setNotice(err instanceof Error ? err.message : "补齐评论失败，请检查模型配置。");
-    }
-  }, [generationMode, setBusy, setNotice, startTask]);
 
   return {
     canGenerate,
     activeTitle,
     generationProgress,
     handleGenerate,
-    handleSupplement,
     previewComments,
     resultRecord,
     setResultRecord
@@ -209,19 +182,23 @@ export function useEngagementGeneration({
 
 function buildSuccessMessage(record: EngagementRecord) {
   const commentCount = record.comments?.items.length || 0;
-  const requestedCount = record.comments?.requestedCount || record.options.commentCount;
+  const requestedCommentCount = record.comments?.requestedCount || record.options.commentCount;
   const danmakuCount = record.danmaku?.items.length || 0;
-  const commentLabel = requestedCount && commentCount < requestedCount
-    ? `${commentCount}/${requestedCount} 条评论，可继续补齐`
+  const requestedDanmakuCount = record.danmaku?.requestedCount || record.options.danmakuCount;
+  const commentLabel = requestedCommentCount && commentCount < requestedCommentCount
+    ? `${commentCount}/${requestedCommentCount} 条评论（自动补齐已结束）`
     : `${commentCount} 条评论`;
-  if (commentCount && danmakuCount) return `已生成 ${commentLabel}和 ${danmakuCount} 条弹幕。`;
+  const danmakuLabel = requestedDanmakuCount && danmakuCount < requestedDanmakuCount
+    ? `${danmakuCount}/${requestedDanmakuCount} 条弹幕（自动补齐已结束）`
+    : `${danmakuCount} 条弹幕`;
+  if (commentCount && danmakuCount) return `已生成 ${commentLabel}和 ${danmakuLabel}。`;
   if (commentCount) return `已生成 ${commentLabel}。`;
-  return `已生成 ${danmakuCount} 条弹幕。`;
+  return `已生成 ${danmakuLabel}。`;
 }
 
 function buildEngagementJobInput(
   rawSource: string,
-  options: Pick<Extract<EngagementJobInput, { sourceType: "text" }>, "includeComments" | "commentCount" | "includeDanmaku" | "danmakuCount" | "generationMode">
+  options: Pick<Extract<EngagementJobInput, { sourceType: "text" }>, "includeComments" | "commentCount" | "includeDanmaku" | "danmakuCount" | "generationMode" | "targetPlatform">
 ): EngagementJobInput {
   const extractedUrl = extractFirstLinkFromInput(rawSource, { kind: "video" });
 
@@ -229,7 +206,11 @@ function buildEngagementJobInput(
     return {
       sourceType: "url",
       url: extractedUrl,
-      ...options
+      includeComments: options.includeComments,
+      commentCount: options.commentCount,
+      includeDanmaku: options.includeDanmaku,
+      danmakuCount: options.danmakuCount,
+      generationMode: options.generationMode
     };
   }
 

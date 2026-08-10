@@ -76,6 +76,7 @@ export {
   getBilibiliComments,
   getBilibiliRelatedTopicComments,
   getBilibiliSubtitle,
+  getBilibiliPublicVideoReference,
   getBilibiliVideoReference,
   getBilibiliVideoStatsByUrl,
   hydrateBilibiliVideoStats
@@ -944,7 +945,7 @@ async function getDouyinVideoStatsByUrlInWorkspace(
 
 export async function getDouyinVideoCommentsByUrl(
   url: string,
-  options: { commentLimit?: number } = {}
+  options: { commentLimit?: number; signal?: AbortSignal } = {}
 ) {
   const inputUrl = url.trim();
   const initialAwemeId = extractDouyinAwemeId(inputUrl);
@@ -954,12 +955,17 @@ export async function getDouyinVideoCommentsByUrl(
 
   try {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
-      timeout: 30_000
+      timeout: 30_000,
+      signal: options.signal
     });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000 }).catch(() => undefined);
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "state"), { timeout: 12_000 }).catch(() => undefined);
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000, signal: options.signal }).catch(
+      ignoreAbortToUndefined
+    );
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "state"), { timeout: 12_000, signal: options.signal }).catch(
+      ignoreAbortToUndefined
+    );
 
-    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId);
+    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId, { signal: options.signal });
     const awemeId = resolved.awemeId;
     if (!awemeId) {
       return {
@@ -973,8 +979,8 @@ export async function getDouyinVideoCommentsByUrl(
     }
 
     const [detail, snapshot] = await Promise.all([
-      getDouyinVideoDetailWithBrowser(workspace, awemeId, { commentLimit }).catch(() => null),
-      getDouyinVideoDetailSnapshot(workspace, awemeId).catch(() => null)
+      getDouyinVideoDetailWithBrowser(workspace, awemeId, { commentLimit, signal: options.signal }).catch(ignoreAbortToNull),
+      getDouyinVideoDetailSnapshot(workspace, awemeId, { signal: options.signal }).catch(ignoreAbortToNull)
     ]);
 
     return {
@@ -1200,6 +1206,11 @@ function ignoreAbortToEmptyString(error: unknown) {
   return "";
 }
 
+function ignoreAbortToUndefined(error: unknown) {
+  if (isAbortError(error)) throw error;
+  return undefined;
+}
+
 async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTimingOptions = {}) {
   const filtered = await runOpenCli(
     buildOpenCliBrowserArgs(workspace, "network", ["--since", "60s", "--filter", "aweme_detail,statistics"]),
@@ -1374,7 +1385,8 @@ async function resolveDouyinAwemeIdFromOpenPage(
       timeout: 20_000,
       timingStage: "douyin.browser.eval.resolve-id",
       onTiming: options.onTiming,
-      timingMeta: options.timingMeta
+      timingMeta: options.timingMeta,
+      signal: options.signal
     })
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
@@ -1388,7 +1400,7 @@ async function resolveDouyinAwemeIdFromOpenPage(
 async function getDouyinVideoDetailWithBrowser(
   workspace: string,
   awemeId: string,
-  options: { commentLimit?: number } = {}
+  options: { commentLimit?: number; signal?: AbortSignal } = {}
 ) {
   const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 50));
   const result = parseJsonish(
@@ -1397,7 +1409,7 @@ async function getDouyinVideoDetailWithBrowser(
         awemeId,
         commentLimit
       })
-    ]), { timeout: 20_000 })
+    ]), { timeout: 20_000, signal: options.signal })
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
   const topComments = Array.isArray(object.topComments)

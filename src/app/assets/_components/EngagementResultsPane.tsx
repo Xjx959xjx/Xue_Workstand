@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, ListPlus } from "lucide-react";
+import { Download } from "lucide-react";
 import { AssetTextList } from "./AssetTextList";
 import type { BusyState } from "./asset-view-utils";
 import { formatTime } from "./asset-view-utils";
@@ -13,7 +13,6 @@ type EngagementResultsPaneProps = {
   resultRecord: EngagementRecord | null;
   onCopyText: (text: string, message: string) => void;
   onExportWord: (record: EngagementRecord) => void;
-  onSupplement: (record: EngagementRecord) => void;
   onPublishAssetText: (kind: "comments" | "danmaku", items: string[], emptyMessage: string) => void;
 };
 
@@ -24,7 +23,6 @@ export function EngagementResultsPane({
   resultRecord,
   onCopyText,
   onExportWord,
-  onSupplement,
   onPublishAssetText
 }: EngagementResultsPaneProps) {
   const activeComments = previewComments.length ? previewComments : resultRecord?.comments?.items || [];
@@ -34,9 +32,13 @@ export function EngagementResultsPane({
   const sourceBrief = diagnostics?.sourceBrief;
   const entityGuard = diagnostics?.entityGuard;
   const relatedResearch = diagnostics?.relatedResearch;
+  const styleProfile = diagnostics?.styleProfile;
   const requestedCommentCount = resultRecord?.comments?.requestedCount || resultRecord?.options.commentCount || 0;
   const actualCommentCount = resultRecord?.comments?.items.length || 0;
   const missingCommentCount = Math.max(requestedCommentCount - actualCommentCount, 0);
+  const requestedDanmakuCount = resultRecord?.danmaku?.requestedCount || (resultRecord?.options.includeDanmaku ? resultRecord.options.danmakuCount : 0);
+  const actualDanmakuCount = resultRecord?.danmaku?.items.length || 0;
+  const missingDanmakuCount = Math.max(requestedDanmakuCount - actualDanmakuCount, 0);
   const isGenerating = busy === "generate";
 
   return (
@@ -45,7 +47,7 @@ export function EngagementResultsPane({
         {generation && !isGenerating ? (
           <div className="engagement-diagnostics">
             {resultRecord?.comments?.generationMode ? (
-              <span>{resultRecord.comments.generationMode === "reference" ? "参考热评" : "快速自然"}</span>
+              <span>{resultRecord.comments.generationMode === "reference" ? (styleProfile ? "原评增强" : "参考热评") : (styleProfile ? "平台自然" : "快速自然")}</span>
             ) : null}
             <span>{generation.mode === "keyword_local" ? "关键词生成" : `${generation.batchCount} 批增强`}</span>
             <span>完成 {actualCommentCount || generation.completedCount}/{requestedCommentCount || generation.requestedCount}</span>
@@ -57,7 +59,14 @@ export function EngagementResultsPane({
             ) : null}
             {generation.entityCorrectedCount ? <span>型号纠错 {generation.entityCorrectedCount}</span> : null}
             {generation.unsupportedEntityRejectedCount ? <span>型号过滤 {generation.unsupportedEntityRejectedCount}</span> : null}
+            {generation.transportRejectedCount ? <span>链接污染过滤 {generation.transportRejectedCount}</span> : null}
             {entityGuard?.allowedModels?.length ? <span>型号 {entityGuard.allowedModels.length}</span> : null}
+            {styleProfile ? <span>{styleProfile.channel === "douyin_comment" ? "抖音风格" : "B站风格"}</span> : null}
+            {styleProfile ? <span>真实样本 {styleProfile.sampleCount}</span> : null}
+            {styleProfile?.matchedVideoCount ? <span>标杆视频 {styleProfile.matchedVideoCount}</span> : null}
+            {styleProfile?.matchedTopics?.length ? <span>题材 {styleProfile.matchedTopics.slice(0, 2).join("/")}</span> : null}
+            {styleProfile?.referenceError ? <span title={styleProfile.referenceError}>原评回退</span> : null}
+            {typeof generation.nativeEmoteCount === "number" ? <span>表情 {generation.nativeEmoteCount}/{generation.targetNativeEmoteCount || 0}</span> : null}
             {generation.lengthBuckets?.long ? <span>长评 {generation.lengthBuckets.long}/{generation.targetLongCommentCount || generation.lengthBuckets.long}</span> : null}
             {generation.intentBuckets ? <span>追问 {generation.intentBuckets.question}</span> : null}
             {generation.intentBuckets ? <span>价格 {generation.intentBuckets.price}</span> : null}
@@ -67,32 +76,34 @@ export function EngagementResultsPane({
             {generation.mode === "model_batch" ? <span>模型解析 {generation.parsedCount}</span> : null}
           </div>
         ) : null}
-        <div className="engagement-export-row">
-          {resultRecord && missingCommentCount > 0 ? (
-            <button
-              className="btn"
-              disabled={Boolean(busy)}
-              onClick={() => onSupplement(resultRecord)}
-              type="button"
-            >
-              <ListPlus aria-hidden="true" size={16} />
-              补齐 {missingCommentCount} 条
-            </button>
-          ) : null}
-          <button
-            className="btn"
-            disabled={!resultRecord || (!activeComments.length && !activeDanmaku.length) || Boolean(busy)}
-            onClick={() => resultRecord ? onExportWord(resultRecord) : undefined}
-            type="button"
-          >
-            <Download aria-hidden="true" size={16} />
-            {busy === "export-word" ? "导出中…" : "Word 文档"}
-          </button>
-        </div>
+        {resultRecord?.danmaku && !isGenerating ? (
+          <div className="engagement-diagnostics">
+            <span>B站弹幕</span>
+            <span>{resultRecord.danmaku.timingBasis === "source_segments" ? "语音分段时间" : "文案节奏估时"}</span>
+            {resultRecord.danmaku.durationSec ? <span>时长 {formatDuration(resultRecord.danmaku.durationSec * 1000)}</span> : null}
+            {typeof resultRecord.danmaku.styleSampleCount === "number" ? <span>真实样本 {resultRecord.danmaku.styleSampleCount}</span> : null}
+            {resultRecord.danmaku.styleVideoCount ? <span>标杆视频 {resultRecord.danmaku.styleVideoCount}</span> : null}
+            {resultRecord.danmaku.styleTopics?.length ? <span>题材 {resultRecord.danmaku.styleTopics.slice(0, 2).join("/")}</span> : null}
+            {typeof resultRecord.danmaku.burstShare === "number" ? <span>爆点成簇</span> : null}
+          </div>
+        ) : null}
         <AssetTextList
           empty={isGenerating ? "首批评论生成后会直接显示。" : "生成后会在这里显示评论。"}
           items={activeComments.map((item) => item.text)}
-          title={`评论 ${activeComments.length}${isGenerating && previewComments.length ? " · 生成中" : ""}`}
+          leadingActions={(
+            <button
+              aria-busy={busy === "export-word"}
+              aria-label={busy === "export-word" ? "正在导出 Word" : "导出 Word"}
+              className="btn compact icon-only"
+              disabled={!resultRecord || (!activeComments.length && !activeDanmaku.length) || Boolean(busy)}
+              onClick={() => resultRecord ? onExportWord(resultRecord) : undefined}
+              title={busy === "export-word" ? "正在导出 Word" : "导出 Word"}
+              type="button"
+            >
+              <Download aria-hidden="true" size={16} />
+            </button>
+          )}
+          title={`评论 ${activeComments.length}${missingCommentCount && !isGenerating ? `/${requestedCommentCount}` : ""}${isGenerating && previewComments.length ? " · 自动补齐中" : ""}`}
           onCopy={() => onCopyText(activeComments.map((item) => item.text).join("\n"), "评论已复制。")}
           onPublish={() =>
             onPublishAssetText(
@@ -107,7 +118,7 @@ export function EngagementResultsPane({
         <AssetTextList
           empty={includeDanmaku || activeDanmaku.length ? "生成后会在这里显示弹幕。" : "勾选弹幕后会生成弹幕。"}
           items={activeDanmaku.map((item) => `${formatTime(item.timeSec)}  ${item.text}`)}
-          title={`弹幕 ${activeDanmaku.length}`}
+          title={`弹幕 ${activeDanmaku.length}${missingDanmakuCount ? `/${requestedDanmakuCount}` : ""}`}
           onCopy={() => onCopyText(activeDanmaku.map((item) => `${formatTime(item.timeSec)}\t${item.text}`).join("\n"), "弹幕已复制。")}
           onPublish={() =>
             onPublishAssetText(

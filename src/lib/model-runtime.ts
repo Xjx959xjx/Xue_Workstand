@@ -54,6 +54,18 @@ export type ChatRuntimePublicConfig = ChatRuntimePublicTargetConfig & {
   fallbackConfigured: boolean;
 };
 
+export type WebResearchRuntimePublicConfig = {
+  baseUrl: string;
+  model: string;
+  wireApi: "responses";
+  reasoningEffort: ChatReasoningEffort;
+  serviceTier: string;
+  responsesUrlConfigured: boolean;
+  proxyConfigured: boolean;
+  configured: boolean;
+  source: "dedicated" | "chat";
+};
+
 export type ChatProbeResult = {
   ok: boolean;
   configured: boolean;
@@ -83,6 +95,8 @@ type ChatMessage = {
 
 const DEFAULT_FALLBACK_CHAT_BASE_URL = "https://www.fhl.mom";
 const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-5.5";
+const DEFAULT_WEB_RESEARCH_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_WEB_RESEARCH_MODEL = "gpt-5.6";
 const MAX_ADDITIONAL_CHAT_FALLBACKS = 4;
 
 class ModelRuntimeError extends Error {
@@ -188,6 +202,57 @@ export function getChatConfigs() {
 
 export function getConfiguredChatConfigs() {
   return getChatConfigs().filter(isChatConfigConfigured);
+}
+
+export function getWebResearchConfig() {
+  return {
+    role: "primary" as const,
+    enabled: process.env.WEB_RESEARCH_ENABLED !== "0",
+    apiKey: process.env.WEB_RESEARCH_API_KEY || "",
+    baseUrl: normalizeBaseUrl(process.env.WEB_RESEARCH_BASE_URL || DEFAULT_WEB_RESEARCH_BASE_URL),
+    responsesUrl: process.env.WEB_RESEARCH_RESPONSES_URL || "",
+    chatCompletionsUrl: "",
+    model: process.env.WEB_RESEARCH_MODEL || DEFAULT_WEB_RESEARCH_MODEL,
+    wireApi: "responses" as const,
+    reasoningEffort: normalizeReasoningEffort(process.env.WEB_RESEARCH_REASONING_EFFORT || "high"),
+    chatCompletionReasoningEffort: "none" as const,
+    serviceTier: normalizeServiceTier(process.env.WEB_RESEARCH_SERVICE_TIER),
+    proxyUrl: process.env.WEB_RESEARCH_PROXY_URL || process.env.CHAT_PROXY_URL || ""
+  } satisfies ChatRuntimeConfig;
+}
+
+export function isWebResearchConfigConfigured(config: ChatRuntimeConfig = getWebResearchConfig()) {
+  return Boolean(config.enabled && config.apiKey && (config.baseUrl || config.responsesUrl) && config.model);
+}
+
+export function getConfiguredWebResearchConfigs() {
+  const dedicated = getWebResearchConfig();
+  const configs = [
+    ...(isWebResearchConfigConfigured(dedicated) ? [dedicated] : []),
+    ...getConfiguredChatConfigs().filter((config) => config.wireApi !== "chat_completions")
+  ];
+  return configs.filter(
+    (config, index) => index === configs.findIndex((candidate) => sameChatRuntimeConfig(candidate, config))
+  );
+}
+
+export function getWebResearchRuntimeConfig(): WebResearchRuntimePublicConfig {
+  const dedicated = getWebResearchConfig();
+  const dedicatedConfigured = isWebResearchConfigConfigured(dedicated);
+  const chatResponses = getConfiguredChatConfigs().find((config) => config.wireApi !== "chat_completions");
+  const active = dedicatedConfigured ? dedicated : chatResponses || dedicated;
+
+  return {
+    baseUrl: active.baseUrl,
+    model: active.model,
+    wireApi: "responses",
+    reasoningEffort: active.reasoningEffort,
+    serviceTier: active.serviceTier,
+    responsesUrlConfigured: Boolean(active.responsesUrl),
+    proxyConfigured: Boolean(active.proxyUrl),
+    configured: Boolean(dedicatedConfigured || chatResponses),
+    source: dedicatedConfigured ? "dedicated" : "chat"
+  };
 }
 
 export function isChatConfigConfigured(config: ChatRuntimeConfig) {

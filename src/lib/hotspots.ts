@@ -592,7 +592,12 @@ function bingNewsUrl(query: string) {
 let cachedSnapshot: HotspotRadarRefreshResult | null = null;
 let activeRefreshPromise: Promise<HotspotRadarRefreshResult> | null = null;
 
-export async function getHotspotRadar(options: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<HotspotRadarRefreshResult> {
+type HotspotRefreshOptions = {
+  signal?: AbortSignal;
+  onProgress?: (progress: { completed: number; total: number; sourceName: string; failed: boolean }) => void | Promise<void>;
+};
+
+export async function getHotspotRadar(options: { refresh?: boolean } & HotspotRefreshOptions = {}): Promise<HotspotRadarRefreshResult> {
   if (options.refresh) {
     return refreshHotspotRadar({ signal: options.signal });
   }
@@ -610,7 +615,7 @@ export async function getHotspotRadar(options: { refresh?: boolean; signal?: Abo
   return buildEmptyHotspotRadarSnapshot();
 }
 
-export async function refreshHotspotRadar(options: { signal?: AbortSignal } = {}) {
+export async function refreshHotspotRadar(options: HotspotRefreshOptions = {}) {
   if (activeRefreshPromise) return activeRefreshPromise;
 
   const promise = refreshHotspotRadarUnlocked(options).then(async (snapshot) => {
@@ -713,8 +718,19 @@ function buildEmptyBoardStats() {
   });
 }
 
-async function refreshHotspotRadarUnlocked(options: { signal?: AbortSignal }) {
-  const collected = await mapWithConcurrency(FIRST_WAVE_SOURCES, MAX_CONCURRENCY, (source) => collectSource(source, options.signal));
+async function refreshHotspotRadarUnlocked(options: HotspotRefreshOptions) {
+  let progressCompleted = 0;
+  const collected = await mapWithConcurrency(FIRST_WAVE_SOURCES, MAX_CONCURRENCY, async (source) => {
+    const result = await collectSource(source, options.signal);
+    progressCompleted += 1;
+    await options.onProgress?.({
+      completed: progressCompleted,
+      total: FIRST_WAVE_SOURCES.length,
+      sourceName: source.name,
+      failed: result.status !== "completed"
+    });
+    return result;
+  });
   const signals = dedupeSignals(collected.flatMap((source) => source.signals))
     .sort((left, right) => right.heat - left.heat || compareIsoDesc(left.publishedAt || left.capturedAt, right.publishedAt || right.capturedAt))
     .slice(0, 140);

@@ -12,7 +12,8 @@
   background: color-mix(in oklch, var(--status-neutral-bg) 92%, white);
   font-size: var(--text-caption);
   font-variant-numeric: tabular-nums;
-  font-weight: 720;
+  font-weight: var(--font-weight-label);
+  line-height: var(--line-height-caption);
   white-space: nowrap;
   transition:
     background-color var(--motion-base) var(--ease-apple),
@@ -53,7 +54,8 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-notice);
   font-size: var(--text-meta);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-meta);
 }
 
 .notice::before,
@@ -143,7 +145,8 @@
 .workbench-toast-copy strong {
   color: var(--text-strong);
   font-size: var(--text-meta);
-  font-weight: 700;
+  font-weight: var(--font-weight-heading);
+  line-height: var(--line-height-meta);
 }
 
 .workbench-toast-copy span {

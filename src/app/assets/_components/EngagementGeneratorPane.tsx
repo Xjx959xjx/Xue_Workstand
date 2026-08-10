@@ -3,7 +3,7 @@
 import { MessageSquareText, Send, Zap } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
-import type { EngagementGenerationMode } from "@/lib/types";
+import type { EngagementGenerationMode, Platform } from "@/lib/types";
 
 const COMMENT_COUNT_PRESETS = [30, 50, 100];
 
@@ -15,6 +15,8 @@ type EngagementGeneratorPaneProps = {
   includeComments: boolean;
   includeDanmaku: boolean;
   generationMode: EngagementGenerationMode;
+  targetPlatform: Platform;
+  supportsDanmaku: boolean;
   generationProgress: {
     stage: string;
     message: string;
@@ -25,6 +27,7 @@ type EngagementGeneratorPaneProps = {
   onDanmakuCountChange: (count: number) => void;
   onGenerate: () => void;
   onGenerationModeChange: (mode: EngagementGenerationMode) => void;
+  onTargetPlatformChange: (platform: Platform) => void;
   onIncludeCommentsChange: (enabled: boolean) => void;
   onIncludeDanmakuChange: (enabled: boolean) => void;
   onSourceInputChange: (value: string) => void;
@@ -38,107 +41,143 @@ export function EngagementGeneratorPane({
   includeComments,
   includeDanmaku,
   generationMode,
+  targetPlatform,
+  supportsDanmaku,
   generationProgress,
   sourceInput,
   onCommentCountChange,
   onDanmakuCountChange,
   onGenerate,
   onGenerationModeChange,
+  onTargetPlatformChange,
   onIncludeCommentsChange,
   onIncludeDanmakuChange,
   onSourceInputChange
 }: EngagementGeneratorPaneProps) {
   return (
     <section className="engagement-generator-pane">
-      <div className="pane-body detail-stack">
+      <div className="pane-body engagement-generator-body">
         <SourceInput value={sourceInput} onChange={onSourceInputChange} />
 
-        <section className="detail-section">
-          <div className="section-title-row">
-            <div>
-              <h3>生成选项</h3>
-              <p className="subtle">评论默认开启，弹幕按需勾选。</p>
-            </div>
-            <button className="btn primary engagement-submit" disabled={!canGenerate} onClick={onGenerate} type="button">
-              <Send aria-hidden="true" size={16} />
-              {busy === "generate" ? "正在生成" : "生成"}
-            </button>
+        <section className="engagement-form-section engagement-options-panel">
+          <div className="engagement-form-heading">
+            <h3>生成设置</h3>
           </div>
           <div className="engagement-mode-row">
             <span className="field-label">生成模式</span>
             <div aria-label="选择评论生成模式" className="segmented engagement-mode-segmented" role="group">
               <button
+                aria-pressed={generationMode === "quick"}
                 className={generationMode === "quick" ? "active" : ""}
                 disabled={busy === "generate"}
                 onClick={() => onGenerationModeChange("quick")}
-                title="直接根据当前素材生成"
+                title="读取本地真实平台语料画像，不联网抓评论"
                 type="button"
               >
                 <Zap aria-hidden="true" size={14} />
-                快速自然
+                平台自然
               </button>
               <button
+                aria-pressed={generationMode === "reference"}
                 className={generationMode === "reference" ? "active" : ""}
                 disabled={busy === "generate"}
                 onClick={() => onGenerationModeChange("reference")}
-                title="额外读取一组同类热评参考"
+                title="额外读取当前视频原评，不搜索其他视频"
                 type="button"
               >
                 <MessageSquareText aria-hidden="true" size={14} />
-                参考热评
+                原评增强
               </button>
             </div>
           </div>
-          <div className="engagement-option-grid">
-            <label className={`engagement-option ${includeComments ? "active" : ""}`}>
-              <input checked={includeComments} name="includeComments" type="checkbox" onChange={(event) => onIncludeCommentsChange(event.target.checked)} />
-              <span>
-                <strong>评论</strong>
-                <small>默认生成评论</small>
-              </span>
-              <input
-                aria-label="评论条数"
-                autoComplete="off"
-                disabled={!includeComments}
-                max={200}
-                min={1}
-                name="commentCount"
-                type="number"
-                value={commentCount}
-                onChange={(event) => updateBoundedNumber(event.target.value, 1, 200, onCommentCountChange)}
-              />
-            </label>
-            <label className={`engagement-option ${includeDanmaku ? "active" : ""}`}>
-              <input checked={includeDanmaku} name="includeDanmaku" type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
-              <span>
-                <strong>弹幕</strong>
-                <small>按正文节奏生成时间点</small>
-              </span>
-              <input
-                aria-label="弹幕条数"
-                autoComplete="off"
-                disabled={!includeDanmaku}
-                max={300}
-                min={1}
-                name="danmakuCount"
-                type="number"
-                value={danmakuCount}
-                onChange={(event) => updateBoundedNumber(event.target.value, 1, 300, onDanmakuCountChange)}
-              />
-            </label>
-          </div>
-          <div className="engagement-count-presets" aria-label="评论快捷条数">
-            {COMMENT_COUNT_PRESETS.map((preset) => (
+          <div className="engagement-mode-row">
+            <span className="field-label">目标平台</span>
+            <div aria-label="选择粘贴文案的目标平台" className="segmented engagement-mode-segmented engagement-platform-segmented" role="group">
               <button
-                key={preset}
-                className={`btn ghost engagement-count-preset ${commentCount === preset ? "active" : ""}`}
-                disabled={!includeComments}
+                aria-pressed={targetPlatform === "douyin"}
+                className={targetPlatform === "douyin" ? "active" : ""}
+                disabled={busy === "generate"}
+                onClick={() => onTargetPlatformChange("douyin")}
+                title="视频链接会自动识别；此选项用于粘贴文案"
                 type="button"
-                onClick={() => onCommentCountChange(preset)}
               >
-                {preset} 条评论
+                抖音
               </button>
-            ))}
+              <button
+                aria-pressed={targetPlatform === "bilibili"}
+                className={targetPlatform === "bilibili" ? "active" : ""}
+                disabled={busy === "generate"}
+                onClick={() => onTargetPlatformChange("bilibili")}
+                title="视频链接会自动识别；此选项用于粘贴文案"
+                type="button"
+              >
+                B站
+              </button>
+            </div>
+          </div>
+          <fieldset className="engagement-output-fieldset">
+            <legend className="field-label">生成内容</legend>
+            <div className="engagement-option-list">
+              <label className={`engagement-option ${includeComments ? "active" : ""}`}>
+                <input checked={includeComments} name="includeComments" type="checkbox" onChange={(event) => onIncludeCommentsChange(event.target.checked)} />
+                <span>
+                  <strong>评论</strong>
+                  <small>默认生成评论</small>
+                </span>
+                <input
+                  aria-label="评论条数"
+                  autoComplete="off"
+                  disabled={!includeComments}
+                  max={200}
+                  min={1}
+                  name="commentCount"
+                  type="number"
+                  value={commentCount}
+                  onChange={(event) => updateBoundedNumber(event.target.value, 1, 200, onCommentCountChange)}
+                />
+              </label>
+              <label className={`engagement-option ${includeDanmaku ? "active" : ""} ${supportsDanmaku ? "" : "is-disabled"}`}>
+                <input checked={includeDanmaku} disabled={!supportsDanmaku} name="includeDanmaku" type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
+                <span>
+                  <strong>弹幕</strong>
+                  <small>{supportsDanmaku ? "B站 · 按正文节点生成" : "仅支持 B站"}</small>
+                </span>
+                <input
+                  aria-label="弹幕条数"
+                  autoComplete="off"
+                  disabled={!includeDanmaku || !supportsDanmaku}
+                  max={300}
+                  min={1}
+                  name="danmakuCount"
+                  type="number"
+                  value={danmakuCount}
+                  onChange={(event) => updateBoundedNumber(event.target.value, 1, 300, onDanmakuCountChange)}
+                />
+              </label>
+            </div>
+          </fieldset>
+          <div className="engagement-settings-footer">
+            <div className="engagement-mode-row engagement-count-row">
+              <span className="field-label">常用数量</span>
+              <div className="segmented engagement-count-segmented" aria-label="评论快捷条数" role="group">
+                {COMMENT_COUNT_PRESETS.map((preset) => (
+                  <button
+                    aria-pressed={commentCount === preset}
+                    key={preset}
+                    className={commentCount === preset ? "active" : ""}
+                    disabled={!includeComments}
+                    type="button"
+                    onClick={() => onCommentCountChange(preset)}
+                  >
+                    {preset} 条
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button className="btn primary engagement-submit" disabled={!canGenerate} onClick={onGenerate} type="button">
+              <Send aria-hidden="true" size={16} />
+              {busy === "generate" ? "正在生成" : "生成评论"}
+            </button>
           </div>
         </section>
 

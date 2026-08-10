@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import type { KeyboardEvent } from "react";
 import { Check, LinkIcon, Search, UsersRound, X } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
+import { ModalBackdrop } from "@/components/ModalBackdrop";
 import type { AccountListItem, CopySource } from "@/lib/types";
 import { SourceRow } from "./SourceRow";
 import { formatJob, type LinkJob } from "./project-workbench-utils";
@@ -52,7 +53,6 @@ export function ProjectCaseDrawer({
   onToggleSource,
   onTranscribeLinks
 }: ProjectCaseDrawerProps) {
-  const [activeTab, setActiveTab] = useState<ProjectCaseDrawerTab>(initialTab);
   const locked = busy === "links";
   const selectedAccountCount = sourceAccountIds.length;
   const selectedSourceCount = sourceMaterialIds.length;
@@ -63,48 +63,33 @@ export function ProjectCaseDrawer({
     if (leftSelected !== rightSelected) return leftSelected ? -1 : 1;
     return left.name.localeCompare(right.name, "zh-CN");
   });
-  const activeTitle = activeTab === "sources" ? "选素材" : activeTab === "links" ? "转写链接" : "选账号";
+  const activeTitle = initialTab === "sources" ? "选择已有素材" : initialTab === "links" ? "转写视频链接" : "选择参考账号";
   const activeHint =
-    activeTab === "sources"
-      ? "从素材池加入案例"
-      : activeTab === "links"
-        ? "粘贴链接后转写为案例素材"
-        : "选择账号作为风格参考";
-
-  function handleBackdropMouseDown(event: MouseEvent<HTMLDivElement>) {
-    if (!locked && event.target === event.currentTarget) onClose();
-  }
+    initialTab === "sources"
+      ? "勾选后直接加入当前项目"
+      : initialTab === "links"
+        ? "粘贴 B站或抖音链接，转写完成后自动加入项目"
+        : "只在需要补充长期口吻时选择账号";
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Escape" && !locked) onClose();
   }
 
   return (
-    <div className="project-drawer-backdrop" onMouseDown={handleBackdropMouseDown}>
-      <aside aria-labelledby="project-case-drawer-title" aria-modal="true" className="project-drawer" onKeyDown={handleKeyDown} role="dialog" tabIndex={-1}>
-        <div className="project-drawer-head">
+    <ModalBackdrop disabled={locked} onClose={onClose} onKeyDown={handleKeyDown}>
+      <div aria-labelledby="project-case-dialog-title" aria-modal="true" className="modal-panel project-case-modal" role="dialog" tabIndex={-1}>
+        <div className="modal-header">
           <div>
-            <p className="eyebrow">案例与参考</p>
-            <h2 id="project-case-drawer-title">{activeTitle}</h2>
+            <h2 id="project-case-dialog-title">{activeTitle}</h2>
             <p className="pane-subtitle">{activeHint}</p>
-            <div className="project-drawer-head-stats" aria-label="当前选择">
-              <span>{selectedSourceCount} 案例</span>
-              <span>{selectedAccountCount} 账号</span>
-            </div>
           </div>
           <button className="btn icon-btn" aria-label="关闭弹窗" disabled={locked} onClick={onClose} type="button" title="关闭">
             <X aria-hidden="true" size={16} />
           </button>
         </div>
 
-        <div className="project-drawer-tabs" role="tablist" aria-label="案例来源">
-          <DrawerTabButton active={activeTab === "sources"} label="素材" meta={`${filteredSources.length} 份`} onClick={() => setActiveTab("sources")} />
-          <DrawerTabButton active={activeTab === "links"} label="链接" meta={parsedLinkCount ? `${parsedLinkCount} 条` : "粘贴"} onClick={() => setActiveTab("links")} />
-          <DrawerTabButton active={activeTab === "accounts"} label="账号" meta={`${selectedAccountCount}/${accounts.length}`} onClick={() => setActiveTab("accounts")} />
-        </div>
-
-        <div className="project-drawer-body">
-          {activeTab === "sources" ? (
+        <div className="project-case-modal-body">
+          {initialTab === "sources" ? (
             <div className="project-drawer-pane" role="tabpanel">
               <label className="project-drawer-search">
                 <Search aria-hidden="true" size={15} />
@@ -115,16 +100,12 @@ export function ProjectCaseDrawer({
                   <SourceRow key={source.id} source={source} selected={sourceMaterialIds.includes(source.id)} compact onToggle={() => onToggleSource(source.id)} />
                 ))}
                 {filteredSources.length > 12 ? <div className="project-more-row">还有 {filteredSources.length - 12} 份，继续搜索可缩小范围</div> : null}
-                {!filteredSources.length ? (
-                  <button className="project-workbench-empty action" onClick={() => setActiveTab("links")} type="button">
-                    没有匹配，去转写链接
-                  </button>
-                ) : null}
+                {!filteredSources.length ? <div className="project-workbench-empty">没有匹配素材</div> : null}
               </div>
             </div>
           ) : null}
 
-          {activeTab === "links" ? (
+          {initialTab === "links" ? (
             <div className="project-drawer-pane" role="tabpanel">
               <label className="field">
                 <span>链接</span>
@@ -145,29 +126,13 @@ export function ProjectCaseDrawer({
                   <small>转写后抽关键帧补充场景、字幕、UI 和动作；抽不到视频时只保存标题和转写。</small>
                 </span>
               </label>
-              <div className="case-intake-actions">
-                <span>识别 {parsedLinkCount} 条</span>
-                <button className="btn primary" disabled={!parsedLinkCount || busy === "links"} onClick={onTranscribeLinks} type="button">
-                  <LinkIcon aria-hidden="true" size={16} />
-                  {busy === "links" ? "转写中" : "转写并加入"}
-                </button>
-              </div>
               {jobs.length ? <ProjectLinkJobList jobs={jobs} /> : null}
             </div>
           ) : null}
 
-          {activeTab === "accounts" ? (
+          {initialTab === "accounts" ? (
             <div className="project-drawer-pane" role="tabpanel">
-              <div className="project-drawer-selection-note">
-                <span>
-                  <strong>{selectedAccountCount}</strong>
-                  已选账号
-                </span>
-                <span>
-                  <strong>{selectedTranscriptCount}</strong>
-                  可参考转写
-                </span>
-              </div>
+              <p className="project-case-selection-summary">已选 {selectedAccountCount} 个账号，共 {selectedTranscriptCount} 份可参考转写</p>
               <div className="project-workbench-account-list">
                 {orderedAccounts.map((account) => {
                   const checked = sourceAccountIds.includes(account.id);
@@ -187,47 +152,30 @@ export function ProjectCaseDrawer({
                 })}
                 {!accounts.length ? <p className="subtle">暂无账号</p> : null}
               </div>
-              {selectedAccounts.length ? (
-                <div className="project-workbench-chip-row">
-                  {selectedAccounts.map((account) => (
-                    <span className="stat-pill" key={account.id}>{account.name}</span>
-                  ))}
-                </div>
-              ) : null}
             </div>
           ) : null}
         </div>
-        <div className="project-drawer-foot">
-          <span className="project-drawer-foot-copy">
-            <strong>已选 {selectedSourceCount} 案例 · {selectedAccountCount} 账号</strong>
-            <small>{locked ? "正在转写，完成后自动加入素材池。" : "完成后回到工作台保存修改。"}</small>
-          </span>
-          <button className="btn primary" disabled={locked} onClick={onClose} type="button">
-            <Check aria-hidden="true" size={16} />
-            完成
-          </button>
+        <div className="modal-actions project-case-modal-actions">
+          {initialTab === "links" ? (
+            <>
+              <span>已识别 {parsedLinkCount} 条链接</span>
+              <button className="btn primary" disabled={!parsedLinkCount || locked} onClick={onTranscribeLinks} type="button">
+                <LinkIcon aria-hidden="true" size={16} />
+                {locked ? "转写中" : "转写并加入"}
+              </button>
+            </>
+          ) : (
+            <>
+              <span>{initialTab === "sources" ? `已选 ${selectedSourceCount} 份素材` : `已选 ${selectedAccountCount} 个账号`}</span>
+              <button className="btn primary" onClick={onClose} type="button">
+                <Check aria-hidden="true" size={16} />
+                完成
+              </button>
+            </>
+          )}
         </div>
-      </aside>
-    </div>
-  );
-}
-
-function DrawerTabButton({
-  active,
-  label,
-  meta,
-  onClick
-}: {
-  active: boolean;
-  label: string;
-  meta: string;
-  onClick: () => void;
-}) {
-  return (
-    <button aria-selected={active} className={active ? "active" : ""} onClick={onClick} role="tab" type="button">
-      <span>{label}</span>
-      <small>{meta}</small>
-    </button>
+      </div>
+    </ModalBackdrop>
   );
 }
 

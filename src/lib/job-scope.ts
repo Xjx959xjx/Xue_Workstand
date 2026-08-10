@@ -1,4 +1,5 @@
 import type { Draft, Platform } from "./types";
+import { splitWriterSourceInput } from "./source-extraction";
 
 export type WriteCopyScopeInput = {
   action?: "create" | "revise";
@@ -10,7 +11,6 @@ export type WriteCopyScopeInput = {
   prompt?: string;
   sourceText?: string;
   supportDocLinks?: string;
-  brief?: string;
   useWebResearch?: boolean;
   parentDraftId?: string;
   currentContent?: string;
@@ -20,6 +20,7 @@ export type WriteCopyScopeInput = {
 };
 
 export function writeCopySourceKey(input: WriteCopyScopeInput) {
+  const separatedInput = splitWriterSourceInput(input.sourceText || "", input.supportDocLinks || "");
   return stableScopeHash(JSON.stringify({
     action: input.action || "create",
     targetType: input.targetType || "account",
@@ -28,9 +29,8 @@ export function writeCopySourceKey(input: WriteCopyScopeInput) {
     projectId: input.projectId || "",
     mode: input.mode,
     prompt: normalizeScopeText(input.prompt),
-    sourceText: normalizeScopeText(input.sourceText),
-    supportDocLinks: normalizeScopeLinks(input.supportDocLinks),
-    brief: normalizeScopeText(input.brief),
+    sourceText: normalizeScopeText(separatedInput.sourceText),
+    supportDocLinks: normalizeScopeLinks(separatedInput.supportDocLinks),
     useWebResearch: Boolean(input.useWebResearch),
     parentDraftId: input.parentDraftId || "",
     currentContent: normalizeScopeText(input.currentContent),
@@ -48,6 +48,7 @@ export function engagementSourceKey(input: {
   includeDanmaku?: boolean;
   danmakuCount?: number;
   generationMode?: "quick" | "reference";
+  targetPlatform?: Platform;
 } | {
   sourceType: "url";
   url: string;
@@ -56,6 +57,7 @@ export function engagementSourceKey(input: {
   includeDanmaku?: boolean;
   danmakuCount?: number;
   generationMode?: "quick" | "reference";
+  targetPlatform?: Platform;
 } | {
   sourceType: "record";
   recordId: string;
@@ -64,6 +66,7 @@ export function engagementSourceKey(input: {
   includeDanmaku?: boolean;
   danmakuCount?: number;
   generationMode?: "quick" | "reference";
+  targetPlatform?: Platform;
 }) {
   return stableScopeHash(JSON.stringify({
     sourceType: input.sourceType,
@@ -76,7 +79,8 @@ export function engagementSourceKey(input: {
     commentCount: input.commentCount ?? 50,
     includeDanmaku: input.includeDanmaku ?? false,
     danmakuCount: input.danmakuCount ?? 50,
-    generationMode: input.generationMode || "quick"
+    generationMode: input.generationMode || "quick",
+    targetPlatform: input.targetPlatform || ""
   }));
 }
 

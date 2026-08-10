@@ -44,6 +44,8 @@ const AUTO_REFRESH_START_DELAY_MS = AUTO_REFRESH_CHECK_INTERVAL_MS;
 const MAX_REFRESH_LOGS = 6;
 const MAX_REFRESH_LOG_DETAILS = 6;
 const REFRESH_LOG_STORAGE_KEY = "douyin-hotlist-refresh-logs";
+const HOTLIST_INITIAL_RENDER_COUNT = 24;
+const HOTLIST_RENDER_STEP = 24;
 
 type BusyState = "" | "load" | "add" | `remove:${string}`;
 type AccountSelection = "all" | string;
@@ -142,6 +144,7 @@ function DouyinHotlistPageContent() {
   const refreshJobsReadyRef = useRef(false);
   const trackedRefreshJobIdsRef = useRef<Set<string>>(new Set());
   const handledRefreshJobIdsRef = useRef<Set<string>>(new Set());
+  const syncedRefreshDataRevisionsRef = useRef<Map<string, number>>(new Map());
   const loadRequestIdRef = useRef(0);
   const refreshHotlistRef = useRef<(options?: RefreshHotlistOptions) => Promise<void>>(async () => {});
   const activeRefreshJob = tasks.activeJobs[0] || null;
@@ -216,6 +219,14 @@ function DouyinHotlistPageContent() {
   useEffect(() => {
     void loadHotlist();
   }, [loadHotlist]);
+
+  useEffect(() => {
+    if (!activeRefreshJob || activeRefreshJob.dataChange?.resource !== "douyin-hotlist") return;
+    const dataRevision = activeRefreshJob.dataRevision || 0;
+    if (dataRevision <= (syncedRefreshDataRevisionsRef.current.get(activeRefreshJob.id) || 0)) return;
+    syncedRefreshDataRevisionsRef.current.set(activeRefreshJob.id, dataRevision);
+    void loadHotlist({ force: true });
+  }, [activeRefreshJob, loadHotlist]);
 
   useEffect(() => {
     if (!snapshot || selectedAccountId === "all") return;
@@ -1080,7 +1091,7 @@ function AccountRow({
       </button>
       <button
         aria-label={`移除 ${account.name}`}
-        className="btn icon-only compact douyin-hotlist-account-remove"
+        className="btn icon-only compact douyin-hotlist-account-remove mobile-destructive-action"
         disabled={busy}
         onClick={onRemove}
         title="移出热榜账号池"
@@ -1100,15 +1111,40 @@ function HotlistTable({
   showGlobalRank: boolean;
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLButtonElement | null>(null);
+  const [renderCount, setRenderCount] = useState(HOTLIST_INITIAL_RENDER_COUNT);
   const maxHeatScore = Math.max(...items.map(({ item }) => item.heatScore), 1);
+  const renderedItems = items.slice(0, renderCount);
+  const hasMore = renderedItems.length < items.length;
+  const remainingCount = Math.max(items.length - renderedItems.length, 0);
+
+  const loadMore = useCallback(() => {
+    setRenderCount((current) => Math.min(current + HOTLIST_RENDER_STEP, items.length));
+  }, [items.length]);
 
   useEffect(() => {
+    setRenderCount(HOTLIST_INITIAL_RENDER_COUNT);
     listRef.current?.scrollTo({ left: 0, top: 0 });
   }, [items, showGlobalRank]);
 
+  useEffect(() => {
+    const root = listRef.current;
+    const target = loadMoreRef.current;
+    if (!root || !target || !hasMore || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore();
+      },
+      { root, rootMargin: "320px 0px" }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore]);
+
   return (
     <div className="douyin-hotlist-list" ref={listRef}>
-      {items.map(({ item, displayRank }) => {
+      {renderedItems.map(({ item, displayRank }) => {
         const surgeClass = getSurgeClass(item.surge);
 
         return (
@@ -1183,6 +1219,14 @@ function HotlistTable({
           </article>
         );
       })}
+      {hasMore ? (
+        <div className="douyin-hotlist-load-more">
+          <button className="btn compact" onClick={loadMore} ref={loadMoreRef} type="button">
+            继续显示 · 已载入 {renderedItems.length}/{items.length}
+          </button>
+          <span>向下滚动会自动载入剩余 {remainingCount} 条</span>
+        </div>
+      ) : null}
     </div>
   );
 }

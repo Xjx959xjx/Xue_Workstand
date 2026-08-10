@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
@@ -38,11 +38,27 @@ const navItems: NavItem[] = [
 ];
 
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
+const devRouteApiWarmups: Record<string, string[]> = {
+  "/hotspots": ["/api/hotspots"],
+  "/douyin-hotlist": ["/api/douyin-hotlist"],
+  "/library": ["/api/library/overview", "/api/accounts"],
+  "/project-workbench": ["/api/copy-sources", "/api/projects"],
+  "/writer": ["/api/drafts", "/api/accounts", "/api/projects"],
+  "/assets": ["/api/engagement"],
+  "/gross-margin": ["/api/gross-margin"],
+  "/gross-margin/monitor": ["/api/gross-margin"]
+};
+const devSharedApiWarmups = ["/api/jobs/__workbench_warmup__"];
 const ROUTE_BUSY_DELAY_MS = 200;
+const DEV_ROUTE_PREWARM_DELAY_MS = 2500;
+const DEV_ROUTE_PREWARM_STEP_MS = 250;
 
 export function AppNav({ appMode }: { appMode: AppMode }) {
+  const router = useRouter();
   const pathname = usePathname();
   const pendingTimerRef = useRef<number | null>(null);
+  const prewarmedRoutesRef = useRef<Set<string>>(new Set());
+  const prewarmedDevTargetsRef = useRef<Set<string>>(new Set());
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [showRouteBusy, setShowRouteBusy] = useState(false);
   const grossMarginMode = appMode === "gross-margin";
@@ -64,6 +80,65 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   useEffect(() => {
     clearPending();
   }, [clearPending, pathname]);
+
+  const prewarmRoute = useCallback(async (href: string) => {
+    if (href === pathname || prewarmedRoutesRef.current.has(href)) return;
+    prewarmedRoutesRef.current.add(href);
+    if (process.env.NODE_ENV !== "development") {
+      router.prefetch(href);
+      return;
+    }
+
+    try {
+      const targets = [href, ...devSharedApiWarmups, ...(devRouteApiWarmups[href] || [])];
+      for (const target of targets) {
+        if (prewarmedDevTargetsRef.current.has(target)) continue;
+        prewarmedDevTargetsRef.current.add(target);
+        try {
+          await fetch(target, {
+            cache: "no-store",
+            headers: { "x-workbench-route-warmup": "1" },
+            method: target.startsWith("/api/") ? "OPTIONS" : "GET"
+          });
+        } catch (error) {
+          prewarmedDevTargetsRef.current.delete(target);
+          throw error;
+        }
+      }
+    } catch {
+      prewarmedRoutesRef.current.delete(href);
+    }
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+
+    const activeIndex = visibleNavItems.findIndex((item) => item.href === activeHref);
+    const prioritizedItems = activeIndex < 0
+      ? visibleNavItems
+      : [...visibleNavItems.slice(activeIndex + 1), ...visibleNavItems.slice(0, activeIndex)];
+    const pendingRoutes = prioritizedItems
+      .map((item) => item.href)
+      .filter((href) => href !== pathname && !prewarmedRoutesRef.current.has(href));
+    if (!pendingRoutes.length) return;
+
+    let cancelled = false;
+    const startTimerId = window.setTimeout(async () => {
+      for (const href of pendingRoutes) {
+        if (cancelled) return;
+        await prewarmRoute(href);
+        if (cancelled) return;
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, DEV_ROUTE_PREWARM_STEP_MS);
+        });
+      }
+    }, DEV_ROUTE_PREWARM_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(startTimerId);
+    };
+  }, [activeHref, pathname, prewarmRoute, visibleNavItems]);
 
   const beginNavigation = useCallback((href: string) => {
     if (href === activeHref || href === pathname) return;
@@ -94,8 +169,9 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
       <Link
         href={brandHref}
         className="brand"
-        prefetch={false}
+        onFocus={() => void prewarmRoute(brandHref)}
         onClick={(event) => handleNavClick(event, brandHref)}
+        onPointerEnter={() => void prewarmRoute(brandHref)}
       >
         <span className="brand-mark" aria-hidden="true">
           <Sparkles size={18} strokeWidth={2.1} />
@@ -116,8 +192,9 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                 href={item.href}
                 className={`nav-link ${active ? "active" : ""} ${pending ? "pending" : ""}`}
                 aria-current={active ? "page" : undefined}
-                prefetch={false}
+                onFocus={() => void prewarmRoute(item.href)}
                 onClick={(event) => handleNavClick(event, item.href)}
+                onPointerEnter={() => void prewarmRoute(item.href)}
               >
                 <span className="nav-emoji" aria-hidden="true">
                   <Icon size={17} strokeWidth={2.1} />
@@ -128,11 +205,9 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
           );
         })}
       </nav>
-      {grossMarginMode ? null : (
-        <div className="sidebar-bottom">
-          <TaskCenter />
-        </div>
-      )}
+      <div className="sidebar-bottom">
+        <TaskCenter />
+      </div>
     </aside>
   );
 }

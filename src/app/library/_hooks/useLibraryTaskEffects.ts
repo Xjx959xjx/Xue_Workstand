@@ -41,6 +41,7 @@ export function useLibraryTaskEffects({
   const [activeTranscribeJobId, setActiveTranscribeJobId] = useState("");
   const [activeBatchJobId, setActiveBatchJobId] = useState("");
   const handledLibraryJobsRef = useRef<Set<string>>(new Set());
+  const syncedBatchDataRevisionRef = useRef<Map<string, number>>(new Map());
 
   const trackedJobs = useMemo(() => [...activeJobs, ...recentJobs], [activeJobs, recentJobs]);
   const accountStyleJob = useMemo(
@@ -178,6 +179,16 @@ export function useLibraryTaskEffects({
     setActiveBatchJobId(batchJob.id);
     setTranscribeStage(batchJob.message || "正在批量转写");
     setTranscribeProgress(batchJob.progress || 0);
+    const dataRevision = batchJob.dataRevision || 0;
+    const shouldSyncSavedData =
+      batchJob.dataChange?.resource === "library-account" &&
+      dataRevision > (syncedBatchDataRevisionRef.current.get(batchJob.id) || 0);
+    if (shouldSyncSavedData) {
+      syncedBatchDataRevisionRef.current.set(batchJob.id, dataRevision);
+      invalidateTranscript();
+      invalidateAccountDetail(selectedAccount?.platform, selectedAccount?.id);
+      void reloadSelectedAccountDetail({ force: true });
+    }
     if (batchJob.status === "running" || batchJob.status === "queued") {
       setBusy(batchJob.title.includes("更新风格") ? "batch-style" : "batch");
       return;
@@ -193,7 +204,7 @@ export function useLibraryTaskEffects({
         setStyleDraft(result.style);
         setAccountDetail((current) => current ? { ...current, style: result.style } : current);
       }
-      void reloadSelectedAccountDetail({ force: true });
+      if (!shouldSyncSavedData) void reloadSelectedAccountDetail({ force: true });
       setTranscribeStage("批量任务已完成");
       setTranscribeProgress(100);
       setMessage(
@@ -212,7 +223,7 @@ export function useLibraryTaskEffects({
       setTranscribeStage("已停止");
       setMessage("已停止批量任务。");
     }
-  }, [batchJob, invalidateTranscript, reloadSelectedAccountDetail, setAccountDetail, setMessage, setStyleDraft]);
+  }, [batchJob, invalidateTranscript, reloadSelectedAccountDetail, selectedAccount?.id, selectedAccount?.platform, setAccountDetail, setMessage, setStyleDraft]);
 
   return {
     busy,

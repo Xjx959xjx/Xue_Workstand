@@ -34,6 +34,7 @@ export type BatchTranscribeHooks = {
   onMediaPreloadStart?: (payload: { total: number }) => void;
   onVideoStart?: (payload: { index: number; total: number; video: Video }) => void;
   onVideoResult?: (payload: BatchTranscribeVideoEvent) => void;
+  onTranscribeComplete?: (payload: Pick<BatchTranscribeResult, "completed" | "skipped" | "failed">) => void | Promise<void>;
   onStyleStart?: () => void;
   onFinalize?: () => void;
   signal?: AbortSignal;
@@ -72,6 +73,11 @@ export async function runBatchTranscribe(
   result.results.sort((a, b) => (candidateOrder.get(a.videoId) ?? 0) - (candidateOrder.get(b.videoId) ?? 0));
 
   pushTiming(result, "transcribe-phase-total", totalStartedAt);
+  await hooks.onTranscribeComplete?.({
+    completed: result.completed,
+    skipped: result.skipped,
+    failed: result.failed
+  });
 
   if (input.updateStyle) {
     throwIfAborted(hooks.signal);

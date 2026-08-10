@@ -41,6 +41,12 @@ export async function generatePublishCopy(input: PublishCopyInput, options: { si
     throw new Error(`没有抓到可用的同类选题，无法提取标题和发布文案框架。${failedHint}`);
   }
 
+  const missingReferencePlatforms = normalized.platform === "both"
+    ? (["bilibili", "douyin"] as const).filter((platform) => !references.some((reference) => reference.platform === platform))
+    : [];
+  const coverageWarnings = missingReferencePlatforms.map((platform) => `${formatPlatformName(platform)}：没有返回可用参考`);
+  const failedQueries = uniqueStrings([...research.failedQueries, ...coverageWarnings]);
+
   const generated = await buildFrameworksAndCandidates({
     input: normalized,
     queryPlan,
@@ -55,15 +61,19 @@ export async function generatePublishCopy(input: PublishCopyInput, options: { si
     queryPlan,
     research: {
       usedQueries: queryPlan.queries,
-      failedQueries: research.failedQueries,
+      failedQueries,
       referenceCount: references.length,
       references
     },
     frameworks: generated.frameworks,
     candidates: generated.candidates,
     usedModel: generated.usedModel,
-    fallback: generated.fallback || queryPlan.querySource === "local",
-    fallbackReason: [queryPlan.fallbackReason, generated.fallbackReason].filter(Boolean).join("；") || undefined
+    fallback: generated.fallback || queryPlan.querySource === "local" || missingReferencePlatforms.length > 0,
+    fallbackReason: [
+      queryPlan.fallbackReason,
+      generated.fallbackReason,
+      coverageWarnings.length ? `参考覆盖不完整：${coverageWarnings.join("、")}` : ""
+    ].filter(Boolean).join("；") || undefined
   };
 }
 
@@ -154,18 +164,14 @@ async function collectPublishingReferences(
 
   for (const query of queries) {
     throwIfAborted(options.signal);
-    const results = await Promise.allSettled(
-      platforms.map((targetPlatform) => searchPlatformReferences(targetPlatform, query, options))
-    );
-
-    results.forEach((result, index) => {
-      const targetPlatform = platforms[index];
-      if (result.status === "fulfilled") {
-        references.push(...result.value);
-        return;
+    for (const targetPlatform of platforms) {
+      try {
+        references.push(...(await searchPlatformReferences(targetPlatform, query, options)));
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        failedQueries.push(`${formatPlatformName(targetPlatform)}：${query}`);
       }
-      failedQueries.push(`${formatPlatformName(targetPlatform)}：${query}`);
-    });
+    }
   }
 
   return {
@@ -646,6 +652,10 @@ function throwIfAborted(signal?: AbortSignal) {
   const error = new Error("任务已停止");
   error.name = "AbortError";
   throw error;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 const PUBLISH_QUERY_STOP_WORDS = new Set([

@@ -6,12 +6,15 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CONTENT_POLL_ATTEMPTS = 12;
+const MAX_COMMAND_ATTEMPTS = 3;
+const COMMAND_RETRY_BASE_DELAY_MS = 400;
 
-type AccountSourceResult = {
+export type AccountSourceResult = {
   accounts: GrossMarginAccountPrice[];
   source: "wecom" | "local";
   warning?: string;
   fetchedAt?: string;
+  refreshing?: boolean;
 };
 
 type WecomResponse = {
@@ -23,40 +26,107 @@ type WecomResponse = {
 };
 
 let cachedResult: AccountSourceResult | null = null;
+let refreshPromise: Promise<AccountSourceResult> | null = null;
+let lastRefreshError = "";
 
-export async function resolveGrossMarginAccounts(localAccounts: GrossMarginAccountPrice[]): Promise<AccountSourceResult> {
+export async function resolveGrossMarginAccounts(
+  localAccounts: GrossMarginAccountPrice[],
+  options: {
+    persisted?: AccountSourceResult | null;
+    refresh?: boolean;
+    onFresh?: (result: AccountSourceResult) => Promise<void>;
+  } = {}
+): Promise<AccountSourceResult> {
   const url = process.env.WECOM_ACCOUNT_SHEET_URL?.trim();
   if (!url) {
     return { accounts: localAccounts, source: "local" };
   }
 
+  if (!cachedResult && options.persisted?.source === "wecom" && options.persisted.accounts.length) {
+    cachedResult = {
+      accounts: options.persisted.accounts,
+      source: "wecom",
+      fetchedAt: options.persisted.fetchedAt
+    };
+  }
+
   const now = Date.now();
   if (cachedResult?.source === "wecom" && cachedResult.fetchedAt) {
     const fetchedAt = Date.parse(cachedResult.fetchedAt);
-    if (Number.isFinite(fetchedAt) && now - fetchedAt < cacheTtlMs()) return cachedResult;
+    if (!options.refresh && Number.isFinite(fetchedAt) && now - fetchedAt < cacheTtlMs()) return cachedResult;
   }
 
-  try {
+  if (options.refresh) {
+    try {
+      return await refreshGrossMarginAccounts(url, options.onFresh);
+    } catch (error) {
+      return resolveRefreshFailure(error, localAccounts);
+    }
+  }
+
+  void refreshGrossMarginAccounts(url, options.onFresh).catch((error) => {
+    const detail = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
+    lastRefreshError = detail;
+    console.warn(`[gross-margin-accounts] 在线账号表后台同步失败：${detail}`);
+  });
+
+  if (cachedResult?.source === "wecom" && cachedResult.accounts.length) {
+    return {
+      ...cachedResult,
+      refreshing: true,
+      warning: lastRefreshError
+        ? `在线账号表后台同步失败，当前展示上次成功缓存：${lastRefreshError}`
+        : "正在后台同步企业微信账号表，当前先展示上次成功缓存。"
+    };
+  }
+
+  return {
+    accounts: localAccounts,
+    source: "local",
+    refreshing: true,
+    warning: lastRefreshError
+      ? `在线账号表后台同步失败，当前使用本地账号缓存：${lastRefreshError}`
+      : "正在后台同步企业微信账号表，当前先展示本地账号缓存。"
+  };
+}
+
+function refreshGrossMarginAccounts(
+  url: string,
+  onFresh?: (result: AccountSourceResult) => Promise<void>
+) {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
     const content = await fetchWecomSheetContent(url);
     const accounts = parseWecomAccountSheet(content);
     if (!accounts.length) throw new Error("在线表没有识别到抖音或 B 站账号");
-    cachedResult = {
+    const result: AccountSourceResult = {
       accounts,
       source: "wecom",
       fetchedAt: new Date().toISOString()
     };
-    return cachedResult;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "未知错误";
-    const warning = `在线账号表同步失败，当前使用本地账号缓存：${detail}`;
-    if (process.env.WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL === "0") {
-      throw new Error(`读取企业微信账号表失败：${detail}`);
-    }
-    console.warn(`[gross-margin-accounts] ${warning}`);
-    const result = { accounts: localAccounts, source: "local" as const, warning };
     cachedResult = result;
+    lastRefreshError = "";
+    await onFresh?.(result);
     return result;
+  })().finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+function resolveRefreshFailure(error: unknown, localAccounts: GrossMarginAccountPrice[]): AccountSourceResult {
+  const detail = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
+  lastRefreshError = detail;
+  if (process.env.WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL === "0") {
+    throw new Error(`读取企业微信账号表失败：${detail}`);
   }
+  const warning = cachedResult?.source === "wecom"
+    ? `在线账号表同步失败，当前展示上次成功缓存：${detail}`
+    : `在线账号表同步失败，当前使用本地账号缓存：${detail}`;
+  console.warn(`[gross-margin-accounts] ${warning}`);
+  return cachedResult?.source === "wecom" && cachedResult.accounts.length
+    ? { ...cachedResult, warning }
+    : { accounts: localAccounts, source: "local", warning };
 }
 
 async function fetchWecomSheetContent(url: string) {
@@ -76,19 +146,25 @@ async function fetchWecomSheetContent(url: string) {
 async function callWecomDoc(input: Record<string, unknown>): Promise<WecomResponse> {
   const command = process.env.WECOM_CLI_BIN?.trim() || "wecom-cli";
   let stdout = "";
-  try {
-    const result = await execFileAsync(command, ["doc", "get_doc_content", "--json", JSON.stringify(input)], {
-      windowsHide: true,
-      maxBuffer: 20 * 1024 * 1024,
-      timeout: timeoutMs()
-    });
-    stdout = result.stdout;
-  } catch (error) {
-    if (isMissingExecutable(error)) {
-      throw new Error(`未检测到 ${command}，请先安装并登录 wecom-cli`);
+  for (let attempt = 0; attempt < MAX_COMMAND_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await execFileAsync(command, ["doc", "get_doc_content", "--json", JSON.stringify(input)], {
+        windowsHide: true,
+        maxBuffer: 20 * 1024 * 1024,
+        timeout: timeoutMs()
+      });
+      stdout = result.stdout;
+      break;
+    } catch (error) {
+      if (isMissingExecutable(error)) {
+        throw new Error(`未检测到 ${command}，请先安装并登录 wecom-cli`);
+      }
+      if (isRetryableWecomError(error) && attempt < MAX_COMMAND_ATTEMPTS - 1) {
+        await wait(COMMAND_RETRY_BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      throw new Error(`wecom-cli 执行失败：${formatWecomError(error)}`);
     }
-    const detail = error instanceof Error ? error.message : "命令执行失败";
-    throw new Error(`wecom-cli 执行失败：${detail}`);
   }
 
   let outer: unknown;
@@ -107,7 +183,7 @@ async function callWecomDoc(input: Record<string, unknown>): Promise<WecomRespon
     throw new Error("wecom-cli 返回了无法解析的表格响应");
   }
   if (response.errcode && response.errcode !== 0) {
-    throw new Error(response.errmsg || `企业微信接口错误 ${response.errcode}`);
+    throw new Error(response.errmsg ? sanitizeWecomError(response.errmsg) : `企业微信接口错误 ${response.errcode}`);
   }
   return response;
 }
@@ -229,4 +305,40 @@ function isMissingExecutable(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const code = "code" in error ? (error as { code?: unknown }).code : undefined;
   return code === "ENOENT";
+}
+
+function isRetryableWecomError(error: unknown) {
+  return /MCP网络请求失败|error sending request|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network/i.test(
+    getWecomErrorText(error)
+  );
+}
+
+function formatWecomError(error: unknown) {
+  const detail = sanitizeWecomError(getWecomErrorText(error));
+  if (/authorization expired/i.test(detail)) {
+    return "企业微信授权已过期，请重新运行 wecom-cli init";
+  }
+  if (/MCP网络请求失败|error sending request/i.test(detail)) {
+    return "企业微信 MCP 网络请求失败，请稍后重试";
+  }
+  const lines = detail
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preferred = lines.find((line) => /^Error:/i.test(line)) || lines.at(-1) || "命令执行失败";
+  return preferred.replace(/^Error:\s*/i, "").slice(0, 500);
+}
+
+function getWecomErrorText(error: unknown) {
+  if (!error || typeof error !== "object") return typeof error === "string" ? error : "命令执行失败";
+  const stderr = "stderr" in error ? (error as { stderr?: unknown }).stderr : undefined;
+  if (typeof stderr === "string" && stderr.trim()) return stderr;
+  return error instanceof Error ? error.message : "命令执行失败";
+}
+
+function sanitizeWecomError(detail: string) {
+  return detail
+    .replace(/([?&]apikey=)[^&\s"'<>)}\]]+/gi, "$1[已隐藏]")
+    .replace(/("apikey"\s*:\s*")[^"]+/gi, "$1[已隐藏]")
+    .replace(/\b(apikey\s*[=:]\s*)[A-Za-z0-9._~-]+/gi, "$1[已隐藏]");
 }

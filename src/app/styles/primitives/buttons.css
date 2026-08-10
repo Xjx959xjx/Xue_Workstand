@@ -7,15 +7,16 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: 0 var(--card-pad-sm);
+  padding: 0 var(--control-padding-x);
   border: 1px solid color-mix(in oklch, var(--line-strong) 58%, var(--line));
-  border-radius: 14px;
+  border-radius: var(--control-radius);
   color: var(--text);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 96%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 90%, var(--panel-soft)) 100%);
   box-shadow: var(--surface-inset-highlight);
   font-size: var(--text-meta);
-  font-weight: 720;
+  font-weight: var(--font-weight-label);
+  line-height: var(--line-height-meta);
   white-space: nowrap;
   transition:
     background-color var(--motion-base) var(--ease-apple),
@@ -145,7 +146,7 @@
 .text-link {
   color: var(--accent-strong);
   font-size: var(--text-meta);
-  font-weight: 600;
+  font-weight: var(--font-weight-label);
 }
 
 .text-link:hover {

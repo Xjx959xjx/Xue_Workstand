@@ -1,8 +1,24 @@
 /* Hotspot radar: monitor type -> subject -> event */
 .hotspots-page {
-  width: min(100%, 1480px);
+  width: 100%;
   align-content: start;
   gap: 12px;
+}
+
+@media (min-width: 1181px) {
+  .hotspots-page {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: var(--workspace-page-height);
+  }
+
+  .hotspots-page:has(> .error) {
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+  }
+
+  .hotspots-browser {
+    min-height: 0;
+    height: 100%;
+  }
 }
 
 .hotspots-header {

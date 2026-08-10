@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowRight,
   Clipboard,
-  Download,
   ExternalLink,
   FileText,
   Hash,
@@ -11,6 +11,7 @@ import {
   Link as LinkIcon,
   Loader2,
   Music,
+  Paperclip,
   Search,
   Sparkles,
   Video,
@@ -18,29 +19,28 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { useScopedTasks } from "@/components/TaskProvider";
 import {
   downloadSingleVideoAsset,
-  generatePublishCopy,
-  transcribeSingleVideoLink,
+  uploadWriterSourceFiles,
   type SingleVideoAssetKind,
   type SingleVideoTranscribeResult
 } from "@/lib/client";
 import type { PublishCopyCandidate, PublishCopyResult, PublishCopyTargetPlatform } from "@/lib/publish-copy-types";
+import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
 
-type ToolMode = "publish-copy" | "transcribe" | "download";
-type BusyState = "" | ToolMode;
+type WorkspaceMode = "video" | "publish-copy";
+type BusyState = "" | "transcribe" | "download" | "publish-copy";
 type NoticeTone = "success" | "info" | "error";
 
-const toolModes: Array<{
-  id: ToolMode;
+const workspaceModes: Array<{
+  id: WorkspaceMode;
   label: string;
-  eyebrow: string;
-  resultTitle: string;
+  meta: string;
   icon: LucideIcon;
 }> = [
-  { id: "publish-copy", label: "标题文案", eyebrow: "选题研究", resultTitle: "标题 / 发布文案", icon: Sparkles },
-  { id: "transcribe", label: "提取文案", eyebrow: "单条链接", resultTitle: "转写结果", icon: FileText },
-  { id: "download", label: "素材下载", eyebrow: "视频资产", resultTitle: "素材信息", icon: Download }
+  { id: "video", label: "视频处理", meta: "文案 + 素材", icon: Video },
+  { id: "publish-copy", label: "标题与发布", meta: "检索 + 生成", icon: Sparkles }
 ];
 
 const downloadOptions: Array<{
@@ -64,70 +64,60 @@ const publishPlatformOptions: Array<{
 
 export default function ToolsPage() {
   const { notify } = useFeedback();
-  const [activeTool, setActiveTool] = useState<ToolMode>("publish-copy");
+  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+    href: "/tools",
+    kinds: ["single-video-transcribe", "publish-copy"]
+  });
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>("video");
   const [url, setUrl] = useState("");
-  const [titleHint, setTitleHint] = useState("");
   const [result, setResult] = useState<SingleVideoTranscribeResult | null>(null);
-  const [downloadKind, setDownloadKind] = useState<SingleVideoAssetKind>("video");
+  const [downloadingKind, setDownloadingKind] = useState<SingleVideoAssetKind | "">("");
   const [publishSourceText, setPublishSourceText] = useState("");
   const [publishTopicHint, setPublishTopicHint] = useState("");
   const [publishPlatform, setPublishPlatform] = useState<PublishCopyTargetPlatform>("both");
   const [publishResult, setPublishResult] = useState<PublishCopyResult | null>(null);
+  const [publishSourceDragActive, setPublishSourceDragActive] = useState(false);
+  const [publishSourceImporting, setPublishSourceImporting] = useState(false);
   const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
   const [noticeTone, setNoticeTone] = useState<NoticeTone>("success");
+  const [activeJobId, setActiveJobId] = useState("");
+  const publishSourceDragDepthRef = useRef(0);
+  const publishSourceFileInputRef = useRef<HTMLInputElement>(null);
 
   const cleanUrl = url.trim();
   const cleanPublishSourceText = publishSourceText.trim();
-  const canTranscribe = Boolean(cleanUrl) && !busy;
-  const canDownload = Boolean(cleanUrl) && !busy;
-  const canGeneratePublishCopy = Boolean(cleanPublishSourceText) && !busy;
-  const canRunActiveTool =
-    activeTool === "publish-copy" ? canGeneratePublishCopy : activeTool === "transcribe" ? canTranscribe : canDownload;
   const noticeIsError = noticeTone === "error";
-  const activeMode = toolModes.find((mode) => mode.id === activeTool) || toolModes[0];
-  const ActiveIcon = activeMode.icon;
-  const activeMeta = useMemo(
-    () => makeActiveMeta(activeTool, { publishResult, result, downloadKind, hasUrl: Boolean(cleanUrl) }),
-    [activeTool, cleanUrl, downloadKind, publishResult, result]
-  );
 
   async function handleTranscribe() {
     if (!cleanUrl || busy) return;
     setBusy("transcribe");
     setNotice("");
     try {
-      const response = await transcribeSingleVideoLink({
-        url: cleanUrl,
-        titleHint: titleHint.trim() || undefined
+      const job = await startTask({
+        kind: "single-video-transcribe",
+        href: "/tools",
+        input: { url: cleanUrl }
       });
-      setResult(response.result);
-      const message = response.result.fallback
-        ? response.result.fallbackReason || "已提取可用文本。"
-        : "文案已提取。";
-      const tone = response.result.fallback ? "info" : "success";
-      setNotice(message);
-      setNoticeTone(tone);
-      notify({ tone, message });
+      setActiveJobId(job.id);
+      setNotice("提取任务已加入任务中心，可离开页面继续处理。");
+      setNoticeTone("info");
     } catch (error) {
       const message = error instanceof Error ? error.message : "单条视频文案提取失败";
       setNotice(message);
       setNoticeTone("error");
       notify({ tone: "error", message });
-    } finally {
       setBusy("");
     }
   }
 
-  async function handleDownload() {
+  async function handleDownload(kind: SingleVideoAssetKind) {
     if (!cleanUrl || busy) return;
     setBusy("download");
+    setDownloadingKind(kind);
     setNotice("");
     try {
-      const response = await downloadSingleVideoAsset({
-        url: cleanUrl,
-        kind: downloadKind
-      });
+      const response = await downloadSingleVideoAsset({ url: cleanUrl, kind });
       const message = `已下载：${response.fileName}`;
       setNotice(message);
       setNoticeTone("success");
@@ -139,48 +129,123 @@ export default function ToolsPage() {
       notify({ tone: "error", message });
     } finally {
       setBusy("");
+      setDownloadingKind("");
     }
   }
 
   async function handleGeneratePublishCopy() {
-    if (!cleanPublishSourceText || busy) return;
+    if (!cleanPublishSourceText || busy || publishSourceImporting) return;
     setBusy("publish-copy");
     setNotice("");
     try {
-      const response = await generatePublishCopy({
-        platform: publishPlatform,
-        sourceText: cleanPublishSourceText,
-        topicHint: publishTopicHint.trim() || undefined,
-        candidateCount: 6
+      const job = await startTask({
+        kind: "publish-copy",
+        href: "/tools",
+        input: {
+          platform: publishPlatform,
+          sourceText: cleanPublishSourceText,
+          topicHint: publishTopicHint.trim() || undefined,
+          candidateCount: 6
+        }
       });
-      setPublishResult(response);
-      const message = response.fallback
-        ? response.fallbackReason || "已生成可编辑标题和发布文案，请检查参考链路。"
-        : `已生成 ${response.candidates.length} 组标题和发布文案。`;
-      const tone = response.fallback ? "info" : "success";
-      setNotice(message);
-      setNoticeTone(tone);
-      notify({ tone, message });
+      setActiveJobId(job.id);
+      setNotice("生成任务已加入任务中心，可离开页面继续处理。");
+      setNoticeTone("info");
     } catch (error) {
       const message = error instanceof Error ? error.message : "标题和发布文案生成失败";
       setNotice(message);
       setNoticeTone("error");
       notify({ tone: "error", message });
-    } finally {
       setBusy("");
     }
   }
 
-  async function handleRunActiveTool() {
-    if (activeTool === "publish-copy") {
-      await handleGeneratePublishCopy();
+  const handlePublishSourceFiles = useCallback(async (files: File[]) => {
+    if (!files.length || publishSourceImporting) return;
+    setPublishSourceImporting(true);
+    try {
+      const response = await uploadWriterSourceFiles(files);
+      setPublishSourceText((current) => appendWriterSourceFiles(current, response.files));
+      setPublishResult(null);
+      const truncatedCount = response.files.filter((file) => file.truncated).length;
+      notify({
+        tone: "success",
+        message: `已导入 ${response.files.length} 个文件${truncatedCount ? `，其中 ${truncatedCount} 个过长文件已截取` : ""}。`
+      });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "导入内容原稿失败" });
+    } finally {
+      setPublishSourceImporting(false);
+      setPublishSourceDragActive(false);
+      publishSourceDragDepthRef.current = 0;
+      if (publishSourceFileInputRef.current) publishSourceFileInputRef.current.value = "";
+    }
+  }, [notify, publishSourceImporting]);
+
+  const handlePublishSourceDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (publishSourceImporting || !event.dataTransfer.types.includes("Files")) return;
+    publishSourceDragDepthRef.current += 1;
+    setPublishSourceDragActive(true);
+  }, [publishSourceImporting]);
+
+  const handlePublishSourceDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    publishSourceDragDepthRef.current = Math.max(0, publishSourceDragDepthRef.current - 1);
+    if (!publishSourceDragDepthRef.current) setPublishSourceDragActive(false);
+  }, []);
+
+  const handlePublishSourceDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    publishSourceDragDepthRef.current = 0;
+    setPublishSourceDragActive(false);
+    if (publishSourceImporting) return;
+    void handlePublishSourceFiles(Array.from(event.dataTransfer.files));
+  }, [handlePublishSourceFiles, publishSourceImporting]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+    const job = [...activeJobs, ...recentJobs].find((item) => item.id === activeJobId);
+    if (!job || job.status === "queued" || job.status === "running") return;
+
+    setActiveJobId("");
+    setBusy("");
+    if (job.status !== "completed" || !job.result) {
+      const message = job.error || job.message || "工具任务未完成。";
+      setNotice(message);
+      setNoticeTone("error");
       return;
     }
-    if (activeTool === "transcribe") {
-      await handleTranscribe();
+
+    if (job.kind === "single-video-transcribe") {
+      const response = job.result as SingleVideoTranscribeResult;
+      setResult(response);
+      const message = response.fallback ? response.fallbackReason || "已提取可用文本。" : "文案已提取。";
+      setNotice(message);
+      setNoticeTone(response.fallback ? "info" : "success");
       return;
     }
-    await handleDownload();
+
+    const response = job.result as PublishCopyResult;
+    setPublishResult(response);
+    const message = response.fallback
+      ? response.fallbackReason || "已生成可编辑标题和发布文案，请检查生成依据。"
+      : `已生成 ${response.candidates.length} 组标题和发布文案。`;
+    setNotice(message);
+    setNoticeTone(response.fallback ? "info" : "success");
+  }, [activeJobId, activeJobs, recentJobs]);
+
+  function handleUrlChange(nextUrl: string) {
+    setUrl(nextUrl);
+    setResult(null);
+  }
+
+  function moveTranscriptToPublishCopy() {
+    if (!result?.text.trim()) return;
+    setPublishSourceText(result.text);
+    setPublishResult(null);
+    setActiveWorkspace("publish-copy");
+    setNotice("");
   }
 
   async function copyResultText() {
@@ -205,7 +270,7 @@ export default function ToolsPage() {
             </span>
             <div className="page-title-copy">
               <h1>工具台</h1>
-              <p className="subtle">选题标题，链接提文案，视频素材下载。</p>
+              <p className="subtle">视频素材与发布包装。</p>
             </div>
           </div>
         </div>
@@ -214,109 +279,156 @@ export default function ToolsPage() {
         </div>
       </header>
 
-      <section className="panel tools-hub" aria-busy={Boolean(busy)}>
-        <div className="tools-hub-grid">
-          <div className="tools-entry">
-            <div className="tools-mode-row">
-              <span className="tools-label">工具</span>
-              <div className="segmented tools-mode-tabs" role="group" aria-label="选择工具">
-                {toolModes.map((mode) => {
-                  const Icon = mode.icon;
-                  const active = mode.id === activeTool;
-                  return (
-                    <button
-                      className={active ? "active" : ""}
-                      key={mode.id}
-                      type="button"
-                      onClick={() => setActiveTool(mode.id)}
-                      aria-pressed={active}
-                    >
-                      <Icon size={15} aria-hidden="true" />
-                      {mode.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="tools-active-head">
-              <span>{activeMode.eyebrow}</span>
-              <strong>{activeMode.resultTitle}</strong>
-            </div>
-
-            <div className="tools-entry-body">{renderToolInputs()}</div>
-
-            <div className="tools-run-row">
-              <button
-                className="btn primary tools-run-submit"
-                disabled={!canRunActiveTool}
-                type="button"
-                onClick={() => void handleRunActiveTool()}
-                aria-busy={busy === activeTool}
-              >
-                {busy === activeTool ? <Loader2 aria-hidden="true" className="tools-spin" size={16} /> : <ActiveIcon aria-hidden="true" size={16} />}
-                {getPrimaryActionLabel(activeTool, busy, downloadKind)}
-              </button>
-            </div>
+      <section className="panel tools-workspace" aria-busy={Boolean(busy)}>
+        <div className="tools-workspace-bar">
+          <div className="tools-workspace-tabs" role="tablist" aria-label="工具台工作区">
+            {workspaceModes.map((mode) => {
+              const Icon = mode.icon;
+              const active = mode.id === activeWorkspace;
+              return (
+                <button
+                  className={active ? "active" : ""}
+                  key={mode.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveWorkspace(mode.id)}
+                >
+                  <Icon size={17} aria-hidden="true" />
+                  <span>
+                    <strong>{mode.label}</strong>
+                    <small>{mode.meta}</small>
+                  </span>
+                </button>
+              );
+            })}
           </div>
+          <span className="tools-workspace-state">
+            {busy ? <Loader2 className="tools-spin" size={14} aria-hidden="true" /> : null}
+            {busy ? busyLabel(busy) : "就绪"}
+          </span>
+        </div>
 
-          <div className="tools-preview" aria-live="polite">
-            <div className="tools-preview-head">
-              <div>
-                <h2>{activeMode.resultTitle}</h2>
-                <p className="pane-subtitle">{getPreviewSubtitle(activeTool)}</p>
-              </div>
-              <MetaPills items={activeMeta} />
-            </div>
-            {renderToolResult()}
-          </div>
+        <div className="tools-workspace-body">
+          {activeWorkspace === "video" ? renderVideoWorkspace() : renderPublishWorkspace()}
         </div>
       </section>
 
-      {notice ? <div className={noticeIsError ? "error" : "notice"} role={noticeIsError ? "alert" : "status"}>{notice}</div> : null}
-
-      {publishResult ? (
-        <section className="panel tools-research-panel">
-          <details className="tools-research-details">
-            <summary>
-              <span>框架和参考选题</span>
-              <small>
-                {publishResult.frameworks.length} 个框架 / {publishResult.research.referenceCount} 条参考
-              </small>
-            </summary>
-            <div className="tools-research-grid">
-              <div className="tools-framework-list">
-                {publishResult.frameworks.map((framework) => (
-                  <div className="tools-framework-item" key={framework.name}>
-                    <strong>{framework.name}</strong>
-                    <span>标题：{framework.titlePattern}</span>
-                    <span>发布：{framework.captionPattern}</span>
-                    {framework.structure ? <span>结构：{framework.structure}</span> : null}
-                  </div>
-                ))}
-              </div>
-              <div className="tools-reference-list">
-                {publishResult.research.references.slice(0, 8).map((reference) => (
-                  <a href={reference.url} target="_blank" rel="noreferrer" key={`${reference.platform}-${reference.url}`}>
-                    <span>{formatPlatformLabel(reference.platform)}｜{reference.title}</span>
-                    <small>{formatReferenceMeta(reference)}</small>
-                  </a>
-                ))}
-              </div>
-            </div>
-          </details>
-        </section>
+      {notice ? (
+        <div className={noticeIsError ? "error" : "notice"} role={noticeIsError ? "alert" : "status"}>
+          {notice}
+        </div>
       ) : null}
     </div>
   );
 
-  function renderToolInputs() {
-    if (activeTool === "publish-copy") {
-      return (
-        <>
+  function renderVideoWorkspace() {
+    return (
+      <div className="tools-split tools-video-workspace">
+        <div className="tools-control-pane">
+          <PaneHeading eyebrow="单条视频" title="提取与下载" />
+
+          <VideoLinkField url={url} setUrl={handleUrlChange} />
+
+          <div className="tools-action-block">
+            <span className="tools-label">视频文案</span>
+            <button
+              className="btn primary tools-primary-action"
+              disabled={!cleanUrl || Boolean(busy)}
+              type="button"
+              onClick={() => void handleTranscribe()}
+              aria-busy={busy === "transcribe"}
+            >
+              {busy === "transcribe" ? <Loader2 className="tools-spin" size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
+              {busy === "transcribe" ? "提取中" : "提取视频文案"}
+            </button>
+          </div>
+
+          <div className="tools-action-block">
+            <span className="tools-label">下载素材</span>
+            <div className="tools-download-actions">
+              {downloadOptions.map((option) => {
+                const Icon = option.icon;
+                const active = busy === "download" && downloadingKind === option.kind;
+                return (
+                  <button
+                    className="btn"
+                    disabled={!cleanUrl || Boolean(busy)}
+                    key={option.kind}
+                    type="button"
+                    onClick={() => void handleDownload(option.kind)}
+                    aria-busy={active}
+                  >
+                    {active ? <Loader2 className="tools-spin" size={16} aria-hidden="true" /> : <Icon size={16} aria-hidden="true" />}
+                    {active ? "下载中" : option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="tools-result-pane" aria-live="polite">
+          <div className="tools-result-heading">
+            <div>
+              <h2>视频结果</h2>
+              <p className="pane-subtitle">{result ? result.title || "已完成内容识别" : "等待处理"}</p>
+            </div>
+            <MetaPills items={videoMeta(result, Boolean(cleanUrl))} />
+          </div>
+
+          {result ? (
+            <div className="tools-video-result">
+              <VideoSourceSummary result={result} />
+              <div className="tools-transcript-card">
+                <div className="tools-transcript-head">
+                  <div>
+                    <span className="tools-label">提取文案</span>
+                    <strong>{result.text.length.toLocaleString("zh-CN")} 字</strong>
+                  </div>
+                  <div className="tools-result-actions">
+                    <button className="btn compact" type="button" onClick={() => void copyResultText()}>
+                      <Clipboard size={15} aria-hidden="true" />
+                      复制
+                    </button>
+                    <button className="btn primary compact" type="button" onClick={moveTranscriptToPublishCopy}>
+                      <Sparkles size={15} aria-hidden="true" />
+                      生成标题与发布
+                      <ArrowRight size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  aria-label="提取结果文案"
+                  autoComplete="off"
+                  className="tools-result-text"
+                  name="transcribeResult"
+                  value={result.text}
+                  readOnly
+                />
+              </div>
+            </div>
+          ) : (
+            <ToolEmptyState
+              icon={Video}
+              title={cleanUrl ? "链接已就绪" : "等待视频链接"}
+              text={cleanUrl ? "可以提取文案，或直接下载需要的素材。" : "支持 B站和抖音单条视频。"}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderPublishWorkspace() {
+    return (
+      <div className="tools-split tools-publish-workspace">
+        <div className="tools-control-pane">
+          <PaneHeading eyebrow="发布包装" title="标题与发布文案" />
+
           <div className="tools-inline-group">
-            <span className="tools-label">参考平台</span>
-            <div className="segmented tools-platform-tabs" role="group" aria-label="参考平台">
+            <span className="tools-label">发布平台</span>
+            <div className="segmented tools-platform-tabs" role="group" aria-label="发布平台">
               {publishPlatformOptions.map((option) => {
                 const active = publishPlatform === option.value;
                 return (
@@ -327,154 +439,165 @@ export default function ToolsPage() {
                     onClick={() => setPublishPlatform(option.value)}
                     aria-pressed={active}
                   >
-                    <Search size={15} aria-hidden="true" />
                     {option.label}
                   </button>
                 );
               })}
             </div>
           </div>
+
+          <div className="field tools-publish-source-field" aria-busy={publishSourceImporting}>
+            <div className="tools-source-label-row">
+              <label htmlFor="tools-publish-source-text">内容原稿</label>
+              <button
+                aria-busy={publishSourceImporting}
+                className="btn small ghost tools-source-file-button"
+                disabled={publishSourceImporting}
+                onClick={() => publishSourceFileInputRef.current?.click()}
+                title="支持 TXT、Markdown、CSV、JSON、HTML、字幕和 DOCX"
+                type="button"
+              >
+                <Paperclip aria-hidden="true" size={14} />
+                {publishSourceImporting ? "导入中" : "添加文件"}
+              </button>
+              <input
+                accept={WRITER_SOURCE_FILE_ACCEPT}
+                aria-label="选择内容原稿文件"
+                className="tools-source-file-input"
+                disabled={publishSourceImporting}
+                multiple
+                onChange={(event) => void handlePublishSourceFiles(Array.from(event.target.files || []))}
+                ref={publishSourceFileInputRef}
+                type="file"
+              />
+            </div>
+            <div
+              className={`tools-publish-source-dropzone ${publishSourceDragActive ? "drag-active" : ""}`}
+              onDragEnter={handlePublishSourceDragEnter}
+              onDragLeave={handlePublishSourceDragLeave}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDrop={handlePublishSourceDrop}
+            >
+              <textarea
+                autoComplete="off"
+                className="tools-source-textarea"
+                id="tools-publish-source-text"
+                name="publishSourceText"
+                value={publishSourceText}
+                onChange={(event) => {
+                  setPublishSourceText(event.target.value);
+                  setPublishResult(null);
+                }}
+                placeholder="粘贴口播稿、内容草稿或已提取的视频文案…"
+              />
+              {publishSourceDragActive ? (
+                <div className="tools-source-drop-overlay" aria-hidden="true">
+                  <Paperclip size={20} />
+                  <strong>松开即可导入</strong>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
           <label className="field">
-            <span>原文案</span>
-            <textarea
-              autoComplete="off"
-              className="tools-source-textarea"
-              name="publishSourceText"
-              value={publishSourceText}
-              onChange={(event) => setPublishSourceText(event.target.value)}
-              placeholder="粘贴已有口播稿、发布文案或选题草稿…"
-            />
-          </label>
-          <label className="field">
-            <span>相似选题关键词</span>
+            <span>选题关键词（可选）</span>
             <div className="tools-input-shell">
               <Hash size={16} aria-hidden="true" />
               <input
                 autoComplete="off"
                 name="publishTopicHint"
                 value={publishTopicHint}
-                onChange={(event) => setPublishTopicHint(event.target.value)}
-                placeholder="可留空…"
+                onChange={(event) => {
+                  setPublishTopicHint(event.target.value);
+                  setPublishResult(null);
+                }}
+                placeholder="例如：低糖麦芽雪冰"
               />
             </div>
           </label>
-        </>
-      );
-    }
 
-    if (activeTool === "transcribe") {
-      return (
-        <>
-          <VideoLinkField url={url} setUrl={setUrl} />
-          <label className="field">
-            <span>标题提示</span>
-            <input
-              autoComplete="off"
-              name="titleHint"
-              value={titleHint}
-              onChange={(event) => setTitleHint(event.target.value)}
-              placeholder="可留空…"
-            />
-          </label>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <VideoLinkField url={url} setUrl={setUrl} />
-        <div className="tools-inline-group">
-          <span className="tools-label">下载类型</span>
-          <div className="tools-download-options" role="group" aria-label="下载类型">
-            {downloadOptions.map((option) => {
-              const Icon = option.icon;
-              const active = downloadKind === option.kind;
-              return (
-                <button
-                  className={`btn icon-toggle ${active ? "active" : ""}`}
-                  key={option.kind}
-                  type="button"
-                  onClick={() => setDownloadKind(option.kind)}
-                  aria-pressed={active}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
+          <button
+            className="btn primary tools-primary-action"
+            disabled={!cleanPublishSourceText || Boolean(busy) || publishSourceImporting}
+            type="button"
+            onClick={() => void handleGeneratePublishCopy()}
+            aria-busy={busy === "publish-copy"}
+          >
+            {busy === "publish-copy" ? <Loader2 className="tools-spin" size={16} aria-hidden="true" /> : <Search size={16} aria-hidden="true" />}
+            {busy === "publish-copy" ? "检索生成中" : "检索并生成 6 组"}
+          </button>
         </div>
-      </>
-    );
-  }
 
-  function renderToolResult() {
-    if (activeTool === "publish-copy") {
-      return publishResult?.candidates.length ? (
-        <div className="tools-candidate-list">
-          {publishResult.candidates.map((candidate, index) => (
-            <article className="tools-candidate-card" key={`${candidate.title}-${index}`}>
-              <div className="tools-candidate-head">
-                <span className="status-pill">{formatTargetPlatformLabel(candidate.platform)}</span>
-                <span>{candidate.angle || candidate.frameworkName || `候选 ${index + 1}`}</span>
+        <div className="tools-result-pane" aria-live="polite">
+          <div className="tools-result-heading">
+            <div>
+              <h2>生成结果</h2>
+              <p className="pane-subtitle">{publishResult?.sourceSummary || "标题与发布文案"}</p>
+            </div>
+            <MetaPills items={publishMeta(publishResult)} />
+          </div>
+
+          {publishResult?.candidates.length ? (
+            <div className="tools-publish-results">
+              <div className="tools-provenance-strip">
+                <div>
+                  <span>选题</span>
+                  <strong>{publishResult.queryPlan.topic}</strong>
+                </div>
+                <div>
+                  <span>参考样本</span>
+                  <strong>{publishResult.research.referenceCount} 条</strong>
+                </div>
+                <div>
+                  <span>生成模型</span>
+                  <strong>{publishResult.usedModel || "本地规则"}</strong>
+                </div>
               </div>
-              <h3>{candidate.title}</h3>
-              <p>{candidate.caption}</p>
-              <button className="btn compact" type="button" onClick={() => void copyPublishCandidate(candidate)}>
-                <Clipboard size={15} aria-hidden="true" />
-                复制
-              </button>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <ToolEmptyState icon={Sparkles} title="待生成" text="结果会显示在这里。" />
-      );
-    }
 
-    if (activeTool === "transcribe") {
-      return (
-        <>
-          <div className="tools-result-shell">
-            {result?.text ? (
-              <textarea aria-label="提取结果文案" autoComplete="off" className="tools-result-text" name="transcribeResult" value={result.text} readOnly />
-            ) : (
-              <ToolEmptyState icon={FileText} title="还没有提取结果" text="粘贴单条视频链接后，文案会显示在这里。" />
-            )}
-          </div>
-          <div className="tools-result-actions">
-            {result?.resolvedUrl ? (
-              <a className="text-link" href={result.resolvedUrl} target="_blank" rel="noreferrer">
-                <ExternalLink size={14} aria-hidden="true" />
-                打开来源
-              </a>
-            ) : null}
-            <button className="btn" disabled={!result?.text} type="button" onClick={() => void copyResultText()}>
-              <Clipboard size={16} aria-hidden="true" />
-              复制文案
-            </button>
-          </div>
-        </>
-      );
-    }
+              <div className="tools-candidate-list">
+                {publishResult.candidates.map((candidate, index) => (
+                  <article className="tools-candidate-card" key={`${candidate.title}-${index}`}>
+                    <div className="tools-candidate-head">
+                      <span className="status-pill">{formatTargetPlatformLabel(candidate.platform)}</span>
+                      <span>{candidate.angle || candidate.frameworkName || `候选 ${index + 1}`}</span>
+                      <button
+                        className="btn compact icon-only"
+                        type="button"
+                        aria-label={`复制候选 ${index + 1}`}
+                        title="复制标题和发布文案"
+                        onClick={() => void copyPublishCandidate(candidate)}
+                      >
+                        <Clipboard size={15} aria-hidden="true" />
+                      </button>
+                    </div>
+                    <h3>{candidate.title}</h3>
+                    <p>{candidate.caption}</p>
+                    {candidate.frameworkName ? <small>框架：{candidate.frameworkName}</small> : null}
+                  </article>
+                ))}
+              </div>
 
-    return (
-      <div className="tools-source-card">
-        {result?.coverUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={result.coverUrl} alt={result.title ? `${result.title} 封面` : "视频封面"} height={135} loading="lazy" width={240} />
-        ) : (
-          <div className="tools-cover-placeholder">
-            <ImageIcon size={22} aria-hidden="true" />
-          </div>
-        )}
-        <div>
-          <strong>{result?.title || "未读取标题"}</strong>
-          <span>{result?.sourceAccountName || (cleanUrl ? "链接已填写" : "来源待解析")}</span>
+              <GenerationBasis result={publishResult} />
+            </div>
+          ) : (
+            <ToolEmptyState icon={Sparkles} title="等待内容原稿" text="生成结果与实际参考依据会显示在这里。" />
+          )}
         </div>
       </div>
     );
   }
+}
+
+function PaneHeading(input: { eyebrow: string; title: string }) {
+  return (
+    <div className="tools-pane-heading">
+      <span>{input.eyebrow}</span>
+      <h2>{input.title}</h2>
+    </div>
+  );
 }
 
 function VideoLinkField(input: { url: string; setUrl: (url: string) => void }) {
@@ -489,10 +612,78 @@ function VideoLinkField(input: { url: string; setUrl: (url: string) => void }) {
           type="url"
           value={input.url}
           onChange={(event) => input.setUrl(event.target.value)}
-          placeholder="https://www.bilibili.com/video/BV… 或 https://www.douyin.com/video/…"
+          placeholder="粘贴 B站或抖音视频链接"
         />
       </div>
     </label>
+  );
+}
+
+function VideoSourceSummary(input: { result: SingleVideoTranscribeResult }) {
+  const { result } = input;
+  return (
+    <div className="tools-source-summary">
+      {result.coverUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={result.coverUrl} alt={result.title ? `${result.title} 封面` : "视频封面"} height={180} loading="lazy" width={320} />
+      ) : (
+        <div className="tools-cover-placeholder">
+          <ImageIcon size={22} aria-hidden="true" />
+        </div>
+      )}
+      <div className="tools-source-copy">
+        <span>{platformLabel(result.platform)}</span>
+        <strong>{result.title || "未读取标题"}</strong>
+        <small>{result.sourceAccountName || transcriptionSourceLabel(result.source)}</small>
+      </div>
+      {result.resolvedUrl ? (
+        <a className="btn compact icon-only" href={result.resolvedUrl} target="_blank" rel="noreferrer" aria-label="打开视频来源" title="打开视频来源">
+          <ExternalLink size={15} aria-hidden="true" />
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function GenerationBasis(input: { result: PublishCopyResult }) {
+  const { result } = input;
+  return (
+    <details className="tools-generation-basis">
+      <summary>
+        <span>生成依据</span>
+        <small>{result.frameworks.length} 个框架 / {result.queryPlan.queries.length} 个检索词</small>
+      </summary>
+      <div className="tools-basis-content">
+        <div className="tools-query-block">
+          <span className="tools-label">实际检索词</span>
+          <div className="tools-query-list">
+            {result.queryPlan.queries.map((query) => (
+              <span className="status-pill" key={query}>{query}</span>
+            ))}
+          </div>
+        </div>
+        <div className="tools-research-grid">
+          <div className="tools-framework-list">
+            {result.frameworks.map((framework) => (
+              <div className="tools-framework-item" key={framework.name}>
+                <strong>{framework.name}</strong>
+                <span>标题：{framework.titlePattern}</span>
+                <span>发布：{framework.captionPattern}</span>
+                {framework.fitReason ? <small>{framework.fitReason}</small> : null}
+              </div>
+            ))}
+          </div>
+          <div className="tools-reference-list">
+            {result.research.references.slice(0, 8).map((reference) => (
+              <a href={reference.url} target="_blank" rel="noreferrer" key={`${reference.platform}-${reference.url}`}>
+                <span>{formatPlatformLabel(reference.platform)}｜{reference.title}</span>
+                <small>{formatReferenceMeta(reference)}</small>
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -500,9 +691,7 @@ function MetaPills(input: { items: string[] }) {
   return (
     <div className="tools-result-meta">
       {input.items.map((item) => (
-        <span className="status-pill" key={item}>
-          {item}
-        </span>
+        <span className="status-pill" key={item}>{item}</span>
       ))}
     </div>
   );
@@ -521,55 +710,25 @@ function ToolEmptyState(input: { icon: LucideIcon; title: string; text: string }
   );
 }
 
-function makeActiveMeta(
-  activeTool: ToolMode,
-  input: {
-    publishResult: PublishCopyResult | null;
-    result: SingleVideoTranscribeResult | null;
-    downloadKind: SingleVideoAssetKind;
-    hasUrl: boolean;
-  }
-) {
-  if (activeTool === "publish-copy") {
-    if (!input.publishResult) return ["待生成"];
-    return [
-      formatTargetPlatformLabel(input.publishResult.platform),
-      `${input.publishResult.research.referenceCount} 条参考`,
-      input.publishResult.fallback ? "需检查" : "已生成"
-    ];
-  }
+function videoMeta(result: SingleVideoTranscribeResult | null, hasUrl: boolean) {
+  if (!result) return [hasUrl ? "链接就绪" : "待链接"];
+  return [platformLabel(result.platform), transcriptionSourceLabel(result.source), result.fallback ? "需检查" : "已提取"];
+}
 
-  if (activeTool === "transcribe") {
-    if (!input.result) return ["待提取"];
-    return [
-      platformLabel(input.result.platform),
-      transcriptionSourceLabel(input.result.source),
-      input.result.mediaUrls?.length ? `${input.result.mediaUrls.length} 个媒体地址` : "未返回媒体地址"
-    ];
-  }
-
+function publishMeta(result: PublishCopyResult | null) {
+  if (!result) return ["6 组候选"];
   return [
-    downloadOptions.find((option) => option.kind === input.downloadKind)?.label || "素材",
-    input.hasUrl ? "链接就绪" : "待链接"
+    formatTargetPlatformLabel(result.platform),
+    `${result.research.referenceCount} 条参考`,
+    result.fallback ? "需检查" : "已生成"
   ];
 }
 
-function getPrimaryActionLabel(activeTool: ToolMode, busy: BusyState, downloadKind: SingleVideoAssetKind) {
-  if (busy === activeTool) {
-    if (activeTool === "publish-copy") return "生成中";
-    if (activeTool === "transcribe") return "提取中";
-    return "下载中";
-  }
-  if (activeTool === "publish-copy") return "生成标题文案";
-  if (activeTool === "transcribe") return "提取文案";
-  const label = downloadOptions.find((option) => option.kind === downloadKind)?.label || "素材";
-  return `下载${label}`;
-}
-
-function getPreviewSubtitle(activeTool: ToolMode) {
-  if (activeTool === "publish-copy") return "候选标题和发布文案。";
-  if (activeTool === "transcribe") return "平台字幕 / 火山转写 / 标题兜底。";
-  return "下载会直接保存到本机。";
+function busyLabel(busy: BusyState) {
+  if (busy === "transcribe") return "正在提取文案";
+  if (busy === "download") return "正在下载素材";
+  if (busy === "publish-copy") return "正在检索生成";
+  return "就绪";
 }
 
 function formatTargetPlatformLabel(platform: PublishCopyTargetPlatform) {

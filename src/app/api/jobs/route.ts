@@ -79,7 +79,8 @@ const engagementOptionsSchema = {
   commentCount: z.number().int().min(1).max(200).optional().default(50),
   includeDanmaku: z.boolean().optional().default(false),
   danmakuCount: z.number().int().min(1).max(300).optional().default(50),
-  generationMode: z.enum(["quick", "reference"]).optional().default("quick")
+  generationMode: z.enum(["quick", "reference"]).optional().default("quick"),
+  targetPlatform: z.enum(platforms).optional()
 };
 
 const engagementSchema = z.object({
@@ -125,6 +126,64 @@ const hotlistRefreshSchema = z.object({
   })
 });
 
+const collectAccountSchema = z.object({
+  kind: z.literal("collect-account"),
+  title: z.string().optional(),
+  inputSummary: z.string().optional(),
+  href: z.string().optional(),
+  input: z.object({
+    platform: z.enum(platforms),
+    name: z.string().min(1),
+    uidOrUrl: z.string().optional(),
+    limit: z.number().int().min(1).max(50),
+    order: z.enum(["views", "likes", "favorites", "comments", "pubdate"]),
+    fromDate: z.string().optional(),
+    toDate: z.string().optional()
+  })
+});
+
+const singleVideoTranscribeSchema = z.object({
+  kind: z.literal("single-video-transcribe"),
+  title: z.string().optional(),
+  inputSummary: z.string().optional(),
+  href: z.string().optional(),
+  input: z.object({
+    url: urlSchema,
+    titleHint: z.string().optional()
+  })
+});
+
+const publishCopySchema = z.object({
+  kind: z.literal("publish-copy"),
+  title: z.string().optional(),
+  inputSummary: z.string().optional(),
+  href: z.string().optional(),
+  input: z.object({
+    platform: z.enum(["bilibili", "douyin", "both"]).default("both"),
+    sourceText: z.string().min(1, "请先粘贴原文案。"),
+    topicHint: z.string().optional(),
+    candidateCount: z.number().int().min(1).max(10).optional()
+  })
+});
+
+const hotspotRefreshSchema = z.object({
+  kind: z.literal("hotspot-refresh"),
+  title: z.string().optional(),
+  inputSummary: z.string().optional(),
+  href: z.string().optional(),
+  input: z.object({})
+});
+
+const grossMarginRefreshSchema = z.object({
+  kind: z.literal("gross-margin-refresh"),
+  title: z.string().optional(),
+  inputSummary: z.string().optional(),
+  href: z.string().optional(),
+  input: z.object({
+    recordIds: z.array(z.string().trim().min(1)).optional()
+  })
+});
+
 const startJobSchema = z.discriminatedUnion("kind", [
   writeCopySchema,
   accountStyleSchema,
@@ -132,6 +191,11 @@ const startJobSchema = z.discriminatedUnion("kind", [
   transcribeVideoSchema,
   batchTranscribeSchema,
   hotlistRefreshSchema,
+  collectAccountSchema,
+  singleVideoTranscribeSchema,
+  publishCopySchema,
+  hotspotRefreshSchema,
+  grossMarginRefreshSchema,
   engagementSchema
 ]);
 

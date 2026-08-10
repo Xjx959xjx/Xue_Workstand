@@ -25,11 +25,12 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { useScopedTasks } from "@/components/TaskProvider";
 import {
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
+  refreshGrossMarginLibraryCache,
   refreshGrossMarginMonitorRecord,
-  refreshGrossMarginMonitorRecords,
   updateGrossMarginMonitorPlayCurrent,
   updateGrossMarginMonitorPlayTarget
 } from "@/lib/client";
@@ -45,6 +46,10 @@ export default function GrossMarginMonitorPage() {
 
 function GrossMarginMonitorPageContent() {
   const { notify } = useFeedback();
+  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+    href: "/gross-margin/monitor",
+    kinds: ["gross-margin-refresh"]
+  });
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -57,6 +62,15 @@ function GrossMarginMonitorPageContent() {
   const [dateFromFilter, setDateFromFilter] = useState(() => parseDateFilter(searchParams.get("from")));
   const [dateToFilter, setDateToFilter] = useState(() => parseDateFilter(searchParams.get("to")));
   const [deleteTarget, setDeleteTarget] = useState<GrossMarginMonitorRecord | null>(null);
+  const [activeRefreshJobId, setActiveRefreshJobId] = useState("");
+  const syncedRefreshDataRevisionsRef = useRef<Map<string, number>>(new Map());
+  const trackedRefreshJob = useMemo(
+    () =>
+      (activeRefreshJobId
+        ? [...activeJobs, ...recentJobs].find((job) => job.id === activeRefreshJobId)
+        : null) || activeJobs.find((job) => job.kind === "gross-margin-refresh") || null,
+    [activeJobs, activeRefreshJobId, recentJobs]
+  );
 
   const records = useMemo(() => library?.monitorRecords || [], [library]);
   const filteredRecords = useMemo(() => {
@@ -126,6 +140,22 @@ function GrossMarginMonitorPageContent() {
     }
   }, [accountFilter, dateFromFilter, dateToFilter, pathname, platformFilter, projectFilter, router]);
 
+  useEffect(() => {
+    if (!trackedRefreshJob || !["queued", "running"].includes(trackedRefreshJob.status)) return;
+    if (!activeRefreshJobId) setActiveRefreshJobId(trackedRefreshJob.id);
+    if (!busy) setBusy("refresh-all");
+  }, [activeRefreshJobId, busy, trackedRefreshJob]);
+
+  useEffect(() => {
+    if (!trackedRefreshJob || trackedRefreshJob.dataChange?.resource !== "gross-margin") return;
+    const dataRevision = trackedRefreshJob.dataRevision || 0;
+    if (dataRevision <= (syncedRefreshDataRevisionsRef.current.get(trackedRefreshJob.id) || 0)) return;
+    syncedRefreshDataRevisionsRef.current.set(trackedRefreshJob.id, dataRevision);
+    void refreshGrossMarginLibraryCache()
+      .then(setLibrary)
+      .catch((error) => notify({ tone: "error", message: error instanceof Error ? error.message : "刷新进度同步失败" }));
+  }, [notify, trackedRefreshJob]);
+
   async function handleRefreshAll() {
     const targetRecordIds = sortedRecords.map((record) => record.id);
     if (!targetRecordIds.length) {
@@ -134,15 +164,33 @@ function GrossMarginMonitorPageContent() {
     }
     setBusy("refresh-all");
     try {
-      const result = await refreshGrossMarginMonitorRecords(targetRecordIds);
-      setLibrary(result.library);
-      notify({ tone: "success", message: `已刷新 ${result.records.length} 条监控记录` });
+      const job = await startTask({
+        kind: "gross-margin-refresh",
+        href: "/gross-margin/monitor",
+        input: { recordIds: targetRecordIds }
+      });
+      setActiveRefreshJobId(job.id);
+      notify({ tone: "info", message: "批量刷新已加入任务中心，可离开页面继续处理" });
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "刷新全部失败" });
-    } finally {
       setBusy("");
     }
   }
+
+  useEffect(() => {
+    if (!activeRefreshJobId) return;
+    const job = [...activeJobs, ...recentJobs].find((item) => item.id === activeRefreshJobId);
+    if (!job || job.status === "queued" || job.status === "running") return;
+    setActiveRefreshJobId("");
+    setBusy("");
+    if (job.status === "completed") {
+      void refreshGrossMarginLibraryCache()
+        .then(setLibrary)
+        .catch((error) => notify({ tone: "error", message: error instanceof Error ? error.message : "刷新结果读取失败" }));
+      return;
+    }
+    notify({ tone: "error", message: job.error || job.message || "批量刷新未完成" });
+  }, [activeJobs, activeRefreshJobId, notify, recentJobs]);
 
   async function handleRefreshOne(recordId: string) {
     setBusy(`refresh-${recordId}`);

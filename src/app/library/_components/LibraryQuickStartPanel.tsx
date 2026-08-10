@@ -70,7 +70,7 @@ export function LibraryQuickStartPanel({
 
   return (
     <>
-      <section className={`panel library-quick-start workbench-leading-panel ${advancedOpen ? "advanced-open" : ""}`} aria-label="账号采集">
+      <section id="library-collect-panel" className={`panel library-quick-start workbench-leading-panel ${advancedOpen ? "advanced-open" : ""}`} aria-label="账号采集">
         <form
           className="library-quick-form"
           onSubmit={(event) => {

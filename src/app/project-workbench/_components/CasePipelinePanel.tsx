@@ -1,12 +1,13 @@
 "use client";
 
-import { Check, ChevronDown, FolderKanban, Plus, Trash2, UsersRound } from "lucide-react";
+import { Check, ChevronDown, FileText, FolderKanban, LinkIcon, Plus, Trash2, UsersRound } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountListItem, CopySource, ProjectListItem } from "@/lib/types";
 import { SourceRow } from "./SourceRow";
 
 type CasePipelinePanelProps = {
   accounts: AccountListItem[];
+  availableSourceCount: number;
   isDirty: boolean;
   managedSourceIds: string[];
   projectDescription: string;
@@ -29,6 +30,7 @@ type CasePipelinePanelProps = {
 
 export function CasePipelinePanel({
   accounts,
+  availableSourceCount,
   isDirty,
   managedSourceIds,
   projectDescription,
@@ -50,49 +52,30 @@ export function CasePipelinePanel({
 }: CasePipelinePanelProps) {
   const title = projectName.trim() || selectedProjectMeta?.name || "未命名项目";
   const saveState = selectedProjectMeta ? (isDirty ? "未保存" : "已保存") : projectName.trim() ? "待保存" : "未命名";
-  const emptyAccountHint = accounts.length ? "未选择时，仅用素材池生成风格卡。" : "暂无账号，可只用素材池生成。";
-  const contextSummary = projectSources.length
-    ? `${projectSources.length} 份案例素材将参与风格提炼`
-    : "从素材池检索已有案例，或粘贴链接转写后加入。";
+  const emptyAccountHint = accounts.length ? "未选择账号，将只按案例素材提炼风格。" : "暂无账号，可只用案例素材生成。";
 
   return (
     <aside className="project-workbench-section project-context-panel" aria-label="项目上下文">
       <button className="project-context-summary project-context-summary-button" onClick={onOpenProjectModal} type="button">
-        <span className="project-context-icon">
-          <FolderKanban aria-hidden="true" size={15} />
+        <FolderKanban aria-hidden="true" size={16} />
+        <span className="project-context-summary-copy">
+          <strong>{title}</strong>
+          <small>{projectDescription.trim() || "点击补充项目说明"}</small>
         </span>
-          <span className="project-context-summary-copy">
-            <span className="project-context-title-row">
-              <strong>{title}</strong>
-              <span className={`project-save-state ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveState}</span>
-            </span>
-            <small>{projectDescription.trim() || "填写项目说明"}</small>
-          </span>
-          <ChevronDown aria-hidden="true" size={15} />
+        <span className={`project-save-state ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveState}</span>
+        <ChevronDown aria-hidden="true" size={15} />
       </button>
-
-      <div className="project-context-readiness" aria-label="当前输入">
-        <div>
-          <strong>{projectSources.length}</strong>
-          <span>案例素材</span>
-        </div>
-        <div>
-          <strong>{selectedAccounts.length}</strong>
-          <span>参考账号</span>
-        </div>
-      </div>
-      <p className="project-context-note">{contextSummary}</p>
 
       <div className="project-context-block">
         <div className="project-context-block-head">
           <div>
-            <h3>素材池</h3>
-            <small>{projectSources.length} 份案例素材</small>
+            <h2>案例素材</h2>
+            <small>{projectSources.length ? `${projectSources.length} 份将参与风格提炼` : availableSourceCount ? "从已有素材或视频链接中加入" : "暂无已有素材，请先转写视频链接"}</small>
           </div>
           {projectSources.length ? (
             <div className="project-context-actions">
               {sourcePoolManage ? (
-                <button className="btn compact danger" disabled={!managedSourceIds.length || deletingSourcePool} onClick={onDeleteSelectedPoolSources} type="button">
+                <button className="btn compact danger mobile-destructive-action" disabled={!managedSourceIds.length || deletingSourcePool} onClick={onDeleteSelectedPoolSources} type="button">
                   <Trash2 aria-hidden="true" size={14} />
                   删除
                 </button>
@@ -104,10 +87,11 @@ export function CasePipelinePanel({
               )}
               {!sourcePoolManage ? (
                 <button className="btn compact" onClick={onOpenLinkIntake} type="button">
-                  转写
+                  <LinkIcon aria-hidden="true" size={14} />
+                  链接
                 </button>
               ) : null}
-              <button className="btn compact" onClick={onToggleSourcePoolManage} type="button">
+              <button className="btn compact mobile-destructive-action" onClick={onToggleSourcePoolManage} type="button">
                 {sourcePoolManage ? <Check aria-hidden="true" size={14} /> : null}
                 {sourcePoolManage ? "完成" : "管理"}
               </button>
@@ -134,13 +118,21 @@ export function CasePipelinePanel({
             ))}
           </div>
         ) : (
-          <div className="project-empty-actions">
-            <button className="project-workbench-empty action" onClick={onOpenSourcePicker} type="button">
-              选已有素材
-            </button>
-            <button className="project-workbench-empty action" onClick={onOpenLinkIntake} type="button">
-              转写链接
-            </button>
+          <div className="project-reference-empty">
+            <FileText aria-hidden="true" size={18} />
+            <p>还没有案例素材</p>
+            <div className="button-row">
+              {availableSourceCount ? (
+                <button className="btn compact" onClick={onOpenSourcePicker} type="button">
+                  <Plus aria-hidden="true" size={14} />
+                  选已有素材
+                </button>
+              ) : null}
+              <button className="btn compact" onClick={onOpenLinkIntake} type="button">
+                <LinkIcon aria-hidden="true" size={14} />
+                转写链接
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -148,12 +140,12 @@ export function CasePipelinePanel({
       <div className="project-context-block project-account-supplement">
         <div className="project-context-block-head">
           <div>
-            <h3>参考账号</h3>
-            <small>{selectedAccounts.length ? `${selectedAccounts.length} 个已选` : "可选补充长期口吻"}</small>
+            <h2>参考账号 <span>可选</span></h2>
+            <small>{selectedAccounts.length ? `${selectedAccounts.length} 个账号将补充长期口吻` : "需要长期口吻时再添加"}</small>
           </div>
           <button className="btn compact" onClick={onOpenAccountPicker} type="button">
             <UsersRound aria-hidden="true" size={14} />
-            账号
+            选择
           </button>
         </div>
         {selectedAccounts.length ? (

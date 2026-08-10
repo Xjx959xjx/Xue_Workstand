@@ -49,18 +49,20 @@
 
 | 角色 | Token | 大小 | 字重 | 行高 | 用法 |
 | --- | --- | --- | --- | --- | --- |
-| 页面标题 | `--text-page-title` | `24px` | `650` | `1.18` | 页面主标题 |
-| 区块标题 | `--text-section-title` | `15px` | `650` | `1.25` | 面板和窗格标题 |
-| 卡片标题 | `--text-card-title` | `13px` | `600` | `1.35` | 列表项、卡片标题 |
-| 正文 | `--text-body` | `13px` | `400` | `1.5` | 默认 UI 文案 |
-| 元信息 | `--text-meta` | `12px` | `500-600` | `1.45-1.65` | 标签、说明、辅助文本 |
-| 标记文本 | `--text-caption` | `11px` | `500-600` | `1.35` | 状态、紧凑元信息 |
+| 页面标题 | `--text-page-title` | `26px` | `740` | `1.08` | 页面主标题 |
+| 区块标题 | `--text-section-title` | `16px` | `700` | `1.25` | 面板和窗格标题 |
+| 卡片标题 | `--text-card-title` | `13px` | `700` | `1.35` | 列表项、卡片标题 |
+| 正文 | `--text-body` | `13px` | `400` | `1.55` | 默认 UI 文案 |
+| 元信息 | `--text-meta` | `12px` | `500-650` | `1.55` | 标签、说明、辅助文本 |
+| 标记文本 | `--text-caption` | `11px` | `500-650` | `1.35` | 状态、紧凑元信息 |
 | 长文编辑 | 页面局部 | `14px` | `400` | `1.72` | 草稿、转写稿、生成结果 |
 
 字体 token：
 
 - `--font-ui`: `Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif`
 - `--font-mono`: `"SF Mono", "SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace`
+- 语义字重：`--font-weight-regular`、`--font-weight-medium`、`--font-weight-label`、`--font-weight-heading`、`--font-weight-page-title`。
+- 语义行高：`--line-height-caption`、`--line-height-meta`、`--line-height-body`、`--line-height-card-title`、`--line-height-section-title`、`--line-height-page-title`、`--line-height-reading`。
 
 规则：
 
@@ -85,10 +87,11 @@
 
 布局规则：
 
-- 页面最大宽度使用 `min(100%, 1680px)`。
-- 桌面工作台页面继续使用 `--workspace-page-height` 和 `--workspace-default-height` 控制高度。
-- 默认面板内边距使用 `--card-pad-md`，当前值为 `14px`。
+- 桌面工作台页面使用主内容区 `100%` 可用宽度；1920px 及以上不再设置固定最大宽度，额外空间优先分配给列表、表格和并列面板。
+- 桌面工作台页面使用 `--workspace-page-height` 撑满可用高度；路由按实际子区块数量声明网格行，避免通用空行或固定高度上限浪费大屏空间。
+- 默认面板内边距使用 `--card-pad-md`，当前值为 `16px`；独立表单分区使用 `--section-pad`，当前值为 `18px`。
 - 默认 grid gap 使用 `--space-3`，密集行内控件使用 `--space-2`。
+- 窗格、列表行、表单标签和控件横向内边距复用对应语义 token；页面 CSS 不新增同义的间距、字重或行高散值。
 - 移动端不能出现横向滚动，主要操作必须可触达。
 
 ## 5. 按钮

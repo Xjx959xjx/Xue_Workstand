@@ -6,7 +6,8 @@ import {
   WRITE_COPY_REASONING_EFFORT
 } from "@/lib/ai";
 import { apiError, parseJsonBody } from "@/lib/api-route";
-import { hasFeishuDocLink } from "@/lib/feishu";
+import { hasSupportDocumentReference } from "@/lib/support-documents";
+import { extractRewriteSourceMaterial, splitWriterSourceInput } from "@/lib/source-extraction";
 import { createNdjsonStream } from "@/lib/streaming";
 import { writeCopyInputSchema } from "@/lib/write-validation";
 
@@ -18,16 +19,18 @@ export async function POST(request: Request) {
 
     const stream = createNdjsonStream(async (emit, signal) => {
       const isRevision = input.action === "revise";
+      const separatedSourceInput = splitWriterSourceInput(input.sourceText || "", input.supportDocLinks || "");
+      const sourceExtraction = extractRewriteSourceMaterial(separatedSourceInput.sourceText);
       emit({
         type: "stage",
         stage: "prepare",
         message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡和代表样本",
         progress: 10
       });
-      if (!isRevision && input.mode === "rewrite" && /https?:\/\//i.test(input.sourceText || "")) {
+      if (!isRevision && input.mode === "rewrite" && sourceExtraction.pendingLinkCount > 0) {
         emit({ type: "stage", stage: "transcribe-links", message: "正在转写链接里的视频文稿", progress: 18 });
       }
-      if (!isRevision && hasFeishuDocLink(input.supportDocLinks)) {
+      if (!isRevision && hasSupportDocumentReference(separatedSourceInput.supportDocLinks)) {
         emit({ type: "stage", stage: "fetch-support-docs", message: "正在读取商单支持文档", progress: 24 });
       }
       const prepared = await prepareWriteCopyContext(input, { signal });
@@ -60,10 +63,6 @@ export async function POST(request: Request) {
           emit({ type: "delta", delta });
         }
       });
-
-      if (!isRevision && !result.text.trim()) {
-        emit({ type: "stage", stage: "fallback", message: "正在切换到本地模板", progress: 76 });
-      }
 
       if (input.save) {
         emit({ type: "stage", stage: "save-draft", message: "正在保存历史记录", progress: 88 });

@@ -1,8 +1,28 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CircleStop, Copy, Eye, FileText, FileUp, Globe2, ListChecks, MessageSquarePlus, PenLine, Save, Send } from "lucide-react";
+import {
+  BookOpenText,
+  CheckCircle2,
+  ChevronDown,
+  CircleStop,
+  Copy,
+  Eye,
+  FileText,
+  FileUp,
+  Globe2,
+  History,
+  MessageSquarePlus,
+  MoreHorizontal,
+  Paperclip,
+  PenLine,
+  Plus,
+  Save,
+  Send,
+  Sparkles,
+  X
+} from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -13,17 +33,30 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
+import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { deleteDrafts, getCachedDrafts, getDrafts, prepareWriteBrief, renameDraft } from "@/lib/client";
+import {
+  deleteDrafts,
+  draftSummaryFromDraft,
+  getCachedDrafts,
+  getDraft,
+  getDrafts,
+  renameDraft,
+  uploadWriterSourceFiles
+} from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
-import { DEFAULT_REWRITE_PROMPT, extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
-import type { Draft, WriteResult, WriteRevisionScope } from "@/lib/types";
+import {
+  DEFAULT_REWRITE_PROMPT,
+  extractRewriteSourceMaterial,
+  mergeWriterSourceInput,
+  normalizeRewritePrompt,
+  splitWriterSourceInput
+} from "@/lib/source-extraction";
+import { appendWriterSourceFiles, countWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
+import type { Draft, DraftSummary, WriteRevisionScope } from "@/lib/types";
 
-const BRIEF_PROGRESS_INITIAL = 8;
-const BRIEF_PROGRESS_CAP = 92;
-const BRIEF_PROGRESS_ESTIMATE_MS = 120_000;
-const BRIEF_PROGRESS_TICK_MS = 1_000;
+const WRITER_SESSION_DRAFT_KEY = "writer-mobile-session-draft-v1";
 
 export default function WriterPage() {
   return (
@@ -42,35 +75,91 @@ function WriterPageContent() {
     kinds: ["write-copy"]
   });
   const { notify } = useFeedback();
+  const remoteStatus = useRemoteStatus();
   const [targetType, setTargetType] = useState<"account" | "project">("account");
   const [accountId, setAccountId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [sourceText, setSourceText] = useState("");
-  const [supportDocLinks, setSupportDocLinks] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
-  const [brief, setBrief] = useState("");
-  const [briefResearch, setBriefResearch] = useState("");
-  const [briefContextFingerprint, setBriefContextFingerprint] = useState("");
-  const [briefSignature, setBriefSignature] = useState("");
-  const [briefMeta, setBriefMeta] = useState<{
-    usedModel: string;
-    fallback: boolean;
-    fallbackReason?: string;
-  } | null>(null);
-  const [briefProgress, setBriefProgress] = useState(0);
-  const [briefStage, setBriefStage] = useState("");
-  const [briefStartedAt, setBriefStartedAt] = useState<number | null>(null);
-  const [preparedSourceText, setPreparedSourceText] = useState("");
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionScope, setRevisionScope] = useState<WriteRevisionScope>("full");
   const [selectedDraftText, setSelectedDraftText] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
-  const [fullDrafts, setFullDrafts] = useState<Draft[] | null>(() => getCachedDrafts()?.drafts ?? null);
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sourceDragActive, setSourceDragActive] = useState(false);
+  const [sourceImporting, setSourceImporting] = useState(false);
+  const [sessionDraftHydrated, setSessionDraftHydrated] = useState(false);
+  const [draftSummaries, setDraftSummaries] = useState<DraftSummary[] | null>(() => getCachedDrafts()?.drafts ?? null);
   const loadedDraftParamRef = useRef("");
   const appliedSearchParamRef = useRef("");
+  const draftEditorRef = useRef<HTMLTextAreaElement>(null);
+  const sourceDragDepthRef = useRef(0);
+  const sourceFileInputRef = useRef<HTMLInputElement>(null);
+  const webResearchCapability = remoteStatus.status?.capabilities.webResearch;
+  const webResearchAvailable = webResearchCapability?.available === true;
+
+  useEffect(() => {
+    if (webResearchCapability && !webResearchCapability.available) {
+      setUseWebResearch(false);
+    }
+  }, [webResearchCapability]);
+
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(WRITER_SESSION_DRAFT_KEY);
+      if (saved) {
+        const draft = JSON.parse(saved) as Partial<{
+          targetType: "account" | "project";
+          accountId: string;
+          projectId: string;
+          prompt: string;
+          sourceText: string;
+          supportDocLinks: string;
+          useWebResearch: boolean;
+          revisionInstruction: string;
+        }>;
+        if (draft.targetType === "account" || draft.targetType === "project") setTargetType(draft.targetType);
+        if (typeof draft.accountId === "string") setAccountId(draft.accountId);
+        if (typeof draft.projectId === "string") setProjectId(draft.projectId);
+        if (typeof draft.prompt === "string") setPrompt(draft.prompt);
+        if (typeof draft.sourceText === "string" || typeof draft.supportDocLinks === "string") {
+          setSourceText(mergeWriterSourceInput(draft.sourceText, draft.supportDocLinks));
+        }
+        if (typeof draft.useWebResearch === "boolean") setUseWebResearch(draft.useWebResearch);
+        if (typeof draft.revisionInstruction === "string") setRevisionInstruction(draft.revisionInstruction);
+      }
+    } catch {
+      window.sessionStorage.removeItem(WRITER_SESSION_DRAFT_KEY);
+    } finally {
+      setSessionDraftHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sessionDraftHydrated) return;
+    window.sessionStorage.setItem(WRITER_SESSION_DRAFT_KEY, JSON.stringify({
+      targetType,
+      accountId,
+      projectId,
+      prompt,
+      sourceText,
+      useWebResearch,
+      revisionInstruction
+    }));
+  }, [
+    accountId,
+    projectId,
+    prompt,
+    revisionInstruction,
+    sessionDraftHydrated,
+    sourceText,
+    targetType,
+    useWebResearch
+  ]);
 
   const selectedAccount = useMemo(() => {
     const first = library?.accounts[0];
@@ -82,142 +171,50 @@ function WriterPageContent() {
     return library?.projects.find((project) => project.id === projectId) || first || null;
   }, [library?.projects, projectId]);
 
-  const allDrafts = useMemo(() => fullDrafts || [], [fullDrafts]);
-  const historyLoading = loading || fullDrafts === null;
+  const allDrafts = useMemo(() => draftSummaries || [], [draftSummaries]);
+  const historyLoading = loading || draftSummaries === null;
   const historyDrafts = useMemo(() => [...allDrafts].sort(compareCreatedAtDesc), [allDrafts]);
 
   const handleDraftSaved = useCallback(
     (draft: Draft) => {
-      setFullDrafts((current) => mergeDraftLists(current || [], [draft]));
+      setDraftSummaries((current) => mergeDraftSummaryLists(current || [], [draftSummaryFromDraft(draft)]));
     },
     []
   );
 
-  const { activeStyle, activeStyleLoading, activeTitle } = useWriterReferenceDetails({
+  const { activeStyle, activeStyleLoading, activeSubtitle, activeTitle } = useWriterReferenceDetails({
     selectedAccount,
     selectedProject,
     setNotice,
     targetType
   });
-  const sourceExtraction = useMemo(() => extractRewriteSourceMaterial(sourceText), [sourceText]);
-  const normalizedSourceText = sourceText;
-  const hasRewriteSource = Boolean(normalizedSourceText.trim());
+  const separatedSourceInput = useMemo(() => splitWriterSourceInput(sourceText), [sourceText]);
+  const sourceExtraction = useMemo(
+    () => extractRewriteSourceMaterial(separatedSourceInput.sourceText),
+    [separatedSourceInput.sourceText]
+  );
+  const normalizedSourceText = separatedSourceInput.sourceText;
+  const hasRewriteSource = Boolean(normalizedSourceText.trim() || separatedSourceInput.supportDocLinks);
   const effectiveMode: Draft["mode"] = hasRewriteSource ? "rewrite" : "topic";
   const normalizedPrompt = useMemo(() => normalizeRewritePrompt(effectiveMode, prompt, sourceText), [effectiveMode, prompt, sourceText]);
   const hasTaskInput = Boolean(normalizedPrompt.trim() || hasRewriteSource);
   const activeReference = targetType === "project" ? selectedProject : selectedAccount;
-  const writerInputSignature = useMemo(
-    () =>
-      makeWriterInputSignature({
-        targetType,
-        referenceId: activeReference?.id || "",
-        mode: effectiveMode,
-        prompt: normalizedPrompt,
-        sourceText: normalizedSourceText,
-        supportDocLinks,
-        useWebResearch
-      }),
-    [activeReference?.id, effectiveMode, normalizedPrompt, normalizedSourceText, supportDocLinks, targetType, useWebResearch]
-  );
-  const briefReady = Boolean(brief.trim()) && briefSignature === writerInputSignature;
-  const briefStale = Boolean(brief.trim()) && briefSignature !== writerInputSignature;
-  const canPrepareBrief = Boolean(hasTaskInput && activeReference && !busy);
+  const activeReferenceValue = activeReference ? `${targetType}:${activeReference.id}` : "";
+  const handleReferenceChange = useCallback((value: string) => {
+    const separatorIndex = value.indexOf(":");
+    if (separatorIndex < 0) return;
+    const nextType = value.slice(0, separatorIndex);
+    const nextId = value.slice(separatorIndex + 1);
+    if (!nextId) return;
+    if (nextType === "project") {
+      setTargetType("project");
+      setProjectId(nextId);
+    } else if (nextType === "account") {
+      setTargetType("account");
+      setAccountId(nextId);
+    }
+  }, []);
   const noticeIsError = notice.includes("失败") || notice.includes("未配置");
-
-  const handleGenerationResult = useCallback(
-    (result: WriteResult) => {
-      if (result.brief) setBrief(result.brief);
-      setBriefResearch(result.research || "");
-      setBriefContextFingerprint(result.contextFingerprint || result.draft?.version?.contextFingerprint || "");
-      if (result.sourceDigest?.resolvedSourceText) {
-        setPreparedSourceText(result.sourceDigest.resolvedSourceText);
-      }
-      if (result.brief || result.sourceDigest) {
-        setBriefSignature(writerInputSignature);
-        setBriefMeta({
-          usedModel: result.usedModel,
-          fallback: result.fallback,
-          fallbackReason: result.fallbackReason
-        });
-      }
-    },
-    [writerInputSignature]
-  );
-
-  const handlePrepareBrief = useCallback(async () => {
-    if (!canPrepareBrief) return;
-    setBriefStartedAt(Date.now());
-    setBriefProgress(BRIEF_PROGRESS_INITIAL);
-    setBriefStage("整理上下文");
-    setBusy("brief");
-    setNotice("");
-    try {
-      const result = await prepareWriteBrief({
-        targetType,
-        platform: targetType === "account" ? selectedAccount?.platform : undefined,
-        accountId: targetType === "account" ? selectedAccount?.id : undefined,
-        projectId: targetType === "project" ? selectedProject?.id : undefined,
-        mode: effectiveMode,
-        prompt: normalizedPrompt,
-        sourceText: normalizedSourceText,
-        supportDocLinks: supportDocLinks.trim() || undefined,
-        useWebResearch
-      });
-      setBrief(result.brief);
-      setBriefResearch(result.research || "");
-      setBriefContextFingerprint(result.contextFingerprint);
-      setPreparedSourceText(result.sourceDigest.resolvedSourceText || normalizedSourceText);
-      setBriefSignature(writerInputSignature);
-      setBriefMeta({
-        usedModel: result.usedModel,
-        fallback: result.fallback,
-        fallbackReason: result.fallbackReason
-      });
-      setNotice(result.fallback ? result.fallbackReason || "已用本地结构准备 brief。" : "写作 brief 已准备。");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "准备写作 brief 失败");
-    } finally {
-      setBusy("");
-      setBriefStartedAt(null);
-    }
-  }, [
-    canPrepareBrief,
-    effectiveMode,
-    normalizedPrompt,
-    normalizedSourceText,
-    selectedAccount?.id,
-    selectedAccount?.platform,
-    selectedProject?.id,
-    setNotice,
-    supportDocLinks,
-    targetType,
-    useWebResearch,
-    writerInputSignature
-  ]);
-
-  useEffect(() => {
-    if (busy !== "brief" || !briefStartedAt) {
-      if (busy !== "brief") {
-        setBriefProgress(0);
-        setBriefStage("");
-      }
-      return;
-    }
-
-    const updateBriefProgress = () => {
-      const elapsedMs = Date.now() - briefStartedAt;
-      const nextProgress = Math.min(
-        BRIEF_PROGRESS_CAP,
-        BRIEF_PROGRESS_INITIAL + Math.round((elapsedMs / BRIEF_PROGRESS_ESTIMATE_MS) * (BRIEF_PROGRESS_CAP - BRIEF_PROGRESS_INITIAL))
-      );
-      setBriefProgress(nextProgress);
-      setBriefStage(getBriefProgressStage(elapsedMs, useWebResearch));
-    };
-
-    updateBriefProgress();
-    const timer = window.setInterval(updateBriefProgress, BRIEF_PROGRESS_TICK_MS);
-    return () => window.clearInterval(timer);
-  }, [briefStartedAt, busy, useWebResearch]);
 
   const handleRevisionCompleted = useCallback(() => {
     setRevisionInstruction("");
@@ -231,7 +228,6 @@ function WriterPageContent() {
     canStopGenerate,
     clearDraftResult,
     copyLast,
-    generateProgress,
     generateStage,
     handleContentChange,
     handleGenerate,
@@ -252,19 +248,14 @@ function WriterPageContent() {
     cancelTask,
     busy,
     hasTaskInput,
-    brief: briefReady ? brief : "",
-    briefContextFingerprint: briefReady ? briefContextFingerprint : "",
-    briefResearch: briefReady ? briefResearch : "",
     mode: effectiveMode,
     normalizedPrompt,
     normalizedSourceText,
-    preparedSourceText: briefReady ? preparedSourceText : "",
-    supportDocLinks,
+    supportDocLinks: separatedSourceInput.supportDocLinks,
     recentJobs,
     revisionInstruction,
     revisionScope,
     selectedText: selectedDraftText,
-    onGenerationResult: handleGenerationResult,
     onDraftSaved: handleDraftSaved,
     onRevisionCompleted: handleRevisionCompleted,
     refresh,
@@ -285,20 +276,105 @@ function WriterPageContent() {
     setBusy,
     setNotice
   });
-  const displayResearch = lastResearch || briefResearch;
-  const materialStatusLabel = sourceExtraction.materials.length
-    ? `${sourceExtraction.materials.length} 条素材`
+  const displayResearch = lastResearch;
+
+  useEffect(() => {
+    setResearchOpen(false);
+  }, [lastDraftId]);
+
+  const sourceFileCount = useMemo(() => countWriterSourceFiles(sourceText), [sourceText]);
+  const nonFileTextMaterialCount = Math.max(0, sourceExtraction.textMaterialCount - sourceFileCount);
+  const sourceItemCount = sourceExtraction.materials.length + separatedSourceInput.supportDocumentCount;
+  const materialStatusLabel = sourceItemCount
+    ? `${sourceItemCount} 项资料`
     : normalizedPrompt.trim()
       ? "自由输入"
       : "待素材";
-  const briefStatusLabel = busy === "brief" ? "准备中" : briefReady ? "已确认" : briefStale ? "需更新" : "可选";
-  const briefMetaLabel = briefMeta
-    ? briefMeta.fallback
-      ? briefMeta.fallbackReason || "本地结构"
-      : briefMeta.usedModel === "历史记录"
-        ? "来自历史记录"
-        : `已调用 ${briefMeta.usedModel}`
-    : "";
+
+  const handleDraftSelection = useCallback((field: HTMLTextAreaElement) => {
+    const nextSelection = field.value.slice(field.selectionStart, field.selectionEnd);
+    setSelectedDraftText(nextSelection);
+    setRevisionScope(nextSelection.trim() ? "selection" : "full");
+  }, []);
+
+  const handleClearDraftSelection = useCallback(() => {
+    const field = draftEditorRef.current;
+    if (field) {
+      const caret = field.selectionEnd;
+      field.focus();
+      field.setSelectionRange(caret, caret);
+    }
+    setSelectedDraftText("");
+    setRevisionScope("full");
+  }, []);
+
+  const handleStartNewTask = useCallback(() => {
+    if (busy || sourceImporting) return;
+    if ((hasTaskInput || lastContent || hasUnsavedChanges) && !window.confirm("新建任务会清空当前输入；已经保存的版本仍会保留。继续吗？")) {
+      return;
+    }
+
+    loadedDraftParamRef.current = "";
+    appliedSearchParamRef.current = "";
+    clearDraftResult();
+    setPrompt("");
+    setSourceText("");
+    setUseWebResearch(false);
+    setRevisionInstruction("");
+    setRevisionScope("full");
+    setSelectedDraftText("");
+    setHistoryOpen(false);
+
+    const params = new URLSearchParams({ targetType, mode: "topic" });
+    if (targetType === "project") {
+      if (selectedProject?.id) params.set("projectId", selectedProject.id);
+    } else if (selectedAccount?.id) {
+      params.set("accountId", selectedAccount.id);
+    }
+    router.replace(`/writer?${params.toString()}`, { scroll: false });
+  }, [busy, clearDraftResult, hasTaskInput, hasUnsavedChanges, lastContent, router, selectedAccount?.id, selectedProject?.id, sourceImporting, targetType]);
+
+  const handleSourceFiles = useCallback(async (files: File[]) => {
+    if (!files.length || sourceImporting) return;
+    setSourceImporting(true);
+    try {
+      const result = await uploadWriterSourceFiles(files);
+      setSourceText((current) => appendWriterSourceFiles(current, result.files));
+      const truncatedCount = result.files.filter((file) => file.truncated).length;
+      notify({
+        tone: "success",
+        message: `已导入 ${result.files.length} 个文件${truncatedCount ? `，其中 ${truncatedCount} 个过长文件已截取` : ""}。`
+      });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "导入素材文件失败" });
+    } finally {
+      setSourceImporting(false);
+      setSourceDragActive(false);
+      sourceDragDepthRef.current = 0;
+      if (sourceFileInputRef.current) sourceFileInputRef.current.value = "";
+    }
+  }, [notify, sourceImporting]);
+
+  const handleSourceDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (sourceImporting || !event.dataTransfer.types.includes("Files")) return;
+    sourceDragDepthRef.current += 1;
+    setSourceDragActive(true);
+  }, [sourceImporting]);
+
+  const handleSourceDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    sourceDragDepthRef.current = Math.max(0, sourceDragDepthRef.current - 1);
+    if (!sourceDragDepthRef.current) setSourceDragActive(false);
+  }, []);
+
+  const handleSourceDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    sourceDragDepthRef.current = 0;
+    setSourceDragActive(false);
+    if (sourceImporting) return;
+    void handleSourceFiles(Array.from(event.dataTransfer.files));
+  }, [handleSourceFiles, sourceImporting]);
 
   useEffect(() => {
     if (!notice || isTaskProgressMessage(notice)) return;
@@ -307,12 +383,12 @@ function WriterPageContent() {
 
   useEffect(() => {
     let ignore = false;
-    if (loading || fullDrafts !== null) return;
+    if (loading || draftSummaries !== null) return;
 
     getDrafts()
       .then((result) => {
         if (ignore) return;
-        setFullDrafts((current) => mergeDraftLists(current || [], result.drafts));
+        setDraftSummaries((current) => mergeDraftSummaryLists(current || [], result.drafts));
       })
       .catch((err) => {
         if (!ignore) setNotice(err instanceof Error ? err.message : "读取历史记录失败");
@@ -321,9 +397,26 @@ function WriterPageContent() {
     return () => {
       ignore = true;
     };
-  }, [fullDrafts, loading]);
+  }, [draftSummaries, loading]);
+
+  const applyLoadedDraft = useCallback((draft: Draft) => {
+    setTargetType(draft.targetType === "project" ? "project" : "account");
+    if (draft.targetType === "project") {
+      setProjectId(draft.projectId);
+    } else {
+      setAccountId(draft.accountId);
+    }
+    setPrompt(draft.prompt);
+    setSourceText(mergeWriterSourceInput(draft.input, draft.supportDocLinks));
+    setUseWebResearch(Boolean(draft.sourceDigest?.webResearchEnabled) && webResearchAvailable);
+    setRevisionInstruction("");
+    setRevisionScope("full");
+    setSelectedDraftText("");
+    loadDraftResult(draft);
+  }, [loadDraftResult, webResearchAvailable]);
 
   useEffect(() => {
+    let ignore = false;
     const searchKey = searchParams.toString();
     const target = searchParams.get("targetType");
     const nextMode = searchParams.get("mode");
@@ -332,35 +425,26 @@ function WriterPageContent() {
     const nextAccountId = searchParams.get("accountId");
     const nextProjectId = searchParams.get("projectId");
     const draftId = searchParams.get("draftId");
-    const sourceDraft = draftId ? allDrafts.find((draft) => draft.id === draftId) : null;
-
-    if (sourceDraft) {
-      if (loadedDraftParamRef.current === sourceDraft.id) return;
-      loadedDraftParamRef.current = sourceDraft.id;
-      setTargetType(sourceDraft.targetType === "project" ? "project" : "account");
-      if (sourceDraft.targetType === "project") {
-        setProjectId(sourceDraft.projectId);
-      } else {
-        setAccountId(sourceDraft.accountId);
-      }
-      setPrompt(sourceDraft.prompt);
-      setSourceText(sourceDraft.input || "");
-      setSupportDocLinks(sourceDraft.supportDocLinks || "");
-      setUseWebResearch(Boolean(sourceDraft.sourceDigest?.webResearchEnabled));
-      setBrief(sourceDraft.brief || "");
-      setBriefResearch(sourceDraft.research || "");
-      setBriefContextFingerprint(sourceDraft.version?.contextFingerprint || "");
-      setPreparedSourceText(sourceDraft.sourceDigest?.resolvedSourceText || sourceDraft.input || "");
-      setBriefSignature(sourceDraft.brief ? makeDraftWriterInputSignature(sourceDraft) : "");
-      setBriefMeta(sourceDraft.brief ? { usedModel: "历史记录", fallback: false } : null);
-      setRevisionInstruction("");
-      setRevisionScope("full");
-      setSelectedDraftText("");
-      loadDraftResult(sourceDraft);
-      return;
-    }
 
     if (draftId && historyLoading) return;
+    if (draftId) {
+      if (loadedDraftParamRef.current === draftId || loadedDraftParamRef.current === `loading:${draftId}`) return;
+      loadedDraftParamRef.current = `loading:${draftId}`;
+      getDraft(draftId)
+        .then((draft) => {
+          if (ignore) return;
+          loadedDraftParamRef.current = draft.id;
+          applyLoadedDraft(draft);
+        })
+        .catch((error) => {
+          if (ignore) return;
+          loadedDraftParamRef.current = "";
+          setNotice(error instanceof Error ? error.message : "读取草稿详情失败");
+        });
+      return () => {
+        ignore = true;
+      };
+    }
     if (!draftId) loadedDraftParamRef.current = "";
     if (appliedSearchParamRef.current === searchKey) return;
 
@@ -381,70 +465,45 @@ function WriterPageContent() {
     if (nextPrompt !== null) setPrompt(nextPrompt);
     if (nextSourceText !== null) setSourceText(nextSourceText);
     setUseWebResearch(false);
-    setBrief("");
-    setBriefResearch("");
-    setBriefContextFingerprint("");
-    setPreparedSourceText("");
-    setBriefSignature("");
-    setBriefMeta(null);
     setRevisionInstruction("");
     setRevisionScope("full");
     setSelectedDraftText("");
     appliedSearchParamRef.current = searchKey;
-  }, [allDrafts, historyLoading, loadDraftResult, searchParams]);
+  }, [applyLoadedDraft, historyLoading, searchParams]);
 
   const handleSelectHistoryDraft = useCallback(
-    (draft: Draft) => {
-      loadedDraftParamRef.current = draft.id;
-      setTargetType(draft.targetType === "project" ? "project" : "account");
-      if (draft.targetType === "project") {
-        setProjectId(draft.projectId);
-      } else {
-        setAccountId(draft.accountId);
+    async (summary: DraftSummary) => {
+      try {
+        const draft = await getDraft(summary.id);
+        loadedDraftParamRef.current = draft.id;
+        applyLoadedDraft(draft);
+        router.replace(buildWriterDraftHref(draft), { scroll: false });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "读取草稿详情失败";
+        setNotice(message);
+        throw error;
       }
-      setPrompt(draft.prompt);
-      setSourceText(draft.input || "");
-      setSupportDocLinks(draft.supportDocLinks || "");
-      setUseWebResearch(Boolean(draft.sourceDigest?.webResearchEnabled));
-      setBrief(draft.brief || "");
-      setBriefResearch(draft.research || "");
-      setBriefContextFingerprint(draft.version?.contextFingerprint || "");
-      setPreparedSourceText(draft.sourceDigest?.resolvedSourceText || draft.input || "");
-      setBriefSignature(draft.brief ? makeDraftWriterInputSignature(draft) : "");
-      setBriefMeta(draft.brief ? { usedModel: "历史记录", fallback: false } : null);
-      setRevisionInstruction("");
-      setRevisionScope("full");
-      setSelectedDraftText("");
-      loadDraftResult(draft);
-      router.replace(buildWriterDraftHref(draft), { scroll: false });
     },
-    [loadDraftResult, router]
+    [applyLoadedDraft, router]
   );
 
   const handleDeleteHistoryDraft = useCallback(
-    async (draft: Draft) => {
+    async (draft: DraftSummary) => {
       const replacement = findReplacementDraft(historyDrafts, new Set([draft.id]), draft);
 
       try {
         await deleteDrafts([draft.id]);
-        setFullDrafts((current) => (current || []).filter((item) => item.id !== draft.id));
+        setDraftSummaries((current) => (current || []).filter((item) => item.id !== draft.id));
 
         if (draft.id === lastDraftId) {
           if (replacement) {
-            handleSelectHistoryDraft(replacement);
+            await handleSelectHistoryDraft(replacement);
           } else {
             loadedDraftParamRef.current = "";
             clearDraftResult();
             setPrompt("");
             setSourceText("");
-            setSupportDocLinks("");
             setUseWebResearch(false);
-            setBrief("");
-            setBriefResearch("");
-            setBriefContextFingerprint("");
-            setPreparedSourceText("");
-            setBriefSignature("");
-            setBriefMeta(null);
             setRevisionInstruction("");
             setRevisionScope("full");
             setSelectedDraftText("");
@@ -489,7 +548,7 @@ function WriterPageContent() {
   );
 
   const handleDeleteHistoryDrafts = useCallback(
-    async (draftsToDelete: Draft[]) => {
+    async (draftsToDelete: DraftSummary[]) => {
       const draftIds = draftsToDelete.map((draft) => draft.id);
       const deletedIds = new Set(draftIds);
       const currentDraft = historyDrafts.find((draft) => draft.id === lastDraftId);
@@ -497,24 +556,17 @@ function WriterPageContent() {
 
       try {
         await deleteDrafts(draftIds);
-        setFullDrafts((current) => (current || []).filter((item) => !deletedIds.has(item.id)));
+        setDraftSummaries((current) => (current || []).filter((item) => !deletedIds.has(item.id)));
 
         if (lastDraftId && deletedIds.has(lastDraftId)) {
           if (replacement) {
-            handleSelectHistoryDraft(replacement);
+            await handleSelectHistoryDraft(replacement);
           } else {
             loadedDraftParamRef.current = "";
             clearDraftResult();
             setPrompt("");
             setSourceText("");
-            setSupportDocLinks("");
             setUseWebResearch(false);
-            setBrief("");
-            setBriefResearch("");
-            setBriefContextFingerprint("");
-            setPreparedSourceText("");
-            setBriefSignature("");
-            setBriefMeta(null);
             setRevisionInstruction("");
             setRevisionScope("full");
             setSelectedDraftText("");
@@ -559,10 +611,10 @@ function WriterPageContent() {
   );
 
   const handleRenameHistoryDraft = useCallback(
-    async (draft: Draft, title: string) => {
+    async (draft: DraftSummary, title: string) => {
       try {
         const updatedDraft = await renameDraft({ draftId: draft.id, title });
-        setFullDrafts((current) => mergeDraftLists(current || [], [updatedDraft]));
+        setDraftSummaries((current) => mergeDraftSummaryLists(current || [], [draftSummaryFromDraft(updatedDraft)]));
         notify({ tone: "success", message: "草稿名称已更新。" });
         void refresh().catch(() => undefined);
       } catch (error) {
@@ -597,127 +649,108 @@ function WriterPageContent() {
   }
 
   return (
-    <div className="page writer-page">
-      <header className="page-header">
+    <div
+      className="page writer-page"
+      data-unsaved-changes={hasUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()) ? "true" : undefined}
+    >
+      <header className="page-header writer-page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">写作</span>
           <div className="page-title-row">
             <span className="page-title-mark" aria-hidden="true">
               <PenLine size={20} strokeWidth={2.1} />
             </span>
             <div className="page-title-copy">
               <h1>对话写作</h1>
-              <p className="subtle">选风格，写需求，生成。</p>
+              <div className="writer-title-meta">
+                <p className="subtle">选风格，写需求，生成。</p>
+                {sessionDraftHydrated && hasTaskInput ? (
+                  <span className="writer-autosave-status" role="status">
+                    <CheckCircle2 aria-hidden="true" size={13} />
+                    输入已暂存
+                  </span>
+                ) : null}
+              </div>
             </div>
           </div>
-        </div>
-        <div className="page-header-meta">
-          <span className="stat-pill">{library?.accounts.length || 0} 个账号</span>
-          <span className="stat-pill">{library?.projects.length || 0} 个项目</span>
         </div>
       </header>
 
       <section className="writer-workbench">
         <section className="panel writer-main">
           <div className="writer-refbar">
-            <div aria-label="选择引用类型" className="segmented" role="group">
-              <button aria-pressed={targetType === "account"} className={targetType === "account" ? "active" : ""} onClick={() => setTargetType("account")} type="button">
-                账号
-              </button>
+            <label className="writer-reference-control">
+              <span>参考风格</span>
+              <select
+                aria-label="选择参考风格"
+                className="writer-ref-select"
+                disabled={loading}
+                name="writerReference"
+                value={activeReferenceValue}
+                onChange={(event) => handleReferenceChange(event.target.value)}
+              >
+                {library?.projects.length ? (
+                  <optgroup label="项目风格">
+                    {library.projects.map((project) => (
+                      <option key={`project:${project.id}`} value={`project:${project.id}`}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+                {library?.accounts.length ? (
+                  <optgroup label="账号风格">
+                    {library.accounts.map((account) => (
+                      <option key={`account:${account.id}`} value={`account:${account.id}`}>
+                        {formatPlatform(account.platform)} / {account.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </select>
+            </label>
+
+            <div className="writer-reference-status" aria-label="当前风格卡状态">
+              <span className="writer-reference-icon" aria-hidden="true">
+                <FileText aria-hidden="true" size={14} />
+              </span>
+              <span className="writer-reference-copy">
+                <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
+                <small>
+                  {activeSubtitle || (targetType === "project" ? "项目风格" : "账号风格")}
+                  {activeStyleLoading ? "" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
+                </small>
+              </span>
               <button
-                aria-pressed={targetType === "project"}
-                className={targetType === "project" ? "active" : ""}
-                disabled={!library?.projects.length}
-                onClick={() => setTargetType("project")}
+                aria-label={`查看${activeTitle || "当前参考"}风格卡`}
+                className="btn ghost icon-only writer-style-trigger"
+                disabled={activeStyleLoading || !activeStyle}
+                onClick={() => setStyleOpen(true)}
+                title="查看风格卡"
                 type="button"
               >
-                项目
+                <Eye aria-hidden="true" size={16} />
               </button>
             </div>
-
-            {loading ? (
-              <span className="stat-pill">正在读取引用</span>
-            ) : targetType === "project" ? (
-              <select
-                aria-label="选择参考项目"
-                className="writer-ref-select"
-                name="projectId"
-                value={selectedProject?.id || ""}
-                onChange={(event) => setProjectId(event.target.value)}
-              >
-                {library?.projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <select
-                aria-label="选择参考账号"
-                className="writer-ref-select"
-                name="accountId"
-                value={selectedAccount?.id || ""}
-                onChange={(event) => setAccountId(event.target.value)}
-              >
-                {library?.accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {formatPlatform(account.platform)} / {account.name}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            <div className="writer-ref-meta" aria-label="当前写作上下文">
-              <span>
-                <FileText aria-hidden="true" size={14} />
-                {activeTitle || "未选择引用"}
-              </span>
-              <span>{activeStyleLoading ? "读取风格卡" : activeStyle?.trim().length ? `${activeStyle.trim().length} 字风格卡` : "无风格卡"}</span>
-              <span>
-                {targetType === "project" && selectedProject
-                  ? `${selectedProject.sourceMaterialCount} 份案例 · ${selectedProject.sourceAccounts.length} 个账号`
-                  : selectedAccount
-                    ? `${selectedAccount.transcriptCount} 份转写 · ${selectedAccount.videoCount} 条视频`
-                    : "待选择"}
-              </span>
-            </div>
-
-            <button className="btn ghost writer-style-trigger" disabled={activeStyleLoading || !activeStyle} onClick={() => setStyleOpen(true)} type="button">
-              <Eye aria-hidden="true" size={16} />
-              风格卡
-            </button>
           </div>
 
           <div className="writer-content-grid">
             <div className="writer-task">
               <div className="section-title-row">
-                <h2>需求</h2>
-                <span className={`status-pill ${hasTaskInput ? "done" : "pending"}`}>{materialStatusLabel}</span>
+                <div>
+                  <h2>写作任务</h2>
+                  <p className="pane-subtitle">说清目标，有素材就贴；其余交给系统处理。</p>
+                </div>
+                <div className="writer-task-heading-actions">
+                  <span className={`status-pill ${hasTaskInput ? "done" : "pending"}`}>{materialStatusLabel}</span>
+                  <button className="btn compact" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
+                    <Plus aria-hidden="true" size={15} />
+                    新建任务
+                  </button>
+                </div>
               </div>
 
               <label className="writer-field">
-                <span>素材 / 原文</span>
-                  <textarea
-                    aria-label="素材、原文或链接"
-                    autoComplete="off"
-                    className="writer-textarea source"
-                    name="sourceText"
-                    placeholder="粘贴原文、抖音分享链接；多条素材中间空一行。"
-                    value={sourceText}
-                    onChange={(event) => setSourceText(event.target.value)}
-                  />
-              </label>
-              {sourceText.trim() ? (
-                <div className="source-detect-row" aria-live="polite">
-                  <span className="status-pill done">{sourceExtraction.materials.length || 1} 条素材</span>
-                  {sourceExtraction.linkCount ? <span className="status-pill pending">{sourceExtraction.linkCount} 个链接待转写</span> : null}
-                  {!sourceExtraction.linkCount && sourceExtraction.textMaterialCount ? <span className="status-pill">{sourceExtraction.textMaterialCount} 条文案</span> : null}
-                  {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
-                </div>
-              ) : null}
-
-              <label className="writer-field">
-                <span>写作要求</span>
+                <span>这次想怎么写</span>
                 <textarea
                   aria-label="写作要求"
                   autoComplete="off"
@@ -729,108 +762,135 @@ function WriterPageContent() {
                 />
               </label>
 
-              <label className="writer-field support-doc-field">
-                <span>支持文档</span>
-                <textarea
-                  aria-label="商单支持文档链接"
-                  autoComplete="off"
-                  className="writer-textarea support-doc"
-                  name="supportDocLinks"
-                  placeholder="粘贴飞书文档、腾讯文档或品牌资料链接；多条可换行…"
-                  value={supportDocLinks}
-                  onChange={(event) => setSupportDocLinks(event.target.value)}
-                />
-              </label>
-
-              <div className={`writer-brief-panel ${briefReady ? "ready" : ""} ${briefStale ? "stale" : ""}`}>
-                <div className="writer-brief-head">
-                  <span>
-                    <ListChecks aria-hidden="true" size={14} />
-                    写作 Brief
-                  </span>
-                  <span className={`status-pill ${briefReady ? "done" : briefStale ? "pending" : ""}`}>
-                    {briefStatusLabel}
-                  </span>
+              <div className="writer-field writer-source-field">
+                <div className="writer-source-label-row">
+                  <label htmlFor="writer-source-text">素材 / 原文 / 支持文档</label>
+                  <button
+                    aria-busy={sourceImporting}
+                    className="btn small ghost writer-source-file-button"
+                    disabled={sourceImporting}
+                    onClick={() => sourceFileInputRef.current?.click()}
+                    title="支持 TXT、Markdown、CSV、JSON、HTML、字幕和 DOCX"
+                    type="button"
+                  >
+                    <Paperclip aria-hidden="true" size={14} />
+                    {sourceImporting ? "导入中" : "添加文件"}
+                  </button>
+                  <input
+                    accept={WRITER_SOURCE_FILE_ACCEPT}
+                    aria-label="选择素材文件"
+                    className="writer-source-file-input"
+                    disabled={sourceImporting}
+                    multiple
+                    onChange={(event) => void handleSourceFiles(Array.from(event.target.files || []))}
+                    ref={sourceFileInputRef}
+                    type="file"
+                  />
                 </div>
-                <textarea
-                  aria-label="写作 brief"
-                  autoComplete="off"
-                  className="writer-textarea brief"
-                  name="brief"
-                  placeholder="先准备 brief，再生成成稿…"
-                  value={brief}
-                  onChange={(event) => setBrief(event.target.value)}
-                />
-                {busy === "brief" ? (
-                  <div className="writer-brief-progress" role="status" aria-live="polite">
-                    <div className="writer-brief-progress-copy">
-                      <span>{briefStage || "等待模型"}</span>
-                      <strong>{briefProgress}%</strong>
+                <div
+                  className={`writer-source-dropzone ${sourceDragActive ? "drag-active" : ""}`}
+                  onDragEnter={handleSourceDragEnter}
+                  onDragLeave={handleSourceDragLeave}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDrop={handleSourceDrop}
+                >
+                  <textarea
+                    aria-label="素材、原文、视频链接或支持文档"
+                    autoComplete="off"
+                    className="writer-textarea source"
+                    id="writer-source-text"
+                    name="sourceText"
+                    placeholder="可选：粘贴原文、抖音/B站视频链接、飞书/企业微信/腾讯文档或公开网页链接；多条资料换行即可。"
+                    value={sourceText}
+                    onChange={(event) => setSourceText(event.target.value)}
+                  />
+                  {sourceDragActive ? (
+                    <div className="writer-source-drop-overlay" aria-hidden="true">
+                      <Paperclip size={20} />
+                      <strong>松开即可导入</strong>
                     </div>
-                    <div className="progress-track" aria-hidden="true">
-                      <div className="progress-fill" style={{ transform: `scaleX(${briefProgress / 100})` }} />
-                    </div>
-                  </div>
-                ) : null}
-                {briefMetaLabel ? <p className="writer-brief-meta">{briefMetaLabel}</p> : null}
+                  ) : null}
+                </div>
               </div>
+              {sourceText.trim() ? (
+                <div className="source-detect-row" aria-live="polite">
+                  {sourceFileCount ? <span className="status-pill done">{sourceFileCount} 个本地文件</span> : null}
+                  {separatedSourceInput.supportDocumentCount ? <span className="status-pill done">{separatedSourceInput.supportDocumentCount} 份支持文档</span> : null}
+                  {sourceExtraction.pendingLinkCount ? <span className="status-pill pending">{sourceExtraction.pendingLinkCount} 个视频链接待转写</span> : null}
+                  {sourceExtraction.reusedTextLinkCount ? <span className="status-pill done">{sourceExtraction.reusedTextLinkCount} 个链接复用已有文案</span> : null}
+                  {nonFileTextMaterialCount ? <span className="status-pill">{nonFileTextMaterialCount} 条文案</span> : null}
+                  {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
+                </div>
+              ) : null}
 
               <div className="writer-actionbar">
-                <button
-                  className={`btn icon-toggle ${useWebResearch ? "active" : ""}`}
-                  onClick={() => setUseWebResearch((enabled) => !enabled)}
-                  type="button"
-                  aria-pressed={useWebResearch}
-                  title="联网检索"
-                >
-                  <Globe2 aria-hidden="true" size={16} />
-                  {useWebResearch ? "联网开" : "联网关"}
-                </button>
-                <button
-                  className="btn"
-                  aria-busy={busy === "brief"}
-                  disabled={!canPrepareBrief || busy === "brief"}
-                  onClick={handlePrepareBrief}
-                  type="button"
-                >
-                  <ListChecks aria-hidden="true" size={16} />
-                  {busy === "brief" ? "准备中" : briefReady ? "更新 Brief" : "准备 Brief"}
-                </button>
-                <button
-                  className="btn primary"
-                  disabled={!canGenerate}
-                  onClick={handleGenerate}
-                  title={canGenerate ? "生成文案" : "先填写素材或写作要求"}
-                  type="button"
-                >
-                  <Send aria-hidden="true" size={16} />
-                  {busy === "generate" ? "生成中" : "生成文案"}
-                </button>
-                {canStopGenerate ? (
-                  <button className="btn ghost" onClick={() => void handleStopGenerate()} type="button">
-                    <CircleStop aria-hidden="true" size={16} />
-                    停止
+                <div className="writer-action-controls">
+                  <button
+                    aria-label={useWebResearch ? "关闭联网补充资料" : "开启联网补充资料"}
+                    aria-pressed={useWebResearch}
+                    className={`btn icon-toggle writer-web-toggle ${useWebResearch ? "active" : ""}`}
+                    disabled={!webResearchAvailable}
+                    onClick={() => setUseWebResearch((enabled) => !enabled)}
+                    title={webResearchCapability
+                      ? webResearchCapability.available
+                        ? `联网补充资料${webResearchCapability.model ? ` · ${webResearchCapability.model}` : ""}`
+                        : webResearchCapability.reason
+                      : "正在检查联网能力"}
+                    type="button"
+                  >
+                    <Globe2 aria-hidden="true" size={16} />
+                    {useWebResearch ? "已联网" : webResearchAvailable ? "联网" : "联网不可用"}
                   </button>
-                ) : null}
+                  <button
+                    className="btn primary writer-generate-button"
+                    disabled={!canGenerate}
+                    onClick={() => void handleGenerate()}
+                    title={canGenerate ? "生成文案" : "先填写素材或写作要求"}
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" size={16} />
+                    {busy === "generate" ? "生成中" : "生成文案"}
+                  </button>
+                  {canStopGenerate ? (
+                    <button className="btn ghost" onClick={() => void handleStopGenerate()} type="button">
+                      <CircleStop aria-hidden="true" size={16} />
+                      停止
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
 
-            <div className="writer-result">
+            <div className="writer-result" id="writer-result">
               <div className="section-title-row">
                 <div className="writer-result-title">
                   <h2>当前稿件</h2>
                   {lastDraftId ? <span className="status-pill done">V{lastDraftVersion?.revision || 1}</span> : null}
                   {hasUnsavedChanges ? <span className="status-pill pending">有未保存编辑</span> : null}
                 </div>
-                {lastContent ? (
-                  <div className="button-row">
-                    <button className="btn" onClick={copyLast} type="button">
+                <div className="writer-result-actions">
+                  <button
+                    aria-label={`打开版本历史，共 ${historyDrafts.length} 个版本`}
+                    className="btn compact writer-history-trigger"
+                    onClick={() => setHistoryOpen(true)}
+                    type="button"
+                  >
+                    <History aria-hidden="true" size={15} />
+                    版本历史
+                    <span className="writer-history-count">{historyLoading ? "…" : historyDrafts.length}</span>
+                  </button>
+                  {lastContent ? (
+                    <>
+                    <button className="btn compact" onClick={copyLast} type="button">
                       <Copy aria-hidden="true" size={16} />
                       复制
                     </button>
                     <button
                       aria-busy={busy === "save-draft"}
-                      className="btn"
+                      className="btn compact"
                       disabled={!hasUnsavedChanges || Boolean(busy)}
                       onClick={() => void handleSaveEdit()}
                       type="button"
@@ -838,59 +898,87 @@ function WriterPageContent() {
                       <Save aria-hidden="true" size={16} />
                       {busy === "save-draft" ? "保存中" : "保存版本"}
                     </button>
-                    <button className="btn" disabled={Boolean(busy)} onClick={handlePublishFeishu} type="button">
-                      <FileUp aria-hidden="true" size={16} />
-                      {busy === "feishu" ? "发布中…" : "飞书"}
-                    </button>
-                    <button className="btn" disabled={!lastDraftBase || Boolean(busy)} onClick={handleOpenAssets} type="button">
-                      <MessageSquarePlus size={16} />
-                      {busy === "assets" ? "准备中" : "评论"}
-                    </button>
-                  </div>
-                ) : (
-                  <span className="status-pill pending" data-busy={busy === "generate" ? "true" : undefined}>{busy === "generate" ? "生成中" : "待输入"}</span>
-                )}
+                    <details className="writer-output-more">
+                      <summary className="btn compact">
+                        <MoreHorizontal aria-hidden="true" size={16} />
+                        更多
+                      </summary>
+                      <div className="writer-output-menu">
+                        <button disabled={Boolean(busy)} onClick={handlePublishFeishu} type="button">
+                          <FileUp aria-hidden="true" size={16} />
+                          {busy === "feishu" ? "发布中…" : "发布到飞书"}
+                        </button>
+                        <button disabled={!lastDraftBase || Boolean(busy)} onClick={handleOpenAssets} type="button">
+                          <MessageSquarePlus aria-hidden="true" size={16} />
+                          {busy === "assets" ? "准备中" : "生成评论 / 弹幕"}
+                        </button>
+                      </div>
+                    </details>
+                    </>
+                  ) : (
+                    <span className="status-pill pending" data-busy={busy === "generate" ? "true" : undefined}>{busy === "generate" ? "生成中" : "待输入"}</span>
+                  )}
+                </div>
               </div>
               {busy === "generate" ? (
-                <div className="project-progress writer-generation-progress" role="status" aria-live="polite">
-                  <div className="project-progress-copy">
-                    <span>{generateStage || "正在生成"}</span>
-                    <span className="button-row">
-                      <strong>{generateProgress}%</strong>
-                      {canStopGenerate ? (
-                        <button className="btn small ghost" onClick={() => void handleStopGenerate()} type="button">
-                          <CircleStop aria-hidden="true" size={14} />
-                          停止
-                        </button>
-                      ) : null}
-                    </span>
+                <div className="writer-generation-status" role="status" aria-live="polite">
+                  <span className="writer-activity-dot" aria-hidden="true" />
+                  <div>
+                    <strong>{generateStage || "正在生成文案"}</strong>
+                    <span>任务会在后台继续，可以留在当前页面等待。</span>
                   </div>
-                  <div className="progress-track" aria-hidden="true">
-                    <div className="progress-fill" style={{ transform: `scaleX(${generateProgress / 100})` }} />
-                  </div>
+                  {canStopGenerate ? (
+                    <button className="btn small ghost" onClick={() => void handleStopGenerate()} type="button">
+                      <CircleStop aria-hidden="true" size={14} />
+                      停止
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
-              <textarea
-                aria-label="当前稿件"
-                className={`result-box writer-draft-editor ${lastContent ? "" : "empty"}`}
-                onChange={(event) => {
-                  handleContentChange(event.target.value);
-                  setSelectedDraftText("");
-                  if (revisionScope === "selection") setRevisionScope("full");
-                }}
-                onKeyUp={(event) => {
-                  const field = event.currentTarget;
-                  setSelectedDraftText(field.value.slice(field.selectionStart, field.selectionEnd));
-                }}
-                onMouseUp={(event) => {
-                  const field = event.currentTarget;
-                  setSelectedDraftText(field.value.slice(field.selectionStart, field.selectionEnd));
-                }}
-                placeholder={busy === "generate" ? "等待内容。" : "生成结果会出现在这里。"}
-                readOnly={busy === "generate"}
-                spellCheck={false}
-                value={lastContent}
-              />
+              {displayResearch ? (
+                <section className={`style-reference ${researchOpen ? "is-open" : ""}`}>
+                  <button
+                    aria-controls="writer-research-reference"
+                    aria-expanded={researchOpen}
+                    className="style-reference-summary"
+                    onClick={() => setResearchOpen((open) => !open)}
+                    type="button"
+                  >
+                    <span className="style-reference-icon" aria-hidden="true">
+                      <BookOpenText size={16} />
+                    </span>
+                    <span className="style-reference-heading">
+                      <span className="style-reference-title">参考资料</span>
+                      <small>本稿使用的研究摘要</small>
+                    </span>
+                    <ChevronDown className="style-reference-chevron" aria-hidden="true" size={16} />
+                  </button>
+                  {researchOpen ? <ResearchReferenceBody id="writer-research-reference" text={displayResearch} /> : null}
+                </section>
+              ) : null}
+              {lastContent ? (
+                <textarea
+                  aria-label="当前稿件"
+                  className="result-box writer-draft-editor"
+                  onChange={(event) => {
+                    handleContentChange(event.target.value);
+                    setSelectedDraftText("");
+                    setRevisionScope("full");
+                  }}
+                  onKeyUp={(event) => handleDraftSelection(event.currentTarget)}
+                  onMouseUp={(event) => handleDraftSelection(event.currentTarget)}
+                  readOnly={busy === "generate"}
+                  ref={draftEditorRef}
+                  spellCheck={false}
+                  value={lastContent}
+                />
+              ) : (
+                <div className="writer-result-empty">
+                  <span aria-hidden="true"><Sparkles size={20} /></span>
+                  <strong>{busy === "generate" ? "正在准备第一版" : "暂无稿件"}</strong>
+                  <p>{busy === "generate" ? "正在整理素材、风格和写作要求。" : `${activeTitle || "当前参考"} · ${materialStatusLabel}`}</p>
+                </div>
+              )}
               {lastContent ? (
                 <section className="writer-revision-composer" aria-labelledby="writer-revision-title">
                   <div className="writer-revision-head">
@@ -898,25 +986,12 @@ function WriterPageContent() {
                       <h3 id="writer-revision-title">继续修改</h3>
                       <p>{selectedDraftText ? `已选中 ${selectedDraftText.length} 字` : "基于当前版本生成下一版"}</p>
                     </div>
-                    <div aria-label="修改范围" className="segmented writer-revision-scope" role="group">
-                      <button
-                        aria-pressed={revisionScope === "full"}
-                        className={revisionScope === "full" ? "active" : ""}
-                        onClick={() => setRevisionScope("full")}
-                        type="button"
-                      >
-                        全文
+                    {selectedDraftText ? (
+                      <button className="writer-selection-chip" onClick={handleClearDraftSelection} type="button">
+                        只改选中内容
+                        <X aria-hidden="true" size={13} />
                       </button>
-                      <button
-                        aria-pressed={revisionScope === "selection"}
-                        className={revisionScope === "selection" ? "active" : ""}
-                        disabled={!selectedDraftText}
-                        onClick={() => setRevisionScope("selection")}
-                        type="button"
-                      >
-                        选中段落
-                      </button>
-                    </div>
+                    ) : null}
                   </div>
                   <label className="writer-field">
                     <span>本轮修改要求</span>
@@ -931,12 +1006,12 @@ function WriterPageContent() {
                           void handleRevise();
                         }
                       }}
-                      placeholder="例如：开头压到 80 字，产品参数和结尾互动保持不变。"
+                      placeholder="例如：压缩第 2 段，产品参数和原有表达方式保持不变。"
                       value={revisionInstruction}
                     />
                   </label>
                   <div className="writer-revision-actions">
-                    <span>{revisionScope === "selection" ? "只调整选中内容，并返回完整新稿。" : "未点名部分会尽量保持不变。"}</span>
+                    <span>{selectedDraftText ? "会只调整选中内容，并返回完整新稿。" : "在稿件里选中文字，可直接切换为局部修改。"}</span>
                     <button
                       aria-busy={busy === "generate"}
                       className="btn primary"
@@ -950,17 +1025,6 @@ function WriterPageContent() {
                   </div>
                 </section>
               ) : null}
-              {displayResearch ? (
-                <details className="style-reference">
-                  <summary>
-                    <span className="style-reference-heading">
-                      <span className="style-reference-title">参考资料</span>
-                      <small>研究摘要</small>
-                    </span>
-                  </summary>
-                  <pre className="style-reference-body">{displayResearch}</pre>
-                </details>
-              ) : null}
             </div>
           </div>
         </section>
@@ -968,6 +1032,8 @@ function WriterPageContent() {
         <WriterHistoryPanel
           drafts={historyDrafts}
           loading={historyLoading}
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
           onDeleteDraft={handleDeleteHistoryDraft}
           onDeleteDrafts={handleDeleteHistoryDrafts}
           onRenameDraft={handleRenameHistoryDraft}
@@ -987,18 +1053,28 @@ function WriterPageContent() {
   );
 }
 
-function mergeDraftLists(...groups: Draft[][]) {
-  const byId = new Map<string, Draft>();
+function ResearchReferenceBody({ id, text }: { id?: string; text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s<>"'）)]+)/g);
+  return (
+    <pre className="style-reference-body" id={id}>
+      {parts.map((part, index) =>
+        /^https?:\/\//i.test(part) ? (
+          <a href={part} key={`${part}-${index}`} rel="noreferrer" target="_blank">
+            {part}
+          </a>
+        ) : part
+      )}
+    </pre>
+  );
+}
+
+function mergeDraftSummaryLists(...groups: DraftSummary[][]) {
+  const byId = new Map<string, DraftSummary>();
 
   for (const group of groups) {
     for (const draft of group) {
       const current = byId.get(draft.id);
       if (!current) {
-        byId.set(draft.id, draft);
-        continue;
-      }
-      if (current.content && !draft.content) continue;
-      if (!current.content && draft.content) {
         byId.set(draft.id, draft);
         continue;
       }
@@ -1015,7 +1091,7 @@ function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: s
   return +new Date(right.createdAt) - +new Date(left.createdAt);
 }
 
-function findReplacementDraft(drafts: Draft[], deletedIds: Set<string>, currentDraft?: Draft) {
+function findReplacementDraft(drafts: DraftSummary[], deletedIds: Set<string>, currentDraft?: DraftSummary) {
   const remaining = drafts.filter((draft) => !deletedIds.has(draft.id));
   if (!currentDraft) return remaining[0] || null;
 
@@ -1030,45 +1106,6 @@ function findReplacementDraft(drafts: Draft[], deletedIds: Set<string>, currentD
     });
 
   return sameSession[0] || remaining[0] || null;
-}
-
-function getBriefProgressStage(elapsedMs: number, useWebResearch: boolean) {
-  if (elapsedMs < 3_000) return "整理上下文";
-  if (useWebResearch && elapsedMs < 60_000) return "联网检索";
-  if (elapsedMs < 105_000) return "等待模型";
-  return "远端较慢";
-}
-
-function makeDraftWriterInputSignature(draft: Draft) {
-  return makeWriterInputSignature({
-    targetType: draft.targetType === "project" ? "project" : "account",
-    referenceId: draft.targetType === "project" ? draft.projectId : draft.accountId,
-    mode: draft.mode,
-    prompt: draft.prompt,
-    sourceText: draft.input || "",
-    supportDocLinks: draft.supportDocLinks || "",
-    useWebResearch: Boolean(draft.sourceDigest?.webResearchEnabled)
-  });
-}
-
-function makeWriterInputSignature(input: {
-  targetType: "account" | "project";
-  referenceId: string;
-  mode: Draft["mode"];
-  prompt: string;
-  sourceText: string;
-  supportDocLinks: string;
-  useWebResearch: boolean;
-}) {
-  return JSON.stringify({
-    targetType: input.targetType,
-    referenceId: input.referenceId,
-    mode: input.mode,
-    prompt: input.prompt.trim(),
-    sourceText: input.sourceText.trim(),
-    supportDocLinks: input.supportDocLinks.trim(),
-    useWebResearch: input.useWebResearch
-  });
 }
 
 function WriterFallback() {

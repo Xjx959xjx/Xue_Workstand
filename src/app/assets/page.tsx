@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { MessageSquarePlus, RefreshCw } from "lucide-react";
 import { AssetsFeishuModal } from "./_components/AssetsFeishuModal";
 import { EngagementGeneratorPane } from "./_components/EngagementGeneratorPane";
@@ -14,12 +14,15 @@ import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import {
   deleteEngagementRecords,
+  engagementSummaryFromRecord,
   exportEngagementRecord,
   getCachedEngagementRecords,
+  getEngagementRecord,
   getEngagementRecords,
   refreshEngagementRecords
 } from "@/lib/client";
-import type { EngagementGenerationMode, EngagementRecord } from "@/lib/types";
+import { detectPlatformFromLink, extractFirstLinkFromInput } from "@/lib/platform-links";
+import type { EngagementGenerationMode, EngagementRecord, EngagementRecordSummary, Platform } from "@/lib/types";
 
 export default function AssetsPage() {
   return <AssetsPageContent />;
@@ -34,19 +37,27 @@ function AssetsPageContent() {
   const [commentCount, setCommentCount] = useState(50);
   const [danmakuCount, setDanmakuCount] = useState(50);
   const [generationMode, setGenerationMode] = useState<EngagementGenerationMode>("quick");
+  const [targetPlatform, setTargetPlatform] = useState<Platform>("douyin");
   const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
-  const [records, setRecords] = useState<EngagementRecord[]>(() => getCachedEngagementRecords()?.records ?? []);
+  const [records, setRecords] = useState<EngagementRecordSummary[]>(() => getCachedEngagementRecords()?.records ?? []);
   const [recordsLoading, setRecordsLoading] = useState(() => !getCachedEngagementRecords());
+  const [openingRecordId, setOpeningRecordId] = useState("");
 
   const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持") || notice.includes("请");
+  const sourceLink = extractFirstLinkFromInput(sourceInput, { kind: "video" });
+  const detectedPlatform = detectPlatformFromLink(sourceLink);
+  const effectivePlatform = detectedPlatform === "unknown" ? targetPlatform : detectedPlatform;
+  const supportsDanmaku = effectivePlatform === "bilibili";
+  const handleRecordCompleted = useCallback((record: EngagementRecord) => {
+    setRecords((current) => mergeEngagementRecords([engagementSummaryFromRecord(record)], current));
+  }, []);
 
   const {
     activeTitle,
     canGenerate,
     generationProgress,
     handleGenerate,
-    handleSupplement,
     previewComments,
     resultRecord,
     setResultRecord
@@ -58,12 +69,18 @@ function AssetsPageContent() {
     includeComments,
     includeDanmaku,
     generationMode,
+    onRecordCompleted: handleRecordCompleted,
+    targetPlatform,
     recentJobs,
     setBusy,
     setNotice,
     sourceInput,
     startTask
   });
+
+  useEffect(() => {
+    if (!supportsDanmaku && includeDanmaku) setIncludeDanmaku(false);
+  }, [includeDanmaku, supportsDanmaku]);
 
   const { feishuResult, handlePublishAssetText, setFeishuResult } = useAssetFeishuPublish({
     activeTitle,
@@ -109,7 +126,7 @@ function AssetsPageContent() {
 
     getEngagementRecords()
       .then((result) => {
-        if (!ignore) setRecords(result.records);
+        if (!ignore) setRecords((current) => mergeEngagementRecords(result.records, current));
       })
       .catch((err) => {
         if (!ignore) setNotice(err instanceof Error ? err.message : "读取互动素材历史失败");
@@ -122,11 +139,6 @@ function AssetsPageContent() {
       ignore = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (!resultRecord) return;
-    setRecords((current) => mergeEngagementRecords([resultRecord], current));
-  }, [resultRecord]);
 
   async function handleRefresh() {
     setRecordsLoading(true);
@@ -141,14 +153,12 @@ function AssetsPageContent() {
     }
   }
 
-  async function handleDeleteRecord(record: EngagementRecord) {
-    const replacement = records.find((item) => item.id !== record.id) || null;
-
+  async function handleDeleteRecord(record: EngagementRecordSummary) {
     try {
       await deleteEngagementRecords([record.id]);
       setRecords((current) => current.filter((item) => item.id !== record.id));
       if (resultRecord?.id === record.id) {
-        setResultRecord(replacement);
+        setResultRecord(null);
       }
       notify({ tone: "success", message: "历史记录已删除。" });
     } catch (error) {
@@ -158,7 +168,7 @@ function AssetsPageContent() {
     }
   }
 
-  async function handleExportRecord(record: EngagementRecord) {
+  async function handleExportRecord(record: EngagementRecordSummary | EngagementRecord) {
     setBusy("export-word");
     setNotice("");
     try {
@@ -168,6 +178,32 @@ function AssetsPageContent() {
       setNotice(err instanceof Error ? err.message : "导出数据维护文档失败");
     } finally {
       setBusy("");
+    }
+  }
+
+  async function handleSelectRecord(record: EngagementRecordSummary) {
+    if (openingRecordId) return;
+    setOpeningRecordId(record.id);
+    setNotice("");
+    try {
+      const detail = await getEngagementRecord(record.id);
+      const restoredPlatform = detail.options.targetPlatform
+        || (detail.platform === "unknown" ? targetPlatform : detail.platform);
+
+      setSourceInput(detail.sourceType === "url"
+        ? detail.sourceUrl || detail.resolvedUrl || detail.sourceText
+        : detail.sourceText);
+      setGenerationMode(detail.options.generationMode === "reference" ? "reference" : "quick");
+      setTargetPlatform(restoredPlatform);
+      setIncludeComments(detail.options.includeComments);
+      setCommentCount(clampCount(detail.options.commentCount, 1, 200, 50));
+      setIncludeDanmaku(detail.options.includeDanmaku && restoredPlatform === "bilibili");
+      setDanmakuCount(clampCount(detail.options.danmakuCount, 1, 300, 50));
+      setResultRecord(detail);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "读取评论详情失败");
+    } finally {
+      setOpeningRecordId("");
     }
   }
 
@@ -217,12 +253,15 @@ function AssetsPageContent() {
               includeComments={includeComments}
               includeDanmaku={includeDanmaku}
               generationMode={generationMode}
+              targetPlatform={targetPlatform}
+              supportsDanmaku={supportsDanmaku}
               generationProgress={generationProgress}
               sourceInput={sourceInput}
               onCommentCountChange={setCommentCount}
               onDanmakuCountChange={setDanmakuCount}
               onGenerate={handleGenerate}
               onGenerationModeChange={setGenerationMode}
+              onTargetPlatformChange={setTargetPlatform}
               onIncludeCommentsChange={setIncludeComments}
               onIncludeDanmakuChange={setIncludeDanmaku}
               onSourceInputChange={setSourceInput}
@@ -235,18 +274,18 @@ function AssetsPageContent() {
               resultRecord={resultRecord}
               onCopyText={copyText}
               onExportWord={(record) => void handleExportRecord(record)}
-              onSupplement={(record) => void handleSupplement(record)}
               onPublishAssetText={handlePublishAssetText}
             />
           </div>
         </section>
         <EngagementHistoryPane
           loading={recordsLoading}
+          openingRecordId={openingRecordId}
           records={records}
           resultRecord={resultRecord}
           onDeleteRecord={handleDeleteRecord}
           onExportRecord={(record) => void handleExportRecord(record)}
-          onSelectRecord={setResultRecord}
+          onSelectRecord={handleSelectRecord}
         />
       </section>
 
@@ -255,9 +294,14 @@ function AssetsPageContent() {
   );
 }
 
-function mergeEngagementRecords(nextRecords: EngagementRecord[], currentRecords: EngagementRecord[]) {
+function mergeEngagementRecords(nextRecords: EngagementRecordSummary[], currentRecords: EngagementRecordSummary[]) {
   const byId = new Map(currentRecords.map((record) => [record.id, record]));
-  for (const record of nextRecords) byId.set(record.id, record);
+  for (const record of nextRecords) {
+    const current = byId.get(record.id);
+    if (!current || +new Date(record.updatedAt) >= +new Date(current.updatedAt)) {
+      byId.set(record.id, record);
+    }
+  }
   return [...byId.values()].sort((left, right) => +new Date(right.createdAt) - +new Date(left.createdAt));
 }
 
@@ -267,4 +311,9 @@ function readCountParam(params: URLSearchParams, key: string) {
   const value = Number(rawValue);
   if (!Number.isFinite(value) || value <= 0) return null;
   return Math.round(value);
+}
+
+function clampCount(value: number | undefined, min: number, max: number, fallback: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.round(value), min), max);
 }

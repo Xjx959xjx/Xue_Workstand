@@ -2,6 +2,35 @@ export const platforms = ["bilibili", "douyin"] as const;
 
 export type Platform = (typeof platforms)[number];
 
+export type RemoteServiceHealth = {
+  status: "ok" | "unconfigured" | "unavailable";
+  message?: string;
+};
+
+export type RemoteStatusResponse = {
+  app: {
+    status: "ok" | "degraded";
+    version: string;
+    buildId: string;
+    startedAt: string;
+    appMode: "workspace" | "gross-margin";
+  };
+  services: Record<
+    "storage" | "opencli" | "browserBridge" | "ffmpeg" | "chat" | "image",
+    RemoteServiceHealth
+  >;
+  capabilities: {
+    webResearch: {
+      available: boolean;
+      wireApi: "responses" | "chat_completions" | "auto";
+      model?: string;
+      source?: "dedicated" | "chat";
+      reason?: string;
+    };
+  };
+  checkedAt: string;
+};
+
 export const collectOrders = ["views", "likes", "favorites", "comments", "pubdate"] as const;
 
 export type CollectOrder = (typeof collectOrders)[number];
@@ -166,6 +195,21 @@ export type DraftAssets = {
           stage: "brief" | "relatedResearch" | "comment";
         }[];
       };
+      styleProfile?: {
+        channel: "douyin_comment" | "bilibili_comment";
+        source: "preset" | "local" | "local+source";
+        sampleCount: number;
+        sourceSampleCount: number;
+        nativeEmoteRate: number;
+        nativeEmotes: string[];
+        benchmarkAccounts?: string[];
+        benchmarkSampleCount?: number;
+        matchedVideoCount?: number;
+        matchedTopics?: string[];
+        matchedContentTypes?: string[];
+        targetNativeEmoteCount: number;
+        referenceError?: string;
+      };
       relatedResearch?: {
         usedQueries: string[];
         failedQueries: string[];
@@ -260,6 +304,10 @@ export type DraftAssets = {
         repeatedStyleRejectedCount?: number;
         entityCorrectedCount?: number;
         unsupportedEntityRejectedCount?: number;
+        transportRejectedCount?: number;
+        nativeEmoteCount?: number;
+        targetNativeEmoteCount?: number;
+        unsupportedEmoteRejectedCount?: number;
         batches: {
           index: number;
           requestedCount: number;
@@ -277,9 +325,19 @@ export type DraftAssets = {
   danmaku?: {
     generatedAt: string;
     requestedCount: number;
+    actualCount?: number;
+    partial?: boolean;
     usedModel: string;
     fallback: boolean;
     fallbackReason?: string;
+    timingBasis?: "source_segments" | "estimated_text";
+    durationSec?: number;
+    styleSampleCount?: number;
+    styleVideoCount?: number;
+    styleTopics?: string[];
+    sameSecondRate?: number;
+    repeatRate?: number;
+    burstShare?: number;
     items: DraftDanmakuAsset[];
   };
   cover?: {
@@ -356,6 +414,30 @@ export type ProjectDraft = DraftBase & {
 };
 
 export type Draft = AccountDraft | ProjectDraft;
+
+type DraftSummaryBase = {
+  id: string;
+  title: string;
+  mode: "topic" | "rewrite";
+  version?: DraftVersion;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AccountDraftSummary = DraftSummaryBase & {
+  targetType?: "account";
+  platform: Platform;
+  accountId: string;
+  accountName: string;
+};
+
+export type ProjectDraftSummary = DraftSummaryBase & {
+  targetType: "project";
+  projectId: string;
+  projectName: string;
+};
+
+export type DraftSummary = AccountDraftSummary | ProjectDraftSummary;
 
 export type AccountDraftInput = Omit<AccountDraft, "id" | "createdAt" | "updatedAt">;
 
@@ -472,6 +554,7 @@ export type EngagementGenerationOptions = {
   includeDanmaku: boolean;
   danmakuCount: number;
   generationMode?: EngagementGenerationMode;
+  targetPlatform?: Platform;
 };
 
 export type EngagementGenerationRequest = EngagementGenerationOptions & (
@@ -497,6 +580,7 @@ export type EngagementRecord = {
     includeDanmaku: boolean;
     danmakuCount: number;
     generationMode?: EngagementGenerationMode;
+    targetPlatform?: Platform;
   };
   comments?: NonNullable<DraftAssets["comments"]>;
   danmaku?: NonNullable<DraftAssets["danmaku"]>;
@@ -504,6 +588,24 @@ export type EngagementRecord = {
   fallbackReason?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type EngagementRecordSummary = Pick<
+  EngagementRecord,
+  | "id"
+  | "sourceType"
+  | "title"
+  | "sourceAccountName"
+  | "sourceUrl"
+  | "platform"
+  | "draftId"
+  | "fallback"
+  | "fallbackReason"
+  | "createdAt"
+  | "updatedAt"
+> & {
+  commentCount: number;
+  danmakuCount: number;
 };
 
 export type GrossMarginTier = {
@@ -645,6 +747,7 @@ export type GrossMarginLibrary = {
   accountSource: "wecom" | "local";
   accountSourceWarning?: string;
   accountSourceFetchedAt?: string;
+  accountSourceRefreshing?: boolean;
   monitorRecords: GrossMarginMonitorRecord[];
   monitorProjects: Array<{
     id: string;
@@ -944,7 +1047,6 @@ export type HotspotRadarRefreshResult = HotspotRadarResponse & {
 
 export type WriteResult = {
   content: string;
-  brief?: string;
   research?: string;
   contextFingerprint?: string;
   sourceDigest?: WriteSourceDigest;
@@ -954,15 +1056,12 @@ export type WriteResult = {
   fallbackReason?: string;
 };
 
-export type WriteBriefResult = {
-  brief: string;
-  research?: string;
-  contextFingerprint: string;
-  sourceDigest: WriteSourceDigest;
-  targetTitle: string;
-  usedModel: string;
-  fallback: boolean;
-  fallbackReason?: string;
+export type WriterSourceFileImport = {
+  name: string;
+  mimeType: string;
+  text: string;
+  originalCharacters: number;
+  truncated: boolean;
 };
 
 export type BatchTranscribeResult = {
@@ -1001,7 +1100,12 @@ export const jobKinds = [
   "transcribe-video",
   "batch-transcribe",
   "engagement",
-  "hotlist-refresh"
+  "hotlist-refresh",
+  "collect-account",
+  "single-video-transcribe",
+  "publish-copy",
+  "hotspot-refresh",
+  "gross-margin-refresh"
 ] as const;
 
 export type JobKind = (typeof jobKinds)[number];
@@ -1022,8 +1126,16 @@ export type JobEvent = {
   progress: number;
 };
 
+export type JobDataChange = {
+  resource: "library-account" | "douyin-hotlist" | "gross-margin";
+  at: string;
+  accountId?: string;
+  videoId?: string;
+  recordId?: string;
+};
+
 export type JobScope = {
-  targetType?: "account" | "project" | "draft" | "engagement" | "url" | "text" | "hotlist";
+  targetType?: "account" | "project" | "draft" | "engagement" | "url" | "text" | "hotlist" | "hotspot" | "gross-margin";
   platform?: Platform;
   accountId?: string;
   projectId?: string;
@@ -1048,6 +1160,8 @@ export type JobRecord = {
   resultRef?: JobResultRef;
   result?: unknown;
   events?: JobEvent[];
+  dataRevision?: number;
+  dataChange?: JobDataChange;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -1075,9 +1189,6 @@ export type JobStartInput =
         prompt: string;
         sourceText?: string;
         supportDocLinks?: string;
-        brief?: string;
-        preparedResearch?: string;
-        preparedContextFingerprint?: string;
         save?: boolean;
         useWebResearch?: boolean;
         parentDraftId?: string;
@@ -1146,6 +1257,59 @@ export type JobStartInput =
         limit?: number;
         window: string;
         automatic?: boolean;
+      };
+    }
+  | {
+      kind: "collect-account";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        platform: Platform;
+        name: string;
+        uidOrUrl?: string;
+        limit: number;
+        order: CollectOrder;
+        fromDate?: string;
+        toDate?: string;
+      };
+    }
+  | {
+      kind: "single-video-transcribe";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        url: string;
+        titleHint?: string;
+      };
+    }
+  | {
+      kind: "publish-copy";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        platform: Platform | "both";
+        sourceText: string;
+        topicHint?: string;
+        candidateCount?: number;
+      };
+    }
+  | {
+      kind: "hotspot-refresh";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: Record<string, never>;
+    }
+  | {
+      kind: "gross-margin-refresh";
+      title?: string;
+      inputSummary?: string;
+      href?: string;
+      input: {
+        recordIds?: string[];
       };
     }
   | {

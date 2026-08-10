@@ -1,4 +1,4 @@
-import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
+import { AlignmentType, Document, HeadingLevel, LevelFormat, Packer, Paragraph, TextRun } from "docx";
 import { extractBvid, extractDouyinAwemeId, getVideoComparableKey } from "./platform-links";
 import { getGrossMarginMonitorRecords, resolveEngagementRecord } from "./storage";
 import { resolveLinkSourceAccountName } from "./transcription";
@@ -8,24 +8,63 @@ export type EngagementExport = {
   fileName: string;
 };
 
+const DOCUMENT_FONT = {
+  ascii: "Arial Unicode MS",
+  hAnsi: "Arial Unicode MS",
+  eastAsia: "Arial Unicode MS",
+  cs: "Arial Unicode MS"
+};
+
 export async function createEngagementDocx(recordId: string): Promise<EngagementExport> {
   const record = await resolveEngagementRecord(recordId);
   const fileBaseName = await resolveExportAccountName(record);
   const comments = record.comments?.items.map((item) => item.text.trim()).filter(Boolean) || [];
   const danmaku = record.danmaku?.items.map((item) => item.text.trim()).filter(Boolean) || [];
+  const sourceUrl = record.sourceUrl?.trim() || record.resolvedUrl?.trim() || "";
 
   if (!comments.length && !danmaku.length) {
     throw new Error("这条记录还没有可导出的评论或弹幕。");
   }
 
+  const documentTitle = `${fileBaseName}｜${comments.length} 条评论｜${danmaku.length} 条弹幕`;
+
   const doc = new Document({
     creator: "账号风格库",
-    description: `${fileBaseName} 的数据维护导出`,
-    title: `${fileBaseName} 数据维护`,
+    description: `${fileBaseName} 的评论与弹幕导出`,
+    title: documentTitle,
+    styles: {
+      default: {
+        document: {
+          run: { font: DOCUMENT_FONT, size: 22 },
+          paragraph: { spacing: { line: 320, after: 100 } }
+        }
+      },
+      paragraphStyles: [
+        {
+          id: "Heading1",
+          name: "Heading 1",
+          basedOn: "Normal",
+          next: "Normal",
+          quickFormat: true,
+          run: { font: DOCUMENT_FONT, size: 28, bold: true, color: "111827" },
+          paragraph: { spacing: { before: 220, after: 120 }, outlineLevel: 0 }
+        }
+      ]
+    },
+    numbering: {
+      config: [
+        buildNumberingConfig("comments"),
+        buildNumberingConfig("danmaku")
+      ]
+    },
     sections: [
       {
         properties: {
           page: {
+            size: {
+              width: 11906,
+              height: 16838
+            },
             margin: {
               top: 1080,
               right: 1080,
@@ -38,18 +77,25 @@ export async function createEngagementDocx(recordId: string): Promise<Engagement
           new Paragraph({
             spacing: { after: 120 },
             children: [
-              new TextRun({ text: `${fileBaseName} 数据维护`, bold: true, size: 32 })
+              new TextRun({ text: fileBaseName, bold: true, size: 34, font: DOCUMENT_FONT })
             ]
           }),
           new Paragraph({
-            spacing: { after: 260 },
+            spacing: { after: 80 },
             children: [
-              new TextRun({ text: "视频链接：", bold: true, size: 24 }),
-              new TextRun({ text: record.resolvedUrl || record.sourceUrl || "未记录", size: 24 })
+              new TextRun({ text: `${comments.length} 条评论｜${danmaku.length} 条弹幕`, color: "475467", font: DOCUMENT_FONT })
             ]
           }),
-          ...buildNumberedSection("评论", comments),
-          ...buildNumberedSection("弹幕", danmaku)
+          ...(sourceUrl
+            ? [
+                new Paragraph({
+                  spacing: { after: 260 },
+                  children: [new TextRun({ text: sourceUrl, font: DOCUMENT_FONT })]
+                })
+              ]
+            : []),
+          ...buildNumberedSection("评论", comments, "comments"),
+          ...buildNumberedSection("弹幕", danmaku, "danmaku")
         ]
       }
     ]
@@ -57,7 +103,7 @@ export async function createEngagementDocx(recordId: string): Promise<Engagement
 
   return {
     buffer: await Packer.toBuffer(doc),
-    fileName: `${safeFileName(fileBaseName)}-数据维护.docx`
+    fileName: `${safeFileName(fileBaseName)}+${comments.length}条评论+${danmaku.length}条弹幕.docx`
   };
 }
 
@@ -159,22 +205,23 @@ function uniqueStrings(values: Array<string | undefined>) {
   return [...new Set(values.map((value) => value?.trim() || "").filter(Boolean))];
 }
 
-function buildNumberedSection(title: string, items: string[]) {
+function buildNumberedSection(title: string, items: string[], numberingReference: "comments" | "danmaku") {
   return [
     new Paragraph({
       heading: HeadingLevel.HEADING_1,
-      spacing: { before: 180, after: 120 },
-      children: [new TextRun({ text: title, bold: true, size: 28 })]
+      children: [new TextRun({ text: `${title}（${items.length}）`, bold: true, size: 28, font: DOCUMENT_FONT })]
     }),
     ...(items.length
       ? items.map(
-          (item, index) =>
+          (item) =>
             new Paragraph({
               spacing: { after: 90, line: 320 },
+              numbering: { reference: numberingReference, level: 0 },
               children: [
                 new TextRun({
-                  text: `${index + 1}. ${item}`,
-                  size: 22
+                  text: item,
+                  size: 22,
+                  font: DOCUMENT_FONT
                 })
               ]
             })
@@ -182,10 +229,29 @@ function buildNumberedSection(title: string, items: string[]) {
       : [
           new Paragraph({
             spacing: { after: 90 },
-            children: [new TextRun({ text: "无", color: "667085", size: 22 })]
+            children: [new TextRun({ text: "无", color: "667085", size: 22, font: DOCUMENT_FONT })]
           })
         ])
   ];
+}
+
+function buildNumberingConfig(reference: "comments" | "danmaku") {
+  return {
+    reference,
+    levels: [
+      {
+        level: 0,
+        format: LevelFormat.DECIMAL,
+        text: "%1.",
+        alignment: AlignmentType.LEFT,
+        style: {
+          paragraph: {
+            indent: { left: 560, hanging: 360 }
+          }
+        }
+      }
+    ]
+  };
 }
 
 function safeFileName(value: string) {

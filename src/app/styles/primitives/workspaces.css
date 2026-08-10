@@ -20,8 +20,8 @@
   min-height: 58px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-3);
+  padding: var(--pane-header-pad);
   border-bottom: 1px solid var(--line);
   background: var(--surface-soft);
 }
@@ -29,18 +29,18 @@
 .pane-subtitle {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: var(--text-caption);
+  line-height: var(--line-height-caption);
 }
 
 .pane-body {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: var(--pane-body-gap);
   max-height: calc(100vh - 216px);
   overscroll-behavior: contain;
   overflow: auto;
-  padding: 10px;
+  padding: var(--pane-body-pad);
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
@@ -107,7 +107,7 @@
   gap: 8px;
   align-items: center;
   width: 100%;
-  padding: 9px 10px;
+  padding: var(--list-row-pad);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--text);
@@ -187,8 +187,9 @@
 .list-title {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-card-title);
+  font-weight: var(--font-weight-heading);
+  line-height: var(--line-height-card-title);
   text-overflow: ellipsis;
   overflow-wrap: anywhere;
 }
@@ -196,7 +197,8 @@
 .list-meta {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-caption);
+  line-height: var(--line-height-caption);
   overflow-wrap: anywhere;
 }
 
@@ -352,7 +354,7 @@
 .compact-card,
 .style-summary-card {
   display: grid;
-  gap: var(--space-3);
+  gap: var(--section-gap);
   padding: var(--card-pad-md);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -363,13 +365,16 @@
 .compact-card h3,
 .style-summary-card h3 {
   margin-bottom: 2px;
+  font-size: var(--text-card-title);
+  font-weight: var(--font-weight-heading);
+  line-height: var(--line-height-card-title);
 }
 
 .compact-card p,
 .style-summary-card p {
   color: var(--muted-strong);
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: var(--text-meta);
+  line-height: var(--line-height-reading);
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }

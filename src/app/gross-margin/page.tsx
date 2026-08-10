@@ -423,7 +423,10 @@ export default function GrossMarginPage() {
         <div className="page-header-meta">
           <span className="stat-pill">2 个平台</span>
           <span className="stat-pill">{configuredPriceCount} 个单价已填</span>
-          <span className="stat-pill">账号源：{library?.accountSource === "wecom" ? "企业微信在线表" : "本地缓存"}</span>
+          <span className="stat-pill">
+            账号源：{library?.accountSource === "wecom" ? "企业微信在线表" : "本地缓存"}
+            {library?.accountSourceRefreshing ? " · 后台同步中" : ""}
+          </span>
           <button className="btn ghost" disabled={busy === "refresh"} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             {busy === "refresh" ? "刷新中" : "刷新"}

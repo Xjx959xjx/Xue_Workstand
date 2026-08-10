@@ -24,7 +24,7 @@
   display: flex;
   min-height: 62px;
   align-items: center;
-  padding: 12px 14px;
+  padding: var(--pane-header-pad);
   border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 88%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
@@ -32,8 +32,9 @@
 
 .engagement-refbar h2 {
   color: var(--text-strong);
-  font-size: 16px;
-  line-height: 1.25;
+  font-size: var(--text-section-title);
+  font-weight: var(--font-weight-heading);
+  line-height: var(--line-height-section-title);
 }
 
 .engagement-content-grid {
@@ -63,17 +64,41 @@
 }
 
 .engagement-generator-pane .pane-body {
-  gap: 14px;
-  padding: 16px;
+  gap: 0;
+  padding: 0;
 }
 
-.engagement-source-input {
-  min-height: 164px;
-  resize: none;
+.engagement-form-section {
+  display: grid;
+  gap: var(--section-gap);
+  padding: var(--section-pad);
+  border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
 }
 
-.engagement-source-summary {
-  justify-content: space-between;
+.engagement-form-section:last-child {
+  border-bottom: 0;
+}
+
+.engagement-form-heading {
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+}
+
+.engagement-form-heading h3 {
+  color: var(--text-strong);
+  font-size: var(--text-card-title);
+  font-weight: var(--font-weight-heading);
+  line-height: var(--line-height-card-title);
+}
+
+.engagement-source-panel .engagement-source-input {
+  min-height: 148px;
+  resize: vertical;
+}
+
+.engagement-generator-body > .project-progress {
+  margin: 16px 18px 18px;
 }
 
 .engagement-draft-search input {
@@ -99,27 +124,40 @@
   scrollbar-width: thin;
 }
 
-.engagement-option-grid {
+.engagement-output-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.engagement-output-fieldset > .field-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.engagement-option-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 8px;
 }
 
 .engagement-mode-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 92px max-content;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
 }
 
 .engagement-mode-row .field-label {
   color: var(--text-strong);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-label);
 }
 
 .engagement-mode-segmented {
-  width: min(100%, 260px);
+  width: max-content;
+  max-width: 100%;
 }
 
 .engagement-mode-segmented button {
@@ -127,34 +165,42 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 0;
+  min-width: 104px;
+}
+
+.engagement-platform-segmented button {
+  min-width: 72px;
 }
 
 .engagement-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) 76px;
   align-items: center;
-  gap: 8px;
-  padding: 10px;
+  gap: 10px;
+  min-height: 58px;
+  padding: var(--list-row-pad);
   border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
-  border-radius: 15px;
-  background: color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
+  border-radius: var(--control-radius);
+  background: color-mix(in oklch, var(--panel-raised) 82%, var(--panel));
   transition:
     background-color var(--motion-base) var(--ease-apple),
     border-color var(--motion-base) var(--ease-apple),
-    box-shadow var(--motion-base) var(--ease-apple),
-    transform var(--motion-base) var(--ease-apple);
+    color var(--motion-base) var(--ease-apple);
 }
 
 .engagement-option.active {
-  border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
+  border-color: color-mix(in oklch, var(--accent) 26%, var(--line));
   background: color-mix(in oklch, var(--accent-tint) 44%, var(--panel-raised));
 }
 
 .engagement-option:hover {
-  border-color: color-mix(in oklch, var(--accent) 18%, var(--line));
-  box-shadow: 0 10px 22px color-mix(in oklch, var(--text-strong) 4%, transparent);
-  transform: translateY(-1px);
+  border-color: color-mix(in oklch, var(--accent) 20%, var(--line));
+  background: color-mix(in oklch, var(--accent-tint) 28%, var(--panel-raised));
+}
+
+.engagement-option.is-disabled {
+  color: var(--muted);
+  background: color-mix(in oklch, var(--panel-muted) 72%, transparent);
 }
 
 .engagement-option input[type="checkbox"] {
@@ -171,14 +217,17 @@
 
 .engagement-option strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-label);
+  line-height: var(--line-height-meta);
   white-space: nowrap;
 }
 
 .engagement-option small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-caption);
+  line-height: var(--line-height-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -198,40 +247,36 @@
   background: var(--panel-muted);
 }
 
-.engagement-submit {
-  justify-self: start;
+.engagement-option.is-disabled:hover {
+  background: color-mix(in oklch, var(--panel-muted) 72%, transparent);
 }
 
-.engagement-count-presets {
+.engagement-count-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 70px);
+  width: max-content;
+  max-width: 100%;
+}
+
+.engagement-count-segmented button {
+  min-width: 0;
+}
+
+.engagement-settings-footer {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding-top: 2px;
 }
 
-.engagement-count-preset {
-  min-height: 30px;
-  padding-inline: 10px;
-}
-
-.engagement-count-preset.active {
-  border-color: var(--selected-border);
-  color: var(--text-strong);
-  background: color-mix(in oklch, var(--amber-soft) 52%, var(--surface-selected));
-}
-
-.engagement-count-preset:disabled {
-  opacity: 0.58;
+.engagement-submit {
+  min-width: 128px;
 }
 
 .engagement-results-pane {
   gap: 12px;
-}
-
-.engagement-export-row {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .engagement-diagnostics {
@@ -395,7 +440,7 @@
   .assets-workspace,
   .engagement-workbench,
   .engagement-content-grid,
-  .engagement-option-grid {
+  .engagement-option-list {
     grid-template-columns: 1fr;
   }
 
@@ -404,12 +449,22 @@
   }
 
   .engagement-mode-row {
+    grid-template-columns: 1fr;
     align-items: stretch;
-    flex-direction: column;
+    gap: 7px;
   }
 
   .engagement-mode-segmented {
-    width: 100%;
+    width: max-content;
+  }
+
+  .engagement-settings-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .engagement-settings-footer .engagement-submit {
+    align-self: stretch;
   }
 }
 
@@ -418,17 +473,10 @@
   overflow: hidden;
 }
 
-.engagement-source-panel,
-.engagement-generator-pane .detail-section,
 .asset-text-list {
   border-color: color-mix(in oklch, var(--line) 80%, transparent);
   border-radius: 16px;
   background: color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
-}
-
-.engagement-count-preset.active {
-  border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
-  background: color-mix(in oklch, var(--accent-tint) 44%, var(--panel-raised));
 }
 
 .engagement-results-pane {

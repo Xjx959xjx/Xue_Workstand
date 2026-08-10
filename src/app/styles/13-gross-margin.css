@@ -1,7 +1,8 @@
 /* Gross margin calculator */
 .gross-margin-workspace {
   grid-template-columns: minmax(250px, 272px) minmax(0, 1fr) minmax(286px, 300px);
-  min-height: calc(100vh - 96px);
+  min-height: 0;
+  height: 100%;
 }
 
 .gross-margin-workspace .pane {

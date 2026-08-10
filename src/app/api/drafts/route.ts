@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
-import { deleteDrafts, getDrafts, saveDraft, updateDraftTitle } from "@/lib/storage";
+import { deleteDrafts, getDraftSummaries, resolveDraft, saveDraft, updateDraftTitle } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -82,8 +82,12 @@ const updateSchema = z.object({
   title: z.string().trim().min(1)
 });
 
-export async function GET() {
-  return apiJson(async () => ({ drafts: await getDrafts() }), {
+export async function GET(request: Request) {
+  return apiJson(async () => {
+    const draftId = new URL(request.url).searchParams.get("draftId")?.trim();
+    if (draftId) return { draft: (await resolveDraft(draftId)).draft };
+    return { drafts: await getDraftSummaries() };
+  }, {
     fallbackMessage: "读取草稿失败",
     status: 500
   });

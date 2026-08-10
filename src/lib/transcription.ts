@@ -6,6 +6,8 @@ import path from "path";
 import { promisify } from "util";
 import {
   buildOpenCliBrowserArgs,
+  downloadBilibiliVideo,
+  getBilibiliPublicVideoReference,
   getBilibiliVideoStatsByUrl,
   getBilibiliVideoReference,
   checkDouyinVideoAvailability,
@@ -17,17 +19,19 @@ import {
 } from "./opencli";
 import {
   browserUserAgent,
+  buildDouyinVideoUrl,
   buildRemoteAssetRequestHeaders,
   detectPlatformFromLink,
   extractBvid,
+  extractDouyinAwemeId,
   inferRemoteContentType,
   inferRemoteFileExtension,
   isLikelyAudioMediaUrl,
   normalizeRemoteImageUrl,
-  selectRemoteVideoMediaUrl,
   sortRemoteAudioMediaUrls,
   videoMediaUrlScore
 } from "./platform-links";
+import { runOpenCli } from "./opencli-runtime";
 import { getTranscriptSnapshot, getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
@@ -60,6 +64,12 @@ export type LinkTranscriptionResult = {
   metadataTitle?: string;
   fallback?: boolean;
   fallbackReason?: string;
+  durationSec?: number;
+  segments?: Array<{
+    startSec: number;
+    endSec: number;
+    text: string;
+  }>;
   timings?: Timing[];
 };
 
@@ -429,6 +439,8 @@ export async function transcribeLinkSource(input: {
       source: "volcengine",
       fallback: cleaned.fallback,
       fallbackReason: cleaned.fallbackReason,
+      durationSec: volcengine.durationSec,
+      segments: volcengine.segments,
       timings: [
         { stage: "download-remote-audio", ms: downloaded.ms },
         ...(downloaded.attempts.length > 1 ? [{ stage: `media-url-attempts-${downloaded.attempts.length}`, ms: 0 }] : []),
@@ -513,26 +525,30 @@ export async function prepareLinkSourceDownload(input: {
   url: string;
   kind: LinkSourceAssetKind;
 }, options: AbortableOptions = {}): Promise<LinkSourceDownloadAsset> {
-  const media = await resolveLinkSourceMedia({ url: input.url, signal: options.signal });
+  if (input.kind === "cover") {
+    return prepareLinkSourceCoverDownload(input.url, options);
+  }
+
+  const resolvedUrl = await resolveShareUrl(input.url, { signal: options.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return input.url;
+  });
+  const platform = detectPlatformFromLink(resolvedUrl || input.url);
+  if (platform === "bilibili") {
+    return prepareBilibiliSourceDownload(input.url, resolvedUrl, input.kind, options);
+  }
+
+  const media = await resolveLinkSourceMedia({
+    url: input.url,
+    resolvedUrl,
+    platform,
+    signal: options.signal
+  });
   if (media.platform !== "bilibili" && media.platform !== "douyin") {
     throw new Error("暂不支持下载这个链接，请粘贴 B站或抖音单条视频链接。");
   }
 
   const baseName = makeLinkSourceFileBaseName(media);
-
-  if (input.kind === "cover") {
-    const coverUrl = normalizeRemoteImageUrl(media.coverUrl || "");
-    if (!coverUrl) {
-      throw new Error("没有解析到这条视频的封面地址。");
-    }
-    return {
-      kind: input.kind,
-      fileName: `${baseName}${inferRemoteFileExtension(coverUrl, "image")}`,
-      contentType: inferRemoteContentType(coverUrl, "image"),
-      remoteUrl: coverUrl,
-      requestHeaders: buildRemoteAssetRequestHeaders(coverUrl)
-    };
-  }
 
   if (input.kind === "audio") {
     const audioUrls = media.platform === "bilibili" ? selectRemoteAudioMediaUrls(media.mediaUrls) : media.mediaUrls;
@@ -555,7 +571,7 @@ export async function prepareLinkSourceDownload(input: {
 
   if (media.platform === "bilibili") {
     throwIfAborted(options.signal);
-    const downloaded = await downloadRemoteBilibiliVideo(media, `${baseName}.mp4`, options);
+    const downloaded = await downloadRemoteVideoAsset(media, `${baseName}.mp4`, options);
     throwIfAborted(options.signal);
     return {
       kind: input.kind,
@@ -566,24 +582,165 @@ export async function prepareLinkSourceDownload(input: {
     };
   }
 
-  const videoUrl = selectRemoteVideoMediaUrl(media.mediaUrls);
-  if (!videoUrl) {
-    throw new Error("没有解析到可下载的视频地址。");
-  }
-
+  throwIfAborted(options.signal);
+  const downloaded = await downloadRemoteVideoAsset(media, `${baseName}.mp4`, options);
+  throwIfAborted(options.signal);
   return {
     kind: input.kind,
-    fileName: `${baseName}${inferRemoteFileExtension(videoUrl, "video")}`,
-    contentType: inferRemoteContentType(videoUrl, "video"),
-    remoteUrl: videoUrl,
-    requestHeaders: buildRemoteAssetRequestHeaders(videoUrl)
+    fileName: `${baseName}.mp4`,
+    contentType: "video/mp4",
+    filePath: downloaded.filePath,
+    cleanupTargets: [downloaded.filePath]
+  };
+}
+
+async function prepareBilibiliSourceDownload(
+  url: string,
+  resolvedUrl: string,
+  kind: Exclude<LinkSourceAssetKind, "cover">,
+  options: AbortableOptions
+): Promise<LinkSourceDownloadAsset> {
+  throwIfAborted(options.signal);
+  const pageUrl = resolvedUrl || url;
+  const reference = await getBilibiliPublicVideoReference({
+    id: pageUrl,
+    url: pageUrl,
+    raw: pageUrl,
+    title: "",
+    coverUrl: ""
+  }, { signal: options.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return null;
+  });
+  const media: LinkSourceResolvedMedia = {
+    url,
+    resolvedUrl,
+    platform: "bilibili",
+    title: reference?.title,
+    coverUrl: normalizeRemoteImageUrl(reference?.thumbnail || "") || undefined,
+    mediaUrls: []
+  };
+  const baseName = makeLinkSourceFileBaseName(media);
+  const downloadedPath = await downloadBilibiliVideo({
+    id: reference?.bvid || pageUrl,
+    platform: "bilibili",
+    accountId: "",
+    title: reference?.title || "",
+    url: pageUrl,
+    duration: "",
+    publishedAt: "",
+    stats: { views: 0, likes: 0, comments: 0, favorites: 0, shares: 0 },
+    hotScore: 0,
+    relativeViewRate: 0,
+    transcriptStatus: "not_started",
+    raw: pageUrl,
+    updatedAt: new Date().toISOString()
+  }, { signal: options.signal });
+  const cleanupRoot = getBilibiliDownloadCleanupRoot(downloadedPath);
+
+  if (kind === "video") {
+    const extension = path.extname(downloadedPath) || ".mp4";
+    return {
+      kind,
+      fileName: `${baseName}${extension}`,
+      contentType: inferRemoteContentType(downloadedPath, "video"),
+      filePath: downloadedPath,
+      cleanupTargets: [cleanupRoot]
+    };
+  }
+
+  try {
+    const extracted = await extractLocalAudio(downloadedPath, `${baseName}.mp3`, options);
+    return {
+      kind,
+      fileName: `${baseName}.mp3`,
+      contentType: "audio/mpeg",
+      filePath: extracted.mediaPath,
+      cleanupTargets: [cleanupRoot, extracted.mediaPath]
+    };
+  } catch (error) {
+    await fs.rm(cleanupRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function getBilibiliDownloadCleanupRoot(downloadedPath: string) {
+  const relative = path.relative(os.tmpdir(), downloadedPath);
+  const firstSegment = relative.split(path.sep)[0];
+  if (!relative.startsWith("..") && firstSegment.startsWith("style-library-bilibili-")) {
+    return path.join(os.tmpdir(), firstSegment);
+  }
+  return downloadedPath;
+}
+
+async function prepareLinkSourceCoverDownload(url: string, options: AbortableOptions): Promise<LinkSourceDownloadAsset> {
+  throwIfAborted(options.signal);
+  const resolvedUrl = await resolveShareUrl(url, { signal: options.signal }).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return url;
+  });
+  const platform = detectPlatformFromLink(resolvedUrl || url);
+  if (platform !== "bilibili" && platform !== "douyin") {
+    throw new Error("暂不支持下载这个链接的封面，请粘贴 B站或抖音单条视频链接。");
+  }
+
+  let media: LinkMediaInfo;
+  if (platform === "bilibili") {
+    const reference = await getBilibiliPublicVideoReference({
+      id: resolvedUrl || url,
+      url: resolvedUrl || url,
+      raw: resolvedUrl || url,
+      title: "",
+      coverUrl: ""
+    }, { signal: options.signal });
+    media = {
+      mediaId: reference?.bvid,
+      title: reference?.title,
+      coverUrl: normalizeRemoteImageUrl(reference?.thumbnail || "") || undefined,
+      mediaUrls: []
+    };
+  } else {
+    const publicMedia = await resolveGenericLinkMedia(resolvedUrl || url, { signal: options.signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return null;
+    });
+    media = publicMedia?.coverUrl
+      ? publicMedia
+      : await resolveDouyinLinkMedia(resolvedUrl || url, { signal: options.signal });
+  }
+
+  const coverUrl = normalizeRemoteImageUrl(media.coverUrl || "");
+  if (!coverUrl) {
+    throw new Error("没有解析到这条视频的封面地址。");
+  }
+  const source: LinkSourceResolvedMedia = {
+    url,
+    resolvedUrl,
+    platform,
+    title: media.title,
+    sourceAccountName: media.sourceAccountName,
+    coverUrl,
+    mediaUrls: []
+  };
+  const baseName = makeLinkSourceFileBaseName(source);
+  return {
+    kind: "cover",
+    fileName: `${baseName}${inferRemoteFileExtension(coverUrl, "image")}`,
+    contentType: inferRemoteContentType(coverUrl, "image"),
+    remoteUrl: coverUrl,
+    requestHeaders: buildRemoteAssetRequestHeaders(coverUrl)
   };
 }
 
 async function transcribeWithVolcengine(
   mediaPath: string,
   options: AbortableOptions = {}
-): Promise<{ text: string; timings: Timing[] }> {
+): Promise<{
+  text: string;
+  timings: Timing[];
+  durationSec?: number;
+  segments: Array<{ startSec: number; endSec: number; text: string }>;
+}> {
   throwIfAborted(options.signal);
   const config = transcriptionConfig();
   if (!config.apiKey && (!config.appKey || !config.accessKey)) {
@@ -609,7 +766,7 @@ async function transcribeWithVolcengine(
       model_name: "bigmodel",
       enable_itn: true,
       enable_punc: true,
-      show_utterances: false
+      show_utterances: true
     }
   };
 
@@ -670,7 +827,13 @@ async function transcribeWithVolcengine(
         timings.push({ stage: `${attemptPrefix}volcengine-query-requests`, ms: queryRequestMs });
         if (pollWaitMs) timings.push({ stage: `${attemptPrefix}volcengine-poll-wait`, ms: pollWaitMs });
         timings.push({ stage: `${attemptPrefix}volcengine-query`, ms: Date.now() - queryStartedAt });
-        return { text: text.trim(), timings };
+        const segments = extractVolcengineSegments(data);
+        return {
+          text: text.trim(),
+          timings,
+          durationSec: segments.length ? segments[segments.length - 1].endSec : undefined,
+          segments
+        };
       }
 
       throw new Error("火山引擎转写任务查询超时，请稍后重试。");
@@ -773,6 +936,49 @@ function extractVolcengineTranscript(data: unknown): string {
   }
 
   return "";
+}
+
+function extractVolcengineSegments(data: unknown) {
+  const object = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const candidates = [object.result, object];
+  if (Array.isArray(object.result)) candidates.push(...object.result);
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const utterances = (candidate as Record<string, unknown>).utterances;
+    if (!Array.isArray(utterances)) continue;
+    const segments = utterances
+      .map((item) => normalizeVolcengineSegment(item))
+      .filter((item): item is { startSec: number; endSec: number; text: string } => Boolean(item));
+    if (segments.length) return segments;
+  }
+  return [];
+}
+
+function normalizeVolcengineSegment(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const object = value as Record<string, unknown>;
+  const text = readTextField(object);
+  if (!text) return null;
+  const startSec = readSegmentTime(object, ["start_time", "startTime", "start_ms", "startMs"], ["start"]);
+  const endSec = readSegmentTime(object, ["end_time", "endTime", "end_ms", "endMs"], ["end"]);
+  if (startSec === null || endSec === null || endSec < startSec) return null;
+  return { startSec, endSec, text };
+}
+
+function readSegmentTime(
+  object: Record<string, unknown>,
+  millisecondKeys: string[],
+  secondKeys: string[]
+) {
+  for (const key of millisecondKeys) {
+    const value = Number(object[key]);
+    if (Number.isFinite(value) && value >= 0) return value / 1000;
+  }
+  for (const key of secondKeys) {
+    const value = Number(object[key]);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
 }
 
 function readTextField(value: unknown) {
@@ -971,12 +1177,10 @@ async function resolveBilibiliLinkMedia(url: string, options: AbortableOptions =
 
   try {
     throwIfAborted(options.signal);
-    const openArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "open", [url], {
+    const openArgs = buildOpenCliBrowserArgs(workspace, "open", [url], {
       window: "background"
-    }));
-    await execFileAsync(openArgs.command, openArgs.args, {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024 * 8,
+    });
+    await runOpenCli(openArgs, {
       timeout: 30_000,
       signal: options.signal
     });
@@ -1008,6 +1212,9 @@ async function resolveBilibiliLinkMedia(url: string, options: AbortableOptions =
       coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
       mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
     };
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw formatLinkBrowserResolutionError("B站", error);
   } finally {
     const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
     await execFileAsync(closeArgs.command, closeArgs.args, {
@@ -1020,15 +1227,14 @@ async function resolveBilibiliLinkMedia(url: string, options: AbortableOptions =
 
 async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {}) {
   const workspace = `douyin-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
+  const pageUrl = buildDouyinVideoUrl(extractDouyinAwemeId(url)) || url;
 
   try {
     throwIfAborted(options.signal);
-    const openArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "open", [url], {
+    const openArgs = buildOpenCliBrowserArgs(workspace, "open", [pageUrl], {
       window: "background"
-    }));
-    await execFileAsync(openArgs.command, openArgs.args, {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024 * 8,
+    });
+    await runOpenCli(openArgs, {
       timeout: 30_000,
       signal: options.signal
     });
@@ -1060,6 +1266,9 @@ async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {
       coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
       mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
     };
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw formatLinkBrowserResolutionError("抖音", error);
   } finally {
     const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
     await execFileAsync(closeArgs.command, closeArgs.args, {
@@ -1068,6 +1277,14 @@ async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {
       timeout: 5_000
     }).catch(() => undefined);
   }
+}
+
+function formatLinkBrowserResolutionError(platformLabel: "B站" | "抖音", error: unknown) {
+  const detail = formatErrorDetail(error);
+  if (/opencli browser|not connected|extension|browser profile/i.test(detail)) {
+    return new Error(`${platformLabel}素材解析需要 OpenCLI 浏览器扩展，当前扩展未连接。请连接扩展后重试。`);
+  }
+  return new Error(`${platformLabel}素材解析失败：${detail}`);
 }
 
 async function resolveGenericLinkMedia(url: string, options: AbortableOptions = {}) {
@@ -1304,6 +1521,18 @@ const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
       document.querySelector('[data-e2e="user-name"], [class*="author"], [class*="account"]')?.textContent ||
       ""
     );
+    for (const image of Array.from(document.images)) {
+      const width = Number(image.naturalWidth || image.width || 0);
+      const height = Number(image.naturalHeight || image.height || 0);
+      if (width < 200 || height < 200) continue;
+      const imageUrl = image.currentSrc || image.src || "";
+      const weight = /AWEME_DETAIL/i.test(imageUrl)
+        ? 180
+        : /RELATED_AWEME/i.test(imageUrl)
+          ? -80
+          : Math.min(80, Math.max(width, height) / 10);
+      pushCoverUrl(imageUrl, "dom.image", weight);
+    }
     pushCoverUrl(metas["og:image"] || "", "meta.og:image", 40);
     pushCoverUrl(metas["twitter:image"] || "", "meta.twitter:image", 35);
     pushCoverUrl(document.querySelector("video")?.poster || "", "video.poster", 55);
@@ -1350,7 +1579,7 @@ const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
         mimeType.startsWith("audio_") ||
         mimeType.startsWith("video_") ||
         /bilivideo|akamaized/i.test(host) ||
-        /\\/upgcxcode\\/|\\/bfs\\/archive\\/|\\.m4s$|\\.mp4$|\\.m4a$|\\.mp3$/i.test(path)
+        /\\/upgcxcode\\/|\\.m4s$|\\.mp4$|\\.m4a$|\\.mp3$/i.test(path)
       );
     } catch {
       return false;
@@ -1627,15 +1856,16 @@ async function downloadBilibiliAudio(video: Video, options: AbortableOptions = {
   };
 }
 
-async function downloadRemoteBilibiliVideo(
+async function downloadRemoteVideoAsset(
   media: LinkSourceResolvedMedia,
   fileName: string,
   options: AbortableOptions = {}
 ) {
+  const platformLabel = media.platform === "bilibili" ? "B站" : media.platform === "douyin" ? "抖音" : "远程";
   const videoUrls = selectRemoteVideoMediaUrls(media.mediaUrls).slice(0, 4);
   const audioUrls = selectRemoteAudioMediaUrls(media.mediaUrls).slice(0, 4);
   if (!videoUrls.length) {
-    throw new Error("没有解析到可下载的 B站视频流。");
+    throw new Error(`没有解析到可下载的${platformLabel}视频流。`);
   }
 
   const attempts: string[] = [];
@@ -1651,7 +1881,7 @@ async function downloadRemoteBilibiliVideo(
         }
       }
     }
-    throw new Error(`B站视频直连合并失败：${formatMediaAttempts(attempts)}`);
+    throw new Error(`${platformLabel}视频直连合并失败：${formatMediaAttempts(attempts)}`);
   }
 
   for (const videoUrl of videoUrls) {
@@ -1663,7 +1893,7 @@ async function downloadRemoteBilibiliVideo(
       attempts.push(formatMediaAttemptError("视频流下载", error));
     }
   }
-  throw new Error(`B站视频直连下载失败：${formatMediaAttempts(attempts)}`);
+  throw new Error(`${platformLabel}视频直连下载失败：${formatMediaAttempts(attempts)}`);
 }
 
 async function mergeRemoteVideoAndAudio(
@@ -1746,6 +1976,7 @@ async function runFfmpegDownload(args: string[], target: string, options: Aborta
 function selectRemoteVideoMediaUrls(urls: string[]) {
   return [...new Set(urls.filter(Boolean))]
     .filter((url) => !isLikelyAudioMediaUrl(url))
+    .filter((url) => videoMediaUrlScore(url) > 0)
     .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
 }
 

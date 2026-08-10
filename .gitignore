@@ -12,4 +12,5 @@ style-library
 .vendor
 *.log
 .dev-server
+.remote-server
 .playwright-cli

@@ -262,7 +262,7 @@ export function isSupportedRemoteMediaUrl(input: string) {
     if (host === "data.bilibili.com" || path.includes("/log/")) return false;
     if (mimeType.startsWith("audio_") || mimeType.startsWith("video_")) return true;
     if (/douyinvod|bilivideo|akamaized/i.test(host)) return true;
-    if (/\/aweme\/v1\/play\/|\/upgcxcode\/|\/bfs\/archive\//i.test(path)) return true;
+    if (/\/aweme\/v1\/play\/|\/upgcxcode\//i.test(path)) return true;
     return /\.(m4s|mp4|m4a|mp3|aac|wav|flac|ogg|webm|mov)$/i.test(path);
   } catch {
     return false;
@@ -300,6 +300,7 @@ export function selectRemoteVideoMediaUrl(urls: string[]) {
     .map((url) => normalizeRemoteMediaUrl(url))
     .filter(Boolean)
     .filter((url) => !isLikelyAudioMediaUrl(url))
+    .filter((url) => videoMediaUrlScore(url) > 0)
     .sort((a, b) => videoMediaUrlScore(b) - videoMediaUrlScore(a));
   return candidates[0] || "";
 }

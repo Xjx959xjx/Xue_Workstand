@@ -9,6 +9,7 @@ type LibraryEditorModalProps = {
   onClose: () => void;
   panelClassName?: string;
   panelRef: RefObject<HTMLDivElement | null>;
+  unsavedChanges?: boolean;
 };
 
 export const LibraryEditorModal = memo(function LibraryEditorModal({
@@ -16,7 +17,8 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
   labelledBy,
   onClose,
   panelClassName = "",
-  panelRef
+  panelRef,
+  unsavedChanges = false
 }: LibraryEditorModalProps) {
   return (
     <ModalBackdrop onClose={onClose}>
@@ -24,6 +26,7 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
         aria-labelledby={labelledBy}
         aria-modal="true"
         className={`modal-panel ${panelClassName}`}
+        data-unsaved-changes={unsavedChanges ? "true" : undefined}
         onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
         ref={panelRef}
         role="dialog"

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { platforms } from "./types";
-import { normalizeRewritePrompt } from "./source-extraction";
+import { normalizeRewritePrompt, splitWriterSourceInput } from "./source-extraction";
 
 export const writeCopyInputSchema = z.object({
   action: z.enum(["create", "revise"]).optional().default("create"),
@@ -12,9 +12,6 @@ export const writeCopyInputSchema = z.object({
   prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
   supportDocLinks: z.string().optional(),
-  brief: z.string().optional(),
-  preparedResearch: z.string().max(120_000).optional(),
-  preparedContextFingerprint: z.string().max(80).optional(),
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional(),
   parentDraftId: z.string().min(1).optional(),
@@ -40,12 +37,14 @@ export const writeCopyInputSchema = z.object({
   }
 
   const mode = input.mode;
-  const prompt = normalizeRewritePrompt(input.mode, input.prompt, input.sourceText);
-  const sourceText = input.sourceText?.trim() || "";
+  const combinedSourceInput = [input.sourceText?.trim(), input.supportDocLinks?.trim()].filter(Boolean).join("\n\n");
+  const separatedInput = splitWriterSourceInput(input.sourceText || "", input.supportDocLinks || "");
+  const prompt = normalizeRewritePrompt(input.mode, input.prompt, combinedSourceInput);
+  const sourceText = separatedInput.sourceText;
 
   if (mode === "topic" && !prompt.trim()) {
     ctx.addIssue({ code: "custom", message: "请填写写作主题", path: ["prompt"] });
-  } else if (mode === "rewrite" && !prompt.trim() && !sourceText) {
+  } else if (mode === "rewrite" && !prompt.trim() && !sourceText && !separatedInput.supportDocLinks) {
     ctx.addIssue({ code: "custom", message: "请填写改写要求或粘贴原文素材", path: ["sourceText"] });
   }
 

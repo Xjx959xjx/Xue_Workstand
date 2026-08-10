@@ -11,6 +11,7 @@ export type AccountStatusFilter = "all" | "pending" | "missing-style";
 export type AccountSortMode = "recent" | "pending" | "videos" | "name";
 export type VideoStatusFilter = "all" | "pending" | "completed" | "failed";
 export type SortDirection = "asc" | "desc";
+type LibraryMobileView = "accounts" | "videos" | "detail";
 
 export function useLibraryAccountSelection(accounts: AccountListItem[]) {
   const router = useRouter();
@@ -67,8 +68,12 @@ export function useLibraryAccountSelection(accounts: AccountListItem[]) {
     if (!filteredAccounts.length) setAccountManageMode(false);
   }, [filteredAccounts]);
 
-  const selectAccount = useCallback((accountId: string) => {
-    replaceParams({ account: accountId || null, video: null });
+  const selectAccount = useCallback((accountId: string, mobileView?: LibraryMobileView) => {
+    replaceParams({
+      account: accountId || null,
+      video: null,
+      ...(mobileView ? { mv: mobileView === "accounts" ? null : mobileView } : {})
+    });
   }, [replaceParams]);
 
   const toggleManagedAccount = useCallback((accountId: string) => {
@@ -167,14 +172,17 @@ export function useLibraryVideoSelection(selectedAccount: AccountDetail | null) 
     if (!selectedAccount || !sortedVideos.length) setVideoManageMode(false);
   }, [selectedAccount, sortedVideos]);
 
-  const selectVideo = useCallback((videoId: string) => {
+  const selectVideo = useCallback((videoId: string, mobileView?: LibraryMobileView) => {
     if (videoManageMode) {
       setSelectedVideoIds((current) =>
         current.includes(videoId) ? current.filter((id) => id !== videoId) : [...current, videoId]
       );
       return;
     }
-    replaceParams({ video: videoId || null });
+    replaceParams({
+      video: videoId || null,
+      ...(mobileView ? { mv: mobileView === "accounts" ? null : mobileView } : {})
+    });
   }, [replaceParams, videoManageMode]);
 
   const changeSortMode = useCallback((mode: VideoSortMode) => {

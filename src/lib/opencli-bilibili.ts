@@ -275,6 +275,23 @@ export async function getBilibiliVideoReference(
   return reference;
 }
 
+export async function getBilibiliPublicVideoReference(
+  video: Pick<Video, "id" | "url" | "raw" | "title" | "coverUrl">,
+  options: OpenCliTimingOptions = {}
+) {
+  const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
+  if (!bvid) return null;
+
+  const fields = await getBilibiliPublicVideoFields(bvid, options);
+  return {
+    bvid,
+    aid: stringField(fields.aid),
+    cid: extractBilibiliCid(fields),
+    thumbnail: stringField(fields.thumbnail) || stringField(fields.pic) || video.coverUrl || findCoverUrlInRaw(video.raw),
+    title: stringField(fields.title) || video.title
+  } satisfies BilibiliVideoReference;
+}
+
 export async function downloadBilibiliVideo(video: Video, options: { signal?: AbortSignal } = {}) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) {

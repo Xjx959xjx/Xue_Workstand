@@ -110,7 +110,7 @@ export const VideoTable = memo(function VideoTable({
           </p>
         </div>
         <div className="video-header-tools">
-          <div className="video-filter-search search-control">
+          <div className="video-filter-search search-control filter-search">
             <Search aria-hidden="true" size={14} />
             <input
               aria-label="搜索视频标题"
@@ -120,7 +120,7 @@ export const VideoTable = memo(function VideoTable({
               value={videoFilter}
             />
           </div>
-          <select aria-label="筛选转写状态" onChange={(event) => onVideoStatusFilterChange(event.target.value as VideoStatusFilter)} value={videoStatusFilter}>
+          <select className="filter-select" aria-label="筛选转写状态" onChange={(event) => onVideoStatusFilterChange(event.target.value as VideoStatusFilter)} value={videoStatusFilter}>
             <option value="all">全部状态</option>
             <option value="pending">待转写</option>
             <option value="completed">已转写</option>
@@ -152,7 +152,7 @@ export const VideoTable = memo(function VideoTable({
             <Download aria-hidden="true" size={14} />
             导出 {selectedCompletedCount || ""}
           </button>
-          <button className="btn danger compact" disabled={!selectedVideoIds.length || busy === "video-delete"} onClick={onRequestDeleteVideos} type="button">
+          <button className="btn danger compact mobile-destructive-action" disabled={!selectedVideoIds.length || busy === "video-delete"} onClick={onRequestDeleteVideos} type="button">
             <Trash2 aria-hidden="true" size={14} />
             {busy === "video-delete" ? "删除中" : "删除"}
           </button>

@@ -18,8 +18,9 @@ export async function GET(request: Request) {
     const result = await createEngagementDocx(input.recordId);
     const headers = new Headers({
       "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(result.fileName)}`,
-      "Cache-Control": "no-store"
+      "Content-Disposition": `attachment; filename="engagement.docx"; filename*=UTF-8''${encodeURIComponent(result.fileName)}`,
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff"
     });
 
     return new NextResponse(new Uint8Array(result.buffer), { headers });

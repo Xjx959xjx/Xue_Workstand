@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileText, RefreshCw } from "lucide-react";
+import { ChevronLeft, FileText, Plus, RefreshCw, X } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
 import { LibraryDetailPane } from "./_components/LibraryDetailPane";
@@ -23,9 +24,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback, type FeedbackTone } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
-import { collectAccount, exportAccountTranscripts, getHealth } from "@/lib/client";
+import { exportAccountTranscripts, getHealth } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import type { AccountListItem, CollectOrder, Platform, VideoListItem } from "@/lib/types";
+import type { AccountListItem, CollectOrder, CollectResult, Platform, VideoListItem } from "@/lib/types";
 
 type ConfirmIntent =
   | { kind: "accounts"; ids: string[]; accounts: AccountListItem[]; projectNames: string[] }
@@ -41,10 +42,17 @@ export default function LibraryPage() {
 }
 
 function LibraryPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const mobileView = searchParams.get("mv") === "detail"
+    ? "detail"
+    : searchParams.get("mv") === "videos"
+      ? "videos"
+      : "accounts";
   const { library, loading, error, refresh } = useLibrary();
   const { activeJobs, recentJobs, startTask } = useScopedTasks({
     href: "/library",
-    kinds: ["account-style", "transcribe-video", "batch-transcribe"]
+    kinds: ["account-style", "transcribe-video", "batch-transcribe", "collect-account"]
   });
   const { notify } = useFeedback();
   const [styleDraft, setStyleDraft] = useState("");
@@ -65,8 +73,16 @@ function LibraryPageContent() {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null);
   const [healthBusy, setHealthBusy] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
-  const [lastCollect, setLastCollect] = useState<Awaited<ReturnType<typeof collectAccount>> | null>(null);
+  const [collectPanelOpen, setCollectPanelOpen] = useState(false);
+  const [lastCollect, setLastCollect] = useState<CollectResult | null>(null);
+  const [activeCollectJobId, setActiveCollectJobId] = useState("");
   const editModalRef = useRef<HTMLDivElement>(null);
+  const setMobileView = useCallback((view: "accounts" | "videos" | "detail") => {
+    const next = new URLSearchParams(searchParams.toString());
+    if (view === "accounts") next.delete("mv");
+    else next.set("mv", view);
+    router.replace(`/library${next.size ? `?${next.toString()}` : ""}`, { scroll: false });
+  }, [router, searchParams]);
 
   const accounts = useMemo(() => library?.accounts || [], [library?.accounts]);
   const initialLibraryLoading = loading && !library;
@@ -345,32 +361,35 @@ function LibraryPageContent() {
     setMessage("");
     setLastCollect(null);
     try {
-      const result = await collectAccount({
-        platform: collectPlatform,
-        name: collectName,
-        limit: collectLimit,
-        order: collectOrder,
-        ...collectDateFilter
+      const job = await startTask({
+        kind: "collect-account",
+        href: "/library",
+        title: `采集账号：${collectName.trim()}`,
+        input: {
+          platform: collectPlatform,
+          name: collectName,
+          limit: collectLimit,
+          order: collectOrder,
+          ...collectDateFilter
+        }
       });
-      setLastCollect(result);
-      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder), "success");
-      await refresh();
+      setActiveCollectJobId(job.id);
+      setCollectPanelOpen(false);
+      setMessage("采集任务已加入任务中心，可离开页面继续处理。", "info");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "采集失败，请检查账号名、主页链接或 opencli 配置后重试。", "error");
-    } finally {
       setBusy("");
     }
   }, [
-    activeTimeLabel,
     canCollect,
     collectDateFilter,
     collectLimit,
     collectName,
     collectOrder,
     collectPlatform,
-    refresh,
     setBusy,
-    setMessage
+    setMessage,
+    startTask
   ]);
 
   const handleExportTranscripts = useCallback(async (videoIds?: string[]) => {
@@ -396,22 +415,44 @@ function LibraryPageContent() {
     setBusy("recollect");
     setMessage("");
     try {
-      const result = await collectAccount({
-        platform: selectedAccount.platform,
-        name: selectedAccount.sourceUrl || selectedAccount.uid || selectedAccount.name,
-        limit: collectLimit,
-        order: collectOrder,
-        ...collectDateFilter
+      const job = await startTask({
+        kind: "collect-account",
+        href: "/library",
+        title: `更新账号：${selectedAccount.name}`,
+        input: {
+          platform: selectedAccount.platform,
+          name: selectedAccount.sourceUrl || selectedAccount.uid || selectedAccount.name,
+          limit: collectLimit,
+          order: collectOrder,
+          ...collectDateFilter
+        }
       });
-      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder), "success");
-      await refresh();
-      await reloadSelectedAccountDetail({ force: true });
+      setActiveCollectJobId(job.id);
+      setMessage("账号更新任务已加入任务中心。", "info");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "更新账号失败，请检查主页链接或采集环境后重试。", "error");
-    } finally {
       setBusy("");
     }
-  }, [activeTimeLabel, busy, collectDateFilter, collectLimit, collectOrder, refresh, reloadSelectedAccountDetail, selectedAccount, setBusy, setMessage]);
+  }, [busy, collectDateFilter, collectLimit, collectOrder, selectedAccount, setBusy, setMessage, startTask]);
+
+  useEffect(() => {
+    if (!activeCollectJobId) return;
+    const job = [...activeJobs, ...recentJobs].find((item) => item.id === activeCollectJobId);
+    if (!job || job.status === "queued" || job.status === "running") return;
+
+    setActiveCollectJobId("");
+    setBusy("");
+    if (job.status === "completed" && job.result) {
+      const result = job.result as CollectResult;
+      setLastCollect(result);
+      setMessage(formatCollectMessage(result, activeTimeLabel, collectOrder), "success");
+      void refresh()
+        .then(() => reloadSelectedAccountDetail({ force: true }))
+        .catch(() => undefined);
+      return;
+    }
+    setMessage(job.error || job.message || "采集任务未完成。", "error");
+  }, [activeCollectJobId, activeJobs, activeTimeLabel, collectOrder, recentJobs, refresh, reloadSelectedAccountDetail, setBusy, setMessage]);
 
   const handleToggleAllAccounts = useCallback(() => {
     const visibleIds = filteredAccounts.map((account) => account.id);
@@ -493,7 +534,7 @@ function LibraryPageContent() {
   }
 
   return (
-    <div className="page library-page workbench-frame-page">
+    <div className={`page library-page workbench-frame-page mobile-library-${mobileView}`}>
       <header className="page-header">
         <div className="page-title-group">
           <span className="page-title-eyebrow">账号风格</span>
@@ -508,6 +549,26 @@ function LibraryPageContent() {
           </div>
         </div>
         <div className="page-header-meta">
+          <button
+            aria-controls="library-collect-panel"
+            aria-expanded={collectPanelOpen}
+            className={`btn ${collectPanelOpen ? "" : "primary"}`}
+            onClick={() => setCollectPanelOpen((current) => !current)}
+            type="button"
+          >
+            {collectPanelOpen ? <X aria-hidden="true" size={16} /> : <Plus aria-hidden="true" size={16} />}
+            {collectPanelOpen ? "收起采集" : "采集账号"}
+          </button>
+          <button
+            aria-busy={busy === "recollect"}
+            className="btn"
+            disabled={!selectedAccount || Boolean(busy)}
+            onClick={handleRecollectSelectedAccount}
+            type="button"
+          >
+            <RefreshCw aria-hidden="true" size={16} />
+            {busy === "recollect" ? "更新中" : "更新账号"}
+          </button>
           <button className="btn ghost" aria-busy={refreshBusy} disabled={refreshBusy} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             {refreshBusy ? "刷新中" : "刷新"}
@@ -515,31 +576,57 @@ function LibraryPageContent() {
         </div>
       </header>
 
-      <LibraryQuickStartPanel
-        activeOrderOptions={activeOrderOptions}
-        busy={healthBusy ? "health" : busy}
-        canSubmit={canCollect}
-        customFromDate={customFromDate}
-        customToDate={customToDate}
-        health={health}
-        limit={collectLimit}
-        name={collectName}
-        order={collectOrder}
-        platform={collectPlatform}
-        timeRange={collectTimeRange}
-        onCollect={handleCollect}
-        onCustomFromDateChange={setCustomFromDate}
-        onCustomToDateChange={setCustomToDate}
-        onHealthCheck={handleHealthCheck}
-        onLimitChange={setCollectLimit}
-        onNameChange={setCollectName}
-        onOrderChange={setCollectOrder}
-        onPlatformChange={handleCollectPlatformChange}
-        onTimeRangeChange={setCollectTimeRange}
-      />
-      {error ? <div className="error" role="alert">{error}</div> : null}
-      {accountDetailError ? <div className="error" role="alert">{accountDetailError}</div> : null}
-      <section className="three-pane library-workspace workbench-frame-workspace">
+      <div className="mobile-library-nav" aria-label="账号库层级导航">
+        {mobileView !== "accounts" ? (
+          <button
+            className="btn icon-btn"
+            onClick={() => setMobileView(mobileView === "detail" ? "videos" : "accounts")}
+            type="button"
+          >
+            <ChevronLeft aria-hidden="true" size={18} />
+            返回
+          </button>
+        ) : <span />}
+        <strong>
+          {mobileView === "accounts"
+            ? "选择账号"
+            : mobileView === "videos"
+              ? selectedAccountMeta?.name || "视频列表"
+              : selectedVideo?.title || "视频详情"}
+        </strong>
+      </div>
+
+      {collectPanelOpen ? (
+        <LibraryQuickStartPanel
+          activeOrderOptions={activeOrderOptions}
+          busy={healthBusy ? "health" : busy}
+          canSubmit={canCollect}
+          customFromDate={customFromDate}
+          customToDate={customToDate}
+          health={health}
+          limit={collectLimit}
+          name={collectName}
+          order={collectOrder}
+          platform={collectPlatform}
+          timeRange={collectTimeRange}
+          onCollect={handleCollect}
+          onCustomFromDateChange={setCustomFromDate}
+          onCustomToDateChange={setCustomToDate}
+          onHealthCheck={handleHealthCheck}
+          onLimitChange={setCollectLimit}
+          onNameChange={setCollectName}
+          onOrderChange={setCollectOrder}
+          onPlatformChange={handleCollectPlatformChange}
+          onTimeRangeChange={setCollectTimeRange}
+        />
+      ) : null}
+      {error || accountDetailError ? (
+        <div className="library-error-stack">
+          {error ? <div className="error" role="alert">{error}</div> : null}
+          {accountDetailError ? <div className="error" role="alert">{accountDetailError}</div> : null}
+        </div>
+      ) : null}
+      <section className={`three-pane library-workspace workbench-frame-workspace mobile-view-${mobileView}`}>
         <AccountSidebar
           accountFilter={accountFilter}
           accountManageMode={accountManageMode}
@@ -560,7 +647,9 @@ function LibraryPageContent() {
           onClearFilters={clearAccountFilters}
           onPlatformFilterChange={setAccountPlatformFilter}
           onRequestDeleteAccounts={requestDeleteAccounts}
-          onSelectAccount={selectAccount}
+          onSelectAccount={(accountId) => {
+            selectAccount(accountId, "videos");
+          }}
           onStatusFilterChange={setAccountStatusFilter}
           onToggleAccountManage={() => {
             setVideoManageMode(false);
@@ -592,7 +681,9 @@ function LibraryPageContent() {
           onBatchTranscribeSelected={handleBatchTranscribeSelected}
           onExportSelected={handleExportSelected}
           onRequestDeleteVideos={requestDeleteVideos}
-          onSelectVideo={selectVideo}
+          onSelectVideo={(videoId) => {
+            selectVideo(videoId, "detail");
+          }}
           onSortModeChange={changeSortMode}
           onToggleAllVideos={handleToggleAllVideos}
           onToggleVideoManage={() => {
@@ -605,7 +696,6 @@ function LibraryPageContent() {
         />
 
         <LibraryDetailPane
-          activeTranscript={activeTranscript}
           busy={busy}
           loading={initialLibraryLoading}
           selectedAccount={selectedAccount}
@@ -626,7 +716,6 @@ function LibraryPageContent() {
           onGenerateStyle={handleGenerateStyle}
           onOpenStyleModal={openStyleModal}
           onOpenTranscriptModal={openTranscriptModal}
-          onRecollectAccount={handleRecollectSelectedAccount}
           onTranscribe={handleTranscribeRequest}
         />
       </section>
@@ -755,7 +844,7 @@ function summarizeNames(names: string[]) {
 }
 
 function formatCollectMessage(
-  result: Awaited<ReturnType<typeof collectAccount>>,
+  result: CollectResult,
   activeTimeLabel: string,
   order: CollectOrder
 ) {

@@ -16,14 +16,19 @@ import {
   WRITE_COPY_REASONING_EFFORT
 } from "./ai";
 import { runBatchTranscribe } from "./batch-transcribe";
+import { collectAccountContent } from "./account-collection";
 import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
 import { refreshDouyinHotlist } from "./douyin-hotlist";
-import { hasFeishuDocLink } from "./feishu";
+import { refreshGrossMarginMonitorRecords } from "./gross-margin-refresh";
+import { getHotspotRadar } from "./hotspots";
+import { hasSupportDocumentReference } from "./support-documents";
+import { extractRewriteSourceMaterial, splitWriterSourceInput } from "./source-extraction";
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
 import { libraryRoot } from "./storage";
+import { generatePublishCopy } from "./publish-copy";
 import { readJsonFile, writeJsonFile } from "./storage/fs";
-import { transcribeVideo } from "./transcription";
+import { transcribeLinkSource, transcribeVideo } from "./transcription";
 import {
   BatchTranscribeResult,
   EngagementRecord,
@@ -166,6 +171,19 @@ async function patchJob(jobId: string, patch: Partial<JobRecord>, options: Patch
 
 function patchTransientJob(jobId: string, patch: Partial<JobRecord>) {
   return patchJob(jobId, patch, { persist: false });
+}
+
+function patchJobWithDataChange(
+  jobId: string,
+  patch: Partial<JobRecord>,
+  dataChange: Omit<NonNullable<JobRecord["dataChange"]>, "at">
+) {
+  return patchJob(jobId, patch, {
+    beforePatch(current) {
+      patch.dataRevision = (current.dataRevision || 0) + 1;
+      patch.dataChange = { ...dataChange, at: nowIso() };
+    }
+  });
 }
 
 async function enqueueJobWrite<T>(jobId: string, run: () => Promise<T>) {
@@ -398,6 +416,16 @@ async function runJob(jobId: string, input: JobStartInput) {
       await runBatchTranscribeJob(jobId, input);
     } else if (input.kind === "hotlist-refresh") {
       await runHotlistRefreshJob(jobId, input);
+    } else if (input.kind === "collect-account") {
+      await runCollectAccountJob(jobId, input);
+    } else if (input.kind === "single-video-transcribe") {
+      await runSingleVideoTranscribeJob(jobId, input);
+    } else if (input.kind === "publish-copy") {
+      await runPublishCopyJob(jobId, input);
+    } else if (input.kind === "hotspot-refresh") {
+      await runHotspotRefreshJob(jobId, input);
+    } else if (input.kind === "gross-margin-refresh") {
+      await runGrossMarginRefreshJob(jobId, input);
     } else {
       await runEngagementJob(jobId, input);
     }
@@ -432,6 +460,8 @@ async function runJob(jobId: string, input: JobStartInput) {
 async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { kind: "write-copy" }>) {
   throwIfCancelled(jobId);
   const isRevision = start.input.action === "revise";
+  const separatedSourceInput = splitWriterSourceInput(start.input.sourceText || "", start.input.supportDocLinks || "");
+  const sourceExtraction = extractRewriteSourceMaterial(separatedSourceInput.sourceText);
   let partialText = "";
   const partialUpdater = createPartialTextUpdater(jobId, {
     stage: "generate",
@@ -446,7 +476,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     progress: 10
   });
 
-  if (!isRevision && start.input.mode === "rewrite" && /https?:\/\//i.test(start.input.sourceText || "")) {
+  if (!isRevision && start.input.mode === "rewrite" && sourceExtraction.pendingLinkCount > 0) {
     await patchJob(jobId, {
       stage: "transcribe-links",
       message: "正在转写链接里的视频文稿",
@@ -454,7 +484,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     });
   }
 
-  if (!isRevision && hasFeishuDocLink(start.input.supportDocLinks)) {
+  if (!isRevision && hasSupportDocumentReference(separatedSourceInput.supportDocLinks)) {
     await patchJob(jobId, {
       stage: "fetch-support-docs",
       message: "正在读取商单支持文档",
@@ -494,14 +524,6 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   });
   await partialUpdater.flush(partialText);
   throwIfCancelled(jobId);
-
-  if (!isRevision && !result.text.trim()) {
-    await patchJob(jobId, {
-      stage: "fallback",
-      message: "正在切换到本地模板",
-      progress: 76
-    });
-  }
 
   if (start.input.save) {
     await patchJob(jobId, {
@@ -803,6 +825,17 @@ async function runBatchTranscribeJob(jobId: string, start: Extract<JobStartInput
         result: { latestVideo: video }
       });
     },
+    async onTranscribeComplete({ completed, skipped, failed }) {
+      throwIfCancelled(jobId);
+      await patchJobWithDataChange(jobId, {
+        stage: "transcripts-saved",
+        message: `转写已同步：新增 ${completed}，跳过 ${skipped}，失败 ${failed}`,
+        progress: 86
+      }, {
+        resource: "library-account",
+        accountId: start.input.accountId
+      });
+    },
     onStyleStart() {
       throwIfCancelled(jobId);
       void patchTransientJob(jobId, {
@@ -887,10 +920,13 @@ async function runHotlistRefreshJob(jobId: string, start: Extract<JobStartInput,
       throwIfCancelled(jobId);
       const account = progress.result;
       const status = account.status === "completed" ? "有更新" : account.status === "unchanged" ? "无变化" : "失败";
-      await patchTransientJob(jobId, {
+      await patchJobWithDataChange(jobId, {
         stage: "collect",
         message: `已处理 ${progress.completed}/${progress.total}：${account.name}（${status}）`,
         progress: Math.min(92, 10 + Math.round((progress.completed / progress.total) * 82))
+      }, {
+        resource: "douyin-hotlist",
+        accountId: account.accountId
       });
     }
   });
@@ -916,6 +952,115 @@ async function runHotlistRefreshJob(jobId: string, start: Extract<JobStartInput,
       href: start.href || "/douyin-hotlist",
       label: "查看视频热榜"
     }
+  });
+}
+
+async function runCollectAccountJob(jobId: string, start: Extract<JobStartInput, { kind: "collect-account" }>) {
+  const result = await collectAccountContent(start.input, {
+    signal: getJobAbortSignal(jobId),
+    async onProgress(progress) {
+      throwIfCancelled(jobId);
+      await patchTransientJob(jobId, progress);
+    }
+  });
+  throwIfCancelled(jobId);
+  await completeJob(jobId, {
+    message: `账号采集完成：写入 ${result.filteredCount} 条视频到「${result.account.name}」`,
+    result,
+    resultRef: {
+      id: result.account.id,
+      href: start.href || "/library",
+      label: "查看账号库"
+    }
+  });
+}
+
+async function runSingleVideoTranscribeJob(jobId: string, start: Extract<JobStartInput, { kind: "single-video-transcribe" }>) {
+  await patchJob(jobId, {
+    stage: "resolve-link",
+    message: "正在识别视频并读取字幕",
+    progress: 18
+  });
+  const result = await transcribeLinkSource({
+    ...start.input,
+    analyzeVideo: true,
+    signal: getJobAbortSignal(jobId)
+  });
+  throwIfCancelled(jobId);
+  await completeJob(jobId, {
+    message: result.fallback ? result.fallbackReason || "已提取可用文本" : "视频文案已提取",
+    result,
+    resultRef: { href: start.href || "/tools", label: "查看工具台" }
+  });
+}
+
+async function runPublishCopyJob(jobId: string, start: Extract<JobStartInput, { kind: "publish-copy" }>) {
+  await patchJob(jobId, {
+    stage: "research",
+    message: "正在规划检索词并收集同类选题",
+    progress: 22
+  });
+  const result = await generatePublishCopy(start.input, { signal: getJobAbortSignal(jobId) });
+  throwIfCancelled(jobId);
+  await completeJob(jobId, {
+    message: `已生成 ${result.candidates.length} 组标题和发布文案`,
+    result,
+    resultRef: { href: start.href || "/tools", label: "查看工具台" }
+  });
+}
+
+async function runHotspotRefreshJob(jobId: string, start: Extract<JobStartInput, { kind: "hotspot-refresh" }>) {
+  await patchJob(jobId, {
+    stage: "collect",
+    message: "正在刷新热点来源",
+    progress: 8
+  });
+  const result = await getHotspotRadar({
+    refresh: true,
+    signal: getJobAbortSignal(jobId),
+    async onProgress(progress) {
+      throwIfCancelled(jobId);
+      await patchTransientJob(jobId, {
+        stage: "collect",
+        message: `已处理 ${progress.completed}/${progress.total}：${progress.sourceName}${progress.failed ? "（失败）" : ""}`,
+        progress: Math.min(92, 8 + Math.round((progress.completed / Math.max(1, progress.total)) * 84))
+      });
+    }
+  });
+  throwIfCancelled(jobId);
+  await completeJob(jobId, {
+    message: `热点刷新完成：${result.summary.hotspotCount} 个热点，${result.summary.failedSourceCount} 个来源异常`,
+    result,
+    resultRef: { href: start.href || "/hotspots", label: "查看热点雷达" }
+  });
+}
+
+async function runGrossMarginRefreshJob(jobId: string, start: Extract<JobStartInput, { kind: "gross-margin-refresh" }>) {
+  await patchJob(jobId, {
+    stage: "load",
+    message: "正在读取监控记录",
+    progress: 8
+  });
+  const records = await refreshGrossMarginMonitorRecords(start.input.recordIds, {
+    signal: getJobAbortSignal(jobId),
+    async onProgress(progress) {
+      throwIfCancelled(jobId);
+      await patchJobWithDataChange(jobId, {
+        stage: "refresh",
+        message: `已刷新 ${progress.completed}/${progress.total}：${progress.record.accountName || progress.record.title || progress.record.id}`,
+        progress: Math.min(94, 10 + Math.round((progress.completed / Math.max(1, progress.total)) * 84))
+      }, {
+        resource: "gross-margin",
+        recordId: progress.record.id
+      });
+    }
+  });
+  throwIfCancelled(jobId);
+  const failed = records.filter((record) => record.status === "failed").length;
+  await completeJob(jobId, {
+    message: `监控刷新完成：${records.length - failed} 条成功，${failed} 条失败`,
+    result: { records },
+    resultRef: { href: start.href || "/gross-margin/monitor", label: "查看数据监控" }
   });
 }
 
@@ -1013,6 +1158,11 @@ function defaultJobTitle(input: JobStartInput) {
   if (input.kind === "transcribe-video") return "转写视频";
   if (input.kind === "batch-transcribe") return input.input.updateStyle ? "批量转写并更新风格" : "批量转写";
   if (input.kind === "hotlist-refresh") return input.input.automatic ? "自动刷新视频热榜" : "刷新视频热榜";
+  if (input.kind === "collect-account") return "采集账号";
+  if (input.kind === "single-video-transcribe") return "提取单条视频文案";
+  if (input.kind === "publish-copy") return "生成标题与发布文案";
+  if (input.kind === "hotspot-refresh") return "刷新热点雷达";
+  if (input.kind === "gross-margin-refresh") return "批量刷新数据监控";
   if (input.input.sourceType === "record") return "补齐评论素材";
   return "生成评论素材";
 }
@@ -1036,6 +1186,11 @@ function defaultInputSummary(input: JobStartInput) {
   if (input.kind === "hotlist-refresh") {
     return `${input.input.window} · ${input.input.accountIds?.length ? `${input.input.accountIds.length} 个账号` : "全部账号"}`;
   }
+  if (input.kind === "collect-account") return `${input.input.platform === "bilibili" ? "B站" : "抖音"} · ${input.input.name}`;
+  if (input.kind === "single-video-transcribe") return input.input.titleHint || input.input.url;
+  if (input.kind === "publish-copy") return input.input.topicHint || input.input.sourceText.slice(0, 42);
+  if (input.kind === "hotspot-refresh") return "全量热点来源";
+  if (input.kind === "gross-margin-refresh") return input.input.recordIds?.length ? `${input.input.recordIds.length} 条记录` : "全部监控记录";
   if (input.input.sourceType === "draft") return "从草稿生成";
   if (input.input.sourceType === "url") return "从链接生成";
   if (input.input.sourceType === "record") return "补齐已有评论";
@@ -1087,6 +1242,25 @@ function defaultJobScope(input: JobStartInput): JobScope {
       sourceKey: shortHash(`${input.input.window}-${(input.input.accountIds || []).join(",") || "all"}`)
     });
   }
+  if (input.kind === "collect-account") {
+    return compactJobScope({
+      targetType: "account",
+      platform: input.input.platform,
+      sourceKey: shortHash(`${input.input.name}-${input.input.uidOrUrl || ""}`)
+    });
+  }
+  if (input.kind === "single-video-transcribe") {
+    return compactJobScope({ targetType: "url", sourceKey: shortHash(input.input.url) });
+  }
+  if (input.kind === "publish-copy") {
+    return compactJobScope({ targetType: "text", sourceKey: shortHash(input.input.sourceText) });
+  }
+  if (input.kind === "hotspot-refresh") {
+    return compactJobScope({ targetType: "hotspot", sourceKey: "all" });
+  }
+  if (input.kind === "gross-margin-refresh") {
+    return compactJobScope({ targetType: "gross-margin", sourceKey: shortHash((input.input.recordIds || ["all"]).join(",")) });
+  }
   if (input.input.sourceType === "draft") {
     return compactJobScope({
       targetType: "draft",
@@ -1122,6 +1296,10 @@ function defaultHref(input: JobStartInput) {
   if (input.kind === "account-style" || input.kind === "transcribe-video" || input.kind === "batch-transcribe") return "/library";
   if (input.kind === "project-style") return "/project-workbench";
   if (input.kind === "hotlist-refresh") return "/douyin-hotlist";
+  if (input.kind === "collect-account") return "/library";
+  if (input.kind === "single-video-transcribe" || input.kind === "publish-copy") return "/tools";
+  if (input.kind === "hotspot-refresh") return "/hotspots";
+  if (input.kind === "gross-margin-refresh") return "/gross-margin/monitor";
   return "/assets";
 }
 
@@ -1136,7 +1314,7 @@ function writeResultRef(result: WriteResult) {
   return {
     id: result.draft.id,
     href: buildWriterDraftHref(result.draft),
-    label: "查看历史"
+    label: "查看文案"
   };
 }
 
@@ -1147,13 +1325,17 @@ function summarizeBatchResult(result: BatchTranscribeResult) {
 function buildEngagementSuccessMessage(record: EngagementRecord) {
   const commentCount = record.comments?.items.length || 0;
   const danmakuCount = record.danmaku?.items.length || 0;
-  const requestedCount = record.comments?.requestedCount || 0;
-  const commentLabel = requestedCount && commentCount < requestedCount
-    ? `${commentCount}/${requestedCount} 条评论`
+  const requestedCommentCount = record.comments?.requestedCount || 0;
+  const requestedDanmakuCount = record.danmaku?.requestedCount || 0;
+  const commentLabel = requestedCommentCount && commentCount < requestedCommentCount
+    ? `${commentCount}/${requestedCommentCount} 条评论`
     : `${commentCount} 条评论`;
-  if (commentCount && danmakuCount) return `已生成 ${commentLabel}和 ${danmakuCount} 条弹幕`;
+  const danmakuLabel = requestedDanmakuCount && danmakuCount < requestedDanmakuCount
+    ? `${danmakuCount}/${requestedDanmakuCount} 条弹幕`
+    : `${danmakuCount} 条弹幕`;
+  if (commentCount && danmakuCount) return `已生成 ${commentLabel}和 ${danmakuLabel}`;
   if (commentCount) return `已生成 ${commentLabel}`;
-  return `已生成 ${danmakuCount} 条弹幕`;
+  return `已生成 ${danmakuLabel}`;
 }
 
 function getJobAbortSignal(jobId: string) {
@@ -1262,6 +1444,8 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
   const href = readOptionalString(target, raw, "href");
   const resultRef = readOptionalObject<JobRecord["resultRef"]>(target, raw, "resultRef");
   const events = readOptionalArray<JobEvent>(target, raw, "events");
+  const dataRevision = readOptionalNumber(target, raw, "dataRevision");
+  const dataChange = readOptionalObject<JobRecord["dataChange"]>(target, raw, "dataChange");
   const completedAt = readOptionalString(target, raw, "completedAt");
 
   return {
@@ -1277,6 +1461,8 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
     ...(href ? { href } : {}),
     ...(resultRef ? { resultRef } : {}),
     ...(events ? { events: summarizeJobEvents(events) } : {}),
+    ...(dataRevision !== undefined ? { dataRevision } : {}),
+    ...(dataChange ? { dataChange } : {}),
     ...(error ? { error: summarizeJobListText(error, 240) } : {}),
     createdAt: readRequiredString(target, raw, "createdAt"),
     updatedAt: readRequiredString(target, raw, "updatedAt"),
@@ -1304,6 +1490,13 @@ function readRequiredNumber(target: string, raw: string, key: string) {
   const value = readOptionalTopLevelJsonValue(target, raw, key);
   if (value.found && typeof value.value === "number" && Number.isFinite(value.value)) return value.value;
   throw new Error(`任务记录字段缺失或无效：${target} 缺少数字字段 ${key}。`);
+}
+
+function readOptionalNumber(target: string, raw: string, key: string) {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (!value.found) return undefined;
+  if (typeof value.value === "number" && Number.isFinite(value.value)) return value.value;
+  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是数字。`);
 }
 
 function readOptionalObject<T>(target: string, raw: string, key: string): T | undefined {

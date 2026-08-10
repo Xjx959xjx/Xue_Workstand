@@ -24,7 +24,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
-import { getHotspotRadar, refreshHotspotRadar } from "@/lib/client";
+import { useScopedTasks } from "@/components/TaskProvider";
+import { getHotspotRadar } from "@/lib/client";
 import type {
   HotspotEvent,
   HotspotMonitorType,
@@ -142,6 +143,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 export default function HotspotsPage() {
+  const { activeJobs, recentJobs, startTask } = useScopedTasks({ href: "/hotspots", kinds: ["hotspot-refresh"] });
   const [snapshot, setSnapshot] = useState<HotspotRadarResponse | null>(null);
   const [activeMonitor, setActiveMonitor] = useState<HotspotMonitorType>("esports");
   const [selectedSubject, setSelectedSubject] = useState("");
@@ -152,6 +154,7 @@ export default function HotspotsPage() {
   const [decisions, setDecisions] = useState<Record<string, DetailAction>>({});
   const [detailNotice, setDetailNotice] = useState("");
   const detailTriggerRef = useRef<HTMLElement | null>(null);
+  const [activeRefreshJobId, setActiveRefreshJobId] = useState("");
 
   const loadSnapshot = useCallback(async () => {
     setBusy((current) => current || "load");
@@ -207,13 +210,30 @@ export default function HotspotsPage() {
     setBusy("refresh");
     setError("");
     try {
-      setSnapshot(await refreshHotspotRadar());
+      const job = await startTask({
+        kind: "hotspot-refresh",
+        href: "/hotspots",
+        input: {}
+      });
+      setActiveRefreshJobId(job.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "刷新热点雷达失败");
-    } finally {
       setBusy("");
     }
   }
+
+  useEffect(() => {
+    if (!activeRefreshJobId) return;
+    const job = [...activeJobs, ...recentJobs].find((item) => item.id === activeRefreshJobId);
+    if (!job || job.status === "queued" || job.status === "running") return;
+    setActiveRefreshJobId("");
+    setBusy("");
+    if (job.status === "completed" && job.result) {
+      setSnapshot(job.result as HotspotRadarResponse);
+      return;
+    }
+    setError(job.error || job.message || "刷新热点雷达失败");
+  }, [activeJobs, activeRefreshJobId, recentJobs]);
 
   function handleMonitorChange(value: HotspotMonitorType) {
     setActiveMonitor(value);

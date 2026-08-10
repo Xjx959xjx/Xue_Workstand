@@ -7,7 +7,10 @@ type SourceInputProps = {
 
 export function SourceInput({ value, onChange }: SourceInputProps) {
   return (
-    <section className="detail-section engagement-source-panel">
+    <section className="engagement-form-section engagement-source-panel">
+      <div className="engagement-form-heading">
+        <h3>输入内容</h3>
+      </div>
       <label className="field">
         <span>链接或文案</span>
         <textarea
@@ -19,10 +22,6 @@ export function SourceInput({ value, onChange }: SourceInputProps) {
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
-      <div className="status-summary engagement-source-summary">
-        <span>链接先转写</span>
-        <span>文案直接生成</span>
-      </div>
     </section>
   );
 }

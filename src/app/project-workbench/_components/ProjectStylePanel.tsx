@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, FileText, Save, Sparkles } from "lucide-react";
+import { ArrowRight, Save, Sparkles } from "lucide-react";
 import type { JobRecord, ProjectListItem } from "@/lib/types";
 import { EMPTY_STYLE } from "./project-workbench-utils";
 
@@ -35,24 +35,22 @@ export function ProjectStylePanel({
   onStyleDraftChange
 }: ProjectStylePanelProps) {
   const styleCount = styleDraft.trim().length;
-  const saveLabel = selectedProjectMeta ? (isDirty ? "未保存" : "已保存") : "待保存";
+  const saveLabel = busy === "style" ? "生成中" : selectedProjectMeta ? (isDirty ? "有修改" : "已保存") : "待保存";
   const canShowSave = canSaveWorkspace || busy === "save";
-  const generateLabel = styleCount ? "重生成" : "生成";
-  const styleStatus = busy === "style" ? "正在生成项目风格卡" : styleCount ? "可继续编辑，也可以直接进入写作" : "等待素材生成";
+  const generateLabel = styleCount ? "重新生成" : "生成风格卡";
+  const styleStatus = busy === "style" ? "正在生成项目风格卡" : styleCount ? `${styleCount} 字，可直接编辑` : "加入参考内容后生成，也可以直接填写";
 
   return (
     <section className="project-workbench-section style-editor-panel" aria-label="项目风格卡">
       <div className="project-style-head">
         <div className="project-style-heading">
-          <span className="project-style-kicker">
-            <FileText aria-hidden="true" size={14} />
-            项目资产
-          </span>
-          <h2>风格卡</h2>
+          <div className="project-style-title-row">
+            <h2>项目风格卡</h2>
+            <span className={`status-pill ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveLabel}</span>
+          </div>
           <p className="pane-subtitle">{styleStatus}</p>
         </div>
         <div className="project-style-actions">
-          <span className={`status-pill ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveLabel}</span>
           <button className="btn" disabled={busy === "style"} onClick={onGenerateStyle} type="button">
             <Sparkles aria-hidden="true" size={16} />
             {busy === "style" ? "生成中" : generateLabel}
@@ -67,21 +65,6 @@ export function ProjectStylePanel({
             写作
             <ArrowRight aria-hidden="true" size={16} />
           </Link>
-        </div>
-      </div>
-
-      <div className="project-style-meta" aria-label="风格卡状态">
-        <div>
-          <span>字数</span>
-          <strong>{styleCount || "0"}</strong>
-        </div>
-        <div>
-          <span>来源</span>
-          <strong>{selectedProjectMeta ? "当前项目" : "未绑定项目"}</strong>
-        </div>
-        <div>
-          <span>状态</span>
-          <strong>{busy === "style" ? "生成中" : isDirty ? "有修改" : "已同步"}</strong>
         </div>
       </div>
 
