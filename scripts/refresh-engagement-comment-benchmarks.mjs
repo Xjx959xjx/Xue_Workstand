@@ -7,10 +7,13 @@ const execFileAsync = promisify(execFile);
 const CACHE_VERSION = 2;
 const LOCAL_ONLY = process.argv.includes("--local-only");
 const BILIBILI_HOT_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_HOT_LIMIT, 0, 20, 6);
-const BILIBILI_VIDEOS_PER_QUERY = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_VIDEOS_PER_QUERY, 1, 5, 2);
-const BILIBILI_VIDEO_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_VIDEO_LIMIT, 4, 60, 24);
+const BILIBILI_VIDEOS_PER_QUERY = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_VIDEOS_PER_QUERY, 1, 5, 3);
+const BILIBILI_VIDEO_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_VIDEO_LIMIT, 4, 60, 36);
 const BILIBILI_COMMENT_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_COMMENT_LIMIT, 5, 50, 30);
 const BILIBILI_DANMAKU_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_DANMAKU_LIMIT, 20, 500, 180);
+const BILIBILI_DIGITAL_VIDEO_SHARE = clampRate(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_DIGITAL_VIDEO_SHARE, 0.3, 0.9, 0.67);
+const BILIBILI_ACCOUNT_VIDEO_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_ACCOUNT_VIDEO_LIMIT, 1, 8, 2);
+const BILIBILI_REQUEST_INTERVAL_MS = clampInteger(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_REQUEST_INTERVAL_MS, 0, 5_000, 750);
 const DOUYIN_VIDEO_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_VIDEO_LIMIT, 1, 20, 12);
 const DOUYIN_COMMENT_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_COMMENT_LIMIT, 1, 10, 10);
 const DOUYIN_SEARCH_VIDEOS_PER_QUERY = clampInteger(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_SEARCH_VIDEOS_PER_QUERY, 0, 3, 1);
@@ -18,6 +21,7 @@ const DOUYIN_SEARCH_COMMENT_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMAR
 const LOCAL_VIDEOS_PER_ACCOUNT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_LOCAL_VIDEOS_PER_ACCOUNT, 5, 80, 24);
 const CHANNEL_SAMPLE_LIMIT = clampInteger(process.env.ENGAGEMENT_BENCHMARK_CHANNEL_SAMPLE_LIMIT, 500, 20_000, 8_000);
 const BILIBILI_QUERIES = parseBilibiliQueries(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_QUERIES);
+const BILIBILI_PREFERRED_ACCOUNTS = parseBilibiliPreferredAccounts(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_PREFERRED_ACCOUNTS);
 const DOUYIN_ACCOUNTS = parseDouyinAccounts(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_ACCOUNTS);
 const DOUYIN_QUERIES = parseDouyinQueries(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_QUERIES);
 
@@ -28,7 +32,7 @@ const cachePath = path.join(cacheDirectory, "benchmark-comments.json");
 const local = await collectLocalCorpus(libraryRoot);
 const remote = LOCAL_ONLY
   ? { videos: [], samples: [], sources: [], failures: [] }
-  : mergeRemoteCorpus(await collectBilibiliBenchmarks(), await collectDouyinBenchmarks());
+  : await collectRemoteBenchmarks();
 const videos = uniqueBy([...local.videos, ...remote.videos], (video) => `${video.platform}:${video.videoId}`);
 const samples = capSamplesByChannel(
   uniqueBy([...local.samples, ...remote.samples], (sample) =>
@@ -36,6 +40,7 @@ const samples = capSamplesByChannel(
   ),
   CHANNEL_SAMPLE_LIMIT
 );
+const quality = buildBenchmarkQuality(videos, samples);
 const payload = {
   version: CACHE_VERSION,
   generatedAt: new Date().toISOString(),
@@ -46,6 +51,10 @@ const payload = {
     bilibiliVideoLimit: BILIBILI_VIDEO_LIMIT,
     bilibiliCommentLimit: BILIBILI_COMMENT_LIMIT,
     bilibiliDanmakuLimit: BILIBILI_DANMAKU_LIMIT,
+    bilibiliDigitalVideoShare: BILIBILI_DIGITAL_VIDEO_SHARE,
+    bilibiliAccountVideoLimit: BILIBILI_ACCOUNT_VIDEO_LIMIT,
+    bilibiliRequestIntervalMs: BILIBILI_REQUEST_INTERVAL_MS,
+    bilibiliPreferredAccounts: BILIBILI_PREFERRED_ACCOUNTS,
     douyinVideoLimit: DOUYIN_VIDEO_LIMIT,
     douyinCommentLimit: DOUYIN_COMMENT_LIMIT,
     douyinSearchVideosPerQuery: DOUYIN_SEARCH_VIDEOS_PER_QUERY,
@@ -63,6 +72,7 @@ const payload = {
     ...remote.sources
   ],
   failures: remote.failures,
+  quality,
   coverage: buildCoverage(videos, samples),
   videos,
   samples
@@ -78,6 +88,10 @@ for (const row of payload.coverage) {
     `${row.channel}：${row.videoCount} 个视频，${row.sampleCount} 条样本，题材 ${row.topics.slice(0, 4).map((item) => item.topic).join("/") || "general"}\n`
   );
 }
+process.stdout.write(
+  `B站质量：${quality.bilibili.digitalVideoCount}/${quality.bilibili.videoCount} 个数码视频，`
+  + `${quality.bilibili.commentSampleCount} 条评论，过滤 ${quality.bilibili.rejectedCommentCount} 条抽奖/导流噪声\n`
+);
 if (payload.failures.length) {
   process.stdout.write(`有 ${payload.failures.length} 个远端样本源失败，已保留其余成功结果；详情写入缓存 failures。\n`);
 }
@@ -172,6 +186,12 @@ async function collectLocalCorpus(root) {
   return { videos, samples };
 }
 
+async function collectRemoteBenchmarks() {
+  const bilibili = await collectBilibiliBenchmarks();
+  validateRemoteBenchmarkCoverage(bilibili);
+  return mergeRemoteCorpus(bilibili, await collectDouyinBenchmarks());
+}
+
 function selectLocalVideos(rows) {
   const groups = new Map();
   for (const row of rows) {
@@ -210,11 +230,18 @@ async function collectBilibiliBenchmarks() {
     try {
       const rows = await runOpenCliJson([
         "bilibili", "search", query.query, "--type", "video", "--limit",
-        String(Math.max(BILIBILI_VIDEOS_PER_QUERY * 2, BILIBILI_VIDEOS_PER_QUERY)),
+        String(Math.max(BILIBILI_VIDEOS_PER_QUERY * 4, 12)),
         "--site-session", "persistent", "-f", "json", "--trace", "retain-on-failure"
       ], 90_000);
-      const usable = asArray(rows)
-        .filter((row) => extractBvid(row?.url || row?.bvid || ""))
+      const discovered = asArray(rows)
+        .filter((row) => extractBvid(row?.url || row?.bvid || ""));
+      const editorial = discovered.filter((row) => !isBilibiliSeoFarmTitle(row?.title));
+      const discoveryPool = editorial.length >= BILIBILI_VIDEOS_PER_QUERY ? editorial : discovered;
+      const topicRelevant = query.topic === "digital_ai"
+        ? discoveryPool.filter((row) => isDigitalBenchmarkText(row?.title))
+        : discoveryPool;
+      const usable = (topicRelevant.length >= BILIBILI_VIDEOS_PER_QUERY ? topicRelevant : discoveryPool)
+        .sort((left, right) => bilibiliSearchRowQualityScore(right) - bilibiliSearchRowQualityScore(left))
         .slice(0, BILIBILI_VIDEOS_PER_QUERY);
       for (const row of usable) addBilibiliCandidate(candidateMap, row, [query.topic], `search:${query.query}`);
       sources.push({
@@ -229,22 +256,33 @@ async function collectBilibiliBenchmarks() {
     }
   }
 
-  const candidates = [...candidateMap.values()]
-    .sort((left, right) => right.score - left.score)
-    .slice(0, BILIBILI_VIDEO_LIMIT);
+  const candidates = selectBilibiliCandidates(
+    [...candidateMap.values()].sort((left, right) => bilibiliCandidateQualityScore(right) - bilibiliCandidateQualityScore(left)),
+    BILIBILI_VIDEO_LIMIT
+  );
   const videos = [];
   const samples = [];
+  let consecutiveVideoFailures = 0;
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     try {
       const bundle = await fetchBilibiliVideoBundle(candidate);
       videos.push(bundle.video);
       samples.push(...bundle.samples);
+      consecutiveVideoFailures = 0;
       process.stdout.write(
         `B站标杆 ${index + 1}/${candidates.length}：${bundle.video.videoTitle}，${bundle.video.commentSampleCount} 评论，${bundle.video.danmakuSampleCount} 弹幕\n`
       );
     } catch (error) {
-      failures.push({ source: `bilibili-video:${candidate.videoId}`, error: formatError(error) });
+      const message = formatError(error);
+      failures.push({ source: `bilibili-video:${candidate.videoId}`, error: message });
+      consecutiveVideoFailures += 1;
+      if (consecutiveVideoFailures >= 3) {
+        throw new Error(`B站评论连续 ${consecutiveVideoFailures} 个视频读取失败，已中止刷新并保留上一份缓存。最近错误：${message}`);
+      }
+    }
+    if (index + 1 < candidates.length && BILIBILI_REQUEST_INTERVAL_MS > 0) {
+      await wait(BILIBILI_REQUEST_INTERVAL_MS);
     }
   }
   return { videos, samples, sources, failures };
@@ -464,8 +502,8 @@ async function fetchBilibiliVideoBundle(candidate) {
     ], 90_000),
     fetchBilibiliView(candidate.videoId)
   ]);
-  if (commentsResult.status === "rejected" && viewResult.status === "rejected") {
-    throw new Error(`评论和视频元数据均读取失败：${formatError(commentsResult.reason)}；${formatError(viewResult.reason)}`);
+  if (commentsResult.status === "rejected") {
+    throw new Error(`评论读取失败：${formatError(commentsResult.reason)}`);
   }
   const view = viewResult.status === "fulfilled" ? viewResult.value : null;
   const videoTitle = normalizeText(view?.title || candidate.videoTitle);
@@ -473,11 +511,13 @@ async function fetchBilibiliVideoBundle(candidate) {
   const durationSec = toFiniteNumber(view?.duration);
   const topics = uniqueText([...candidate.topics, ...inferTopics(`${videoTitle}\n${normalizeText(view?.desc)}`)]);
   const contentTypes = uniqueText([...candidate.contentTypes, ...inferContentTypes(`${videoTitle}\n${normalizeText(view?.desc)}`)]);
-  const commentRows = commentsResult.status === "fulfilled" ? asArray(commentsResult.value) : [];
+  const commentRows = asArray(commentsResult.value);
+  if (!commentRows.length) throw new Error("评论接口返回空结果，可能触发了临时限流");
   const danmakuRows = view?.cid
     ? await fetchBilibiliDanmaku(view.cid, durationSec).catch(() => [])
     : [];
-  const comments = commentRows.map(normalizeComment).filter(Boolean);
+  const normalizedComments = commentRows.map(normalizeComment).filter(Boolean);
+  const comments = normalizedComments.filter((row) => !isBilibiliBenchmarkCommentNoise(row.text));
   const danmaku = deterministicSample(
     danmakuRows.map((row, index) => normalizeDanmaku(row, index, durationSec)).filter(Boolean),
     BILIBILI_DANMAKU_LIMIT,
@@ -499,6 +539,7 @@ async function fetchBilibiliVideoBundle(candidate) {
       stats: normalizeStats(view?.stat || { views: candidate.score }),
       durationSec,
       commentSampleCount: comments.length,
+      commentRejectedCount: normalizedComments.length - comments.length,
       danmakuSampleCount: danmaku.length
     },
     samples: [
@@ -699,6 +740,40 @@ function buildCoverage(videos, samples) {
   });
 }
 
+function buildBenchmarkQuality(videos, samples) {
+  const bilibiliVideos = videos.filter((video) => video.platform === "bilibili" && video.source === "benchmark");
+  return {
+    bilibili: {
+      videoCount: bilibiliVideos.length,
+      digitalVideoCount: bilibiliVideos.filter((video) => isDigitalBenchmarkText(video.videoTitle)).length,
+      accountCount: new Set(bilibiliVideos.map((video) => normalizeAccountName(video.accountName))).size,
+      commentSampleCount: samples.filter((sample) => sample.channel === "bilibili_comment" && sample.source === "benchmark").length,
+      rejectedCommentCount: bilibiliVideos.reduce((total, video) => total + toFiniteNumber(video.commentRejectedCount), 0)
+    }
+  };
+}
+
+function validateRemoteBenchmarkCoverage(remote) {
+  const bilibiliComments = remote.samples.filter((sample) => sample.channel === "bilibili_comment");
+  const bilibiliCommentVideos = new Set(bilibiliComments.map((sample) => sample.videoId));
+  const digitalCommentVideos = new Set(
+    bilibiliComments
+      .filter((sample) => isDigitalBenchmarkText(sample.videoTitle))
+      .map((sample) => sample.videoId)
+  );
+  const minimumCommentVideos = Math.min(BILIBILI_VIDEO_LIMIT, Math.max(4, Math.floor(BILIBILI_VIDEO_LIMIT * 0.8)));
+  const minimumDigitalVideos = Math.min(
+    minimumCommentVideos,
+    Math.max(3, Math.floor(BILIBILI_VIDEO_LIMIT * BILIBILI_DIGITAL_VIDEO_SHARE * 0.8))
+  );
+  if (bilibiliCommentVideos.size < minimumCommentVideos || digitalCommentVideos.size < minimumDigitalVideos) {
+    throw new Error(
+      `B站标杆刷新覆盖不足：评论区 ${bilibiliCommentVideos.size}/${minimumCommentVideos}，`
+      + `数码评论区 ${digitalCommentVideos.size}/${minimumDigitalVideos}。可能触发了 B站临时限流，已保留上一份缓存。`
+    );
+  }
+}
+
 function inferTopics(value) {
   const text = normalizeText(value).toLowerCase();
   const topics = [];
@@ -740,8 +815,18 @@ function inferContentTypes(value) {
 
 function parseBilibiliQueries(raw) {
   const defaults = [
-    { topic: "digital_ai", query: "数码测评" },
-    { topic: "digital_ai", query: "AI硬件" },
+    { topic: "digital_ai", query: "手机测评" },
+    { topic: "digital_ai", query: "旗舰手机横评" },
+    { topic: "digital_ai", query: "电脑硬件评测" },
+    { topic: "digital_ai", query: "笔记本电脑评测" },
+    { topic: "digital_ai", query: "显卡横评" },
+    { topic: "digital_ai", query: "相机深度评测" },
+    { topic: "digital_ai", query: "手机影像评测" },
+    { topic: "digital_ai", query: "耳机横评" },
+    { topic: "digital_ai", query: "智能穿戴评测" },
+    { topic: "digital_ai", query: "AI硬件体验" },
+    { topic: "digital_ai", query: "数码翻车" },
+    { topic: "digital_ai", query: "智能家居评测" },
     { topic: "workplace", query: "效率工具" },
     { topic: "gaming", query: "游戏评测" },
     { topic: "food", query: "美食探店" },
@@ -758,6 +843,26 @@ function parseBilibiliQueries(raw) {
       const query = queryParts.join(":").trim();
       return query ? { topic: topic.trim() || "general", query } : { topic: "general", query: topic.trim() };
     });
+}
+
+function parseBilibiliPreferredAccounts(raw) {
+  const defaults = [
+    "极客湾Geekerwan",
+    "影视飓风",
+    "差评君",
+    "小白测评",
+    "笔吧评测室",
+    "硬件茶谈",
+    "老师好我叫何同学",
+    "科技美学",
+    "爱否科技FView",
+    "先看评测",
+    "TESTV官方频道",
+    "凰家评测",
+    "Linksphotograph",
+    "嗨-视听"
+  ];
+  return uniqueText(raw?.trim() ? raw.split(",") : defaults).map(normalizeAccountName);
 }
 
 function parseDouyinAccounts(raw) {
@@ -817,6 +922,76 @@ function videoQualityScore(video) {
   const comments = Array.isArray(video?.topComments) ? video.topComments.length : 0;
   const danmaku = Array.isArray(video?.danmakuSamples) ? video.danmakuSamples.length : 0;
   return Math.log10(stats.views + 10) * 2 + Math.log10(stats.likes + 10) * 3 + comments * 0.2 + danmaku * 0.05;
+}
+
+function bilibiliSearchRowQualityScore(row) {
+  const accountName = normalizeAccountName(row?.author);
+  const popularity = Math.log10(Math.max(0, toFiniteNumber(row?.score ?? row?.play)) + 10) * 10;
+  return popularity + (isPreferredBilibiliAccount(accountName) ? 24 : 0);
+}
+
+function bilibiliCandidateQualityScore(candidate) {
+  return Math.log10(Math.max(0, candidate.score) + 10) * 10
+    + (isPreferredBilibiliAccount(candidate.accountName) ? 24 : 0)
+    + Math.min(6, (candidate.discoverySources?.length || 0) * 2);
+}
+
+function selectBilibiliCandidates(candidates, limit) {
+  const selected = [];
+  const selectedIds = new Set();
+  const accountCounts = new Map();
+  const take = (pool, targetCount, enforceAccountLimit = true) => {
+    for (const candidate of pool) {
+      if (selected.length >= targetCount || selected.length >= limit) break;
+      if (selectedIds.has(candidate.videoId)) continue;
+      const accountKey = normalizeAccountName(candidate.accountName).toLowerCase();
+      if (enforceAccountLimit && (accountCounts.get(accountKey) || 0) >= BILIBILI_ACCOUNT_VIDEO_LIMIT) continue;
+      selected.push(candidate);
+      selectedIds.add(candidate.videoId);
+      accountCounts.set(accountKey, (accountCounts.get(accountKey) || 0) + 1);
+    }
+  };
+  const digitalTarget = Math.min(limit, Math.round(limit * BILIBILI_DIGITAL_VIDEO_SHARE));
+  take(candidates.filter((candidate) => isDigitalBenchmarkText(candidate.videoTitle)), digitalTarget);
+  take(candidates, limit);
+  take(candidates, limit, false);
+  return selected;
+}
+
+function isPreferredBilibiliAccount(value) {
+  const normalized = normalizeAccountName(value).toLowerCase();
+  return BILIBILI_PREFERRED_ACCOUNTS.some((account) => {
+    const preferred = account.toLowerCase();
+    return normalized === preferred || normalized.includes(preferred) || preferred.includes(normalized);
+  });
+}
+
+function isDigitalBenchmarkText(value) {
+  return /数码(?:区|圈|产品|设备|测评|评测|科技|博主)|手机|平板|电脑|笔记本|显卡|处理器|芯片|主板|硬盘|内存|相机|镜头|摄影|耳机|音频|降噪|键盘|鼠标|显示器|路由器|nas|穿戴|手表|机器人|智能家居|ai\s*硬件|影像|iphone|macbook|安卓|鸿蒙|小米|华为|荣耀|vivo|oppo|索尼|佳能|尼康|大疆|rtx|cpu|gpu/i.test(normalizeText(value));
+}
+
+function isBilibiliSeoFarmTitle(value) {
+  const text = normalizeText(value);
+  const markers = [
+    /闭眼入/,
+    /不踩(?:坑|雷)/,
+    /建议收藏/,
+    /保姆级/,
+    /全价位/,
+    /年度大合集/,
+    /\d{4}年\d{1,2}月/,
+    /最新.*(?:推荐|合集|测评)/,
+    /(?:学生党|小白).*(?:必看|推荐|选购)/
+  ];
+  return markers.filter((pattern) => pattern.test(text)).length >= 2;
+}
+
+function isBilibiliBenchmarkCommentNoise(value) {
+  const text = normalizeText(value);
+  return /(?:抽奖|开奖|中奖|欧气|读到这条).{0,16}(?:中奖|好运|欧气|抽|送)/i.test(text)
+    || /(?:三连|关注|点赞|投币).{0,16}(?:抽|送|中奖|福利)/i.test(text)
+    || /(?:抽|送)\s*\d{1,4}\s*(?:台|部|个|份|套).{0,18}(?:iphone|手机|耳机|奖|福利)?/i.test(text)
+    || /(?:咱|本)(?:店|直播间)|店里逛逛|点击购买|购买链接|联系客服/i.test(text);
 }
 
 function sampleQualityScore(sample) {
@@ -901,6 +1076,11 @@ function clampInteger(value, min, max, fallback) {
   const parsed = Number.parseInt(String(value || ""), 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function clampRate(value, min, max, fallback) {
+  const parsed = Number.parseFloat(String(value || ""));
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
 function toFiniteNumber(value) {

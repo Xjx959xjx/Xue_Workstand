@@ -74,7 +74,9 @@ type LocalStyleCorpus = Record<EngagementStyleChannel, EngagementStyleSample[]>;
 const STYLE_CORPUS_CACHE_MS = 5 * 60_000;
 const STYLE_CORPUS_LIMIT = 12_000;
 const STYLE_SAMPLE_LIMIT = 240;
-const STYLE_EXAMPLE_LIMIT = 12;
+const STYLE_EXAMPLE_LIMIT = 18;
+const STYLE_RELEVANCE_SCORE_FLOOR = 16;
+const STYLE_MIN_PROFILE_SAMPLES = 48;
 const BENCHMARK_CACHE_VERSION = 2;
 const BENCHMARK_CACHE_FILE = "benchmark-comments.json";
 const NATIVE_EMOTE_PATTERN = /\[[^\]\n]{1,12}\]/g;
@@ -144,7 +146,7 @@ export async function loadEngagementStyleProfile(
     lengthQuantiles: measured?.lengthQuantiles || PRESET_LENGTHS[channel],
     intentBuckets: measured?.intentBuckets || presetIntentBuckets(channel),
     nativeEmoteRate: measured
-      ? clampRate(measured.nativeEmoteRate, channel === "douyin_comment" ? 0.08 : 0, channel === "douyin_comment" ? 0.55 : 0.3)
+      ? clampRate(measured.nativeEmoteRate, channel === "douyin_comment" ? 0.08 : 0, channel === "douyin_comment" ? 0.34 : 0.3)
       : PRESET_EMOTE_RATES[channel],
     nativeEmotes: uniqueText([
       ...(measured?.nativeEmotes || []),
@@ -333,9 +335,11 @@ async function collectBenchmarkSamples(root: string, corpus: LocalStyleCorpus) {
       : row.channel === "bilibili_comment"
         ? "bilibili_comment"
         : "douyin_comment";
+    const videoTitle = typeof row.videoTitle === "string" ? row.videoTitle : "";
+    if (platform === "bilibili" && isBilibiliBenchmarkVideoNoise(videoTitle)) continue;
     const sample = normalizeStyleSample(row, {
       accountName: typeof row.accountName === "string" ? row.accountName : "标杆账号",
-      videoTitle: typeof row.videoTitle === "string" ? row.videoTitle : "",
+      videoTitle,
       likes: readNumericValue(row, "likes"),
       source: "benchmark",
       videoId: typeof row.videoId === "string" ? row.videoId : undefined,
@@ -344,8 +348,31 @@ async function collectBenchmarkSamples(root: string, corpus: LocalStyleCorpus) {
       timeSec: readOptionalNumber(row, "timeSec"),
       durationSec: readOptionalNumber(row, "durationSec")
     });
+    if (sample && channel === "bilibili_comment" && isBilibiliBenchmarkCommentNoise(sample.text)) continue;
     if (sample && (channel !== "bilibili_danmaku" || platform === "bilibili")) corpus[channel].push(sample);
   }
+}
+
+function isBilibiliBenchmarkVideoNoise(value: string) {
+  const markers = [
+    /闭眼入/,
+    /不踩(?:坑|雷)/,
+    /建议收藏/,
+    /保姆级/,
+    /全价位/,
+    /年度大合集/,
+    /\d{4}年\d{1,2}月/,
+    /最新.*(?:推荐|合集|测评)/,
+    /(?:学生党|小白).*(?:必看|推荐|选购)/
+  ];
+  return markers.filter((pattern) => pattern.test(value)).length >= 2;
+}
+
+function isBilibiliBenchmarkCommentNoise(value: string) {
+  return /(?:抽奖|开奖|中奖|欧气|读到这条).{0,16}(?:中奖|好运|欧气|抽|送)/i.test(value)
+    || /(?:三连|关注|点赞|投币).{0,16}(?:抽|送|中奖|福利)/i.test(value)
+    || /(?:抽|送)\s*\d{1,4}\s*(?:台|部|个|份|套).{0,18}(?:iphone|手机|耳机|奖|福利)?/i.test(value)
+    || /(?:咱|本)(?:店|直播间)|店里逛逛|点击购买|购买链接|联系客服/i.test(value);
 }
 
 function normalizeStyleSample(
@@ -407,8 +434,8 @@ function selectRelevantStyleSamples(
   if (!samples.length || limit <= 0) return [];
   const excluded = new Set(excludeVideoIds.map(normalizeVideoId).filter(Boolean));
   const tokens = styleContextTokens(contextText);
-  const contextTopics = inferStyleTopics(contextText);
-  const contextContentTypes = inferStyleContentTypes(contextText);
+  const contextTopics = inferStyleTopics(contextText).filter((topic) => topic !== "general");
+  const contextContentTypes = inferStyleContentTypes(contextText).filter((type) => type !== "general");
   const scored = samples
     .filter((sample) => !sample.videoId || !excluded.has(normalizeVideoId(sample.videoId)))
     .map((sample, index) => ({
@@ -427,11 +454,67 @@ function selectRelevantStyleSamples(
   const orderedGroups = [...groups.values()].sort((left, right) =>
     (right[0]?.score || 0) - (left[0]?.score || 0)
   );
+  const hasContextSignal = tokens.length > 0 || contextTopics.length > 0 || contextContentTypes.length > 0;
+  const titleRelevantGroups = orderedGroups.filter((group) => group.some(({ sample }) => {
+    const title = sample.videoTitle.toLowerCase();
+    return tokens.some((token) => title.includes(token));
+  }));
+  const metadataRelevantGroups = orderedGroups.filter((group) => group.some(({ sample }) =>
+    contextTopics.some((topic) => sample.topics?.includes(topic))
+    || contextContentTypes.some((type) => sample.contentTypes?.includes(type))
+  ));
+  const relevanceCandidates = titleRelevantGroups.length
+    ? titleRelevantGroups
+    : metadataRelevantGroups.length
+      ? metadataRelevantGroups
+      : orderedGroups;
+  const bestRelevanceScore = relevanceCandidates[0]?.[0]?.score || 0;
+  const focusedRelevanceFloor = Math.max(STYLE_RELEVANCE_SCORE_FLOOR, bestRelevanceScore - 30);
+  const relevantGroups = hasContextSignal
+    ? relevanceCandidates.filter((group) => (group[0]?.score || 0) >= focusedRelevanceFloor)
+    : orderedGroups;
+  if (!relevantGroups.length) return takeStyleSamplesRoundRobin(orderedGroups, limit);
+
+  const relevant = takeStyleSamplesRoundRobin(relevantGroups, limit);
+  if (relevant.length >= Math.min(limit, STYLE_MIN_PROFILE_SAMPLES)) return relevant;
+
+  const selectedGroupKeys = new Set(relevantGroups.map(styleSampleGroupKey));
+  const secondaryGroups = metadataRelevantGroups.filter((group) => !selectedGroupKeys.has(styleSampleGroupKey(group)));
+  const secondary = takeStyleSamplesRoundRobin(
+    secondaryGroups,
+    Math.min(limit - relevant.length, Math.max(STYLE_MIN_PROFILE_SAMPLES - relevant.length, 0))
+  );
+  secondaryGroups.forEach((group) => selectedGroupKeys.add(styleSampleGroupKey(group)));
+  const focused = uniqueStyleSamples([...relevant, ...secondary]);
+  if (focused.length >= Math.min(limit, STYLE_MIN_PROFILE_SAMPLES)) return focused.slice(0, limit);
+
+  const fallbackGroups = orderedGroups.filter((group) => {
+    return !selectedGroupKeys.has(styleSampleGroupKey(group));
+  });
+  const fallbackLimit = Math.min(
+    limit - focused.length,
+    Math.max(STYLE_MIN_PROFILE_SAMPLES - focused.length, 0)
+  );
+  return uniqueStyleSamples([
+    ...focused,
+    ...takeStyleSamplesRoundRobin(fallbackGroups, fallbackLimit)
+  ]).slice(0, limit);
+}
+
+function styleSampleGroupKey(group: Array<{ sample: EngagementStyleSample }>) {
+  const sample = group[0]?.sample;
+  return `${sample?.source || "unknown"}:${sample?.videoId || sample?.accountName || ""}`;
+}
+
+function takeStyleSamplesRoundRobin(
+  groups: Array<Array<{ sample: EngagementStyleSample }>>,
+  limit: number
+) {
   const output: EngagementStyleSample[] = [];
   let row = 0;
   while (output.length < limit) {
     let appended = false;
-    for (const group of orderedGroups) {
+    for (const group of groups) {
       const item = group[row];
       if (!item) continue;
       output.push(item.sample);
@@ -592,10 +675,14 @@ function styleContextTokens(value: string) {
   const normalized = String(value || "").toLowerCase();
   const words = normalized.match(/[a-z0-9][a-z0-9.+-]{1,24}|[\u4e00-\u9fa5]{2,12}/g) || [];
   const tokens = words.flatMap((word) => {
-    if (!/[\u4e00-\u9fa5]/.test(word) || word.length <= 4) return [word];
-    return [word, ...Array.from({ length: word.length - 1 }, (_, index) => word.slice(index, index + 2))];
+    if (!/[\u4e00-\u9fa5]/.test(word) || word.length <= 3) return [word];
+    if (word.length <= 6) {
+      return [word, ...Array.from({ length: word.length - 1 }, (_, index) => word.slice(index, index + 2))];
+    }
+    return [word];
   });
   return uniqueText(tokens)
+    .filter((token) => !/^\d+(?:\.\d+)?$/.test(token))
     .filter((token) => !/^(这个|那个|视频|评论|大家|一个|我们|你们|他们|就是|真的|可以|感觉|怎么|什么|为什么|还是|比较|现在)$/.test(token))
     .slice(0, 80);
 }
@@ -646,18 +733,34 @@ function selectRepresentativeExamples(samples: string[], channel: EngagementStyl
   const maxLength = channel === "bilibili_danmaku" ? 42 : 90;
   const candidates = samples.filter((sample) => Array.from(sample).length <= maxLength);
   const groups = [
-    candidates.filter((sample) => hasNativeEmote(sample)),
+    candidates.filter((sample) => Array.from(sample).length <= 10 && !hasNativeEmote(sample)),
+    candidates.filter((sample) => {
+      const length = Array.from(sample).length;
+      return length >= 11 && length <= 35 && !/[?？]/.test(sample) && !hasNativeEmote(sample);
+    }),
     candidates.filter((sample) => /[?？]/.test(sample)),
-    candidates.filter((sample) => Array.from(sample).length <= 10),
-    candidates.filter((sample) => Array.from(sample).length >= 24),
+    candidates.filter((sample) => Array.from(sample).length >= 36),
+    candidates.filter((sample) => hasNativeEmote(sample)),
+    candidates.filter((sample) => !hasNativeEmote(sample)),
     candidates
   ];
   const output: string[] = [];
-  for (const group of groups) {
-    for (const sample of group) {
+  const positions = groups.map(() => 0);
+  while (output.length < STYLE_EXAMPLE_LIMIT) {
+    let appended = false;
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const group = groups[groupIndex];
+      while (positions[groupIndex] < group.length) {
+        const sample = group[positions[groupIndex]];
+        positions[groupIndex] += 1;
+        if (output.includes(sample)) continue;
+        output.push(sample);
+        appended = true;
+        break;
+      }
       if (output.length >= STYLE_EXAMPLE_LIMIT) break;
-      if (!output.includes(sample)) output.push(sample);
     }
+    if (!appended) break;
   }
   return output;
 }

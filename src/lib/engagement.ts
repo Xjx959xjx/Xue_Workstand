@@ -122,17 +122,23 @@ type CommentEntityCorrection = {
 type CommentEntityGuard = {
   allowedModels: string[];
   allowedModelKeys: Set<string>;
+  blockedModels: string[];
+  blockedModelKeys: Set<string>;
+  aliases: Map<string, string>;
 };
 
-const ENGAGEMENT_ENGINE_VERSION = "engagement-v3.3";
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v3.7";
+const ENGAGEMENT_DANMAKU_ENGINE_VERSION = "danmaku-v2";
 const ENGAGEMENT_SOURCE_CACHE_VERSION = "engagement-v3";
-const ENGAGEMENT_BRIEF_CACHE_VERSION = "engagement-v3.1";
+const ENGAGEMENT_BRIEF_CACHE_VERSION = "engagement-v3.2";
 const COMMENT_GENERATION_BATCH_SIZE = 8;
 const COMMENT_MODEL_CONCURRENCY = clampCount(Number.parseInt(process.env.ENGAGEMENT_MODEL_CONCURRENCY || "", 10), 1, 4, 4);
-const COMMENT_CANDIDATE_RATIO = clampRate(Number.parseFloat(process.env.ENGAGEMENT_COMMENT_CANDIDATE_RATIO || ""), 1.2, 2.5, 1.8);
-const COMMENT_EXPLICIT_ANCHOR_RATE = 0.52;
+const DANMAKU_GENERATION_BATCH_SIZE = 16;
+const DANMAKU_MODEL_CONCURRENCY = Math.min(COMMENT_MODEL_CONCURRENCY, 2);
+const COMMENT_CANDIDATE_RATIO = clampRate(Number.parseFloat(process.env.ENGAGEMENT_COMMENT_CANDIDATE_RATIO || ""), 1.05, 1.5, 1.4);
+const COMMENT_EXPLICIT_ANCHOR_RATE = 0.24;
 const COMMENT_GENERATION_MAX_ROUNDS = 2;
-const ENGAGEMENT_AUTO_SUPPLEMENT_MAX_PASSES = 3;
+const ENGAGEMENT_AUTO_SUPPLEMENT_MAX_PASSES = 2;
 const ENABLE_MODEL_COMMENT_GENERATION =
   getChatRuntimeConfig().configured && process.env.ENGAGEMENT_MODEL_COMMENTS !== "0";
 const KNOWN_ENGAGEMENT_TERM_CORRECTIONS: { pattern: RegExp; replacement: string }[] = [
@@ -146,7 +152,22 @@ const KNOWN_ENGAGEMENT_TERM_CORRECTIONS: { pattern: RegExp; replacement: string 
   { pattern: /黑\s*GMK87/g, replacement: "黑爵MK87" },
   { pattern: /\btape\s*7\s*接口/gi, replacement: "Type-C接口" },
   { pattern: /27\s*件紧凑布局/g, replacement: "87键紧凑布局" },
-  { pattern: /今年6月8是直降/g, replacement: "今年618是直降" }
+  { pattern: /今年6月8是直降/g, replacement: "今年618是直降" },
+  { pattern: /漫步者家新出的\s*clip\s*s1/gi, replacement: "漫步者家新出的 LolliClip SE" },
+  {
+    pattern: /\b(?:roly\s+cap|lowly\s+cap|lolly\s+clip|lonely\s+(?:k\s+)?clip)\s+s(?:1|e)\b/gi,
+    replacement: "LolliClip SE"
+  },
+  { pattern: /\bLHTC\s*5(?:\.0)?\b/gi, replacement: "LHDC 5.0" },
+  { pattern: /\bdeep\s*sk\b/gi, replacement: "DeepSeek" },
+  { pattern: /服役了34年/g, replacement: "服役了3、4年" },
+  { pattern: /5\s*千瓦超广角/g, replacement: "5000万像素超广角" },
+  { pattern: /\b7060\s*ma\b/gi, replacement: "7060mAh" },
+  { pattern: /\bPY\s*4\b/gi, replacement: "Pocket 4" },
+  { pattern: /大疆\s*POCKE\b/gi, replacement: "大疆 Pocket" },
+  { pattern: /在\s*Poke\s*上/gi, replacement: "在 Pocket 上" },
+  { pattern: /洛克西编码/g, replacement: "Log C 编码" },
+  { pattern: /起售价不低于\s*(\d{3,6})\s*tb/gi, replacement: "起售价不低于$1元" }
 ];
 
 export async function generateEngagement(input: GenerateEngagementInput, runOptions: GenerateEngagementOptions = {}) {
@@ -268,7 +289,13 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
       })
     : Promise.resolve(null);
   const danmakuPromise = options.includeDanmaku
-    ? generateDanmaku(prepared.content, prepared.contexts, options.danmakuCount, runOptions.signal)
+    ? generateDanmaku(
+        prepared.content,
+        prepared.contexts,
+        options.danmakuCount,
+        prepared.existingRecord?.danmaku?.items.map((item) => item.text) || [],
+        runOptions.signal
+      )
     : Promise.resolve(null);
   const [comments, danmaku] = await Promise.all([commentsPromise, danmakuPromise]);
   throwIfAborted(runOptions.signal);
@@ -338,6 +365,12 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
               styleSampleCount: Math.max(current.danmaku?.styleSampleCount || 0, savedDanmaku.styleSampleCount || 0),
               styleVideoCount: Math.max(current.danmaku?.styleVideoCount || 0, savedDanmaku.styleVideoCount || 0),
               styleTopics: uniqueText([...(current.danmaku?.styleTopics || []), ...(savedDanmaku.styleTopics || [])]),
+              engineVersion: savedDanmaku.engineVersion || current.danmaku?.engineVersion,
+              diagnostics: mergeDanmakuDiagnostics(
+                current.danmaku?.diagnostics,
+                savedDanmaku.diagnostics,
+                mergedDanmakuItems.length
+              ),
               items: mergedDanmakuItems
             }
           : current.danmaku;
@@ -454,6 +487,7 @@ function buildSavedDanmakuAsset(
     usedModel: danmaku.usedModel,
     fallback: danmaku.fallback,
     fallbackReason: danmaku.fallbackReason,
+    engineVersion: ENGAGEMENT_DANMAKU_ENGINE_VERSION,
     timingBasis: danmaku.timingBasis,
     durationSec: danmaku.durationSec,
     styleSampleCount: danmaku.styleSampleCount,
@@ -462,6 +496,7 @@ function buildSavedDanmakuAsset(
     sameSecondRate: danmaku.sameSecondRate,
     repeatRate: danmaku.repeatRate,
     burstShare: danmaku.burstShare,
+    diagnostics: danmaku.diagnostics,
     items: danmaku.items
   };
 }
@@ -497,6 +532,23 @@ function mergeDanmakuItems(existing: DraftDanmakuAsset[], incoming: DraftDanmaku
   return merged
     .sort((left, right) => left.timeSec - right.timeSec)
     .map((item, index) => ({ ...item, id: `danmaku-${index + 1}-${shortHash(`${item.timeSec}-${item.text}`)}` }));
+}
+
+function mergeDanmakuDiagnostics(
+  existing: NonNullable<NonNullable<Draft["assets"]>["danmaku"]>["diagnostics"],
+  incoming: NonNullable<NonNullable<Draft["assets"]>["danmaku"]>["diagnostics"],
+  completedCount: number
+) {
+  if (!incoming) return existing;
+  if (!existing) return { ...incoming, completedCount };
+  return {
+    ...incoming,
+    batchCount: existing.batchCount + incoming.batchCount,
+    parsedCount: existing.parsedCount + incoming.parsedCount,
+    completedCount,
+    rejectedCount: existing.rejectedCount + incoming.rejectedCount,
+    batches: [...existing.batches, ...incoming.batches].map((batch, index) => ({ ...batch, index }))
+  };
 }
 
 function mergeSupplementDiagnostics(
@@ -782,16 +834,30 @@ function normalizeKnownEngagementTerms(text: string) {
 
 function buildCommentEntityGuard(source: EngagementContent): CommentEntityGuard {
   const inputText = source.input && !/^https?:\/\//i.test(source.input.trim()) ? source.input : "";
-  const sourceText = normalizeKnownEngagementTerms([
+  const rawSourceText = [
     source.title,
     source.content,
     source.prompt || "",
     inputText
-  ].join("\n"));
+  ].join("\n");
+  const sourceText = normalizeKnownEngagementTerms(rawSourceText);
   const allowedModels = uniqueText(extractModelLikeTerms(sourceText));
+  const aliases = new Map<string, string>();
+  if (/LolliClip SE/i.test(sourceText)) aliases.set("CLIPS1", "LolliClip SE");
+  const blockedModels = uniqueText(
+    extractModelLikeTerms(rawSourceText).filter((term) => {
+      const normalized = normalizeKnownEngagementTerms(term);
+      const alias = aliases.get(toModelKey(term));
+      if (alias) return true;
+      return normalized !== term && !allowedModels.some((allowed) => toModelKey(allowed) === toModelKey(term));
+    })
+  );
   return {
     allowedModels,
-    allowedModelKeys: new Set(allowedModels.map(toModelKey))
+    allowedModelKeys: new Set(allowedModels.map(toModelKey)),
+    blockedModels,
+    blockedModelKeys: new Set(blockedModels.map(toModelKey)),
+    aliases
   };
 }
 
@@ -870,8 +936,14 @@ async function collectCommentStyleSamples(input: {
 }
 
 function buildCommentSystemPrompt(platform: Platform) {
-  const channel = platform === "bilibili" ? "B站评论区" : "抖音评论区";
-  return `你在模拟一群互不认识的${channel}观众。每条评论来自不同的人，必须遵守给定的意图和长度；只有显式锚点槽位才点出素材名词，隐式接话槽位不要复述标题。允许一个词、半句话、口头禅、没说完、只问一句、轻吐槽、圈内补充和少量跑题。不要写成评测总结、营销文案或整齐的观点清单。只能依据素材，不编造新闻、销量、购买或生活经历；不要照抄真实样本，不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 字符串数组。`;
+  if (platform === "bilibili") {
+    return `你在模拟真实的 B站视频评论区，不是弹幕，也不是给视频写摘要。每条评论来自不同用户。多数人只抓一个细节随手反应、接梗、与 UP 互动或说一句自己的判断；少数人才会认真补充、纠错、追问或反驳。允许长短评论并存，但不要把普通网友都写成产品经理、评测编辑或课代表。
+
+评论必须对素材有反应，可以使用稳定常识做一步推理；技术质疑必须有明确事实关系，不能把两个同时出现的参数硬凑成因果问题。不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄真实样本，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
+  }
+  return `你在模拟真实的抖音评论区，不是在写产品评测或给文案做摘要。每条评论来自不同网友：有人玩梗，有人顺着一个词跳到熟悉场景，有人接话，有人只丢半句，也有人认真追问或泼冷水。评论必须对素材有反应，但不能只是把素材卖点换成口语再说一次。
+
+可以使用稳定、常见的文化常识、平台语感、游戏或日常场景做“一步联想”，也可以用明显夸张和假设制造笑点；不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄真实样本，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
 }
 
 function assertNativeStyleProfile(profile: EngagementStyleProfile, label: string) {
@@ -933,7 +1005,7 @@ async function generateComments(input: {
     commentStyleChannel(platform),
     reference.samples,
     reference.error,
-    `${generationSource.title}\n${generationSource.content}`,
+    buildCommentStyleContext(generationSource, sourceBrief),
     extractEngagementVideoIds(sourceUrl || source.input || "")
   );
   const styleProfile: EngagementStyleProfile = {
@@ -959,12 +1031,13 @@ async function generateComments(input: {
   let lastBatchError: unknown;
   let nextBatchIndex = 0;
   let round = 0;
+  const modelConcurrency = platform === "bilibili" ? 1 : COMMENT_MODEL_CONCURRENCY;
   const targetLengthBuckets = buildTargetCommentLengthBuckets(count, styleProfile);
   const targetLongCommentCount = targetLengthBuckets.long;
   const targetIntentBuckets = buildTargetCommentIntentBuckets(count, styleProfile, sourceBrief);
   const targetNativeEmoteCount = Math.min(count, Math.round(count * styleProfile.nativeEmoteRate));
   let selected = rebalanceCommentSelection(
-    selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments),
+    selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
     count,
     targetIntentBuckets,
     targetLengthBuckets,
@@ -973,12 +1046,7 @@ async function generateComments(input: {
   const generationStartedAt = Date.now();
 
   while (
-    (selected.items.length < count || hasCommentDistributionGap(
-      selected.items,
-      targetIntentBuckets,
-      targetLengthBuckets,
-      targetNativeEmoteCount
-    ))
+    (selected.items.length < count || hasSevereCommentLengthGap(selected.items, targetLengthBuckets))
     && round < COMMENT_GENERATION_MAX_ROUNDS
   ) {
     throwIfAborted(signal);
@@ -996,59 +1064,70 @@ async function generateComments(input: {
       targetLengthBuckets,
       currentLengthBuckets: summarizeCommentLengthBuckets(selected.items),
       targetNativeEmoteCount,
-      currentNativeEmoteCount: selected.items.filter(hasNativeEmote).length
+      currentNativeEmoteCount: selected.items.filter(hasNativeEmote).length,
+      platform
     });
     const batches = buildCommentGenerationBatches(slots, nextBatchIndex);
 
-    for (let start = 0; start < batches.length; start += COMMENT_MODEL_CONCURRENCY) {
+    for (let start = 0; start < batches.length; start += modelConcurrency) {
       throwIfAborted(signal);
-      const wave = batches.slice(start, start + COMMENT_MODEL_CONCURRENCY);
+      const wave = batches.slice(start, start + modelConcurrency);
       const waveResults = await Promise.allSettled(
         wave.map(async (batch) => {
           throwIfAborted(signal);
-          const result = await chatCompleteStrict(
-            [
-              {
-                role: "system",
-                content:
-                  buildCommentSystemPrompt(platform)
-              },
-              {
-                role: "user",
-                content: buildCommentBatchPrompt({
-                  source: generationSource,
-                  sourceBrief,
-                  entityGuard,
-                  styleProfile,
-                  platform,
-                  slots: batch.slots
-                })
+          let lastError: unknown;
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            try {
+              const result = await chatCompleteStrict(
+                [
+                  {
+                    role: "system",
+                    content: buildCommentSystemPrompt(platform)
+                  },
+                  {
+                    role: "user",
+                    content: buildCommentBatchPrompt({
+                      source: generationSource,
+                      sourceBrief,
+                      entityGuard,
+                      styleProfile,
+                      platform,
+                      slots: batch.slots,
+                      usedComments: uniqueText([...excludedComments, ...selected.items]).slice(-60)
+                    })
+                  }
+                ],
+                "low",
+                {
+                  signal,
+                  maxOutputTokens: clampCount(batch.slots.length * 72, 1800, 9000, 3600)
+                }
+              );
+              throwIfAborted(signal);
+              if (result.fallback || !result.text.trim()) {
+                throw new Error(result.fallbackReason || "模型没有返回可用评论，请重试或更换模型。");
               }
-            ],
-            "none",
-            {
-              signal,
-              maxOutputTokens: clampCount(batch.slots.length * 88, 1200, 4200, 2600)
+              const batchParsed = parseStringArray(result.text)
+                .slice(0, batch.slots.length);
+              if (!batchParsed.length) {
+                throw new Error("模型返回了内容，但没有解析到可用评论，请重试或更换模型。");
+              }
+              return { batch, batchParsed, result, attempts: attempt };
+            } catch (error) {
+              throwIfAborted(signal);
+              lastError = error;
+              if (attempt >= 2 || !isRetryableCommentBatchError(error)) throw error;
+              await waitForCommentRetry(5_000, signal);
             }
-          );
-          throwIfAborted(signal);
-          if (result.fallback || !result.text.trim()) {
-            throw new Error(result.fallbackReason || "模型没有返回可用评论，请重试或更换模型。");
           }
-          const batchParsed = parseStringArray(result.text)
-            .slice(0, batch.slots.length)
-            .filter((text, index) => commentMatchesRequestedLength(text, batch.slots[index]?.length));
-          if (!batchParsed.length) {
-            throw new Error("模型返回了内容，但没有解析到可用评论，请重试或更换模型。");
-          }
-          return { batch, batchParsed, result };
+          throw lastError;
         })
       );
 
       waveResults.forEach((settled, index) => {
         const batch = wave[index];
         if (settled.status === "fulfilled") {
-          const { batchParsed, result } = settled.value;
+          const { batchParsed, result, attempts } = settled.value;
           parsed.push(...batchParsed);
           usedModel = result.model || usedModel;
           batchResults.push({
@@ -1058,7 +1137,7 @@ async function generateComments(input: {
             model: result.model,
             fallback: false,
             status: "completed",
-            attempts: 1
+            attempts
           });
           return;
         }
@@ -1076,7 +1155,7 @@ async function generateComments(input: {
       });
 
       selected = rebalanceCommentSelection(
-        selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments),
+        selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
         count,
         targetIntentBuckets,
         targetLengthBuckets,
@@ -1091,12 +1170,15 @@ async function generateComments(input: {
         progress: Math.min(88, 42 + Math.round((preview.length / count) * 44)),
         previewComments: preview
       });
+      if (modelConcurrency === 1 && start + modelConcurrency < batches.length) {
+        await waitForCommentRetry(250, signal);
+      }
     }
 
     nextBatchIndex += batches.length;
     round += 1;
     selected = rebalanceCommentSelection(
-      selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments),
+      selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
       count,
       targetIntentBuckets,
       targetLengthBuckets,
@@ -1105,7 +1187,7 @@ async function generateComments(input: {
   }
 
   const selection = rebalanceCommentSelection(
-    selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments),
+    selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
     count,
     targetIntentBuckets,
     targetLengthBuckets,
@@ -1200,12 +1282,13 @@ function buildCommentGenerationBatches(slots: CommentSlot[], startIndex = 0) {
 
 type CommentLength = "short" | "medium" | "long";
 type CommentLengthBuckets = Record<CommentLength, number>;
+type CommentCreativeLane = "meme" | "association" | "inside" | "supplement" | "reply" | "micro" | "counterpoint" | "question" | "reaction";
 type CommentSlot = {
   index: number;
   intent: CommentIntent;
   length: CommentLength;
+  lane: CommentCreativeLane;
   anchor?: string;
-  shape: string;
   emote: "none" | "optional";
   allowedEmotes: string[];
 };
@@ -1221,6 +1304,7 @@ function buildCommentSlots(input: {
   currentLengthBuckets: CommentLengthBuckets;
   targetNativeEmoteCount: number;
   currentNativeEmoteCount: number;
+  platform: Platform;
 }) {
   const intentOrder: CommentIntent[] = ["reaction", "question", "skeptical", "experience", "comparison", "follow", "chatter", "price"];
   const intents = buildDeficitSequence(
@@ -1248,22 +1332,31 @@ function buildCommentSlots(input: {
     input.count,
     Math.min(input.count, Math.round(input.count * COMMENT_EXPLICIT_ANCHOR_RATE))
   ));
+  const lanes = buildCommentCreativeLaneSequence(input.count, input.startIndex, input.platform);
 
   return Array.from({ length: input.count }, (_, offset): CommentSlot => {
     const intent = intents[offset] || "reaction";
-    const anchor = anchorPositions.has(offset) && anchors.length
+    const lane = lanes[offset] || "reaction";
+    const anchor = lane !== "micro" && anchorPositions.has(offset) && anchors.length
       ? anchors[(input.startIndex + offset * 5) % anchors.length]
       : undefined;
     return {
       index: input.startIndex + offset + 1,
       intent,
-      length: lengths[offset] || "medium",
+      length: lane === "micro" ? "short" : lengths[offset] || "medium",
+      lane,
       anchor,
-      shape: commentSlotShape(intent, offset),
       emote: emotePositions.has(offset) && input.styleProfile.nativeEmotes.length ? "optional" : "none",
       allowedEmotes: input.styleProfile.nativeEmotes
     };
   });
+}
+
+function buildCommentCreativeLaneSequence(count: number, startIndex: number, platform: Platform) {
+  const cycle: CommentCreativeLane[] = platform === "bilibili"
+    ? ["reaction", "inside", "micro", "supplement", "reply", "meme", "question", "reaction", "counterpoint", "inside", "micro", "association"]
+    : ["meme", "association", "micro", "inside", "reply", "meme", "association", "micro", "counterpoint", "question"];
+  return Array.from({ length: count }, (_, index) => cycle[(startIndex + index) % cycle.length]);
 }
 
 function buildDeficitSequence<K extends string>(
@@ -1298,49 +1391,76 @@ function spreadPositions(count: number, selectedCount: number) {
   );
 }
 
-function commentSlotShape(intent: CommentIntent, index: number) {
-  const shapes: Record<CommentIntent, string[]> = {
-    reaction: ["第一反应", "抓一个细节随口接话", "半句话、一个人名或轻吐槽"],
-    question: ["自然追问一个细节", "像回复别人一样问", "短问句，不先总结"],
-    price: ["只谈价格或值不值", "预算党口吻", "问到手价或优惠"],
-    comparison: ["和同类或以前体验做轻对比", "纠结怎么选", "只指出一个差异"],
-    skeptical: ["保留意见", "担心一个真实门槛", "轻微反向观点"],
-    experience: ["只说自己的偏好或门槛", "素材明确支持时才说亲历", "不用编宿舍、下班或购买经历"],
-    follow: ["插眼或蹲反馈", "求后续或求实测", "简短跟进感"],
-    chatter: ["圈内补充或接梗", "围观、考古或作者互动感", "轻度跑题但仍和素材有关"]
-  };
-  return shapes[intent][index % shapes[intent].length];
-}
-
 function formatCommentSlot(slot: CommentSlot) {
-  const length = slot.length === "short" ? "短句/半句" : slot.length === "medium" ? "中等长度" : "稍长但不是小作文";
+  const length = slot.length === "short"
+    ? "2—12 个字的短句/半句"
+    : slot.length === "medium"
+      ? "13—35 个字"
+      : "36—70 个字，可以有两个口语分句，但不要写成小作文";
   const anchor = slot.anchor
-    ? `显式锚点：${slot.anchor}`
+    ? `素材锚点：${slot.anchor}（取其中 1—2 个具体名词造梗，不要把长句整段抄进评论；型号保持原写法）`
     : "隐式接话：不要复述标题、产品名或日期，像已经看过视频后直接开口";
   const emote = slot.emote === "optional"
     ? `语气合适时可用一个平台表情，只能从 ${slot.allowedEmotes.join(" ")} 中选；不合适就不用`
     : "不用 emoji 或方括号表情";
-  return `${slot.index}. ${formatCommentIntent(slot.intent)}｜${length}｜${anchor}｜形态：${slot.shape}｜${emote}`;
+  return `${slot.index}. 意图：${formatCommentIntent(slot.intent)}｜创意方式：${formatCommentCreativeLane(slot.lane)}｜${length}｜${anchor}｜${emote}`;
 }
 
 function formatCommentIntent(intent: CommentIntent) {
   const labels: Record<CommentIntent, string> = {
-    reaction: "普通反应",
-    question: "追问",
-    price: "价格",
-    comparison: "对比",
-    skeptical: "观望质疑",
-    experience: "自我位置",
-    follow: "插眼跟进",
-    chatter: "圈内闲聊"
+    reaction: "普通反应，不强行总结",
+    question: "只追问一个具体问题",
+    price: "只聊价格、优惠或值不值",
+    comparison: "轻对比、纠结怎么选或只点一个差异",
+    skeptical: "保留意见、泼冷水或指出一个门槛",
+    experience: "只说个人偏好或使用门槛，不编亲历",
+    follow: "插眼、蹲后续或求实测",
+    chatter: "圈内闲聊或轻度跑题，但仍能接上素材"
   };
   return labels[intent];
 }
 
+function formatCommentCreativeLane(lane: CommentCreativeLane) {
+  const labels: Record<CommentCreativeLane, string> = {
+    meme: "玩梗：抓反差、身份错位、夸张后果或一句可传播的包袱",
+    association: "联想：从素材跳一步联想到熟悉场景、圈层文化或另一种身份，但别编新闻",
+    inside: "素材内梗：拿两个素材名词重新组合、接话或反转，不复述卖点",
+    supplement: "补充讨论：补一个条件、边界、因果、常识或核验点；只展开一个中心，不冒充亲历",
+    reply: "接话：像回复评论区某人，单独看也能懂，不用‘你这么一说’",
+    micro: "短碎片：2—10 个字，一个槽点、称呼、半句话或冷幽默",
+    counterpoint: "反向吐槽：泼一点冷水、拆一句话或指出荒诞处，不写评测总结",
+    question: "真问题：只问一个观众确实会追问的点，不先总结",
+    reaction: "自然反应：脱口而出，允许不完整，不写工整结论"
+  };
+  return labels[lane];
+}
+
 function formatStyleExamples(examples: string[]) {
   return examples.length
-    ? examples.slice(0, 12).map((example) => `- ${example}`).join("\n")
+    ? examples.slice(0, 18).map((example) => `- ${example}`).join("\n")
     : "暂无本地真实样本，只按平台预设分布生成。";
+}
+
+function formatCommentCreativePalette(firstSlotIndex: number, platform: Platform) {
+  const batchIndex = Math.floor(Math.max(firstSlotIndex - 1, 0) / COMMENT_GENERATION_BATCH_SIZE);
+  const palettes = platform === "bilibili" ? [
+    "优先写第一层自然反应、UP互动和具体小梗；认真分析最多两条，别一上来就集体做风险评审。",
+    "优先用具体名词做短梗、圈内接话和一步联想；不要照搬抖音热评，也不要解释包袱。",
+    "放少量真问题、对比或反向观点；问题必须来自素材尚未回答的空白，不能把两个无关参数硬连起来。",
+    "优先写轻纠错、个人判断和短反应；补充只讲一个有依据的边界，不要写成百科或产品分析。"
+  ] : [
+    "优先挖身份和职业错位、人物关系、谁比谁更认真；少用‘副本、任务、攻略、现实版’作落点。",
+    "优先做具体名词碰撞、词义双关、尺寸/位置/动作变化；少写‘像把 X 搬到 Y’和泛泛的‘开始研究’。",
+    "优先联想明显是假设的后续场面、旁观者反应和荒诞后果；不要靠‘抽卡、皮肤、坐骑’三个万能词撑满本批。",
+    "优先写回怼、泼冷水、真问题、尴尬点和短碎片；问题不能只是把参数名后面加‘吗’。"
+  ];
+  return palettes[batchIndex % palettes.length];
+}
+
+function formatCommentMixRule(platform: Platform) {
+  return platform === "bilibili"
+    ? "整批至少四成是自然反应、短梗、UP互动或圈内接话，约两成是 2—12 字的短评论；补充/考据/条件边界与具体追问/反向观点合计不超过三成。评论不是弹幕，稍长评论也只讲一个中心。"
+    : "整批至少四成是玩梗或一步联想，约两成是 2—12 字的短反应/碎片，约一成半把素材里的两个细节重新组合；其余再放真实追问、反向吐槽、补充和围观。";
 }
 
 function buildCommentBatchPrompt(input: {
@@ -1350,6 +1470,7 @@ function buildCommentBatchPrompt(input: {
   styleProfile: EngagementStyleProfile;
   platform: Platform;
   slots: CommentSlot[];
+  usedComments: string[];
 }) {
   return `文案标题：${input.source.title}
 
@@ -1364,29 +1485,50 @@ ${formatCommentEntityGuard(input.entityGuard)}
 平台真实风格画像：
 ${formatEngagementStyleProfile(input.styleProfile)}
 
-真实样本（只学习长度、断句、语气和表情位置，严禁照抄内容或带入样本里的事实）：
+真实样本（学习它们如何省略、歪楼、接梗和突然联想；严禁照抄原句或带入样本里的事实）：
 ${formatStyleExamples(input.styleProfile.examples)}
+
+本次已经生成/历史已有的评论（这些观点、梗、问法和句式都已经用过，不能改几个字再写一遍）：
+${input.usedComments.length ? input.usedComments.map((comment) => `- ${comment}`).join("\n") : "暂无"}
 
 原始文案节选（只用于核对，不要逐句复读）：
 ${clampText(input.source.content, 2600)}
+
+本批创意侧重点：
+${formatCommentCreativePalette(input.slots[0]?.index || 1, input.platform)}
+
+先在心里从素材找 8—15 个“可玩钩子”，不要输出这一步：反差、身份错位、名词碰撞、谐音/句式、夸张后果、人物关系、观众下一步动作。再把钩子改造成网友会发的评论。
+
+“改造成评论”指的是：
+- 事实是“售货员要学角色设定”，不要写“培训很认真”，可以写成“销售岗笔试加考角色理解”。
+- 事实是“玩家开始研究续航”，不要写“跨度很大”，可以写成“配队表旁边新增电量表”。
+这两句只说明转换方法，不能当成本批答案照搬；如果当前素材没有对应事实，更不能硬套。
 
 请严格按下面每个槽位各写一条，并按槽位顺序输出 ${input.slots.length} 个 JSON 字符串：
 ${input.slots.map(formatCommentSlot).join("\n")}
 
 要求：
-1. 每条像不同网友看完后随手发的，不追求语法完整，不要整批都像同一个人交作业。
-2. 自然混入不同声部：接梗、补充、纠错、作者互动、第一反应、犹豫、吐槽、实际顾虑、轻度跑题、对比、追问和围观；不要写出这些标签，也不要机械逐项打卡。
-3. 只有标了“显式锚点”的槽位才需要自然落到该细节；“隐式接话”槽位不要复读标题、产品名、活动日期或完整卖点。允许一个人名、一个词、半句话、口头禅、问号和回复感，也允许少量稍长评论。
-4. 不要全夸，也不要每条都先夸再转折；别反复使用“确实、感觉、适合、定位、配置、我这种、对我来说”。
-5. 少复读标题，避免“产品力、需求场景、适合人群、这次信息量、画面感、莫名合理”等文案腔。
-6. 不得声称已经购买、长期使用、回购或亲历素材没有说明的事情；不要凭空编宿舍、下班、午休、同事、室友、饭搭子、固定队等生活场景。
+1. ${formatCommentMixRule(input.platform)}不要写出分类标签，也不要机械轮流报数。
+2. 每条像不同网友看完后随手发的。允许突然、没头没尾、轻微歪楼、口语不完整和冷幽默；笑点优先来自具体细节，不靠“哈哈哈”“笑死”硬撑。
+3. 只有标了“显式锚点”的槽位才要自然落到该细节；“隐式接话”不要复读标题、产品名、活动日期或完整卖点。联想可以跳一步，但不要连续解释为什么好笑。
+4. 不要全夸，也不要每条都先夸再转折；禁用流水线开场“第一反应、你这么一说、本来以为、热闹归热闹、我先观望、好家伙、这下真”；少用“确实、感觉、适合、定位、配置、我这种、对我来说”。
+5. 禁止把卖点换个口语说法、写工整总结或概括“信息量/画面感/产品力/需求场景/适合人群”；一句能删掉前半句仍成立时，优先删掉。
+6. 允许明显是假设、夸张或梗的生活场景联想；但不能声称自己或朋友已经购买、长期使用、回购、每天在用，不能把虚构经历写成证词。
 7. 英文数字型号只能使用“型号一致性约束”里的写法，不自行添加 Pro、Max、V2 等后缀。
-8. 槽位要求“无表情”时不能加 emoji 或方括号表情；要求“一个表情”时只能从允许表情中选一个，并放在符合语气的位置。
-9. 可以有“你这么一说”“还真是”这类回复感，但不要让本批评论互相依赖，也不要生成真实用户名或虚构 @ 对象。
-10. 输入链接、域名、短链码、视频 ID 和“复制链接打开平台”等分享信息只是运输元数据，绝不能出现在评论里。`;
+8. 槽位要求“无表情”时不能加 emoji 或方括号表情；“可用一个表情”时最多用一个，而且不必强行使用。
+9. 回复感要直接接内容，不要统一用“你这么一说”；不要让本批评论互相依赖，也不要生成真实用户名或虚构 @ 对象。
+10. 输入链接、域名、短链码、视频 ID 和“复制链接打开平台”等分享信息只是运输元数据，绝不能出现在评论里。
+11. 同一个事实、同一种包袱、同一个担忧或同一联想落点在本批最多使用一次；换几个字仍算重复，围绕同一风险的近义担忧也只能占一个槽位。
+12. 技术问题必须是素材没有回答、普通观众确实会问的问题。禁止因为两个参数同时出现就臆造“参数 A 是否影响功能 B”之类的关系；也不要重新质疑素材已经明确解释的基本功能。`;
 }
 
-async function generateDanmaku(source: EngagementContent, contexts: SourceContext[], count: number, signal?: AbortSignal) {
+async function generateDanmaku(
+  source: EngagementContent,
+  contexts: SourceContext[],
+  count: number,
+  excludedDanmaku: string[] = [],
+  signal?: AbortSignal
+) {
   throwIfAborted(signal);
   const transportGuard = buildEngagementTransportGuard([source.input, source.title, source.content]);
   const generationSource = sanitizeEngagementSource(source, transportGuard);
@@ -1406,45 +1548,84 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
   };
   assertNativeStyleProfile(styleProfile, "B站弹幕");
   const timeline = buildDanmakuTimeline(generationSource, count, styleProfile);
-  const batches = chunkValues(timeline.slots, 50);
+  const batches = chunkValues(timeline.slots, DANMAKU_GENERATION_BATCH_SIZE);
   const parsedItems: Array<{ slot: DanmakuSlot; text: string }> = [];
   const acceptedTextsBySlot = new Map<number, string>();
   const failures: string[] = [];
+  const batchResults: NonNullable<NonNullable<NonNullable<Draft["assets"]>["danmaku"]>["diagnostics"]>["batches"] = [];
   let usedModel = "model";
 
-  for (let start = 0; start < batches.length; start += COMMENT_MODEL_CONCURRENCY) {
+  for (let start = 0; start < batches.length; start += DANMAKU_MODEL_CONCURRENCY) {
     throwIfAborted(signal);
-    const wave = batches.slice(start, start + COMMENT_MODEL_CONCURRENCY);
-    const settled = await Promise.allSettled(wave.map(async (slots) => {
-      const result = await chatCompleteStrict(
-        [
-          {
-            role: "system",
-            content:
-              "你在模拟一群互不认识的 B站观众。严格按给定时间槽和台词锚点各写一条即时弹幕，只负责写文本，不得自己编时间。弹幕要短、像看到当下画面时脱口而出，允许短梗、接话和少量复读感；不要写成完整测评句，不要攻击、造谣、色情、歧视或刷屏。只输出与槽位等长、顺序一致的 JSON 字符串数组。"
-          },
-          {
-            role: "user",
-            content: buildDanmakuBatchPrompt(generationSource, styleProfile, slots)
+    const wave = batches.slice(start, start + DANMAKU_MODEL_CONCURRENCY);
+    const settled = await Promise.allSettled(wave.map(async (slots, waveIndex) => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const result = await chatCompleteStrict(
+            [
+              {
+                role: "system",
+                content:
+                  "你在模拟一群互不认识的 B站观众。严格按给定时间槽和台词锚点各写一条即时弹幕，只负责写文本，不得自己编时间。弹幕是看见当下画面脱口而出的短反应，不是视频评论、测评总结或台词改写。只有明确标记的复读槽才能复读；其他槽位不得重复已经用过的句子。不要攻击、造谣、色情、歧视或刷屏。只输出与槽位等长、顺序一致的 JSON 字符串数组。"
+              },
+              {
+                role: "user",
+                content: buildDanmakuBatchPrompt(
+                  generationSource,
+                  styleProfile,
+                  slots,
+                  uniqueText([...excludedDanmaku, ...parsedItems.map((item) => item.text)]).slice(-80)
+                )
+              }
+            ],
+            "none",
+            { signal, maxOutputTokens: clampCount(slots.length * 52, 1000, 3600, 2400) }
+          );
+          throwIfAborted(signal);
+          if (result.fallback || !result.text.trim()) {
+            throw new Error(result.fallbackReason || "模型没有返回可用弹幕，请重试或更换模型。");
           }
-        ],
-        "none",
-        { signal, maxOutputTokens: clampCount(slots.length * 52, 1000, 3600, 2400) }
-      );
-      throwIfAborted(signal);
-      const texts = parseStringArray(result.text);
-      if (!texts.length) {
-        throw new Error(result.fallbackReason || "模型返回了内容，但没有解析到可用弹幕。");
+          const texts = parseStringArray(result.text).slice(0, slots.length);
+          if (!texts.length) {
+            throw new Error("模型返回了内容，但没有解析到可用弹幕。");
+          }
+          return { result, slots, texts, attempts: attempt, batchIndex: start + waveIndex };
+        } catch (error) {
+          throwIfAborted(signal);
+          lastError = error;
+          if (attempt >= 2 || !isRetryableCommentBatchError(error)) throw error;
+          await waitForCommentRetry(5_000, signal);
+        }
       }
-      return { result, slots, texts };
+      throw lastError;
     }));
 
-    settled.forEach((item) => {
+    settled.forEach((item, waveIndex) => {
       if (item.status === "rejected") {
-        failures.push(item.reason instanceof Error ? item.reason.message : "弹幕批次生成失败");
+        const error = item.reason instanceof Error ? item.reason.message : "弹幕批次生成失败";
+        failures.push(error);
+        const slots = wave[waveIndex] || [];
+        batchResults.push({
+          index: start + waveIndex,
+          requestedCount: slots.length,
+          parsedCount: 0,
+          model: "",
+          status: "failed",
+          attempts: 2,
+          error
+        });
         return;
       }
       usedModel = item.value.result.model || usedModel;
+      batchResults.push({
+        index: item.value.batchIndex,
+        requestedCount: item.value.slots.length,
+        parsedCount: item.value.texts.length,
+        model: item.value.result.model,
+        status: "completed",
+        attempts: item.value.attempts
+      });
       item.value.texts.slice(0, item.value.slots.length).forEach((text, index) => {
         const slot = item.value.slots[index];
         const generated = String(text || "").replace(/\s+/g, " ").trim();
@@ -1462,7 +1643,8 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
     });
   }
 
-  const selectedItems = limitDanmakuRepeats(parsedItems, 3).slice(0, count);
+  const selection = selectDanmakuItems(parsedItems, excludedDanmaku);
+  const selectedItems = selection.items.slice(0, count);
   if (!selectedItems.length) {
     throw new Error(failures[0] || "模型返回了内容，但没有解析到可用弹幕，请重试或更换模型。");
   }
@@ -1478,6 +1660,14 @@ async function generateDanmaku(source: EngagementContent, contexts: SourceContex
     sameSecondRate: styleProfile.danmakuRhythm?.sameSecondRate,
     repeatRate: styleProfile.danmakuRhythm?.repeatRate,
     burstShare: styleProfile.danmakuRhythm?.burstShare,
+    diagnostics: {
+      batchSize: DANMAKU_GENERATION_BATCH_SIZE,
+      batchCount: batchResults.length,
+      parsedCount: parsedItems.length,
+      completedCount: selectedItems.length,
+      rejectedCount: selection.rejectedCount,
+      batches: batchResults.sort((left, right) => left.index - right.index)
+    },
     items: selectedItems.map((item, index) => ({
       id: `danmaku-${index + 1}-${shortHash(`${item.slot.timeSec}-${item.text}`)}`,
       timeSec: item.slot.timeSec,
@@ -1493,7 +1683,10 @@ type DanmakuSlot = {
   emote: "none" | "one";
   clusterId: number;
   echoOfIndex?: number;
+  voice: DanmakuVoice;
 };
+
+type DanmakuVoice = "reaction" | "punchline" | "question" | "detail" | "counterpoint" | "association" | "echo";
 
 function buildDanmakuTimeline(source: EngagementContent, count: number, styleProfile: EngagementStyleProfile) {
   const sourceSegments = (source.segments || [])
@@ -1516,7 +1709,7 @@ function buildDanmakuTimeline(source: EngagementContent, count: number, stylePro
   );
   const centers = selectDanmakuBurstCenters(segments, durationSec, desiredCenterCount, rhythm?.densityByPosition || []);
   const allocations = allocateDanmakuClusterCounts(centers, count);
-  const rawSlots: Array<Omit<DanmakuSlot, "index" | "emote" | "echoOfIndex">> = [];
+  const rawSlots: Array<Omit<DanmakuSlot, "index" | "emote" | "echoOfIndex" | "voice">> = [];
   centers.forEach((center, centerIndex) => {
     const clusterCount = allocations[centerIndex] || 0;
     for (let offsetIndex = 0; offsetIndex < clusterCount; offsetIndex += 1) {
@@ -1533,7 +1726,7 @@ function buildDanmakuTimeline(source: EngagementContent, count: number, stylePro
   });
   rawSlots.sort((left, right) => left.timeSec - right.timeSec || left.clusterId - right.clusterId);
 
-  const repeatRate = clampRate(rhythm?.repeatRate || 0.08, 0.04, 0.16, 0.08);
+  const repeatRate = clampRate(rhythm?.repeatRate ?? 0.08, 0, 0.16, 0.08);
   const repeatTarget = Math.min(Math.round(count * repeatRate), Math.max(count - centers.length, 0));
   const repeatPositions = selectDanmakuRepeatPositions(rawSlots, repeatTarget);
   const emoteTarget = Math.min(count, Math.round(count * styleProfile.nativeEmoteRate));
@@ -1547,10 +1740,18 @@ function buildDanmakuTimeline(source: EngagementContent, count: number, stylePro
       ...slot,
       index: index + 1,
       echoOfIndex: canEcho ? index : undefined,
+      voice: canEcho ? "echo" : danmakuVoiceForSlot(index, slot.clusterId),
       emote: wantsEmote && styleProfile.nativeEmotes.length ? "one" : "none"
     };
   });
   return { timingBasis, durationSec, slots };
+}
+
+function danmakuVoiceForSlot(index: number, clusterId: number): DanmakuVoice {
+  const cycle: Exclude<DanmakuVoice, "echo">[] = [
+    "reaction", "punchline", "detail", "question", "association", "counterpoint"
+  ];
+  return cycle[(index + clusterId * 2) % cycle.length];
 }
 
 type DanmakuBurstCenter = {
@@ -1643,18 +1844,75 @@ function selectDanmakuRepeatPositions(
   return new Set(positions);
 }
 
-function limitDanmakuRepeats(
+function selectDanmakuItems(
   items: Array<{ slot: DanmakuSlot; text: string }>,
-  maxPerText: number
+  excludedValues: string[]
 ) {
+  const excluded = excludedValues.map((value) => value.trim()).filter(Boolean);
+  const selected: Array<{ slot: DanmakuSlot; text: string }> = [];
+  const selectedBySlot = new Map<number, { slot: DanmakuSlot; text: string }>();
   const counts = new Map<string, number>();
-  return items.filter((item) => {
-    const key = commentFingerprint(item.text);
-    const count = counts.get(key) || 0;
-    if (!key || count >= maxPerText) return false;
-    counts.set(key, count + 1);
-    return true;
+  const templateCounts = new Map<string, number>();
+  excluded.forEach((text) => {
+    const key = commentFingerprint(text);
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
   });
+  let rejectedCount = 0;
+  for (const item of items) {
+    const source = item.slot.echoOfIndex ? selectedBySlot.get(item.slot.echoOfIndex) : undefined;
+    const text = source?.text || item.text;
+    const key = commentFingerprint(text);
+    const existingCount = counts.get(key) || 0;
+    if (!key) {
+      rejectedCount += 1;
+      continue;
+    }
+    if (item.slot.echoOfIndex) {
+      if (!source || existingCount >= 3) {
+        rejectedCount += 1;
+        continue;
+      }
+    } else if (
+      existingCount > 0
+      || isNearDuplicateDanmaku(text, [...excluded, ...selected.map((entry) => entry.text)])
+    ) {
+      rejectedCount += 1;
+      continue;
+    }
+    const template = danmakuTemplateFingerprint(text);
+    const templateCount = template ? templateCounts.get(template) || 0 : 0;
+    if (template && templateCount >= 2) {
+      rejectedCount += 1;
+      continue;
+    }
+    const next = { slot: item.slot, text };
+    selected.push(next);
+    selectedBySlot.set(item.slot.index, next);
+    counts.set(key, existingCount + 1);
+    if (template) templateCounts.set(template, templateCount + 1);
+  }
+  return { items: selected, rejectedCount };
+}
+
+function isNearDuplicateDanmaku(value: string, existing: string[]) {
+  const normalized = normalizeCommentKey(value);
+  if (normalized.length < 8) return false;
+  return existing.some((item) => {
+    const other = normalizeCommentKey(item);
+    if (other.length < 8) return false;
+    if (normalized.includes(other) || other.includes(normalized)) {
+      return Math.min(normalized.length, other.length) / Math.max(normalized.length, other.length) >= 0.7;
+    }
+    const distance = levenshteinDistance(normalized, other);
+    return distance <= 2 && Math.max(normalized.length, other.length) <= 18;
+  });
+}
+
+function danmakuTemplateFingerprint(value: string) {
+  if (/^(?:重点|核心|关键|正片).{0,4}(?:来了|开始|登场)/.test(value)) return "transition";
+  if (/(?:下期见|拜拜|结束了|走了走了|散了散了)/.test(value)) return "ending";
+  if (/(?:钱包|价格).{0,6}(?:报警|顶不住|劝退)/.test(value)) return "price-alarm";
+  return "";
 }
 
 function buildEstimatedTranscriptSegments(content: string) {
@@ -1679,7 +1937,12 @@ function estimateSpokenDurationSec(content: string) {
   return Math.max(15, Math.min(900, readableChars / 4.2));
 }
 
-function buildDanmakuBatchPrompt(source: EngagementContent, styleProfile: EngagementStyleProfile, slots: DanmakuSlot[]) {
+function buildDanmakuBatchPrompt(
+  source: EngagementContent,
+  styleProfile: EngagementStyleProfile,
+  slots: DanmakuSlot[],
+  usedDanmaku: string[]
+) {
   return `B站弹幕真实风格画像：
 ${formatEngagementStyleProfile(styleProfile)}
 
@@ -1689,10 +1952,30 @@ ${formatStyleExamples(styleProfile.examples)}
 正文节选：
 ${clampText(source.content, 2600)}
 
-请按顺序为每个时间槽写一条弹幕，只输出 ${slots.length} 个 JSON 字符串：
-${slots.map((slot) => `${slot.index}. ${slot.timeSec}s｜当下内容：${slot.anchor}｜${slot.echoOfIndex ? "复读紧邻上一条弹幕，不新增观点" : "写这一刻的即时反应"}｜${slot.emote === "one" ? `使用一个允许表情：${styleProfile.nativeEmotes.join(" ")}` : "不用 emoji 或方括号表情"}`).join("\n")}
+本次已经出现过的弹幕（除明确复读槽外，不能重复或只改一两个字）：
+${usedDanmaku.length ? usedDanmaku.map((text) => `- ${text}`).join("\n") : "暂无"}
 
-不要复述完整台词；优先写观众看到这一刻会脱口而出的短反应。输入链接、域名、短链码和视频 ID 不属于画面内容，绝不能写进弹幕。`;
+请按顺序为每个时间槽写一条弹幕，只输出 ${slots.length} 个 JSON 字符串：
+${slots.map((slot) => `${slot.index}. ${slot.timeSec}s｜当下内容：${slot.anchor}｜${formatDanmakuVoice(slot.voice)}｜${slot.emote === "one" ? `使用一个允许表情：${styleProfile.nativeEmotes.join(" ")}` : "不用 emoji 或方括号表情"}`).join("\n")}
+
+要求：
+1. 每条只回应当前时间槽，不预告后文，不复述完整台词，不总结整段视频。
+2. 同一个爆点的一簇弹幕要像不同观众：有人惊讶、有人抓细节、有人问一句、有人泼冷水；不要连续换词复述同一结论。
+3. 除明确标记的复读槽外，同一句和近似句只能出现一次；“重点来了、核心来了、开始了”一类转场废话整批最多两条。
+4. 输入链接、域名、短链码和视频 ID 不属于画面内容，绝不能写进弹幕。`;
+}
+
+function formatDanmakuVoice(voice: DanmakuVoice) {
+  const labels: Record<DanmakuVoice, string> = {
+    reaction: "即时反应：短、直接，不复述台词",
+    punchline: "短梗：抓当前名词或反差落一个包袱",
+    question: "即时疑问：只问这一刻自然冒出的一个问题",
+    detail: "抓细节：点出当前一个具体信息，不写完整评测句",
+    counterpoint: "泼冷水：指出当前说法的一个限制或槽点",
+    association: "一步联想：联想到熟悉的梗或场景，不连续解释",
+    echo: "设计复读：复读紧邻上一条弹幕，必须完全相同，不新增观点"
+  };
+  return labels[voice];
 }
 
 function chunkValues<T>(values: T[], size: number) {
@@ -1705,6 +1988,26 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw new Error("任务已停止");
   }
+}
+
+function isRetryableCommentBatchError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /限流|rate limit|429|暂时异常|暂时不可用|连接异常|网络|超时|timeout|5\d\d|没有解析到可用评论/i.test(message);
+}
+
+async function waitForCommentRetry(ms: number, signal?: AbortSignal) {
+  throwIfAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new Error("任务已停止"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function prepareCommentSourceBrief(
@@ -1844,6 +2147,13 @@ function normalizeTextWithEntityGuard(
 ) {
   let text = normalizeKnownEngagementTerms(value);
   const corrections: CommentEntityCorrection[] = [];
+  if (entityGuard.allowedModelKeys.has("LHDC50")) {
+    const nextText = text.replace(/(^|[^A-Za-z0-9])5\.0\s*高清音频解码/gi, "$1LHDC 5.0 高清音频解码");
+    if (nextText !== text) {
+      text = nextText;
+      corrections.push({ from: "5.0 高清音频解码", to: "LHDC 5.0 高清音频解码", stage });
+    }
+  }
   for (const term of extractModelLikeTerms(text)) {
     const correction = findModelEntityCorrection(term, entityGuard);
     if (!correction) continue;
@@ -1859,6 +2169,7 @@ function findUnsupportedModelTerms(value: string, entityGuard: CommentEntityGuar
   return uniqueText(
     extractModelLikeTerms(value).filter((term) => {
       const key = toModelKey(term);
+      if (entityGuard.blockedModelKeys.has(key)) return true;
       return !entityGuard.allowedModelKeys.has(key) && !findModelEntityCorrection(term, entityGuard) && isSuspiciousModelVariant(key, entityGuard);
     })
   );
@@ -1867,6 +2178,8 @@ function findUnsupportedModelTerms(value: string, entityGuard: CommentEntityGuar
 function findModelEntityCorrection(term: string, entityGuard: CommentEntityGuard) {
   const key = toModelKey(term);
   if (!key || entityGuard.allowedModelKeys.has(key)) return "";
+  const alias = entityGuard.aliases.get(key);
+  if (alias) return alias;
   return entityGuard.allowedModels
     .slice()
     .sort((left, right) => toModelKey(right).length - toModelKey(left).length)
@@ -1910,7 +2223,8 @@ function extractModelLikeTerms(text: string) {
 function isModelLikeTerm(term: string) {
   const key = toModelKey(term);
   if (isBlockedModelKey(key)) return false;
-  if (!/[A-Z]/.test(key) || !/\d/.test(key)) return false;
+  const hasNamedSuffix = /^[A-Z][A-Za-z0-9.+-]{2,}\s+(?:SE|AI|PRO|MAX|ULTRA)$/i.test(term.trim());
+  if (!hasNamedSuffix && (!/[A-Z]/.test(key) || !/\d/.test(key))) return false;
   if (key.length < 3 || key.length > 24) return false;
   return !/^\d+(?:MS|HZ|KHZ|MAH|MM|KG|G|K)$/.test(key);
 }
@@ -1941,6 +2255,7 @@ function uniqueEntityCorrections(corrections: CommentEntityCorrection[]) {
 function toCommentEntityGuardDiagnostics(entityGuard: CommentEntityGuard, corrections: CommentEntityCorrection[]) {
   return {
     allowedModels: entityGuard.allowedModels,
+    blockedModels: entityGuard.blockedModels,
     correctedTerms: uniqueEntityCorrections(corrections).slice(0, 40)
   };
 }
@@ -1951,8 +2266,9 @@ function formatCommentEntityGuard(entityGuard: CommentEntityGuard) {
   }
   return [
     `可写型号：${entityGuard.allowedModels.join("、")}`,
+    entityGuard.blockedModels.length ? `识别冲突、禁止照写：${entityGuard.blockedModels.join("、")}` : "",
     "如果要写英文数字型号，只能从上面选；不要把相近型号、搜索结果里的其他型号或自己猜的后缀写进评论。"
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function levenshteinDistance(left: string, right: string) {
@@ -2002,6 +2318,16 @@ function formatCommentSourceBrief(brief: CommentSourceBrief) {
     formatBriefLines("评论锚点词", brief.anchorTerms),
     formatBriefLines("不要写", brief.mustAvoid)
   ].filter(Boolean).join("\n");
+}
+
+function buildCommentStyleContext(source: EngagementContent, brief: CommentSourceBrief) {
+  return uniqueText([
+    source.title,
+    brief.summary,
+    brief.topic,
+    ...brief.subjects,
+    ...brief.keyFacts.slice(0, 6)
+  ]).join("\n");
 }
 
 function formatBriefLines(label: string, values: string[]) {
@@ -2092,6 +2418,18 @@ function buildTargetCommentLengthBuckets(count: number, styleProfile: Engagement
     targets[key] = Math.max(0, targets[key] - 1);
   }
   while (targets.short + targets.medium + targets.long < count) targets.medium += 1;
+  if (styleProfile.channel === "bilibili_comment") {
+    const maxLong = Math.ceil(count * 0.25);
+    const minShort = count >= 5 ? Math.max(1, Math.floor(count * 0.2)) : 0;
+    if (targets.long > maxLong) {
+      targets.medium += targets.long - maxLong;
+      targets.long = maxLong;
+    }
+    while (targets.short < minShort && targets.medium > 0) {
+      targets.short += 1;
+      targets.medium -= 1;
+    }
+  }
   return targets;
 }
 
@@ -2154,32 +2492,24 @@ function rebalanceCommentSelection(
     if (selected.hasEmote) nativeEmoteCount += 1;
   }
 
+  const arranged = arrangeCommentOrder(output);
+
   return {
     ...selection,
-    items: output,
-    lengthBuckets: summarizeCommentLengthBuckets(output)
+    items: arranged,
+    lengthBuckets: summarizeCommentLengthBuckets(arranged)
   };
 }
 
-function hasCommentDistributionGap(
-  values: string[],
-  targetIntentBuckets: CommentIntentBuckets,
-  targetLengthBuckets: CommentLengthBuckets,
-  targetNativeEmoteCount: number
-) {
-  if (!values.length) return true;
-  const actual = summarizeCommentIntentBuckets(values);
-  const missingCoreIntent = (Object.keys(targetIntentBuckets) as CommentIntent[]).some((intent) =>
-    targetIntentBuckets[intent] >= 2 && actual[intent] < Math.max(1, Math.floor(targetIntentBuckets[intent] * 0.55))
-  );
-  const actualLengths = summarizeCommentLengthBuckets(values);
-  const missingLengthBucket = (Object.keys(targetLengthBuckets) as CommentLength[]).some((length) =>
-    targetLengthBuckets[length] >= 3
-    && actualLengths[length] < Math.max(2, Math.floor(targetLengthBuckets[length] * 0.72))
-  );
-  const nativeEmoteCount = values.filter(hasNativeEmote).length;
-  const missingEmotes = targetNativeEmoteCount >= 2 && nativeEmoteCount < Math.floor(targetNativeEmoteCount * 0.7);
-  return missingCoreIntent || missingLengthBucket || missingEmotes;
+function arrangeCommentOrder(values: string[]) {
+  return values
+    .map((text, index) => ({
+      text,
+      index,
+      order: Number.parseInt(shortHash(`comment-order:${text}`).slice(0, 8), 16)
+    }))
+    .sort((left, right) => left.order - right.order || left.index - right.index)
+    .map((item) => item.text);
 }
 
 function commentLengthBucket(value: string): CommentLength {
@@ -2189,9 +2519,12 @@ function commentLengthBucket(value: string): CommentLength {
   return "short";
 }
 
-function commentMatchesRequestedLength(value: string, requested: CommentLength | undefined) {
-  if (!requested) return true;
-  return commentLengthBucket(String(value || "").replace(/\s+/g, " ").trim()) === requested;
+function hasSevereCommentLengthGap(values: string[], target: CommentLengthBuckets) {
+  if (!values.length) return true;
+  const actual = summarizeCommentLengthBuckets(values);
+  const longFloor = target.long >= 4 ? Math.max(2, Math.ceil(target.long * 0.6)) : 0;
+  const mediumFloor = target.medium >= 10 ? Math.max(5, Math.ceil(target.medium * 0.5)) : 0;
+  return actual.long < longFloor || actual.medium < mediumFloor;
 }
 
 type CommentSelectionResult = {
@@ -2219,7 +2552,8 @@ function selectCommentSamples(
   transportGuard: EngagementTransportGuard,
   styleProfile: EngagementStyleProfile,
   targetCount: number,
-  excludedValues: string[] = []
+  excludedValues: string[] = [],
+  diversityBaseline: string[] = []
 ): CommentSelectionResult {
   const anchorTerms = sourceBrief ? buildCommentAnchorTerms(sourceBrief) : [];
   const primaryAnchorTerms = sourceBrief ? buildPrimaryCommentAnchorTerms(sourceBrief) : [];
@@ -2227,10 +2561,25 @@ function selectCommentSamples(
   const seen = new Set(excluded.map(commentFingerprint));
   const styleCounts = new Map<string, number>();
   const prefixCounts = new Map<string, number>();
-  const repeatedStyleLimit = clampCount(Math.ceil(targetCount * 0.06), 3, 12, 4);
-  const repeatedPrefixLimit = clampCount(Math.ceil(targetCount * 0.06), 3, 12, 4);
-  const explicitAnchorLimit = Math.max(1, Math.round(targetCount * 0.62));
-  const leadingAnchorLimit = Math.max(1, Math.round(targetCount * 0.3));
+  const anchorCounts = new Map<string, number>();
+  const anchorPairCounts = new Map<string, number>();
+  const repeatedStyleLimit = clampCount(Math.ceil(targetCount * 0.04), 2, 6, 2);
+  const repeatedPrefixLimit = clampCount(Math.ceil(targetCount * 0.025), 2, 4, 2);
+  const perAnchorLimit = clampCount(Math.ceil(targetCount * 0.08), 2, 12, 2);
+  const explicitAnchorLimit = Math.max(1, Math.round(targetCount * 0.42));
+  const leadingAnchorLimit = Math.max(1, Math.round(targetCount * 0.16));
+  for (const value of diversityBaseline) {
+    const styleKey = commentStyleFingerprint(value, primaryAnchorTerms);
+    if (styleKey) styleCounts.set(styleKey, (styleCounts.get(styleKey) || 0) + 1);
+    const prefixKey = commentPrefixFingerprint(value);
+    if (prefixKey) prefixCounts.set(prefixKey, (prefixCounts.get(prefixKey) || 0) + 1);
+    primaryAnchorTerms.filter((term) => commentIncludesAnchorTerm(value, term)).forEach((term) => {
+      anchorCounts.set(term, (anchorCounts.get(term) || 0) + 1);
+    });
+    commentAnchorPairKeys(value, primaryAnchorTerms).forEach((key) => {
+      anchorPairCounts.set(key, (anchorPairCounts.get(key) || 0) + 1);
+    });
+  }
   const output: string[] = [];
   let lowSignalRejectedCount = 0;
   let syntheticRejectedCount = 0;
@@ -2282,11 +2631,15 @@ function selectCommentSamples(
       syntheticRejectedCount += 1;
       continue;
     }
-    const hasExplicitAnchor = primaryAnchorTerms.some((term) => value.includes(term));
-    const hasLeadingAnchor = primaryAnchorTerms.some((term) => value.startsWith(term));
+    const matchedPrimaryAnchors = primaryAnchorTerms.filter((term) => commentIncludesAnchorTerm(value, term));
+    const matchedAnchorPairs = commentAnchorPairKeys(value, primaryAnchorTerms);
+    const hasExplicitAnchor = matchedPrimaryAnchors.length > 0;
+    const hasLeadingAnchor = matchedPrimaryAnchors.some((term) => commentStartsWithAnchorTerm(value, term));
     if (
       (hasExplicitAnchor && acceptedExplicitAnchorCount >= explicitAnchorLimit)
       || (hasLeadingAnchor && acceptedLeadingAnchorCount >= leadingAnchorLimit)
+      || matchedPrimaryAnchors.some((term) => (anchorCounts.get(term) || 0) >= perAnchorLimit)
+      || matchedAnchorPairs.some((key) => (anchorPairCounts.get(key) || 0) >= 1)
     ) {
       repeatedStyleRejectedCount += 1;
       continue;
@@ -2314,6 +2667,8 @@ function selectCommentSamples(
     if (nativeEmoteCount) acceptedNativeEmoteCount += 1;
     if (hasExplicitAnchor) acceptedExplicitAnchorCount += 1;
     if (hasLeadingAnchor) acceptedLeadingAnchorCount += 1;
+    matchedPrimaryAnchors.forEach((term) => anchorCounts.set(term, (anchorCounts.get(term) || 0) + 1));
+    matchedAnchorPairs.forEach((key) => anchorPairCounts.set(key, (anchorPairCounts.get(key) || 0) + 1));
     output.push(value);
   }
   return {
@@ -2333,7 +2688,7 @@ function selectCommentSamples(
 
 function normalizeGeneratedCommentText(raw: unknown, entityGuard: CommentEntityGuard) {
   return normalizeTextWithEntityGuard(
-    String(raw || "").replace(/^"+|"+$/g, "").replace(/^\d+[.、]\s*/, "").replace(/\s+/g, " ").trim(),
+    String(raw || "").replace(/^"+|"+$/g, "").replace(/^\d+(?:[.．]\s+|、\s*)/, "").replace(/\s+/g, " ").trim(),
     entityGuard,
     "comment"
   );
@@ -2345,6 +2700,12 @@ function commentStyleFingerprint(value: string, anchorTerms: string[] = []) {
     .reduce((current, term) => current.split(term).join("{锚点}"), value)
     .replace(/\[[^\]\n]{1,12}\]/g, "")
     .replace(/\d+(?:\.\d+)?/g, "{数字}");
+  if (/^第一反应/.test(template)) return "canned-first-reaction";
+  if (/^你这么一说/.test(template)) return "canned-you-say";
+  if (/^本来(?:以为|只是|只想)/.test(template)) return "canned-originally";
+  if (/^热闹归热闹/.test(template)) return "canned-busy-but";
+  if (/^(?:好家伙|这下真|这波真)/.test(template)) return "canned-exclamation";
+  if (/^我先(?:声明|去|蹲|看|问|观望|等等|插个眼|记下)/.test(template)) return "canned-i-first";
   if (/会不会|会不会有|会不会太|会不会更/.test(template)) return "question-will";
   if (/是不是|算不算|能不能|可不可以/.test(template)) return "question-is";
   if (/真能|真的能|用得出来|感知/.test(template)) return "question-feel";
@@ -2385,14 +2746,45 @@ function buildCommentAnchorTerms(brief: CommentSourceBrief) {
 }
 
 function buildPrimaryCommentAnchorTerms(brief: CommentSourceBrief) {
-  return uniqueText([
-    ...brief.subjects,
-    ...brief.anchorTerms
-  ])
+  const subjects = uniqueText(brief.subjects)
     .map((term) => term.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").trim())
     .filter((term) => term.length >= 3 && !isGenericAnchorTerm(term))
+    .slice(0, 12);
+  const subjectKeys = new Set(subjects.map(commentAnchorMatchKey));
+  const supplemental = uniqueText(brief.anchorTerms)
+    .map((term) => term.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").trim())
+    .filter((term) => term.length >= 3 && !isGenericAnchorTerm(term) && !subjectKeys.has(commentAnchorMatchKey(term)))
     .sort((left, right) => right.length - left.length)
-    .slice(0, 24);
+    .slice(0, Math.max(24 - subjects.length, 0));
+  return [...subjects, ...supplemental];
+}
+
+function commentAnchorPairKeys(value: string, anchorTerms: string[]) {
+  const matched = anchorTerms
+    .filter((term) => commentIncludesAnchorTerm(value, term))
+    .filter((term, _index, values) => !values.some((other) => other !== term && other.includes(term)))
+    .sort();
+  const pairs: string[] = [];
+  for (let left = 0; left < matched.length; left += 1) {
+    for (let right = left + 1; right < matched.length; right += 1) {
+      pairs.push(`${matched[left]}\u0000${matched[right]}`);
+    }
+  }
+  return pairs;
+}
+
+function commentIncludesAnchorTerm(value: string, term: string) {
+  const termKey = commentAnchorMatchKey(term);
+  return Boolean(termKey) && commentAnchorMatchKey(value).includes(termKey);
+}
+
+function commentStartsWithAnchorTerm(value: string, term: string) {
+  const termKey = commentAnchorMatchKey(term);
+  return Boolean(termKey) && commentAnchorMatchKey(value).startsWith(termKey);
+}
+
+function commentAnchorMatchKey(value: string) {
+  return value.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").toLowerCase();
 }
 
 function containsUnsupportedPersonalScene(value: string, brief: CommentSourceBrief) {
@@ -2403,8 +2795,11 @@ function containsUnsupportedPersonalScene(value: string, brief: CommentSourceBri
     ...brief.viewerScenes,
     ...brief.discussionAngles
   ].join(" ");
-  const sceneTerms = value.match(/下班|午休|宿舍|办公室|室友|同事|饭搭子|固定队|周末|通勤|开黑群|学生党|上班族|饭点/g) || [];
-  return sceneTerms.some((term) => !sourceText.includes(term));
+  const sceneTerms = value.match(/下班|午休|宿舍|办公室|室友|同事|朋友|饭搭子|固定队|周末|通勤|开黑群|学生党|上班族|饭点/g) || [];
+  if (!sceneTerms.some((term) => !sourceText.includes(term))) return false;
+
+  const firstPersonTestimony = /(?:我|我们|我家|我这边|本人|俺)(?:已经|一直|平时|每天|之前|上次|最近|刚刚|刚|用过|买过|入了|回购|实测|亲测|碰到|遇到|带去|拿去|在).{0,28}(?:下班|午休|宿舍|办公室|室友|同事|朋友|饭搭子|固定队|周末|通勤|开黑群|学生党|上班族|饭点)|(?:我室友|我同事|我朋友|我们固定队|我的饭搭子).{0,24}(?:买了|入了|用了|在用|用过|说过|碰到|遇到|已经|一直|每天)/;
+  return firstPersonTestimony.test(value);
 }
 
 function isLowSignalComment(value: string) {
@@ -2437,7 +2832,7 @@ function isNearDuplicateComment(value: string, accepted: string[]) {
     if (existingTokens.length < 4) return false;
     const overlap = valueTokens.filter((token) => existingTokens.includes(token)).length;
     const dice = (overlap * 2) / (valueTokens.length + existingTokens.length);
-    return dice >= 0.68 || (overlap >= 9 && Math.min(valueTokens.length, existingTokens.length) <= 18);
+    return dice >= 0.56 || (overlap >= 8 && Math.min(valueTokens.length, existingTokens.length) <= 18);
   });
 }
 

@@ -4,6 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, typ
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
+  CalendarRange,
   CalendarClock,
   CheckCircle2,
   Copy,
@@ -16,6 +17,7 @@ import {
   MessageCircle,
   MousePointerClick,
   RefreshCw,
+  Search,
   Star,
   ThumbsUp,
   Trash2,
@@ -107,6 +109,18 @@ function GrossMarginMonitorPageContent() {
   );
   const monitorProjects = useMemo(() => library?.monitorProjects || [], [library]);
   const hasActiveFilters = Boolean(accountFilter.trim() || platformFilter !== "all" || projectFilter !== "all" || dateFromFilter || dateToFilter);
+  const overview = useMemo(() => {
+    let highGapCount = 0;
+    let refreshIssueCount = 0;
+
+    sortedRecords.forEach((record) => {
+      const gap = getOverallGap(record);
+      if (getOverallGapTone(gap.percent, record.status) === "danger") highGapCount += 1;
+      if (record.status === "failed" || record.status === "partial") refreshIssueCount += 1;
+    });
+
+    return { highGapCount, refreshIssueCount };
+  }, [sortedRecords]);
 
   useEffect(() => {
     let ignore = false;
@@ -268,71 +282,91 @@ function GrossMarginMonitorPageContent() {
     <div className="page gross-margin-page gross-monitor-page">
       <h1 className="sr-only">数据监控</h1>
       <div className="gross-monitor-topbar">
-        <div className="page-header-meta">
-          <span className="stat-pill">{hasActiveFilters ? `${sortedRecords.length} / ${records.length} 条记录` : `${records.length} 条记录`}</span>
-          <span className="stat-pill">{sortedRecords.filter((record) => record.status === "failed" || record.status === "partial").length} 条异常</span>
+        <div className="page-header-meta gross-monitor-overview" aria-label="监控概览">
+          <span className="stat-pill gross-monitor-stat">
+            <strong>{sortedRecords.length}</strong>
+            {hasActiveFilters ? `/ ${records.length} 条记录` : "条记录"}
+          </span>
+          <span className={`stat-pill gross-monitor-stat danger ${overview.highGapCount ? "" : "quiet"}`}>
+            <AlertTriangle aria-hidden="true" size={12} />
+            <strong>{overview.highGapCount}</strong>
+            高缺口
+          </span>
+          <span className={`stat-pill gross-monitor-stat warning ${overview.refreshIssueCount ? "" : "quiet"}`}>
+            <RefreshCw aria-hidden="true" size={12} />
+            <strong>{overview.refreshIssueCount}</strong>
+            刷新异常
+          </span>
         </div>
         <div className="gross-monitor-toolbar">
           <div className="gross-monitor-inline-filters" role="group" aria-label="监控筛选">
-            <input
-              aria-label="按账号、标题或链接筛选"
-              autoComplete="off"
-              className="gross-monitor-inline-input"
-              id="gross-monitor-account-filter"
-              name="grossMonitorAccountFilter"
-              onChange={(event) => setAccountFilter(event.target.value)}
-              placeholder="账号 / 标题 / 链接…"
-              type="text"
-              value={accountFilter}
-            />
-            <select
-              aria-label="按平台筛选"
-              className="gross-monitor-inline-select"
-              id="gross-monitor-platform-filter"
-              onChange={(event) => setPlatformFilter(event.target.value as "all" | GrossMarginMonitorRecord["platform"])}
-              value={platformFilter}
-            >
-              <option value="all">全部平台</option>
-              <option value="bilibili">B站</option>
-              <option value="douyin">抖音</option>
-            </select>
-            <select
-              aria-label="按项目筛选"
-              className="gross-monitor-inline-select gross-monitor-project-select"
-              id="gross-monitor-project-filter"
-              onChange={(event) => setProjectFilter(event.target.value)}
-              value={projectFilter}
-            >
-              <option value="all">全部项目</option>
-              {monitorProjects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}（{project.count}）
-                </option>
-              ))}
-            </select>
-            <input
-              aria-label="开始日期"
-              autoComplete="off"
-              className="gross-monitor-inline-date"
-              id="gross-monitor-date-from"
-              name="grossMonitorDateFrom"
-              onChange={(event) => setDateFromFilter(event.target.value)}
-              type="date"
-              value={dateFromFilter}
-            />
-            <span className="gross-monitor-inline-date-separator" aria-hidden="true">
-              至
+            <span className="gross-monitor-search-field">
+              <Search aria-hidden="true" size={14} />
+              <input
+                aria-label="按账号、标题或链接筛选"
+                autoComplete="off"
+                className="gross-monitor-inline-input"
+                id="gross-monitor-account-filter"
+                name="grossMonitorAccountFilter"
+                onChange={(event) => setAccountFilter(event.target.value)}
+                placeholder="账号 / 标题 / 链接"
+                type="search"
+                value={accountFilter}
+              />
             </span>
-            <input
-              aria-label="结束日期"
-              autoComplete="off"
-              className="gross-monitor-inline-date"
-              id="gross-monitor-date-to"
-              name="grossMonitorDateTo"
-              onChange={(event) => setDateToFilter(event.target.value)}
-              type="date"
-              value={dateToFilter}
-            />
+            <span className="gross-monitor-filter-group">
+              <select
+                aria-label="按平台筛选"
+                className="gross-monitor-inline-select"
+                id="gross-monitor-platform-filter"
+                onChange={(event) => setPlatformFilter(event.target.value as "all" | GrossMarginMonitorRecord["platform"])}
+                value={platformFilter}
+              >
+                <option value="all">全部平台</option>
+                <option value="bilibili">B站</option>
+                <option value="douyin">抖音</option>
+              </select>
+              <select
+                aria-label="按项目筛选"
+                className="gross-monitor-inline-select gross-monitor-project-select"
+                id="gross-monitor-project-filter"
+                onChange={(event) => setProjectFilter(event.target.value)}
+                value={projectFilter}
+              >
+                <option value="all">全部项目</option>
+                {monitorProjects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}（{project.count}）
+                  </option>
+                ))}
+              </select>
+            </span>
+            <span className="gross-monitor-date-range">
+              <CalendarRange aria-hidden="true" size={14} />
+              <input
+                aria-label="开始日期"
+                autoComplete="off"
+                className="gross-monitor-inline-date"
+                id="gross-monitor-date-from"
+                name="grossMonitorDateFrom"
+                onChange={(event) => setDateFromFilter(event.target.value)}
+                type="date"
+                value={dateFromFilter}
+              />
+              <span className="gross-monitor-inline-date-separator" aria-hidden="true">
+                至
+              </span>
+              <input
+                aria-label="结束日期"
+                autoComplete="off"
+                className="gross-monitor-inline-date"
+                id="gross-monitor-date-to"
+                name="grossMonitorDateTo"
+                onChange={(event) => setDateToFilter(event.target.value)}
+                type="date"
+                value={dateToFilter}
+              />
+            </span>
             {hasActiveFilters ? (
               <button
                 className="btn subtle compact"
@@ -349,8 +383,8 @@ function GrossMarginMonitorPageContent() {
               </button>
             ) : null}
           </div>
-          <div className="button-row">
-            <button className="btn primary" disabled={busy === "refresh-all" || !sortedRecords.length} onClick={() => void handleRefreshAll()} type="button">
+          <div className="button-row gross-monitor-primary-action">
+            <button className="btn primary compact" disabled={busy === "refresh-all" || !sortedRecords.length} onClick={() => void handleRefreshAll()} type="button">
               <RefreshCw aria-hidden="true" size={15} />
               {busy === "refresh-all" ? "刷新中" : hasActiveFilters ? "刷新当前" : "刷新全部"}
             </button>
@@ -566,17 +600,29 @@ function MonitorCard({
       <div className="gross-monitor-risk-line">
         <span
           className={`gross-monitor-risk-dial ${overallGapTone} ${record.platform}`}
+          aria-label={`整体缺口 ${formatOverallGap(overallGap, record.status)}，${getOverallGapLabel(overallGap, overallGapTone, record.status)}`}
+          role="img"
           style={{ "--risk-fill": `${overallGap.percent * 100}%` } as CSSProperties}
         >
           <strong>{formatOverallGap(overallGap, record.status)}</strong>
           <small>整体缺口</small>
         </span>
         <span className="gross-monitor-risk-meta">
-          <span>
-            {renderStatusIcon(record.status)}
-            {formatStatus(record.status)}
-            <CalendarClock aria-hidden="true" size={12} />
-            {formatDateTime(record.lastRefreshedAt || record.updatedAt)}
+          <span className="gross-monitor-risk-status-line">
+            <em className={`gross-monitor-gap-level ${overallGapTone}`}>
+              {overallGapTone === "danger" || overallGapTone === "warning" ? <AlertTriangle aria-hidden="true" size={11} /> : null}
+              {getOverallGapLabel(overallGap, overallGapTone, record.status)}
+            </em>
+            <em className={`gross-monitor-refresh-state ${record.status}`}>
+              {renderStatusIcon(record.status)}
+              {formatStatus(record.status)}
+            </em>
+            <span className="gross-monitor-refresh-time">
+              <CalendarClock aria-hidden="true" size={12} />
+              {formatDateTime(record.lastRefreshedAt || record.updatedAt)}
+            </span>
+          </span>
+          <span className="gross-monitor-risk-insights">
             {record.status === "completed" ? (
               <em className={`gross-monitor-refresh-summary ${changedMetricCount ? "changed" : "stable"}`}>
                 {changedMetricCount ? `${changedMetricCount} 项变化` : "本次无变化"}
@@ -622,15 +668,16 @@ function MonitorCard({
       <div className="gross-monitor-metric-list" aria-label={formatTargetSummary(record)}>
         {metrics.map((metric) => {
           const refreshDelta = getMetricRefreshDelta(record, metric.service);
+          const hasVisibleDelta = refreshDelta !== null && refreshDelta !== 0;
           const deltaTone = refreshDelta === null ? "" : refreshDelta > 0 ? "positive" : refreshDelta < 0 ? "negative" : "neutral";
-          const deltaLabel = refreshDelta === null ? "" : `，本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}`;
+          const deltaLabel = hasVisibleDelta ? `，本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}` : "";
 
           return (
             <span
               aria-label={`${getMetricLabel(metric)}，目标 ${formatMetric(metric.target, record.platform)}，当前 ${formatMetricCurrentValue(metric, record.platform)}，缺口比例 ${formatMetricPercent(metric)}${deltaLabel}`}
               className={`gross-monitor-metric-cell ${metric.highRisk ? "danger" : ""}`}
               key={metric.service}
-              title={`${getMetricLabel(metric)} | 目标 ${formatMetric(metric.target, record.platform)} | 当前 ${formatMetricCurrentValue(metric, record.platform)} | ${formatMetricPercent(metric)}${refreshDelta === null ? "" : ` | 本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}`}`}
+              title={`${getMetricLabel(metric)} | 目标 ${formatMetric(metric.target, record.platform)} | 当前 ${formatMetricCurrentValue(metric, record.platform)} | ${formatMetricPercent(metric)}${hasVisibleDelta ? ` | 本次刷新 ${formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}` : ""}`}
             >
               <span className="gross-monitor-metric-cell-head">
                 {renderMetricIcon(metric.service)}
@@ -726,7 +773,7 @@ function MonitorCard({
                     <em>{formatMetricCurrentValue(metric, record.platform)} / {formatMetric(metric.target, record.platform)}</em>
                   )}
                 </span>
-                {refreshDelta !== null ? (
+                {hasVisibleDelta ? (
                   <span className={`gross-monitor-metric-delta ${deltaTone}`}>
                     {formatMetricRefreshDelta(refreshDelta, metric.service, record.platform)}
                   </span>
@@ -859,8 +906,23 @@ function getOverallGapTone(percent: number, status: GrossMarginMonitorRecord["st
   if (status === "partial") return "warning";
   if (percent >= 0.75) return "danger";
   if (percent >= 0.45) return "warning";
-  if (percent > 0) return "calm";
+  if (percent >= 0.0005) return "calm";
   return "neutral";
+}
+
+function getOverallGapLabel(
+  gap: { percent: number; target: number },
+  tone: ReturnType<typeof getOverallGapTone>,
+  status: GrossMarginMonitorRecord["status"]
+) {
+  if (!gap.target) return status === "pending" ? "等待首刷" : "暂无目标";
+  if (status === "failed") return "刷新失败";
+  if (status === "partial") return "数据不完整";
+  if (tone === "danger") return "严重缺口";
+  if (tone === "warning") return "较大缺口";
+  if (tone === "calm") return "轻微缺口";
+  if (gap.percent > 0) return "基本达标";
+  return "已达目标";
 }
 
 function formatPlatform(platform: GrossMarginMonitorRecord["platform"]) {

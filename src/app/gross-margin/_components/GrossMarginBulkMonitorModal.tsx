@@ -122,10 +122,10 @@ export function GrossMarginBulkMonitorModal({
 
             <div className="gross-bulk-monitor-list">
               {parsed.items.length ? (
-                parsed.items.map((item) => (
-                  <div className="gross-bulk-monitor-item" key={`${item.accountName}-${item.videoUrl}`}>
+                parsed.items.map((item, index) => (
+                  <div className="gross-bulk-monitor-item" key={`${index}-${item.accountName}-${item.videoUrl}`}>
                     <strong>{item.accountName}</strong>
-                    <span>{formatTargets(item.targetStats)}</span>
+                    <span>{formatTargets(item.targetStats, item.platform)}</span>
                   </div>
                 ))
               ) : (
@@ -135,8 +135,8 @@ export function GrossMarginBulkMonitorModal({
 
             {[...parsed.warnings, ...parsed.items.flatMap((item) => item.warnings)].length ? (
               <div className="gross-bulk-monitor-warnings">
-                {[...parsed.warnings, ...parsed.items.flatMap((item) => item.warnings)].map((warning) => (
-                  <p key={warning}>{warning}</p>
+                {[...parsed.warnings, ...parsed.items.flatMap((item) => item.warnings)].map((warning, index) => (
+                  <p key={`${index}-${warning}`}>{warning}</p>
                 ))}
               </div>
             ) : null}
@@ -170,13 +170,16 @@ function makeDefaultProjectName(count: number) {
   return `${month}${day} 批量监控 ${count} 条`;
 }
 
-function formatTargets(targetStats: Record<string, number>) {
+function formatTargets(targetStats: Record<string, number>, platform: "bilibili" | "douyin") {
   const labels: Record<string, string> = {
     play: "播放",
     like: "点赞",
+    coin: "投币",
     comment: "评论",
     favorite: "收藏",
-    share: "转发"
+    share: platform === "bilibili" ? "分享" : "转发",
+    danmaku: "弹幕",
+    blueLink: "蓝链点击"
   };
   return (
     Object.entries(targetStats)

@@ -189,6 +189,7 @@ export type DraftAssets = {
       };
       entityGuard?: {
         allowedModels: string[];
+        blockedModels?: string[];
         correctedTerms: {
           from: string;
           to: string;
@@ -327,6 +328,7 @@ export type DraftAssets = {
     requestedCount: number;
     actualCount?: number;
     partial?: boolean;
+    engineVersion?: string;
     usedModel: string;
     fallback: boolean;
     fallbackReason?: string;
@@ -338,6 +340,22 @@ export type DraftAssets = {
     sameSecondRate?: number;
     repeatRate?: number;
     burstShare?: number;
+    diagnostics?: {
+      batchSize: number;
+      batchCount: number;
+      parsedCount: number;
+      completedCount: number;
+      rejectedCount: number;
+      batches: {
+        index: number;
+        requestedCount: number;
+        parsedCount: number;
+        model: string;
+        status: "completed" | "failed";
+        attempts: number;
+        error?: string;
+      }[];
+    };
     items: DraftDanmakuAsset[];
   };
   cover?: {

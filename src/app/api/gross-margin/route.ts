@@ -206,7 +206,7 @@ async function bulkSaveMonitorRecordsFromInput(input: z.infer<typeof mutationSch
   const records = await Promise.all(
     parsed.items.map((item) =>
       upsertGrossMarginMonitorRecord({
-        platform: item.platform,
+        platform: resolveMonitorPlatform(item.videoUrl, item.platform),
         accountName: item.accountName,
         projectId: projectId || undefined,
         projectName: projectName || undefined,
