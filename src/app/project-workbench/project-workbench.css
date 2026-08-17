@@ -1,4 +1,4 @@
-/* Project workbench */
+/* Project workbench route */
 .project-workbench-page {
   gap: 14px;
   grid-template-rows: auto minmax(0, 1fr);

@@ -196,6 +196,7 @@
 | 状态、notice、toast | `src/app/styles/primitives/feedback.css` |
 | 动效和 reduced-motion | `src/app/styles/primitives/interactions.css` |
 | 统一工作台系统层 | `src/app/styles/16-workbench-system.css` |
+| 业务路由样式 | `src/app/<route>/<route>.css`，由同级 `layout.tsx` 导入 |
 
 `16-workbench-system.css` 是通用系统层，应在 primitives 之后、页面 CSS 之前导入。新增模块、页面、弹窗、抽屉和工具面板优先让通用 class 命中这层规则；确需局部样式时，写回对应页面 CSS，只补布局、业务密度和必要响应式，不重新定义一套颜色、按钮、圆角或动效。不要再新增后置全局页面补丁。
 

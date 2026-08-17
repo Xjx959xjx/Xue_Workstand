@@ -1,4 +1,4 @@
-/* Gross margin calculator */
+/* Gross margin route family */
 .gross-margin-workspace {
   grid-template-columns: minmax(250px, 272px) minmax(0, 1fr) minmax(286px, 300px);
   min-height: 0;

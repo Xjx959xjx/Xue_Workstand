@@ -1,7 +1,6 @@
 /*
-  CSS map: tokens/base/primitives establish shared behavior, 16-workbench-system
-  applies the common workbench skin, and page files loaded after it own route-specific
-  layout and density. Do not add a late global page-polish layer.
+  Global CSS owns tokens, primitives, the application shell, and cross-route responsive/overlay styles.
+  Business route layouts import their colocated CSS after this shared foundation.
 */
 @import "./styles/00-tokens.css";
 @import "./styles/01-base.css";
@@ -13,14 +12,6 @@
 @import "./styles/primitives/interactions.css";
 @import "./styles/16-workbench-system.css";
 @import "./styles/02-shell.css";
-@import "./styles/06-workspaces.css";
-@import "./styles/07-writer.css";
-@import "./styles/09-project-workbench.css";
 @import "./styles/10-documents-modals.css";
-@import "./styles/12-assets.css";
-@import "./styles/13-gross-margin.css";
-@import "./styles/15-tools.css";
-@import "./styles/17-douyin-hotlist.css";
-@import "./styles/18-hotspots.css";
 @import "./styles/19-mobile-remote.css";
 @import "./styles/11-responsive.css";

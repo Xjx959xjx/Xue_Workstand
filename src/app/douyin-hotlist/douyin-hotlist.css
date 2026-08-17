@@ -1,4 +1,4 @@
-/* Douyin hotlist workspace */
+/* Douyin hotlist route workspace */
 .douyin-hotlist-page {
   width: min(100%, var(--workbench-page-max-width));
   align-content: start;
@@ -1159,13 +1159,36 @@
 }
 
 .douyin-hotlist-account-row .account-avatar {
+  position: relative;
+  display: grid;
   width: 34px;
   height: 34px;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--text-strong) 9%, transparent);
   border-radius: 13px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
 }
 
 .douyin-hotlist-account-row .account-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   border-radius: inherit;
+  object-fit: cover;
+}
+
+.douyin-hotlist-account-row .account-avatar svg {
+  display: block;
+}
+
+.douyin-hotlist-account-row .account-list-copy {
+  min-width: 0;
 }
 
 .douyin-hotlist-account-row .list-title,
