@@ -1,5 +1,6 @@
-import type { Draft, Platform } from "./types";
+import type { Draft, Platform, WriteStyleReferenceInput } from "./types";
 import { splitWriterSourceInput } from "./source-extraction";
+import { normalizeWriteStyleReferenceInputs, writeStyleReferenceKey } from "./write-references";
 
 export type WriteCopyScopeInput = {
   action?: "create" | "revise";
@@ -7,6 +8,7 @@ export type WriteCopyScopeInput = {
   platform?: Platform;
   accountId?: string;
   projectId?: string;
+  styleRefs?: WriteStyleReferenceInput[];
   mode: Draft["mode"];
   prompt?: string;
   sourceText?: string;
@@ -21,12 +23,14 @@ export type WriteCopyScopeInput = {
 
 export function writeCopySourceKey(input: WriteCopyScopeInput) {
   const separatedInput = splitWriterSourceInput(input.sourceText || "", input.supportDocLinks || "");
+  const styleRefs = normalizeWriteStyleReferenceInputs(input).map(writeStyleReferenceKey);
   return stableScopeHash(JSON.stringify({
     action: input.action || "create",
     targetType: input.targetType || "account",
     platform: input.platform || "",
     accountId: input.accountId || "",
     projectId: input.projectId || "",
+    styleRefs,
     mode: input.mode,
     prompt: normalizeScopeText(input.prompt),
     sourceText: normalizeScopeText(separatedInput.sourceText),

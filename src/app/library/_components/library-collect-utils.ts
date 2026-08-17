@@ -17,6 +17,11 @@ export const collectOrderOptions: Record<Platform, Array<{ value: CollectOrder; 
   ]
 };
 
+export function normalizeCollectOrder(platform: Platform, order: CollectOrder): CollectOrder {
+  const options = collectOrderOptions[platform];
+  return options.some((option) => option.value === order) ? order : options[0].value;
+}
+
 export const timeRangeOptions: Array<{ value: TimeRange; label: string; days?: number }> = [
   { value: "all", label: "不限" },
   { value: "7d", label: "近 7 天", days: 7 },

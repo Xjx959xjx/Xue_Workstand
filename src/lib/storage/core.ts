@@ -12,3 +12,22 @@ export function normalizeStorageSegment(value: string, label: string) {
   }
   return normalized;
 }
+
+export function toLibraryRelativePath(target: string) {
+  const relative = path.relative(libraryRoot(), path.resolve(target));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`路径不在素材库内：${target}`);
+  }
+  return relative.split(path.sep).join("/");
+}
+
+export function resolveStoredLibraryPath(storedPath: string) {
+  if (path.isAbsolute(storedPath)) return path.normalize(storedPath);
+  const normalized = storedPath.split("/").join(path.sep);
+  const target = path.resolve(libraryRoot(), normalized);
+  const relative = path.relative(libraryRoot(), target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`素材库相对路径不合法：${storedPath}`);
+  }
+  return target;
+}

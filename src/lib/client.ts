@@ -25,7 +25,6 @@ import {
   JobRecord,
   JobStartInput,
   LibraryOverviewResponse,
-  LibraryState,
   Platform,
   ProjectDraftInput,
   ProjectDetail,
@@ -36,6 +35,7 @@ import {
   WriteAction,
   WriteRevisionScope,
   WriteResult,
+  WriteStyleReferenceInput,
   WriterSourceFileImport
 } from "./types";
 import type { LinkTranscriptionResult } from "./transcription";
@@ -72,6 +72,7 @@ type WriteCopyRequest = {
   platform?: Platform;
   accountId?: string;
   projectId?: string;
+  styleRefs?: WriteStyleReferenceInput[];
   mode: Draft["mode"];
   prompt?: string;
   sourceText?: string;
@@ -456,10 +457,6 @@ function downloadBlob(blob: Blob, fileName: string) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-}
-
-export function getLibrary() {
-  return requestJson<LibraryState>("/api/library");
 }
 
 export function getLibraryOverview() {

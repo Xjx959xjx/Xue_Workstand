@@ -1,20 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { CheckCircle2, CircleStop, Clock3, ListTodo, Loader2, RefreshCw, X, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, CircleStop, Clock3, ListTodo, Loader2, RefreshCw, X, XCircle } from "lucide-react";
 import { formatJobErrorMessage } from "@/lib/job-messages";
+import { getJobResultHref } from "@/lib/job-links";
 import type { JobRecord } from "@/lib/types";
 import { useOptionalTasks } from "./TaskProvider";
 
+const RECENT_COLLAPSED_COUNT = 4;
+
+type TaskDrawerPosition = CSSProperties & {
+  "--task-drawer-bottom"?: string;
+  "--task-drawer-left"?: string;
+  "--task-drawer-width"?: string;
+};
+
 export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mobile" }) {
   const tasks = useOptionalTasks();
+  const drawerId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const [recentExpanded, setRecentExpanded] = useState(false);
+  const [drawerPosition, setDrawerPosition] = useState<TaskDrawerPosition>();
   const [stoppingJobId, setStoppingJobId] = useState("");
   const activeJobs = tasks?.activeJobs ?? [];
   const activeJobIds = new Set(activeJobs.map((job) => job.id));
-  const recentJobs = tasks?.recentJobs.filter((job) => !activeJobIds.has(job.id)).slice(0, 4) ?? [];
+  const recentJobs = tasks?.jobs.filter((job) => !activeJobIds.has(job.id)) ?? [];
+  const visibleRecentJobs = recentExpanded ? recentJobs : recentJobs.slice(0, RECENT_COLLAPSED_COUNT);
   const activeCount = activeJobs.length;
   const primaryJob = activeJobs[0] || null;
   const latestRecentJob = recentJobs[0] || null;
@@ -24,14 +38,53 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
     "--progress-scale": `${progress / 100}`
   } as CSSProperties;
 
+  const updateDrawerPosition = useCallback(() => {
+    if (variant === "mobile" || typeof window === "undefined" || window.innerWidth <= 900) {
+      setDrawerPosition(undefined);
+      return;
+    }
+
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const viewportEdge = 16;
+    const triggerGap = 12;
+    const availableWidth = window.innerWidth - triggerRect.right - triggerGap - viewportEdge;
+    const width = Math.min(420, Math.max(320, availableWidth));
+    const left = Math.max(
+      viewportEdge,
+      Math.min(triggerRect.right + triggerGap, window.innerWidth - width - viewportEdge)
+    );
+    const bottom = Math.max(viewportEdge, window.innerHeight - triggerRect.bottom);
+
+    setDrawerPosition({
+      "--task-drawer-bottom": `${Math.round(bottom)}px`,
+      "--task-drawer-left": `${Math.round(left)}px`,
+      "--task-drawer-width": `${Math.round(width)}px`
+    });
+  }, [variant]);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    const onViewportChange = () => updateDrawerPosition();
+
+    updateDrawerPosition();
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+    window.addEventListener("resize", onViewportChange);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onViewportChange);
+    };
+  }, [open, updateDrawerPosition]);
+
+  const toggleOpen = () => {
+    if (!open) updateDrawerPosition();
+    setOpen((current) => !current);
+  };
 
   if (!tasks) return null;
 
@@ -39,11 +92,13 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
     <div className={`task-center ${variant === "mobile" ? "task-center-mobile" : ""}`}>
       {variant === "mobile" ? (
         <button
+          aria-controls={drawerId}
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-label={taskCenterLabel(activeCount, displayJob)}
           className={`mobile-task-trigger ${activeCount ? "active" : ""}`}
-          onClick={() => setOpen((current) => !current)}
+          onClick={toggleOpen}
+          ref={triggerRef}
           type="button"
         >
           <ListTodo aria-hidden="true" size={20} />
@@ -51,11 +106,13 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
         </button>
       ) : (
         <button
+          aria-controls={drawerId}
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-label={taskCenterLabel(activeCount, displayJob)}
           className={`task-center-trigger ${activeCount ? "active" : ""}`}
-          onClick={() => setOpen((current) => !current)}
+          onClick={toggleOpen}
+          ref={triggerRef}
           type="button"
         >
           <span className="task-center-trigger-copy">
@@ -75,7 +132,13 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
       {open && typeof document !== "undefined" ? createPortal((
         <>
           <button className="task-center-backdrop" aria-label="关闭任务中心" onClick={() => setOpen(false)} type="button" />
-          <aside className="task-center-drawer" aria-label="任务中心" role="dialog">
+          <aside
+            aria-label="任务中心"
+            className="task-center-drawer"
+            id={drawerId}
+            role="dialog"
+            style={drawerPosition}
+          >
             <header className="task-center-drawer-header">
               <div>
                 <h2>任务中心</h2>
@@ -114,11 +177,24 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
                       setStoppingJobId((current) => (current === jobId ? "" : current));
                     }
                   }}
+                  onNavigate={() => setOpen(false)}
                   stoppingJobId={stoppingJobId}
                 />
               ) : null}
               {recentJobs.length ? (
-                <TaskSection title="最近任务" jobs={recentJobs} onCancel={async () => undefined} stoppingJobId={stoppingJobId} readOnly />
+                <TaskSection
+                  collapsible={recentJobs.length > RECENT_COLLAPSED_COUNT ? {
+                    expanded: recentExpanded,
+                    onToggle: () => setRecentExpanded((current) => !current)
+                  } : undefined}
+                  jobs={visibleRecentJobs}
+                  onCancel={async () => undefined}
+                  onNavigate={() => setOpen(false)}
+                  readOnly
+                  stoppingJobId={stoppingJobId}
+                  title="最近任务"
+                  totalCount={recentJobs.length}
+                />
               ) : null}
               {!activeJobs.length && !recentJobs.length ? (
                 <p className="task-center-more">最近没有任务记录。</p>
@@ -134,25 +210,54 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
 function TaskSection({
   jobs,
   onCancel,
+  onNavigate,
   stoppingJobId,
   title,
+  totalCount = jobs.length,
+  collapsible,
   readOnly = false
 }: {
   jobs: JobRecord[];
   onCancel: (jobId: string) => Promise<void>;
+  onNavigate: () => void;
   stoppingJobId: string;
   title: string;
+  totalCount?: number;
+  collapsible?: {
+    expanded: boolean;
+    onToggle: () => void;
+  };
   readOnly?: boolean;
 }) {
   return (
     <section className={`task-center-section ${readOnly ? "is-recent" : "is-active"}`}>
       <div className="task-center-section-title">
-        <h3>{title}</h3>
-        <span>{jobs.length}</span>
+        <div className="task-center-section-heading">
+          <h3>{title}</h3>
+          <span className="task-center-section-count">{totalCount}</span>
+        </div>
+        {collapsible ? (
+          <button
+            aria-expanded={collapsible.expanded}
+            className="task-center-section-toggle"
+            onClick={collapsible.onToggle}
+            type="button"
+          >
+            <span>{collapsible.expanded ? "收起" : "展开全部"}</span>
+            <ChevronDown aria-hidden="true" className={collapsible.expanded ? "is-expanded" : ""} size={14} />
+          </button>
+        ) : null}
       </div>
       <div className="task-center-list">
         {jobs.map((job) => (
-          <TaskRow job={job} key={job.id} onCancel={onCancel} stopping={stoppingJobId === job.id} readOnly={readOnly} />
+          <TaskRow
+            job={job}
+            key={job.id}
+            onCancel={onCancel}
+            onNavigate={onNavigate}
+            readOnly={readOnly}
+            stopping={stoppingJobId === job.id}
+          />
         ))}
       </div>
     </section>
@@ -162,16 +267,19 @@ function TaskSection({
 function TaskRow({
   job,
   onCancel,
+  onNavigate,
   stopping,
   readOnly
 }: {
   job: JobRecord;
   onCancel: (jobId: string) => Promise<void>;
+  onNavigate: () => void;
   stopping: boolean;
   readOnly?: boolean;
 }) {
   const detail = taskDetail(job);
   const progress = clampProgress(job.progress);
+  const resultHref = getJobResultHref(job);
   return (
     <div className={`task-center-row ${job.status} ${readOnly ? "is-recent" : "is-active"}`}>
       <span className={`task-center-row-state ${job.status}`}>
@@ -198,8 +306,8 @@ function TaskRow({
             {stopping ? "停止中…" : "停止"}
           </button>
         ) : null}
-        {readOnly && job.status === "completed" && (job.resultRef?.href || job.href) ? (
-          <Link className="btn small ghost task-center-row-action" href={job.resultRef?.href || job.href || "/"}>
+        {readOnly && job.status === "completed" && resultHref ? (
+          <Link className="btn small ghost task-center-row-action" href={resultHref} onClick={onNavigate}>
             {job.kind === "write-copy" ? "查看文案" : job.resultRef?.label || "查看结果"}
           </Link>
         ) : null}

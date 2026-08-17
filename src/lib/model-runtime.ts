@@ -214,7 +214,7 @@ export function getWebResearchConfig() {
     chatCompletionsUrl: "",
     model: process.env.WEB_RESEARCH_MODEL || DEFAULT_WEB_RESEARCH_MODEL,
     wireApi: "responses" as const,
-    reasoningEffort: normalizeReasoningEffort(process.env.WEB_RESEARCH_REASONING_EFFORT || "high"),
+    reasoningEffort: normalizeReasoningEffort(process.env.WEB_RESEARCH_REASONING_EFFORT || "medium"),
     chatCompletionReasoningEffort: "none" as const,
     serviceTier: normalizeServiceTier(process.env.WEB_RESEARCH_SERVICE_TIER),
     proxyUrl: process.env.WEB_RESEARCH_PROXY_URL || process.env.CHAT_PROXY_URL || ""
@@ -256,7 +256,18 @@ export function getWebResearchRuntimeConfig(): WebResearchRuntimePublicConfig {
 }
 
 export function isChatConfigConfigured(config: ChatRuntimeConfig) {
-  return Boolean(config.enabled && config.apiKey && config.baseUrl && config.model);
+  return Boolean(
+    config.enabled &&
+    config.apiKey &&
+    config.model &&
+    hasConfiguredChatEndpoint(config)
+  );
+}
+
+function hasConfiguredChatEndpoint(config: ChatRuntimeConfig) {
+  if (config.wireApi === "responses") return Boolean(config.responsesUrl || config.baseUrl);
+  if (config.wireApi === "chat_completions") return Boolean(config.chatCompletionsUrl || config.baseUrl);
+  return Boolean(config.responsesUrl || config.chatCompletionsUrl || config.baseUrl);
 }
 
 export function getChatRuntimeConfig(): ChatRuntimePublicConfig {

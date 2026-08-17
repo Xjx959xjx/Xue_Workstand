@@ -2,12 +2,25 @@ import { z } from "zod";
 import { platforms } from "./types";
 import { normalizeRewritePrompt, splitWriterSourceInput } from "./source-extraction";
 
+const writeStyleReferenceSchema = z.discriminatedUnion("targetType", [
+  z.object({
+    targetType: z.literal("account"),
+    platform: z.enum(platforms),
+    accountId: z.string().min(1)
+  }),
+  z.object({
+    targetType: z.literal("project"),
+    projectId: z.string().min(1)
+  })
+]);
+
 export const writeCopyInputSchema = z.object({
   action: z.enum(["create", "revise"]).optional().default("create"),
   targetType: z.enum(["account", "project"]).optional(),
   platform: z.enum(platforms).optional(),
   accountId: z.string().optional(),
   projectId: z.string().optional(),
+  styleRefs: z.array(writeStyleReferenceSchema).min(1).optional(),
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().optional().default(""),
   sourceText: z.string().optional(),
@@ -48,6 +61,8 @@ export const writeCopyInputSchema = z.object({
     ctx.addIssue({ code: "custom", message: "请填写改写要求或粘贴原文素材", path: ["sourceText"] });
   }
 
+  if (input.styleRefs?.length) return;
+
   if (input.targetType === "project" || input.projectId) {
     if (!input.projectId) {
       ctx.addIssue({ code: "custom", message: "请选择参考项目", path: ["projectId"] });
@@ -56,6 +71,6 @@ export const writeCopyInputSchema = z.object({
   }
 
   if (!input.platform || !input.accountId) {
-    ctx.addIssue({ code: "custom", message: "请选择参考账号", path: ["accountId"] });
+    ctx.addIssue({ code: "custom", message: "请选择至少一个参考风格", path: ["accountId"] });
   }
 });

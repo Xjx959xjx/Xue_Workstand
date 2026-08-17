@@ -119,23 +119,36 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
           <p className="detail-preview-text detail-style-preview">{stylePreviewText}</p>
           <div className="detail-action-grid account-style-actions">
             <button
-              className="btn primary progress-button detail-action-primary"
+              className="btn primary detail-action-primary"
               disabled={!selectedAccount || styleLoading || busy === "style"}
-              onClick={styleLoaded ? onOpenStyleModal : onGenerateStyle}
+              onClick={onOpenStyleModal}
               type="button"
             >
-              {!styleLoaded ? <span className="progress-button-fill" style={{ transform: `scaleX(${busy === "style" ? styleProgress / 100 : 0})` }} /> : null}
+              <FileText aria-hidden="true" size={16} />
+              {styleLoading ? "读取中…" : "查看 / 编辑风格卡"}
+            </button>
+            <button
+              aria-busy={busy === "style"}
+              className="btn detail-action-secondary progress-button"
+              disabled={!selectedAccount || styleLoading || busy === "style"}
+              onClick={onGenerateStyle}
+              type="button"
+            >
+              <span className="progress-button-fill" style={{ transform: `scaleX(${busy === "style" ? styleProgress / 100 : 0})` }} />
               <span className="progress-button-content">
-                {styleLoaded ? <FileText aria-hidden="true" size={16} /> : <Sparkles aria-hidden="true" size={16} />}
-                {styleLoading ? "读取中…" : styleLoaded ? "查看 / 编辑风格卡" : "按现有稿总结"}
+                <Sparkles aria-hidden="true" size={16} />
+                {busy === "style" ? "总结中…" : styleLoaded ? "重新总结" : "按现有稿总结"}
               </span>
             </button>
-            {styleLoaded ? (
-              <button className="btn detail-action-secondary progress-button" disabled={!selectedAccount || busy === "style"} onClick={onGenerateStyle} type="button">
-                <span className="progress-button-fill" style={{ transform: `scaleX(${busy === "style" ? styleProgress / 100 : 0})` }} />
-                <span className="progress-button-content"><RefreshCw aria-hidden="true" size={16} />{busy === "style" ? "总结中…" : "重新总结"}</span>
-              </button>
-            ) : null}
+            <button
+              aria-busy={busy === "export-transcripts"}
+              className="btn detail-action-secondary"
+              disabled={!selectedAccount || !selectedAccount.transcriptCount || busy === "export-transcripts"}
+              onClick={onExportTranscripts}
+              type="button"
+            >
+              <Download aria-hidden="true" size={16} />{busy === "export-transcripts" ? "导出中…" : "导出全部转写"}
+            </button>
             {missingTranscriptCount ? (
               <>
                 <button className="btn detail-action-secondary" disabled={!selectedAccount || busy === "batch"} onClick={onBatchTranscribe} type="button">
@@ -154,9 +167,6 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
                 </button>
               </>
             ) : null}
-            <button className="btn ghost detail-export-action" disabled={!selectedAccount || !selectedAccount.transcriptCount || busy === "export-transcripts"} onClick={onExportTranscripts} type="button">
-              <Download aria-hidden="true" size={16} />{busy === "export-transcripts" ? "导出中…" : "导出全部转写"}
-            </button>
           </div>
         </div>
       </div>

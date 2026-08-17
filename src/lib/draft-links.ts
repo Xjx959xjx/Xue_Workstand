@@ -1,4 +1,5 @@
 import type { Draft } from "./types";
+import { draftWriteStyleReferenceInputs, writeStyleReferenceKey } from "./write-references";
 
 export function buildWriterDraftHref(draft: Draft) {
   const params = new URLSearchParams({
@@ -11,6 +12,10 @@ export function buildWriterDraftHref(draft: Draft) {
     params.set("projectId", draft.projectId);
   } else {
     params.set("accountId", draft.accountId);
+  }
+
+  for (const reference of draftWriteStyleReferenceInputs(draft)) {
+    params.append("styleRef", writeStyleReferenceKey(reference));
   }
 
   return `/writer?${params.toString()}`;

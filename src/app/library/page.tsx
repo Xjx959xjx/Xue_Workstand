@@ -9,7 +9,7 @@ import { LibraryDetailPane } from "./_components/LibraryDetailPane";
 import { LibraryQuickStartPanel } from "./_components/LibraryQuickStartPanel";
 import { TranscriptEditorModal } from "./_components/TranscriptEditorModal";
 import { VideoTable } from "./_components/VideoTable";
-import { collectOrderOptions, formatTimeRangeLabel, getDateFilter, type TimeRange } from "./_components/library-collect-utils";
+import { collectOrderOptions, formatTimeRangeLabel, getDateFilter, normalizeCollectOrder, type TimeRange } from "./_components/library-collect-utils";
 import { makePreview } from "./_components/library-view-utils";
 import { useBilibiliStatsHydration } from "./_hooks/useBilibiliStatsHydration";
 import { useLibraryAccountDetail } from "./_hooks/useLibraryAccountDetail";
@@ -320,11 +320,7 @@ function LibraryPageContent() {
 
   const handleCollectPlatformChange = useCallback((nextPlatform: Platform) => {
     setCollectPlatform(nextPlatform);
-    setCollectOrder((currentOrder) =>
-      collectOrderOptions[nextPlatform].some((option) => option.value === currentOrder)
-        ? currentOrder
-        : collectOrderOptions[nextPlatform][0].value
-    );
+    setCollectOrder((currentOrder) => normalizeCollectOrder(nextPlatform, currentOrder));
   }, []);
 
   const handleRefresh = useCallback(async () => {
@@ -423,7 +419,7 @@ function LibraryPageContent() {
           platform: selectedAccount.platform,
           name: selectedAccount.sourceUrl || selectedAccount.uid || selectedAccount.name,
           limit: collectLimit,
-          order: collectOrder,
+          order: normalizeCollectOrder(selectedAccount.platform, collectOrder),
           ...collectDateFilter
         }
       });

@@ -379,6 +379,28 @@ export type DraftVersion = {
   origin: "generated" | "revision" | "manual_edit";
 };
 
+export type AccountWriteStyleReference = {
+  targetType: "account";
+  platform: Platform;
+  accountId: string;
+  accountName: string;
+  videoIds?: string[];
+};
+
+export type ProjectWriteStyleReference = {
+  targetType: "project";
+  projectId: string;
+  projectName: string;
+  sourceAccountIds?: string[];
+  sourceMaterialIds?: string[];
+};
+
+export type WriteStyleReference = AccountWriteStyleReference | ProjectWriteStyleReference;
+
+export type WriteStyleReferenceInput =
+  | Pick<AccountWriteStyleReference, "targetType" | "platform" | "accountId">
+  | Pick<ProjectWriteStyleReference, "targetType" | "projectId">;
+
 type DraftBase = {
   id: string;
   title: string;
@@ -389,6 +411,7 @@ type DraftBase = {
   brief?: string;
   research?: string;
   sourceDigest?: WriteSourceDigest;
+  styleRefs?: WriteStyleReference[];
   version?: DraftVersion;
   content: string;
   assets?: DraftAssets;
@@ -792,20 +815,6 @@ export type GrossMarginCalculationResult = {
   lines: GrossMarginCalculationLine[];
 };
 
-export type LibraryState = {
-  root: string;
-  accounts: AccountSummary[];
-  projects: ProjectSummary[];
-  copySources: CopySource[];
-  engagementRecords: EngagementRecord[];
-  drafts: Draft[];
-  recentAccounts: AccountSummary[];
-  recentProjects: ProjectSummary[];
-  recentCopySources: CopySource[];
-  recentEngagementRecords: EngagementRecord[];
-  recentDrafts: Draft[];
-};
-
 export type LibraryOverview = {
   root: string;
   accounts: AccountListItem[];
@@ -1177,6 +1186,8 @@ export type JobRecord = {
   partialText?: string;
   resultRef?: JobResultRef;
   result?: unknown;
+  resultCompacted?: boolean;
+  resultSizeBytes?: number;
   events?: JobEvent[];
   dataRevision?: number;
   dataChange?: JobDataChange;
@@ -1203,6 +1214,7 @@ export type JobStartInput =
         platform?: Platform;
         accountId?: string;
         projectId?: string;
+        styleRefs?: WriteStyleReferenceInput[];
         mode: Draft["mode"];
         prompt: string;
         sourceText?: string;

@@ -356,16 +356,17 @@
 
 .task-center-drawer {
   position: fixed;
-  top: 18px;
-  left: 250px;
+  bottom: var(--task-drawer-bottom, 16px);
+  left: var(--task-drawer-left, 250px);
   z-index: 46;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  width: 400px;
-  max-width: calc(100vw - 260px);
-  max-height: calc(100vh - 32px);
+  width: var(--task-drawer-width, 420px);
+  max-width: calc(100vw - var(--task-drawer-left, 250px) - 16px);
+  max-height: calc(100vh - var(--task-drawer-bottom, 16px) - 16px);
   border: 1px solid color-mix(in oklch, var(--accent) 14%, var(--line));
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 94%, white) 0%, var(--panel) 100%);
   box-shadow: var(--shadow-lift);
@@ -391,6 +392,10 @@
   display: flex;
   flex: 0 0 auto;
   gap: 6px;
+}
+
+.task-center-drawer-actions .btn {
+  border-radius: var(--control-radius);
 }
 
 .task-center-drawer-body {
@@ -419,17 +424,63 @@
   padding: 0 2px;
 }
 
+.task-center-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
 .task-center-section-title h3 {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 700;
 }
 
-.task-center-section-title span {
+.task-center-section-count {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+.task-center-section-toggle {
+  display: inline-flex;
+  min-height: var(--control-height-sm);
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 9px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  background: var(--panel-raised);
+  font-size: 11px;
+  font-weight: 650;
+  transition:
+    border-color var(--motion-base) var(--ease-apple),
+    color var(--motion-base) var(--ease-apple),
+    background-color var(--motion-base) var(--ease-apple);
+}
+
+.task-center-section-toggle:hover,
+.task-center-section-toggle:focus-visible {
+  border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
+  color: var(--accent-strong);
+  background: color-mix(in oklch, var(--accent-tint) 48%, var(--panel-raised));
+}
+
+.task-center-section-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-shadow);
+}
+
+.task-center-section-toggle svg {
+  transition: transform var(--motion-base) var(--ease-apple);
+}
+
+.task-center-section-toggle svg.is-expanded {
+  transform: rotate(180deg);
 }
 
 .task-center-list {
@@ -438,11 +489,7 @@
 }
 
 .task-center-section.is-recent .task-center-list {
-  overflow: hidden;
-  gap: 0;
-  border: 1px solid var(--line-subtle);
-  border-radius: 14px;
-  background: var(--panel-raised);
+  gap: 8px;
 }
 
 .task-center-row {
@@ -470,13 +517,9 @@
 
 .task-center-section.is-recent .task-center-row {
   min-height: 58px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.task-center-section.is-recent .task-center-row + .task-center-row {
-  border-top: 1px solid var(--line-subtle);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--panel-raised);
 }
 
 .task-center-row:hover {
@@ -490,7 +533,7 @@
   height: 30px;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: var(--muted);
   background: var(--panel-soft);
 }
@@ -615,7 +658,7 @@
   margin: 12px 14px 0;
   padding: 9px 10px;
   border: 1px solid var(--error-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   color: var(--rose);
   background: var(--error-bg);
   font-size: 12px;
@@ -631,7 +674,7 @@
 .task-center-empty {
   padding: 14px;
   border: 1px dashed var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   color: var(--muted);
   background: color-mix(in oklch, var(--surface-soft) 72%, var(--panel));
   font-size: 12px;
@@ -651,7 +694,7 @@
 @keyframes task-drawer-enter {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.985);
+    transform: translate(-8px, 4px) scale(0.985);
   }
 }
 

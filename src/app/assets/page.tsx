@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { MessageSquarePlus, RefreshCw } from "lucide-react";
 import { AssetsFeishuModal } from "./_components/AssetsFeishuModal";
 import { EngagementGeneratorPane } from "./_components/EngagementGeneratorPane";
@@ -12,6 +13,7 @@ import { useEngagementGeneration } from "./_hooks/useEngagementGeneration";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
+import { ENGAGEMENT_RECORD_QUERY_PARAM } from "@/lib/job-links";
 import {
   deleteEngagementRecords,
   engagementSummaryFromRecord,
@@ -25,10 +27,16 @@ import { detectPlatformFromLink, extractFirstLinkFromInput } from "@/lib/platfor
 import type { EngagementGenerationMode, EngagementRecord, EngagementRecordSummary, Platform } from "@/lib/types";
 
 export default function AssetsPage() {
-  return <AssetsPageContent />;
+  return (
+    <Suspense fallback={<AssetsPageFallback />}>
+      <AssetsPageContent />
+    </Suspense>
+  );
 }
 
 function AssetsPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { activeJobs, recentJobs, startTask } = useTasks();
   const { notify } = useFeedback();
   const [sourceInput, setSourceInput] = useState("");
@@ -43,6 +51,8 @@ function AssetsPageContent() {
   const [records, setRecords] = useState<EngagementRecordSummary[]>(() => getCachedEngagementRecords()?.records ?? []);
   const [recordsLoading, setRecordsLoading] = useState(() => !getCachedEngagementRecords());
   const [openingRecordId, setOpeningRecordId] = useState("");
+  const loadedRecordParamRef = useRef("");
+  const openRecordRequestRef = useRef(0);
 
   const noticeIsError = notice.includes("失败") || notice.includes("未配置") || notice.includes("不支持") || notice.includes("请");
   const sourceLink = extractFirstLinkFromInput(sourceInput, { kind: "video" });
@@ -113,6 +123,69 @@ function AssetsPageContent() {
     }
   }, []);
 
+  const applyLoadedRecord = useCallback((detail: EngagementRecord) => {
+    const restoredPlatform = detail.options.targetPlatform
+      || (detail.platform === "unknown" ? targetPlatform : detail.platform);
+
+    setSourceInput(detail.sourceType === "url"
+      ? detail.sourceUrl || detail.resolvedUrl || detail.sourceText
+      : detail.sourceText);
+    setGenerationMode(detail.options.generationMode === "reference" ? "reference" : "quick");
+    setTargetPlatform(restoredPlatform);
+    setIncludeComments(detail.options.includeComments);
+    setCommentCount(clampCount(detail.options.commentCount, 1, 200, 50));
+    setIncludeDanmaku(detail.options.includeDanmaku && restoredPlatform === "bilibili");
+    setDanmakuCount(clampCount(detail.options.danmakuCount, 1, 300, 50));
+    setResultRecord(detail);
+  }, [setResultRecord, targetPlatform]);
+
+  const openRecord = useCallback(async (recordId: string) => {
+    const requestId = openRecordRequestRef.current + 1;
+    openRecordRequestRef.current = requestId;
+    setOpeningRecordId(recordId);
+    setNotice("");
+    try {
+      const detail = await getEngagementRecord(recordId);
+      if (openRecordRequestRef.current !== requestId) return false;
+      applyLoadedRecord(detail);
+      return true;
+    } catch (error) {
+      if (openRecordRequestRef.current === requestId) {
+        setNotice(error instanceof Error ? error.message : "读取评论详情失败");
+      }
+      return false;
+    } finally {
+      if (openRecordRequestRef.current === requestId) setOpeningRecordId("");
+    }
+  }, [applyLoadedRecord]);
+
+  const requestedRecordId = searchParams.get(ENGAGEMENT_RECORD_QUERY_PARAM)?.trim() || "";
+  const replaceSelectedRecordInUrl = useCallback((recordId: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (recordId) params.set(ENGAGEMENT_RECORD_QUERY_PARAM, recordId);
+    else params.delete(ENGAGEMENT_RECORD_QUERY_PARAM);
+    const query = params.toString();
+    router.replace(query ? `/assets?${query}` : "/assets", { scroll: false });
+  }, [router, searchParams]);
+
+  useEffect(() => {
+    if (!requestedRecordId) {
+      loadedRecordParamRef.current = "";
+      return;
+    }
+    if (
+      loadedRecordParamRef.current === requestedRecordId
+      || loadedRecordParamRef.current === `loading:${requestedRecordId}`
+    ) return;
+
+    const loadingKey = `loading:${requestedRecordId}`;
+    loadedRecordParamRef.current = loadingKey;
+    void openRecord(requestedRecordId).then((opened) => {
+      if (loadedRecordParamRef.current !== loadingKey) return;
+      loadedRecordParamRef.current = opened ? requestedRecordId : "";
+    });
+  }, [openRecord, requestedRecordId]);
+
   useEffect(() => {
     let ignore = false;
     const cachedRecords = getCachedEngagementRecords();
@@ -159,6 +232,8 @@ function AssetsPageContent() {
       setRecords((current) => current.filter((item) => item.id !== record.id));
       if (resultRecord?.id === record.id) {
         setResultRecord(null);
+        loadedRecordParamRef.current = "";
+        replaceSelectedRecordInUrl("");
       }
       notify({ tone: "success", message: "历史记录已删除。" });
     } catch (error) {
@@ -183,28 +258,10 @@ function AssetsPageContent() {
 
   async function handleSelectRecord(record: EngagementRecordSummary) {
     if (openingRecordId) return;
-    setOpeningRecordId(record.id);
-    setNotice("");
-    try {
-      const detail = await getEngagementRecord(record.id);
-      const restoredPlatform = detail.options.targetPlatform
-        || (detail.platform === "unknown" ? targetPlatform : detail.platform);
-
-      setSourceInput(detail.sourceType === "url"
-        ? detail.sourceUrl || detail.resolvedUrl || detail.sourceText
-        : detail.sourceText);
-      setGenerationMode(detail.options.generationMode === "reference" ? "reference" : "quick");
-      setTargetPlatform(restoredPlatform);
-      setIncludeComments(detail.options.includeComments);
-      setCommentCount(clampCount(detail.options.commentCount, 1, 200, 50));
-      setIncludeDanmaku(detail.options.includeDanmaku && restoredPlatform === "bilibili");
-      setDanmakuCount(clampCount(detail.options.danmakuCount, 1, 300, 50));
-      setResultRecord(detail);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "读取评论详情失败");
-    } finally {
-      setOpeningRecordId("");
-    }
+    const opened = await openRecord(record.id);
+    if (!opened) return;
+    loadedRecordParamRef.current = record.id;
+    replaceSelectedRecordInUrl(record.id);
   }
 
   async function copyText(text: string, message: string) {
@@ -316,4 +373,12 @@ function readCountParam(params: URLSearchParams, key: string) {
 function clampCount(value: number | undefined, min: number, max: number, fallback: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function AssetsPageFallback() {
+  return (
+    <div className="page assets-page">
+      <p className="subtle">正在打开评论历史…</p>
+    </div>
+  );
 }

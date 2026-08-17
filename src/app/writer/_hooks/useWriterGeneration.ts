@@ -14,7 +14,8 @@ import type {
   ProjectDraftInput,
   ProjectListItem,
   WriteResult,
-  WriteRevisionScope
+  WriteRevisionScope,
+  WriteStyleReferenceInput
 } from "@/lib/types";
 
 type DraftSaveBase = Omit<AccountDraftInput, "assets" | "content"> | Omit<ProjectDraftInput, "assets" | "content">;
@@ -42,6 +43,7 @@ type UseWriterGenerationInput = {
   routerReplace: (href: string, options?: { scroll?: boolean }) => void;
   selectedAccount: AccountListItem | null;
   selectedProject: ProjectListItem | null;
+  styleRefs: WriteStyleReferenceInput[];
   setBusy: Dispatch<SetStateAction<string>>;
   setNotice: Dispatch<SetStateAction<string>>;
   startTask: (input: JobStartInput) => Promise<JobRecord>;
@@ -70,6 +72,7 @@ export function useWriterGeneration({
   routerReplace,
   selectedAccount,
   selectedProject,
+  styleRefs,
   setBusy,
   setNotice,
   startTask,
@@ -95,6 +98,7 @@ export function useWriterGeneration({
         platform: targetType === "account" ? selectedAccount?.platform : undefined,
         accountId: targetType === "account" ? selectedAccount?.id : undefined,
         projectId: targetType === "project" ? selectedProject?.id : undefined,
+        styleRefs,
         mode,
         prompt: normalizedPrompt,
         sourceText: normalizedSourceText,
@@ -108,6 +112,7 @@ export function useWriterGeneration({
       selectedAccount?.id,
       selectedAccount?.platform,
       selectedProject?.id,
+      styleRefs,
       supportDocLinks,
       targetType,
       useWebResearch
@@ -126,7 +131,7 @@ export function useWriterGeneration({
     ) || null;
   }, [activeWriteJobId, selectedAccount?.id, selectedProject?.id, targetType, writeJobCandidates, writeJobSourceKey]);
   const isGenerating = Boolean(activeWriteJob && isActiveJob(activeWriteJob));
-  const canGenerate = Boolean(hasTaskInput && !busy && !isGenerating && (targetType === "project" ? selectedProject : selectedAccount));
+  const canGenerate = Boolean(hasTaskInput && styleRefs.length && !busy && !isGenerating);
   const canRevise = Boolean(
     lastDraftId &&
     lastDraftBase &&
@@ -246,6 +251,7 @@ export function useWriterGeneration({
           platform: targetType === "account" ? selectedAccount?.platform : undefined,
           accountId: targetType === "account" ? selectedAccount?.id : undefined,
           projectId: targetType === "project" ? selectedProject?.id : undefined,
+          styleRefs,
           mode,
           prompt: normalizedPrompt,
           sourceText: normalizedSourceText,
@@ -274,6 +280,7 @@ export function useWriterGeneration({
     normalizedSourceText,
     selectedAccount,
     selectedProject,
+    styleRefs,
     setBusy,
     setNotice,
     startTask,
@@ -473,6 +480,7 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
     brief: draft.brief,
     research: draft.research,
     sourceDigest: draft.sourceDigest,
+    styleRefs: draft.styleRefs,
     version: draft.version
   };
 

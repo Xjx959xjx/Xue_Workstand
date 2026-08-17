@@ -6,14 +6,18 @@ const platforms = ["bilibili", "douyin"];
 const grossMarginPlatforms = ["bilibili", "douyin"];
 const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"];
 const root = path.resolve(process.cwd(), process.env.STYLE_LIBRARY_DIR || "style-library");
+const repairMode = process.argv.includes("--repair");
 const issues = [];
+const repairs = [];
+const repairStamp = new Date().toISOString().replace(/[:.]/g, "-");
+const repairRoot = path.join(root, ".repairs", repairStamp);
 
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (error) {
     issues.push({
-      type: "invalid-json",
+      type: error && typeof error === "object" && error.code === "ENOENT" ? "missing-json" : "invalid-json",
       file,
       detail: error instanceof Error ? error.message : "JSON 读取失败"
     });
@@ -25,13 +29,27 @@ function exists(file) {
   return fs.existsSync(file);
 }
 
+function resolveStoredPath(storedPath) {
+  if (path.isAbsolute(storedPath)) return path.normalize(storedPath);
+  const target = path.resolve(root, storedPath.split("/").join(path.sep));
+  const relative = path.relative(root, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+  return target;
+}
+
+function libraryRelativePath(file) {
+  return path.relative(root, file).split(path.sep).join("/");
+}
+
 function dirs(dir) {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return [];
+    pushIssue("directory-read-failed", dir, error instanceof Error ? error.message : "目录读取失败");
     return [];
   }
 }
@@ -39,7 +57,9 @@ function dirs(dir) {
 function files(dir, extension) {
   try {
     return fs.readdirSync(dir).filter((file) => file.endsWith(extension));
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return [];
+    pushIssue("directory-read-failed", dir, error instanceof Error ? error.message : "目录读取失败");
     return [];
   }
 }
@@ -52,6 +72,30 @@ function pushIssue(type, file, detail) {
   issues.push({ type, file, detail });
 }
 
+function writeRepair(file, value, reason) {
+  const relative = path.relative(root, file);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`拒绝修复素材库之外的文件：${file}`);
+  }
+
+  const backup = path.join(repairRoot, relative);
+  fs.mkdirSync(path.dirname(backup), { recursive: true });
+  fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+
+  const temporary = `${file}.${process.pid}.${Date.now()}.repair.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.renameSync(temporary, file);
+  } finally {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // 临时文件清理失败不会覆盖原始修复错误；备份仍保留在 repairRoot。
+    }
+  }
+  repairs.push({ file, backup, reason });
+}
+
 const accountIds = new Set();
 const copySourceIds = new Set();
 const copySourceProjectRefs = new Map();
@@ -62,6 +106,10 @@ for (const platform of platforms) {
   for (const slug of dirs(path.join(root, platform))) {
     const base = path.join(root, platform, slug);
     const accountFile = path.join(base, "account.json");
+    if (!exists(accountFile)) {
+      pushIssue("missing-account-json", accountFile, "account directory exists but account.json is missing");
+      continue;
+    }
     const account = readJson(accountFile);
     if (!account) continue;
 
@@ -79,11 +127,18 @@ for (const platform of platforms) {
     for (const file of files(videoDir, ".json")) {
       const id = file.slice(0, -5);
       const videoFile = path.join(videoDir, file);
-      const video = readJson(videoFile);
+      let video = readJson(videoFile);
       if (!video) continue;
 
       const transcriptFile = path.join(transcriptDir, `${id}.txt`);
       const hasTranscript = exists(transcriptFile);
+      if (repairMode) {
+        const nextVideo = repairedTranscriptMetadata(video, transcriptFile, hasTranscript);
+        if (nextVideo) {
+          writeRepair(videoFile, nextVideo, hasTranscript ? "同步已有转写文件的元数据" : "清理缺失转写文件的失效元数据");
+          video = nextVideo;
+        }
+      }
 
       if (video.id !== id) {
         pushIssue("video-id-filename-mismatch", videoFile, `id=${video.id}, file=${id}`);
@@ -97,7 +152,7 @@ for (const platform of platforms) {
       if (!hasTranscript && video.transcriptStatus === "completed") {
         pushIssue("missing-transcript-file", videoFile, "status completed but txt missing");
       }
-      if (video.transcriptPath && !exists(video.transcriptPath)) {
+      if (video.transcriptPath && !exists(resolveStoredPath(video.transcriptPath) || "")) {
         pushIssue("stale-transcript-path", videoFile, video.transcriptPath);
       }
     }
@@ -168,6 +223,10 @@ for (const file of files(path.join(root, "copy-tools", "sources"), ".txt")) {
 for (const slug of dirs(path.join(root, "projects"))) {
   const base = path.join(root, "projects", slug);
   const projectFile = path.join(base, "project.json");
+  if (!exists(projectFile)) {
+    pushIssue("missing-project-json", projectFile, "project directory exists but project.json is missing");
+    continue;
+  }
   const project = readJson(projectFile);
   if (!project) continue;
 
@@ -421,6 +480,38 @@ function checkGrossMarginAccounts(file) {
   }
 }
 
+function repairedTranscriptMetadata(video, transcriptFile, hasTranscript) {
+  if (hasTranscript) {
+    const transcriptPath = libraryRelativePath(transcriptFile);
+    if (video.transcriptStatus === "completed" && video.transcriptPath === transcriptPath) return null;
+    return {
+      ...video,
+      transcriptStatus: "completed",
+      transcriptPath,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  if (
+    video.transcriptStatus !== "completed" &&
+    !video.transcriptPath &&
+    !video.transcriptRevision &&
+    !video.transcriptSource
+  ) {
+    return null;
+  }
+
+  const next = {
+    ...video,
+    transcriptStatus: video.transcriptStatus === "failed" ? "failed" : "not_started",
+    updatedAt: new Date().toISOString()
+  };
+  delete next.transcriptPath;
+  delete next.transcriptRevision;
+  delete next.transcriptSource;
+  return next;
+}
+
 const counts = issues.reduce((acc, issue) => {
   acc[issue.type] = (acc[issue.type] || 0) + 1;
   return acc;
@@ -430,6 +521,9 @@ console.log(
   JSON.stringify(
     {
       root,
+      repairMode,
+      repairCount: repairs.length,
+      repairs,
       issueCount: issues.length,
       counts,
       issues

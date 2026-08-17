@@ -5,7 +5,6 @@ import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Clock3,
-  ExternalLink,
   Flame,
   Plus,
   RefreshCw,
@@ -38,7 +37,7 @@ import type {
 
 const DEFAULT_WINDOW = "3d";
 const REFRESH_LIMIT = 10;
-const AUTO_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const AUTO_REFRESH_INTERVAL_MS = 3 * 60 * 60 * 1000;
 const AUTO_REFRESH_CHECK_INTERVAL_MS = 60 * 1000;
 const AUTO_REFRESH_START_DELAY_MS = AUTO_REFRESH_CHECK_INTERVAL_MS;
 const MAX_REFRESH_LOGS = 6;
@@ -751,7 +750,7 @@ function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
       <div className="douyin-hotlist-refresh-log-panel" role="log" aria-label="刷新日志">
         <div className="douyin-hotlist-refresh-log-head">
           <strong>刷新日志</strong>
-          <span>每 30 分钟自动检查，失败会记录</span>
+          <span>页面打开时每 3 小时自动检查，失败会记录</span>
         </div>
         {logs.length ? (
           <ol>
@@ -1160,7 +1159,18 @@ function HotlistTable({
               <div className="douyin-hotlist-item-head">
                 <HotlistCover item={item} />
                 <div className="douyin-hotlist-item-main">
-                  <h3 title={item.video.title}>{item.video.title}</h3>
+                  <h3>
+                    <a
+                      className="douyin-hotlist-title-link"
+                      href={getVideoExternalUrl(item.video)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={item.video.title}
+                      aria-label={`${item.video.title}（新标签页打开）`}
+                    >
+                      {item.video.title}
+                    </a>
+                  </h3>
                   <div className="douyin-hotlist-item-meta">
                     <span className="douyin-hotlist-account-meta">
                       <span
@@ -1193,9 +1203,6 @@ function HotlistTable({
                     </div>
                   ) : null}
                 </div>
-                <a className="btn icon-only compact" href={getVideoExternalUrl(item.video)} target="_blank" rel="noreferrer" aria-label={`打开 ${item.video.title}`}>
-                  <ExternalLink aria-hidden="true" size={15} />
-                </a>
               </div>
 
               <div className="douyin-hotlist-item-data">

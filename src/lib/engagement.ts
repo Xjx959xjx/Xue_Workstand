@@ -1097,7 +1097,7 @@ async function generateComments(input: {
                     })
                   }
                 ],
-                "low",
+                "medium",
                 {
                   signal,
                   maxOutputTokens: clampCount(batch.slots.length * 72, 1800, 9000, 3600)
@@ -1579,7 +1579,7 @@ async function generateDanmaku(
                 )
               }
             ],
-            "none",
+            "low",
             { signal, maxOutputTokens: clampCount(slots.length * 52, 1000, 3600, 2400) }
           );
           throwIfAborted(signal);

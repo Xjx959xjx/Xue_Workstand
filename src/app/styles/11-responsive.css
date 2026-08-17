@@ -37,10 +37,6 @@
   .app-shell {
     grid-template-columns: 214px minmax(0, 1fr);
   }
-
-  .task-center-drawer {
-    left: 232px;
-  }
 }
 
 @media (max-width: 900px) {

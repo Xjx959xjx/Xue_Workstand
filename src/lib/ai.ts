@@ -11,6 +11,8 @@ import {
   ProjectSummary,
   WriteResult,
   WriteSourceDigest,
+  WriteStyleReference,
+  WriteStyleReferenceInput,
   platforms
 } from "./types";
 import { clampText, makeTitleFromPrompt, nowIso, shortHash } from "./utils";
@@ -47,6 +49,7 @@ import {
 } from "./storage";
 import { extractRewriteSourceMaterial, normalizeRewritePrompt, splitWriterSourceInput } from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
+import { draftWriteStyleReferenceInputs, normalizeWriteStyleReferenceInputs } from "./write-references";
 import {
   buildChatFallbackReason,
   chatCompletionPayload,
@@ -103,6 +106,7 @@ export type WriteCopyInput = {
   accountId?: string;
   targetType?: "account" | "project";
   projectId?: string;
+  styleRefs?: WriteStyleReferenceInput[];
   mode: Draft["mode"];
   prompt: string;
   sourceText?: string;
@@ -200,7 +204,7 @@ export type AccountStyleGenerationResult = {
 };
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
-const STYLE_REASONING_EFFORT: ChatReasoningEffort = "xhigh";
+const STYLE_REASONING_EFFORT: ChatReasoningEffort = "high";
 const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 1, 1, 4);
 const STYLE_ONE_SHOT_MAX_INPUT_CHARS = boundedEnvInteger("STYLE_ONE_SHOT_MAX_INPUT_CHARS", 50_000, 10_000, 200_000);
 const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = 2;
@@ -2613,24 +2617,14 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
 
   const normalizedInput = await normalizeWriteCopyInput(input, options);
   throwIfAborted(options.signal);
-
-  if (normalizedInput.targetType === "project" || normalizedInput.projectId) {
-    return prepareProjectWriteContext(normalizedInput, options);
-  }
-
-  if (!normalizedInput.platform || !normalizedInput.accountId) {
-    throw new Error("请选择参考账号");
-  }
-
-  const account = await resolveAccount(normalizedInput.platform, normalizedInput.accountId);
-  const style = await fs.readFile(path.join(libraryRoot(), normalizedInput.platform, account.slug, "style.md"), "utf8");
-  const samples = await getTopTranscriptSamples(normalizedInput.platform, normalizedInput.accountId, WRITE_ACCOUNT_SAMPLE_LIMIT);
-  const sampleContext = formatWriteSampleContext(samples);
+  const styleInputs = normalizeWriteStyleReferenceInputs(normalizedInput);
+  if (!styleInputs.length) throw new Error("请选择至少一个参考风格");
+  const styleContexts = await Promise.all(styleInputs.map((reference) => resolveWriteStyleContext(reference, true)));
 
   const userTask =
     normalizedInput.mode === "topic"
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
-      : `请按账号风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
+      : `请按所选参考风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
   const contextFingerprint = buildWriteContextFingerprint(normalizedInput);
   const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
   const webContext = normalizedInput.useWebResearch
@@ -2649,23 +2643,20 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
       {
         role: "system",
         content:
-          "你是中文短视频文案写手。直接根据用户任务、账号风格卡、代表样本和已核验资料完成成稿，不要输出中间策划过程、创作思路或审稿意见。账号风格卡和代表样本决定表达方式，不得套用跨账号通用的短视频结构。"
+          "你是中文短视频文案写手。直接根据用户任务、所选风格卡、代表样本和已核验资料完成成稿，不要输出中间策划过程、创作思路或审稿意见。选择顺序代表风格优先级：第一项是主风格，其余作为补充。应融合兼容特征并处理冲突，不得把不同风格机械拼段，也不得套用跨账号通用的短视频结构。"
       },
       {
         role: "user",
         content: [
-          `参考账号：${account.name}`,
-          `平台：${normalizedInput.platform}`,
-          `账号风格卡：\n${style}`,
-          `代表样本：\n${sampleContext || "暂无样本，仅参考风格卡。"}`,
+          `参考风格（共 ${styleContexts.length} 项，按优先级排列）：\n${formatWriteStyleContexts(styleContexts, true)}`,
           `支持文档资料：\n${supportDocContext}`,
           `联网检索资料：\n${webContext}`,
           `任务：\n${userTask}`,
           [
             "写作边界：",
             "1. 只输出可直接使用的成稿，不解释创作思路。",
-            "2. 开头方式、句长、节奏、具象程度和结尾方式完全服从当前账号风格卡与代表样本，不自行补统一模板。",
-            "3. 风格卡与样本出现差异时，以多个代表样本反复出现的表达模式为准。",
+            "2. 开头方式、句长、节奏、具象程度和结尾方式服从所选风格卡与代表样本，不自行补统一模板。",
+            "3. 多个风格存在冲突时按选择顺序取舍；同一风格的风格卡与样本有差异时，以代表样本反复出现的表达模式为准。",
             "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
             "5. 保留用户给出的具体梗、场景、原话和事实线索。"
           ].join("\n")
@@ -2675,25 +2666,13 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
     research,
     contextFingerprint,
     sourceDigest,
-    draftBase: {
-      platform: normalizedInput.platform,
-      accountId: normalizedInput.accountId,
-      accountName: account.name,
-      title: makeTitleFromPrompt(normalizedInput.prompt),
-      mode: normalizedInput.mode,
-      prompt: normalizedInput.prompt,
-      input: normalizedInput.sourceText,
-      supportDocLinks: normalizedInput.supportDocLinks,
+    draftBase: buildPreparedWriteDraftBase({
+      input: normalizedInput,
+      styleContexts,
       research,
       sourceDigest,
-      version: createInitialDraftVersion(contextFingerprint),
-      styleRef: {
-        platform: normalizedInput.platform,
-        accountId: normalizedInput.accountId,
-        accountName: account.name,
-        videoIds: samples.map((sample) => sample.video.id)
-      }
-    }
+      contextFingerprint
+    })
   };
 }
 
@@ -2719,15 +2698,18 @@ async function prepareWriteRevisionContext(
   const resolved = await resolveDraft(input.parentDraftId);
   const parent = resolved.draft;
   const isProject = parent.targetType === "project";
-  const [targetName, style] = isProject
-    ? [parent.projectName, await readProjectStyle(parent.projectId)]
-    : [parent.accountName, await readStyle(parent.platform, parent.accountId)];
+  const styleContexts = await Promise.all(
+    draftWriteStyleReferenceInputs(parent).map((reference) => resolveWriteStyleContext(reference, false))
+  );
+  const targetName = styleContexts.map((context) => context.title).join("、");
+  const style = formatWriteStyleContexts(styleContexts, false);
   const contextFingerprint = parent.version?.contextFingerprint || buildWriteContextFingerprint({
     action: "create",
     targetType: isProject ? "project" : "account",
     platform: isProject ? undefined : parent.platform,
     accountId: isProject ? undefined : parent.accountId,
     projectId: isProject ? parent.projectId : undefined,
+    styleRefs: draftWriteStyleReferenceInputs(parent),
     mode: parent.mode,
     prompt: parent.prompt,
     sourceText: parent.input,
@@ -2793,6 +2775,7 @@ async function prepareWriteRevisionContext(
     brief: parent.brief,
     research: parent.research,
     sourceDigest,
+    styleRefs: styleContexts.map((context) => context.reference),
     version
   };
   const draftBase: PreparedWriteContext["draftBase"] = isProject
@@ -2820,113 +2803,135 @@ async function prepareWriteRevisionContext(
   };
 }
 
-async function prepareProjectWriteContext(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<PreparedWriteContext> {
-  throwIfAborted(options.signal);
-  if (!input.projectId) {
-    throw new Error("请选择参考项目");
+type WriteStyleContext = {
+  reference: WriteStyleReference;
+  title: string;
+  subtitle: string;
+  style: string;
+  sampleContext?: string;
+};
+
+async function resolveWriteStyleContext(
+  reference: WriteStyleReferenceInput,
+  includeSamples: boolean
+): Promise<WriteStyleContext> {
+  if (reference.targetType === "account") {
+    const account = await resolveAccount(reference.platform, reference.accountId);
+    const [style, samples] = await Promise.all([
+      readStyle(account.platform, account.id),
+      includeSamples
+        ? getTopTranscriptSamples(account.platform, account.id, WRITE_ACCOUNT_SAMPLE_LIMIT)
+        : Promise.resolve([])
+    ]);
+    return {
+      reference: {
+        targetType: "account",
+        platform: account.platform,
+        accountId: account.id,
+        accountName: account.name,
+        videoIds: samples.map((sample) => sample.video.id)
+      },
+      title: account.name,
+      subtitle: `账号风格｜${account.platform}`,
+      style,
+      sampleContext: includeSamples ? formatWriteSampleContext(samples) : undefined
+    };
   }
 
-  const project = await resolveProject(input.projectId);
-  const style = await fs.readFile(path.join(libraryRoot(), "projects", project.slug, "style.md"), "utf8");
-
-  const accountContexts = await Promise.all(
-    project.sourceAccountIds.map(async (sourceAccountId) => {
-      const [platform] = sourceAccountId.split(":") as [Platform, string];
-      const account = await resolveAccount(platform, sourceAccountId);
-      const samples = await getTopTranscriptSamples(platform, sourceAccountId, WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT);
-      return {
-        account,
-        samples
-      };
-    })
-  );
-
-  const sampleContext = accountContexts
-    .map(({ account, samples }) => {
-      const block = formatWriteSampleContext(samples);
-      return `参考账号：${account.name}\n${block || "暂无样本"}`;
-    })
-    .join("\n\n---\n\n");
-  const materialContext = await buildProjectCopySourceContext(project.sourceMaterialIds || []);
-  const referenceContext = [sampleContext, materialContext].filter(Boolean).join("\n\n---\n\n");
-
-  const userTask =
-    input.mode === "topic"
-      ? `请基于这个主题生成文案：\n${input.prompt}`
-      : `请按项目风格改写下面文案。改写要求：${input.prompt}\n\n原文素材：\n${input.sourceText || ""}`;
-  const contextFingerprint = buildWriteContextFingerprint(input);
-  const supportDocContext = await buildSupportDocumentContext(input.supportDocLinks, options);
-  const webContext = input.useWebResearch
-    ? await buildWebResearchContext({ ...input, supportDocContext }, options)
-    : "未启用联网检索。";
-  const research = buildReferenceSummary({
-    supportDocLinks: input.supportDocLinks,
-    supportDocContext,
-    useWebResearch: input.useWebResearch,
-    webContext
-  });
-  const sourceDigest = buildWriteSourceDigest(input);
+  const project = await resolveProject(reference.projectId);
+  const style = await readProjectStyle(project.id);
+  let sampleContext: string | undefined;
+  if (includeSamples) {
+    const accountContexts = await Promise.all(
+      project.sourceAccountIds.map(async (sourceAccountId) => {
+        const [platform] = sourceAccountId.split(":") as [Platform, string];
+        const account = await resolveAccount(platform, sourceAccountId);
+        const samples = await getTopTranscriptSamples(platform, sourceAccountId, WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT);
+        return { account, samples };
+      })
+    );
+    const accountSamples = accountContexts
+      .map(({ account, samples }) => `参考账号：${account.name}\n${formatWriteSampleContext(samples) || "暂无样本"}`)
+      .join("\n\n---\n\n");
+    const materialContext = await buildProjectCopySourceContext(project.sourceMaterialIds || []);
+    sampleContext = [accountSamples, materialContext].filter(Boolean).join("\n\n---\n\n");
+  }
 
   return {
-    messages: [
-      {
-        role: "system",
-        content:
-          "你是中文短视频文案写手。直接根据用户任务、项目风格卡、代表样本和已核验资料完成成稿，不要输出中间策划过程、创作思路或审稿意见，也不要照抄原转写稿。项目风格卡和代表样本决定表达方式，不得套用跨项目通用的短视频结构。只有在联网检索资料明确启用并提供结果时，才基于资料写最新事实。"
-      },
-      {
-        role: "user",
-        content: [
-          `参考项目：${project.name}`,
-          `项目说明：${project.description || "暂无"}`,
-          `项目风格卡：\n${style}`,
-          `代表样本：\n${referenceContext || "暂无样本，仅参考风格卡。"}`,
-          `支持文档资料：\n${supportDocContext}`,
-          `联网检索资料：\n${webContext}`,
-          `任务：\n${userTask}`,
-          [
-            "写作边界：",
-            "1. 只输出可直接使用的成稿，不解释创作思路。",
-            "2. 开头方式、句长、节奏、具象程度和结尾方式完全服从当前项目风格卡与代表样本，不自行补统一模板。",
-            "3. 风格卡与样本出现差异时，以多个代表样本反复出现的表达模式为准。",
-            "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
-            "5. 保留用户给出的具体梗、场景、原话和事实线索。"
-          ].join("\n")
-        ].join("\n\n")
-      }
-    ],
-    research,
-    contextFingerprint,
-    sourceDigest,
-    draftBase: {
+    reference: {
       targetType: "project",
       projectId: project.id,
       projectName: project.name,
-      title: makeTitleFromPrompt(input.prompt),
-      mode: input.mode,
-      prompt: input.prompt,
-      input: input.sourceText,
-      supportDocLinks: input.supportDocLinks,
-      research,
-      sourceDigest,
-      version: createInitialDraftVersion(contextFingerprint),
-      styleRef: {
-        projectId: project.id,
-        projectName: project.name,
-        sourceAccountIds: project.sourceAccountIds,
-        sourceMaterialIds: project.sourceMaterialIds
-      }
-    }
+      sourceAccountIds: project.sourceAccountIds,
+      sourceMaterialIds: project.sourceMaterialIds
+    },
+    title: project.name,
+    subtitle: `项目风格${project.description ? `｜${project.description}` : ""}`,
+    style,
+    sampleContext
+  };
+}
+
+function formatWriteStyleContexts(contexts: WriteStyleContext[], includeSamples: boolean) {
+  return contexts.map((context, index) => [
+    `## 风格 ${index + 1}${index === 0 ? "（主风格）" : "（补充风格）"}｜${context.title}`,
+    context.subtitle,
+    `风格卡：\n${includeSamples ? context.style : clampText(context.style, 12_000)}`,
+    ...(includeSamples ? [`代表样本：\n${context.sampleContext || "暂无样本，仅参考风格卡。"}`] : [])
+  ].join("\n\n")).join("\n\n---\n\n");
+}
+
+function buildPreparedWriteDraftBase(input: {
+  input: WriteCopyInput;
+  styleContexts: WriteStyleContext[];
+  research?: string;
+  sourceDigest: WriteSourceDigest;
+  contextFingerprint: string;
+}): PreparedWriteContext["draftBase"] {
+  const primary = input.styleContexts[0].reference;
+  const shared = {
+    title: makeTitleFromPrompt(input.input.prompt),
+    mode: input.input.mode,
+    prompt: input.input.prompt,
+    input: input.input.sourceText,
+    supportDocLinks: input.input.supportDocLinks,
+    research: input.research,
+    sourceDigest: input.sourceDigest,
+    styleRefs: input.styleContexts.map((context) => context.reference),
+    version: createInitialDraftVersion(input.contextFingerprint)
+  };
+
+  if (primary.targetType === "project") {
+    const { targetType: _targetType, ...styleRef } = primary;
+    return {
+      ...shared,
+      targetType: "project",
+      projectId: primary.projectId,
+      projectName: primary.projectName,
+      styleRef
+    };
+  }
+
+  const { targetType: _targetType, ...styleRef } = primary;
+  return {
+    ...shared,
+    targetType: "account",
+    platform: primary.platform,
+    accountId: primary.accountId,
+    accountName: primary.accountName,
+    styleRef
   };
 }
 
 function buildWriteContextFingerprint(input: WriteCopyInput) {
+  const styleRefs = normalizeWriteStyleReferenceInputs(input);
   return shortHash(JSON.stringify({
     promptVersion: WRITE_PROMPT_VERSION,
     targetType: input.targetType || (input.projectId ? "project" : "account"),
     platform: input.platform || "",
     accountId: input.accountId || "",
     projectId: input.projectId || "",
+    styleRefs,
     mode: input.mode,
     prompt: input.prompt.trim(),
     sourceText: input.sourceText?.trim() || "",

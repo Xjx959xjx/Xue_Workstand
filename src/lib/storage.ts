@@ -1,5 +1,5 @@
-import { promises as fs } from "fs";
-import { createHash } from "crypto";
+import { promises as fs, type Dirent } from "fs";
+import { createHash, randomUUID } from "crypto";
 import path from "path";
 import {
   Account,
@@ -17,7 +17,6 @@ import {
   EngagementRecord,
   EngagementRecordSummary,
   LibraryOverviewResponse,
-  LibraryState,
   Platform,
   Project,
   ProjectDetail,
@@ -31,9 +30,10 @@ import {
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
 import { fileExists, readJsonFile, writeFileAtomic, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
-import { libraryRoot, normalizeStorageSegment } from "./storage/core";
+import { libraryRoot, normalizeStorageSegment, toLibraryRelativePath } from "./storage/core";
 import { ensureDouyinHotlistDirs } from "./storage/douyin-hotlist";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
+import { parseStoredRecord, storedRecordKind, versionStoredRecord } from "./storage/schemas";
 export { libraryRoot } from "./storage/core";
 export {
   appendGrossMarginPlaySample,
@@ -73,7 +73,8 @@ const DEFAULT_STYLE = `# 风格卡
 
 const draftAssetQueues = new Map<string, Promise<unknown>>();
 const engagementRecordQueues = new Map<string, Promise<unknown>>();
-const transcriptQueues = new Map<string, Promise<unknown>>();
+const identityMutationQueues = new Map<string, Promise<unknown>>();
+const videoMutationQueues = new Map<string, Promise<unknown>>();
 
 type DetailReadOptions = {
   includeStyle?: boolean;
@@ -292,8 +293,74 @@ function createStorageSlug(value: string, fallback: string, label: string) {
   return normalizeStorageSegment(safeSegment(value, fallback), label);
 }
 
+async function createAvailableAccountSlug(platform: Platform, name: string, uid: string) {
+  const base = createStorageSlug(name, shortHash(uid), "账号 ID");
+  const baseAccount = await readJson<Account>(accountJsonPath(platform, base));
+  if (baseAccount?.uid === uid) return base;
+  if (!baseAccount && !(await exists(accountPath(platform, base)))) return base;
+
+  const hashedBase = createStorageSlug(`${base}-${shortHash(uid)}`, shortHash(uid), "账号 ID");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = attempt ? `${hashedBase}-${attempt + 1}` : hashedBase;
+    const account = await readJson<Account>(accountJsonPath(platform, candidate));
+    if (account?.uid === uid) return candidate;
+    if (!account && !(await exists(accountPath(platform, candidate)))) return candidate;
+  }
+
+  throw new Error(`无法为账号「${name}」分配唯一目录，请检查现有账号目录。`);
+}
+
+async function createAvailableProjectSlug(name: string) {
+  const base = createStorageSlug(name, shortHash(name), "项目 ID");
+  if (!(await exists(projectPath(base)))) return base;
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = shortHash(`${name}-${randomUUID()}`);
+    const candidate = createStorageSlug(`${base}-${suffix}`, suffix, "项目 ID");
+    if (!(await exists(projectPath(candidate)))) return candidate;
+  }
+
+  throw new Error(`无法为项目「${name}」分配唯一目录，请检查现有项目目录。`);
+}
+
 function isFsErrorCode(error: unknown, code: string) {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === code);
+}
+
+async function readDirNamesIfExists(target: string) {
+  try {
+    return await fs.readdir(target);
+  } catch (error) {
+    if (isFsErrorCode(error, "ENOENT")) return [];
+    throw new Error(`读取目录失败：${target}。${error instanceof Error ? error.message : "文件系统异常"}`);
+  }
+}
+
+async function readDirEntriesIfExists(target: string): Promise<Dirent[]> {
+  try {
+    return await fs.readdir(target, { withFileTypes: true });
+  } catch (error) {
+    if (isFsErrorCode(error, "ENOENT")) return [];
+    throw new Error(`读取目录失败：${target}。${error instanceof Error ? error.message : "文件系统异常"}`);
+  }
+}
+
+async function readTextOrDefaultIfMissing(target: string, fallback: string) {
+  try {
+    return await fs.readFile(target, "utf8");
+  } catch (error) {
+    if (isFsErrorCode(error, "ENOENT")) return fallback;
+    throw new Error(`读取文本文件失败：${target}。${error instanceof Error ? error.message : "文件系统异常"}`);
+  }
+}
+
+async function statIfExists(target: string) {
+  try {
+    return await fs.stat(target);
+  } catch (error) {
+    if (isFsErrorCode(error, "ENOENT")) return null;
+    throw new Error(`读取文件状态失败：${target}。${error instanceof Error ? error.message : "文件系统异常"}`);
+  }
 }
 
 function uniqueTrimmedStrings(values: string[]) {
@@ -305,60 +372,40 @@ function normalizeEngagementRecordId(recordId: string) {
 }
 
 async function withDraftAssetsLock<T>(draftId: string, run: () => Promise<T>) {
-  const previous = draftAssetQueues.get(draftId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const next = previous.then(() => current, () => current);
-  draftAssetQueues.set(draftId, next);
-
-  try {
-    await previous.catch(() => undefined);
-    return await run();
-  } finally {
-    release();
-    if (draftAssetQueues.get(draftId) === next) {
-      draftAssetQueues.delete(draftId);
-    }
-  }
+  return withMutationLock(draftAssetQueues, draftId, run);
 }
 
 async function withEngagementRecordLock<T>(recordId: string, run: () => Promise<T>) {
-  const previous = engagementRecordQueues.get(recordId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const next = previous.then(() => current, () => current);
-  engagementRecordQueues.set(recordId, next);
-
-  try {
-    await previous.catch(() => undefined);
-    return await run();
-  } finally {
-    release();
-    if (engagementRecordQueues.get(recordId) === next) {
-      engagementRecordQueues.delete(recordId);
-    }
-  }
+  return withMutationLock(engagementRecordQueues, recordId, run);
 }
 
-async function withTranscriptLock<T>(key: string, run: () => Promise<T>) {
-  const previous = transcriptQueues.get(key) ?? Promise.resolve();
+async function withIdentityMutationLock<T>(key: string, run: () => Promise<T>) {
+  return withMutationLock(identityMutationQueues, key, run);
+}
+
+async function withVideoMutationLock<T>(key: string, run: () => Promise<T>) {
+  return withMutationLock(videoMutationQueues, key, run);
+}
+
+async function withMutationLock<T>(
+  queues: Map<string, Promise<unknown>>,
+  key: string,
+  run: () => Promise<T>
+) {
+  const previous = queues.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
   const next = previous.then(() => current, () => current);
-  transcriptQueues.set(key, next);
+  queues.set(key, next);
 
   try {
     await previous.catch(() => undefined);
     return await run();
   } finally {
     release();
-    if (transcriptQueues.get(key) === next) transcriptQueues.delete(key);
+    if (queues.get(key) === next) queues.delete(key);
   }
 }
 
@@ -367,11 +414,17 @@ async function exists(target: string) {
 }
 
 async function readJson<T>(target: string): Promise<T | null> {
-  return readJsonFile<T>(target);
+  const value = await readJsonFile<unknown>(target);
+  if (value === null) return null;
+  const kind = storedRecordKind(target, libraryRoot());
+  return kind ? parseStoredRecord<T>(target, value, kind) : value as T;
 }
 
 async function writeJson(target: string, value: unknown) {
-  return writeJsonFile(target, value);
+  const kind = storedRecordKind(target, libraryRoot());
+  if (!kind) return writeJsonFile(target, value);
+  const versioned = versionStoredRecord(value);
+  return writeJsonFile(target, parseStoredRecord(target, versioned, kind));
 }
 
 async function ensureAccountDirs(platform: Platform, slug: string) {
@@ -418,7 +471,7 @@ export async function resolveAccount(platform: Platform, accountIdOrSlug: string
 
 async function findExistingAccount(platform: Platform, uid: string) {
   const base = platformPath(platform);
-  const entries = await fs.readdir(base, { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(base);
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -437,7 +490,7 @@ export async function findAccountByUid(platform: Platform, uid: string) {
 export async function findAccountByName(platform: Platform, name: string) {
   await ensureLibrary();
   const base = platformPath(platform);
-  const entries = await fs.readdir(base, { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(base);
   const normalizedName = name.trim().toLowerCase();
 
   for (const entry of entries) {
@@ -458,27 +511,30 @@ export async function upsertAccount(input: {
   lastCollectedAt?: string;
 }) {
   await ensureLibrary();
+  return withIdentityMutationLock(`accounts:${input.platform}`, async () => {
+    const existing = await findExistingAccount(input.platform, input.uid);
+    const now = nowIso();
+    const slug = existing?.slug
+      ? normalizeAccountSlug(existing.slug)
+      : await createAvailableAccountSlug(input.platform, input.name || input.uid, input.uid);
 
-  const existing = await findExistingAccount(input.platform, input.uid);
-  const now = nowIso();
-  const slug = existing?.slug ? normalizeAccountSlug(existing.slug) : createStorageSlug(input.name || input.uid, shortHash(input.uid), "账号 ID");
-  await ensureAccountDirs(input.platform, slug);
+    const account: Account = {
+      id: `${input.platform}:${slug}`,
+      slug,
+      platform: input.platform,
+      name: input.name || existing?.name || input.uid,
+      uid: input.uid,
+      sourceUrl: input.sourceUrl || existing?.sourceUrl,
+      avatarUrl: input.avatarUrl || existing?.avatarUrl,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastCollectedAt: input.lastCollectedAt ?? existing?.lastCollectedAt
+    };
 
-  const account: Account = {
-    id: `${input.platform}:${slug}`,
-    slug,
-    platform: input.platform,
-    name: input.name || existing?.name || input.uid,
-    uid: input.uid,
-    sourceUrl: input.sourceUrl || existing?.sourceUrl,
-    avatarUrl: input.avatarUrl || existing?.avatarUrl,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    lastCollectedAt: input.lastCollectedAt ?? existing?.lastCollectedAt
-  };
-
-  await writeJson(accountJsonPath(input.platform, slug), account);
-  return account;
+    await writeJson(accountJsonPath(input.platform, slug), account);
+    await ensureAccountDirs(input.platform, slug);
+    return account;
+  });
 }
 
 export async function deleteAccounts(accountIds: string[]) {
@@ -511,38 +567,41 @@ export async function upsertProject(input: {
   projectId?: string;
 }) {
   await ensureLibrary();
+  return withIdentityMutationLock("projects", async () => {
+    const existing = input.projectId ? await resolveProject(input.projectId) : null;
+    const now = nowIso();
+    const slug = existing?.slug
+      ? normalizeProjectSlug(existing.slug)
+      : await createAvailableProjectSlug(input.name);
+    if (input.sourceAccountIds) {
+      await assertAccountsExist(input.sourceAccountIds);
+    }
+    if (input.sourceMaterialIds) {
+      await assertCopySourcesExist(input.sourceMaterialIds);
+    }
+    const sourceAccountIds = input.sourceAccountIds ? normalizeProjectAccountRefs(input.sourceAccountIds) : existing?.sourceAccountIds ?? [];
+    const sourceMaterialIds = input.sourceMaterialIds
+      ? uniqueTrimmedStrings(input.sourceMaterialIds).map(normalizeCopySourceId)
+      : existing?.sourceMaterialIds ?? [];
 
-  const existing = input.projectId ? await resolveProject(input.projectId).catch(() => null) : null;
-  const now = nowIso();
-  const slug = existing?.slug ? normalizeProjectSlug(existing.slug) : createStorageSlug(input.name, shortHash(input.name), "项目 ID");
-  await ensureProjectDirs(slug);
-  if (input.sourceAccountIds) {
-    await assertAccountsExist(input.sourceAccountIds);
-  }
-  if (input.sourceMaterialIds) {
-    await assertCopySourcesExist(input.sourceMaterialIds);
-  }
-  const sourceAccountIds = input.sourceAccountIds ? normalizeProjectAccountRefs(input.sourceAccountIds) : existing?.sourceAccountIds ?? [];
-  const sourceMaterialIds = input.sourceMaterialIds
-    ? uniqueTrimmedStrings(input.sourceMaterialIds).map(normalizeCopySourceId)
-    : existing?.sourceMaterialIds ?? [];
+    const project: Project = {
+      id: `project:${slug}`,
+      slug,
+      name: input.name || existing?.name || "未命名项目",
+      description: input.description ?? existing?.description,
+      sourceAccountIds,
+      sourceMaterialIds,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
 
-  const project: Project = {
-    id: `project:${slug}`,
-    slug,
-    name: input.name || existing?.name || "未命名项目",
-    description: input.description ?? existing?.description,
-    sourceAccountIds,
-    sourceMaterialIds,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now
-  };
-
-  await writeJson(projectJsonPath(slug), project);
-  if (input.sourceMaterialIds) {
-    await syncCopySourceProjectRefs(project.id, sourceMaterialIds);
-  }
-  return project;
+    await writeJson(projectJsonPath(slug), project);
+    await ensureProjectDirs(slug);
+    if (input.sourceMaterialIds) {
+      await syncCopySourceProjectRefs(project.id, sourceMaterialIds);
+    }
+    return project;
+  });
 }
 
 export async function deleteProjects(projectIds: string[]) {
@@ -597,7 +656,7 @@ export async function saveCopySource(input: {
     url: input.url,
     resolvedUrl: input.resolvedUrl,
     transcript,
-    transcriptPath: transcriptFile,
+    transcriptPath: toLibraryRelativePath(transcriptFile),
     source: input.source,
     status: input.status || "completed",
     error: input.error,
@@ -655,7 +714,7 @@ export async function createCopySourceProject(input: {
 
 export async function getCopySources() {
   await ensureLibrary();
-  const files = await fs.readdir(copySourcesPath()).catch(() => []);
+  const files = await readDirNamesIfExists(copySourcesPath());
   const sources = (
     await Promise.all(
       files
@@ -756,7 +815,7 @@ export async function writeEngagementCache(kind: EngagementCacheKind, cacheKey: 
 
 export async function getEngagementRecords() {
   await ensureLibrary();
-  const files = await fs.readdir(engagementPath()).catch(() => []);
+  const files = await readDirNamesIfExists(engagementPath());
   const records = (
     await Promise.all(
       files
@@ -824,35 +883,41 @@ export async function saveVideos(account: Account, incoming: Video[]) {
   const saved: Video[] = [];
   for (const video of incoming) {
     const id = safeSegment(video.id, shortHash(`${video.title}-${video.url}`));
-    const target = path.join(videosPath(account.platform, account.slug), `${id}.json`);
-    const existing = await readJson<Video>(target);
-    const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${id}.txt`);
-    const hasTranscript = await exists(transcriptFile);
-    const mergedStats = mergeVideoStats(existing, video);
-    const mergedTopComments =
-      Array.isArray(video.topComments) && video.topComments.length
-        ? video.topComments
-        : existing?.topComments;
+    const lockKey = `${account.platform}:${account.slug}:${id}`;
+    saved.push(await withVideoMutationLock(lockKey, async () => {
+      const target = path.join(videosPath(account.platform, account.slug), `${id}.json`);
+      const existing = await readJson<Video>(target);
+      const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${id}.txt`);
+      const hasTranscript = await exists(transcriptFile);
+      const mergedStats = mergeVideoStats(existing, video);
+      const mergedTopComments =
+        Array.isArray(video.topComments) && video.topComments.length
+          ? video.topComments
+          : existing?.topComments;
+      const transcriptStatus = hasTranscript
+        ? "completed"
+        : normalizeTranscriptStatusWithoutFile(existing?.transcriptStatus ?? video.transcriptStatus);
 
-    const next: Video = {
-      ...existing,
-      ...video,
-      id,
-      accountId: account.id,
-      platform: account.platform,
-      stats: mergedStats,
-      topComments: mergedTopComments,
-      hotScore: calculateHotScore({ ...video, stats: mergedStats }),
-      relativeViewRate:
-        mergedStats.views > 0 && averageViews > 0 ? Number((mergedStats.views / averageViews).toFixed(2)) : 0,
-      transcriptStatus: hasTranscript ? "completed" : existing?.transcriptStatus ?? video.transcriptStatus,
-      transcriptPath: hasTranscript ? transcriptFile : existing?.transcriptPath ?? video.transcriptPath,
-      transcriptSource: hasTranscript ? existing?.transcriptSource ?? video.transcriptSource : video.transcriptSource,
-      updatedAt: nowIso()
-    };
+      const next: Video = {
+        ...existing,
+        ...video,
+        id,
+        accountId: account.id,
+        platform: account.platform,
+        stats: mergedStats,
+        topComments: mergedTopComments,
+        hotScore: calculateHotScore({ ...video, stats: mergedStats }),
+        relativeViewRate:
+          mergedStats.views > 0 && averageViews > 0 ? Number((mergedStats.views / averageViews).toFixed(2)) : 0,
+        transcriptStatus,
+        transcriptPath: hasTranscript ? toLibraryRelativePath(transcriptFile) : undefined,
+        transcriptSource: hasTranscript ? existing?.transcriptSource ?? video.transcriptSource : undefined,
+        updatedAt: nowIso()
+      };
 
-    await writeJson(target, next);
-    saved.push(next);
+      await writeJson(target, next);
+      return next;
+    }));
   }
 
   return saved.sort((a, b) => b.hotScore - a.hotScore);
@@ -876,18 +941,37 @@ function pickPreferredMetric(existing?: number, incoming?: number) {
   return safeExisting;
 }
 
+function normalizeTranscriptStatusWithoutFile(status: Video["transcriptStatus"]) {
+  return status === "failed" ? "failed" : "not_started";
+}
+
 export async function saveVideo(account: Account, video: Video) {
   await ensureAccountDirs(account.platform, account.slug);
   const id = normalizeVideoId(video.id);
-  const target = path.join(videosPath(account.platform, account.slug), `${id}.json`);
-  const next = {
-    ...video,
-    id,
-    hotScore: calculateHotScore(video),
-    updatedAt: nowIso()
-  };
-  await writeJson(target, next);
-  return next;
+  const lockKey = `${account.platform}:${account.slug}:${id}`;
+  return withVideoMutationLock(lockKey, async () => {
+    const target = path.join(videosPath(account.platform, account.slug), `${id}.json`);
+    const existing = await readJson<Video>(target);
+    const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${id}.txt`);
+    const hasTranscript = await exists(transcriptFile);
+    const stats = mergeVideoStats(existing, video);
+    const next: Video = {
+      ...existing,
+      ...video,
+      id,
+      stats,
+      hotScore: calculateHotScore({ ...video, stats }),
+      transcriptStatus: hasTranscript
+        ? "completed"
+        : normalizeTranscriptStatusWithoutFile(existing?.transcriptStatus ?? video.transcriptStatus),
+      transcriptPath: hasTranscript ? toLibraryRelativePath(transcriptFile) : undefined,
+      transcriptRevision: hasTranscript ? existing?.transcriptRevision ?? video.transcriptRevision : undefined,
+      transcriptSource: hasTranscript ? existing?.transcriptSource ?? video.transcriptSource : undefined,
+      updatedAt: nowIso()
+    };
+    await writeJson(target, next);
+    return next;
+  });
 }
 
 export async function saveVideoAssetFields(
@@ -898,17 +982,20 @@ export async function saveVideoAssetFields(
 ) {
   const account = await resolveAccount(platform, accountId);
   const normalizedVideoId = normalizeVideoId(videoId);
-  const target = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
-  const video = await readJson<Video>(target);
-  if (!video) throw new Error("找不到视频元数据");
+  const lockKey = `${account.platform}:${account.slug}:${normalizedVideoId}`;
+  return withVideoMutationLock(lockKey, async () => {
+    const target = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
+    const video = await readJson<Video>(target);
+    if (!video) throw new Error("找不到视频元数据");
 
-  const next: Video = {
-    ...video,
-    ...fields,
-    updatedAt: nowIso()
-  };
-  await writeJson(target, next);
-  return next;
+    const next: Video = {
+      ...video,
+      ...fields,
+      updatedAt: nowIso()
+    };
+    await writeJson(target, next);
+    return next;
+  });
 }
 
 export async function saveTranscript(input: {
@@ -924,7 +1011,7 @@ export async function saveTranscript(input: {
   const videoId = normalizeVideoId(input.videoId);
   const lockKey = `${account.platform}:${account.slug}:${videoId}`;
 
-  return withTranscriptLock(lockKey, async () => {
+  return withVideoMutationLock(lockKey, async () => {
     const videoFile = path.join(videosPath(account.platform, account.slug), `${videoId}.json`);
     const video = await readJson<Video>(videoFile);
     if (!video) throw new Error("找不到视频元数据");
@@ -947,7 +1034,7 @@ export async function saveTranscript(input: {
     const next: Video = {
       ...video,
       transcriptStatus: "completed",
-      transcriptPath: transcriptFile,
+      transcriptPath: toLibraryRelativePath(transcriptFile),
       transcriptRevision: revision || undefined,
       transcriptSource: input.source,
       raw: clearTranscriptError(video.raw),
@@ -995,7 +1082,7 @@ async function listTranscriptVersions(platform: Platform, accountId: string, vid
   const account = await resolveAccount(platform, accountId);
   const normalizedVideoId = normalizeVideoId(videoId);
   const historyDir = transcriptHistoryPath(account.platform, account.slug, normalizedVideoId);
-  const files = await fs.readdir(historyDir).catch(() => []);
+  const files = await readDirNamesIfExists(historyDir);
   const versions = await Promise.all(
     files
       .filter((file) => file.endsWith(".txt"))
@@ -1050,15 +1137,23 @@ function clearTranscriptError(raw: unknown) {
 export async function markTranscriptFailed(platform: Platform, accountId: string, videoId: string, reason: string) {
   const account = await resolveAccount(platform, accountId);
   const normalizedVideoId = normalizeVideoId(videoId);
-  const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
-  const video = await readJson<Video>(videoFile);
-  if (!video) return;
+  const lockKey = `${account.platform}:${account.slug}:${normalizedVideoId}`;
+  await withVideoMutationLock(lockKey, async () => {
+    const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
+    const video = await readJson<Video>(videoFile);
+    if (!video) return;
+    const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
+    const hasTranscript = await exists(transcriptFile);
 
-  await writeJson(videoFile, {
-    ...video,
-    transcriptStatus: videoHasTranscript(video) ? "completed" : "failed",
-    raw: { ...(typeof video.raw === "object" && video.raw ? video.raw : {}), transcriptError: reason },
-    updatedAt: nowIso()
+    await writeJson(videoFile, {
+      ...video,
+      transcriptStatus: hasTranscript ? "completed" : "failed",
+      transcriptPath: hasTranscript ? toLibraryRelativePath(transcriptFile) : undefined,
+      transcriptRevision: hasTranscript ? video.transcriptRevision : undefined,
+      transcriptSource: hasTranscript ? video.transcriptSource : undefined,
+      raw: { ...(typeof video.raw === "object" && video.raw ? video.raw : {}), transcriptError: reason },
+      updatedAt: nowIso()
+    });
   });
 }
 
@@ -1078,7 +1173,7 @@ export async function deleteTranscript(platform: Platform, accountId: string, vi
   const account = await resolveAccount(platform, accountId);
   const normalizedVideoId = normalizeVideoId(videoId);
   const lockKey = `${account.platform}:${account.slug}:${normalizedVideoId}`;
-  return withTranscriptLock(lockKey, async () => {
+  return withVideoMutationLock(lockKey, async () => {
     const transcriptFile = path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`);
     const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
     const styleAnalysisFile = accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId);
@@ -1116,20 +1211,24 @@ export async function deleteVideos(platform: Platform, accountId: string, videoI
 
   for (const videoId of uniqueIds) {
     const normalizedVideoId = normalizeVideoId(videoId);
-    const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
-    if (!(await exists(videoFile))) continue;
+    const lockKey = `${account.platform}:${account.slug}:${normalizedVideoId}`;
+    const didDelete = await withVideoMutationLock(lockKey, async () => {
+      const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
+      if (!(await exists(videoFile))) return false;
 
-    await Promise.all([
-      fs.rm(videoFile, { force: true }),
-      fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true }),
-      fs.rm(transcriptHistoryPath(account.platform, account.slug, normalizedVideoId), { recursive: true, force: true }),
-      fs.rm(accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId), { force: true })
-    ]);
-    deleted.push(normalizedVideoId);
+      await Promise.all([
+        fs.rm(videoFile, { force: true }),
+        fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true }),
+        fs.rm(transcriptHistoryPath(account.platform, account.slug, normalizedVideoId), { recursive: true, force: true }),
+        fs.rm(accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId), { force: true })
+      ]);
+      return true;
+    });
+    if (didDelete) deleted.push(normalizedVideoId);
   }
 
   if (deleted.length) {
-    const draftFiles = await fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []);
+    const draftFiles = await readDirNamesIfExists(draftsPath(account.platform, account.slug));
     await Promise.all(
       draftFiles
         .filter((file) => file.endsWith(".json"))
@@ -1167,7 +1266,7 @@ export async function saveStyle(platform: Platform, accountId: string, content: 
 export async function readStyle(platform: Platform, accountId: string) {
   const account = await resolveAccount(platform, accountId);
   await ensureAccountDirs(account.platform, account.slug);
-  return fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE);
+  return readTextOrDefaultIfMissing(stylePath(account.platform, account.slug), DEFAULT_STYLE);
 }
 
 export async function readAccountStyleMeta(platform: Platform, accountId: string) {
@@ -1215,7 +1314,7 @@ export async function saveProjectStyle(projectId: string, content: string) {
 export async function readProjectStyle(projectId: string) {
   const project = await resolveProject(projectId);
   await ensureProjectDirs(project.slug);
-  return fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE);
+  return readTextOrDefaultIfMissing(projectStylePath(project.slug), DEFAULT_STYLE);
 }
 
 export async function readProjectStyleMeta(projectId: string) {
@@ -1454,9 +1553,9 @@ export async function getAccountSummary(account: Account): Promise<AccountSummar
   await ensureAccountDirs(account.platform, account.slug);
 
   const [videoFiles, draftFiles, style] = await Promise.all([
-    fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
-    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []),
-    fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE)
+    readDirNamesIfExists(videosPath(account.platform, account.slug)),
+    readDirNamesIfExists(draftsPath(account.platform, account.slug)),
+    readTextOrDefaultIfMissing(stylePath(account.platform, account.slug), DEFAULT_STYLE)
   ]);
 
   const videos = (
@@ -1499,10 +1598,10 @@ export async function getAccountDetail(
   await ensureAccountDirs(account.platform, account.slug);
 
   const [videoFiles, draftFiles, style] = await Promise.all([
-    fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
-    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []),
+    readDirNamesIfExists(videosPath(account.platform, account.slug)),
+    readDirNamesIfExists(draftsPath(account.platform, account.slug)),
     options.includeStyle
-      ? fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE)
+      ? readTextOrDefaultIfMissing(stylePath(account.platform, account.slug), DEFAULT_STYLE)
       : Promise.resolve<string | undefined>(undefined)
   ]);
 
@@ -1541,12 +1640,12 @@ async function getAccountListItem(account: Account): Promise<AccountListItem> {
   await ensureAccountDirs(account.platform, account.slug);
 
   const [videoFiles, transcriptFiles, draftFiles, styleMeta, styleText, styleStat] = await Promise.all([
-    fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
-    fs.readdir(transcriptsPath(account.platform, account.slug)).catch(() => []),
-    fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []),
+    readDirNamesIfExists(videosPath(account.platform, account.slug)),
+    readDirNamesIfExists(transcriptsPath(account.platform, account.slug)),
+    readDirNamesIfExists(draftsPath(account.platform, account.slug)),
     readJson<AccountStyleMeta>(styleMetaPath(account.platform, account.slug)),
-    fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE),
-    fs.stat(stylePath(account.platform, account.slug)).catch(() => null)
+    readTextOrDefaultIfMissing(stylePath(account.platform, account.slug), DEFAULT_STYLE),
+    statIfExists(stylePath(account.platform, account.slug))
   ]);
   const videoIds = new Set(videoFiles.filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -5)));
   const transcriptIds = new Set(transcriptFiles.filter((file) => file.endsWith(".txt")).map((file) => file.slice(0, -4)));
@@ -1583,7 +1682,7 @@ export async function resolveProject(projectIdOrSlug: string) {
 export async function getProjectSummary(project: Project): Promise<ProjectSummary> {
   await ensureProjectDirs(project.slug);
   const [style, libraryAccounts, sourceMaterials] = await Promise.all([
-    fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE),
+    readTextOrDefaultIfMissing(projectStylePath(project.slug), DEFAULT_STYLE),
     getAllAccountListItems(),
     getProjectCopySources(project.sourceMaterialIds || [])
   ]);
@@ -1615,7 +1714,7 @@ export async function getProjectDetail(
   await ensureProjectDirs(project.slug);
   const [style, libraryAccounts, sourceMaterials] = await Promise.all([
     options.includeStyle
-      ? fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE)
+      ? readTextOrDefaultIfMissing(projectStylePath(project.slug), DEFAULT_STYLE)
       : Promise.resolve<string | undefined>(undefined),
     getAllAccountListItems(),
     getProjectCopySources(project.sourceMaterialIds || [])
@@ -1640,27 +1739,11 @@ export async function getProjectDetail(
   };
 }
 
-async function getAllAccountSummaries() {
-  const accounts: AccountSummary[] = [];
-
-  for (const platform of platforms) {
-    const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const account = await readJson<Account>(accountJsonPath(platform, entry.name));
-      if (!account) continue;
-      accounts.push(await getAccountSummary(account));
-    }
-  }
-
-  return accounts.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
-}
-
 async function getAllAccountListItems() {
   const accountRecords = (
     await Promise.all(
       platforms.map(async (platform) => {
-        const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+        const entries = await readDirEntriesIfExists(platformPath(platform));
         return Promise.all(
           entries
             .filter((entry) => entry.isDirectory())
@@ -1689,23 +1772,8 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper:
   return results;
 }
 
-async function getAllProjectSummaries() {
-  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
-  const projects = (
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => readJson<Project>(projectJsonPath(entry.name)))
-    )
-  ).filter(Boolean) as Project[];
-
-  return (
-    await Promise.all(projects.map((project) => getProjectSummary(project)))
-  ).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
-}
-
 async function getAllProjectListItems(accounts?: AccountListItem[]): Promise<ProjectListItem[]> {
-  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(projectsPath());
   const projects = (
     await Promise.all(
       entries
@@ -1740,12 +1808,12 @@ async function getAllProjectListItems(accounts?: AccountListItem[]): Promise<Pro
 async function getAllAccountDrafts() {
   const draftGroups = await Promise.all(
     platforms.map(async (platform) => {
-      const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+      const entries = await readDirEntriesIfExists(platformPath(platform));
       return Promise.all(
         entries
           .filter((entry) => entry.isDirectory())
           .flatMap(async (entry) => {
-            const files = await fs.readdir(draftsPath(platform, entry.name)).catch(() => []);
+            const files = await readDirNamesIfExists(draftsPath(platform, entry.name));
             return Promise.all(
               files
                 .filter((file) => file.endsWith(".json"))
@@ -1760,13 +1828,13 @@ async function getAllAccountDrafts() {
 }
 
 async function getAllProjectDrafts() {
-  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(projectsPath());
   const drafts = (
     await Promise.all(
       entries
         .filter((entry) => entry.isDirectory())
         .flatMap(async (entry) => {
-          const files = await fs.readdir(projectDraftsPath(entry.name)).catch(() => []);
+          const files = await readDirNamesIfExists(projectDraftsPath(entry.name));
           return Promise.all(
             files
               .filter((file) => file.endsWith(".json"))
@@ -1822,69 +1890,18 @@ export function toDraftSummary(draft: Draft): DraftSummary {
   };
 }
 
-export async function getLibraryOverview(options: { includeAuxiliary?: boolean } = {}): Promise<LibraryOverviewResponse> {
+export async function getLibraryOverview(): Promise<LibraryOverviewResponse> {
   await ensureLibrary();
   const accounts = await getAllAccountListItems();
   const projects = await getAllProjectListItems(accounts);
 
-  if (!options.includeAuxiliary) {
-    return {
-      root: libraryRoot(),
-      accounts,
-      projects,
-      copySources: [],
-      engagementRecords: [],
-      drafts: []
-    };
-  }
-
-  const [copySources, engagementRecords, accountDrafts, projectDrafts] = await Promise.all([
-    getCopySources(),
-    getEngagementRecords(),
-    getAllAccountDrafts(),
-    getAllProjectDrafts()
-  ]);
-  const drafts = [...accountDrafts, ...projectDrafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
-
   return {
     root: libraryRoot(),
     accounts,
     projects,
-    copySources: copySources.map(stripCopySourceForOverview),
-    engagementRecords: engagementRecords.map(stripEngagementRecordForOverview),
-    drafts: drafts.map(stripDraftForOverview)
-  };
-}
-
-export async function getLibrary(): Promise<LibraryState> {
-  await ensureLibrary();
-  const [accounts, projects, copySources, engagementRecords] = await Promise.all([
-    getAllAccountSummaries(),
-    getAllProjectSummaries(),
-    getCopySources(),
-    getEngagementRecords()
-  ]);
-
-  const projectDrafts = await getAllProjectDrafts();
-  const drafts = [...accounts.flatMap((account) => account.drafts), ...projectDrafts];
-  const recentAccounts = [...accounts].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
-  const recentProjects = [...projects].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).slice(0, 4);
-  const recentCopySources = [...copySources].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
-  const recentEngagementRecords = [...engagementRecords].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
-  const recentDrafts = [...drafts].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8);
-
-  return {
-    root: libraryRoot(),
-    accounts,
-    projects,
-    copySources,
-    engagementRecords,
-    drafts,
-    recentAccounts,
-    recentProjects,
-    recentCopySources,
-    recentEngagementRecords,
-    recentDrafts
+    copySources: [],
+    engagementRecords: [],
+    drafts: []
   };
 }
 
@@ -1898,7 +1915,7 @@ export async function getVideo(platform: Platform, accountId: string, videoId: s
 
 async function findAccountDraft(draftId: string) {
   for (const platform of platforms) {
-    const entries = await fs.readdir(platformPath(platform), { withFileTypes: true }).catch(() => []);
+    const entries = await readDirEntriesIfExists(platformPath(platform));
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const file = path.join(draftsPath(platform, entry.name), `${draftId}.json`);
@@ -1910,7 +1927,7 @@ async function findAccountDraft(draftId: string) {
 }
 
 async function findProjectDraft(draftId: string) {
-  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(projectsPath());
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const file = path.join(projectDraftsPath(entry.name), `${draftId}.json`);
@@ -1966,7 +1983,13 @@ function normalizeProjectAccountRefs(accountIds: string[]) {
 
 async function getProjectCopySources(sourceIds: string[]) {
   const uniqueIds = [...new Set(sourceIds)].filter(Boolean);
-  const sources = await Promise.all(uniqueIds.map((sourceId) => resolveCopySource(sourceId).catch(() => null)));
+  const sources = await Promise.all(
+    uniqueIds.map(async (sourceId) => {
+      const id = normalizeCopySourceId(sourceId);
+      const source = await readJson<CopySource>(copySourceJsonPath(id));
+      return source ? normalizeCopySource(source) : null;
+    })
+  );
   return sources.filter(Boolean) as CopySource[];
 }
 
@@ -2011,7 +2034,7 @@ async function removeCopySourceProjectRefs(projectIds: string[]) {
 
 async function removeDeletedAccountsFromProjects(accountIds: string[]) {
   const deleted = new Set(accountIds);
-  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(projectsPath());
 
   await Promise.all(
     entries
@@ -2046,7 +2069,7 @@ async function removeDeletedAccountsFromProjects(accountIds: string[]) {
 
 async function removeCopySourcesFromProjects(sourceIds: string[]) {
   const deleted = new Set(sourceIds);
-  const entries = await fs.readdir(projectsPath(), { withFileTypes: true }).catch(() => []);
+  const entries = await readDirEntriesIfExists(projectsPath());
 
   await Promise.all(
     entries
@@ -2088,7 +2111,7 @@ async function updateProjectDraftRefs(
   projectSlug: string,
   updateStyleRef: (draft: ProjectDraft) => ProjectDraft["styleRef"] | null
 ) {
-  const files = await fs.readdir(projectDraftsPath(projectSlug)).catch(() => []);
+  const files = await readDirNamesIfExists(projectDraftsPath(projectSlug));
 
   await Promise.all(
     files
@@ -2112,44 +2135,12 @@ function normalizeCopySource(source: CopySource): CopySource {
   return {
     ...source,
     transcript: source.transcript || "",
-    transcriptPath: source.transcriptPath || copySourceTranscriptPath(source.id),
+    transcriptPath: toLibraryRelativePath(copySourceTranscriptPath(source.id)),
     status: source.status || "completed",
     source: source.source || "manual",
     materialAnalysis: source.materialAnalysis,
     projectIds: source.projectIds || []
   };
-}
-
-function stripCopySourceForOverview(source: CopySource): CopySource {
-  return {
-    ...source,
-    transcript: ""
-  };
-}
-
-function stripEngagementRecordForOverview(record: EngagementRecord): EngagementRecord {
-  return {
-    ...record,
-    sourceText: ""
-  };
-}
-
-function stripDraftForOverview(draft: Draft): Draft {
-  const strippedAssets = draft.assets
-    ? {
-        comments: draft.assets.comments ? { ...draft.assets.comments, items: [] } : undefined,
-        danmaku: draft.assets.danmaku ? { ...draft.assets.danmaku, items: [] } : undefined,
-        cover: draft.assets.cover ? { ...draft.assets.cover, references: [], images: [] } : undefined
-      }
-    : undefined;
-
-  return {
-    ...draft,
-    input: undefined,
-    research: undefined,
-    content: "",
-    assets: strippedAssets
-  } as Draft;
 }
 
 function formatPlatformName(platform: CopySource["platform"]) {

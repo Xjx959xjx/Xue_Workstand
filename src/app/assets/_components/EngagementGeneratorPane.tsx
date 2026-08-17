@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { MessageSquareText, Send, Zap } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
@@ -124,16 +125,14 @@ export function EngagementGeneratorPane({
                   <strong>评论</strong>
                   <small>默认生成评论</small>
                 </span>
-                <input
-                  aria-label="评论条数"
-                  autoComplete="off"
+                <BoundedNumberInput
+                  ariaLabel="评论条数"
                   disabled={!includeComments}
                   max={200}
                   min={1}
                   name="commentCount"
-                  type="number"
                   value={commentCount}
-                  onChange={(event) => updateBoundedNumber(event.target.value, 1, 200, onCommentCountChange)}
+                  onChange={onCommentCountChange}
                 />
               </label>
               <label className={`engagement-option ${includeDanmaku ? "active" : ""} ${supportsDanmaku ? "" : "is-disabled"}`}>
@@ -142,16 +141,14 @@ export function EngagementGeneratorPane({
                   <strong>弹幕</strong>
                   <small>{supportsDanmaku ? "B站 · 按正文节点生成" : "仅支持 B站"}</small>
                 </span>
-                <input
-                  aria-label="弹幕条数"
-                  autoComplete="off"
+                <BoundedNumberInput
+                  ariaLabel="弹幕条数"
                   disabled={!includeDanmaku || !supportsDanmaku}
                   max={300}
                   min={1}
                   name="danmakuCount"
-                  type="number"
                   value={danmakuCount}
-                  onChange={(event) => updateBoundedNumber(event.target.value, 1, 300, onDanmakuCountChange)}
+                  onChange={onDanmakuCountChange}
                 />
               </label>
             </div>
@@ -204,9 +201,74 @@ export function EngagementGeneratorPane({
   );
 }
 
-function updateBoundedNumber(value: string, min: number, max: number, onChange: (value: number) => void) {
-  if (!value.trim()) return;
-  const next = Number(value);
-  if (!Number.isFinite(next)) return;
-  onChange(Math.min(Math.max(Math.trunc(next), min), max));
+type BoundedNumberInputProps = {
+  ariaLabel: string;
+  disabled: boolean;
+  max: number;
+  min: number;
+  name: string;
+  value: number;
+  onChange: (value: number) => void;
+};
+
+function BoundedNumberInput({
+  ariaLabel,
+  disabled,
+  max,
+  min,
+  name,
+  value,
+  onChange
+}: BoundedNumberInputProps) {
+  const [draftValue, setDraftValue] = useState<string | null>(null);
+  const displayedValue = draftValue ?? String(value);
+
+  function commitValue(rawValue: string) {
+    const nextValue = normalizeBoundedNumber(rawValue, min, max, value);
+    setDraftValue(null);
+    if (nextValue !== value) onChange(nextValue);
+  }
+
+  return (
+    <input
+      aria-label={ariaLabel}
+      autoComplete="off"
+      disabled={disabled}
+      inputMode="numeric"
+      max={max}
+      min={min}
+      name={name}
+      step={1}
+      title={`请输入 ${min}–${max} 之间的整数`}
+      type="number"
+      value={displayedValue}
+      onBlur={(event) => commitValue(event.currentTarget.value)}
+      onChange={(event) => {
+        const nextDraft = event.currentTarget.value;
+        setDraftValue(nextDraft);
+        const nextValue = readValidBoundedNumber(nextDraft, min, max);
+        if (nextValue !== null && nextValue !== value) onChange(nextValue);
+      }}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
+function readValidBoundedNumber(rawValue: string, min: number, max: number) {
+  if (!rawValue.trim()) return null;
+  const nextValue = Number(rawValue);
+  if (!Number.isInteger(nextValue) || nextValue < min || nextValue > max) return null;
+  return nextValue;
+}
+
+function normalizeBoundedNumber(rawValue: string, min: number, max: number, fallback: number) {
+  if (!rawValue.trim()) return fallback;
+  const nextValue = Number(rawValue);
+  if (!Number.isFinite(nextValue)) return fallback;
+  return Math.min(Math.max(Math.trunc(nextValue), min), max);
 }

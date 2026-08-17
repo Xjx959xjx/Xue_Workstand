@@ -53,9 +53,11 @@ npm run remote:setup
 npm run remote:status
 npm run remote:deploy
 npm run remote:rollback
+npm test
 npm run lint
 npm run typecheck
 npm run check:library
+npm run check:library:repair
 npm run build
 npm run package:release
 ```
@@ -122,6 +124,7 @@ style-library/
 - `src/lib/storage.ts` 是账号、项目、草稿、素材、总览的主编排；`src/lib/storage/fs.ts` 负责原子写；`src/lib/storage/core.ts` 负责根目录和路径段校验；`src/lib/storage/gross-margin.ts` 负责毛利数据。
 - 毛利账号配对可通过 `WECOM_ACCOUNT_SHEET_URL` 读取企业微信在线表；普通读取必须先返回 `accounts.wecom-cache.json` 的最后成功缓存并在后台刷新，只有显式手动刷新才等待远端。解析失败时只允许显式可见的缓存回退，不得静默覆盖或丢失账号数据。
 - JSON / 文本 / 二进制写入优先使用 `writeJsonFile`、`writeTextFileAtomic`、`writeFileAtomic`，保持临时文件 + `rename` 原子落盘。
+- 账号、视频、项目、草稿、文案素材和互动记录写入带 `schemaVersion`，读取统一经过 `src/lib/storage/schemas.ts` 运行时校验；转写路径持久化为素材库相对路径，旧绝对路径只做兼容读取。
 - 路径段必须经过 `normalizeStorageSegment` / 现有 normalize 函数；不要把 URL、标题、用户输入直接拼进路径。
 - `style.md`、转写稿、草稿、`*.assets` 是用户资产。不要无意义重排、截断、重新生成或批量改写。
 - `style-library/engagement/.cache` 只保存评论链路的链接文稿、素材锚点、标杆评论语料和热评研究派生缓存；评论历史仍是 `engagement/*.json`，清理缓存不得删除历史记录。
@@ -137,6 +140,7 @@ style-library/
 - 删除项目时清理素材 `projectIds` 反向引用。
 - 修改草稿资产走 `updateDraftAssets()` / `withDraftAssetsLock()`，避免评论、弹幕、封面并发覆盖。
 - 存储结构或引用联动变化后跑 `npm run check:library`。
+- `npm run check:library:repair` 只修复可安全推导的转写元数据，并先备份原文件到 `style-library/.repairs/<timestamp>/`；孤立目录、损坏 JSON 和跨引用问题仍须人工确认，未经用户明确同意不得直接对真实素材库执行修复模式。
 
 ## 业务链路
 
@@ -147,7 +151,7 @@ style-library/
 - 模型 / 写作 / 风格：`src/lib/ai.ts`、`src/lib/write-validation.ts`。
 - 对话模型配置支持主模型、`CHAT_FALLBACK_*` 和按序尝试的 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`；扩展容灾时复用 `src/lib/model-runtime.ts` 的统一配置链，不要在业务模块里单独请求中转站。
 - 写作台联网检索优先使用独立 `WEB_RESEARCH_*` Responses API 配置，只向 `/responses` 发送 `web_search`；现有 Chat Completions 写作链保持独立。未配置专用接口时只能复用明确支持 Responses 的对话节点，不能把 `web_search` 静默发给普通 Chat Completions。
-- 账号风格卡在 `STYLE_ONE_SHOT_MAX_INPUT_CHARS` 安全阈值内把全量完整转写合并为一次 `xhigh` 请求；超限时按 `STYLE_SAMPLE_ANALYSIS_CONCURRENCY` 串行或小并发分析，样本分析和最终整合都保持 `xhigh`，不得恢复硬编码 8 并发。
+- 账号风格卡在 `STYLE_ONE_SHOT_MAX_INPUT_CHARS` 安全阈值内把全量完整转写合并为一次 `high` 请求；超限时按 `STYLE_SAMPLE_ANALYSIS_CONCURRENCY` 串行或小并发分析，样本分析和最终整合都保持 `high`，不得恢复硬编码 8 并发。
 - 对话写作：首稿不再生成独立写作 Brief，直接使用用户要求、原始素材、风格卡、代表样本和已读取资料成稿；旧草稿已有 `brief` 只作为历史策划备注兼容读取，不再新增。账号 / 项目的开头、句长、节奏、具象程度和结尾方式只服从当前风格卡与代表样本，不得添加跨账号通用模板。首稿、续改和手动编辑都保存为不可变草稿版本；`Draft.version.sessionId` 聚合同一会话，`parentDraftId` 记录父版本。旧草稿缺少 `version` 时按单版本会话读取，不要批量迁移。续改必须复用父稿已保存的 research / sourceDigest 和可选历史策划备注，只读取当前风格卡，不重复转写链接、抓支持文档或联网；模型失败应显式失败，不能用通用本地模板覆盖当前稿。
 - 支持文档统一通过 `src/lib/support-documents.ts` 解析：飞书走 lark-cli，企业微信走官方 `wecom-cli doc`，灵犀走公开访客正文接口，腾讯文档和其他公开网页走 OpenCLI；链接读不到正文必须显式失败，不能把裸 URL 交给模型猜测。
 - 写作台前端保持单一首稿生成入口：参考账号 / 项目合并选择，素材、原文、视频链接和支持文档使用同一个输入框并自动分流，支持点选或拖入文本、Markdown、字幕和 DOCX 文件，文件块内链接不得误触发外部抓取；联网开关放在生成操作区，不提供独立 Brief 预览；版本历史使用抽屉，稿件选区直接决定局部续改范围，不再要求手动切换全文 / 选区。
@@ -191,7 +195,7 @@ UI 是浅色、本地、桌面优先的工作台 / 控制台，不做营销首�
 
 按影响面从小到大验证：
 
-1. 目标单元或脚本检查；后端单测命令加 60 秒超时。
+1. 目标单元或脚本检查，已有底层回归优先跑 `npm test`；后端单测命令加 60 秒超时。
 2. `npm run lint`。
 3. `npm run typecheck`。
 4. 存储 / 引用改动补 `npm run check:library`。

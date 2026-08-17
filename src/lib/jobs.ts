@@ -17,6 +17,7 @@ import {
 } from "./ai";
 import { runBatchTranscribe } from "./batch-transcribe";
 import { collectAccountContent } from "./account-collection";
+import { assertJobKindAllowedForAppMode, isJobKindAllowedForAppMode } from "./app-mode";
 import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
 import { refreshDouyinHotlist } from "./douyin-hotlist";
@@ -25,6 +26,8 @@ import { getHotspotRadar } from "./hotspots";
 import { hasSupportDocumentReference } from "./support-documents";
 import { extractRewriteSourceMaterial, splitWriterSourceInput } from "./source-extraction";
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
+import { buildEngagementRecordHref } from "./job-links";
+import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES } from "./job-persistence";
 import { libraryRoot } from "./storage";
 import { generatePublishCopy } from "./publish-copy";
 import { readJsonFile, writeJsonFile } from "./storage/fs";
@@ -103,6 +106,7 @@ const JOB_SUMMARY_EVENT_LIMIT = 3;
 const JOB_SUMMARY_LIMIT = 80;
 const DEFAULT_MAX_ACTIVE_JOBS = 2;
 const DEFAULT_JOB_HISTORY_LIMIT = 200;
+const DEFAULT_JOB_HISTORY_MAX_BYTES = 20 * 1024 * 1024;
 const jobKindSet = new Set<JobKind>(jobKinds);
 const jobStatusSet = new Set<JobRecord["status"]>([
   "queued",
@@ -140,7 +144,7 @@ async function writeJson(target: string, value: unknown) {
 async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
   runtime.records.set(job.id, job);
   if (options.persist === false) return;
-  await writeJson(jobJsonPath(job.id), job);
+  await writeJson(jobJsonPath(job.id), compactJobForPersistence(job, jobResultPersistBytes()));
   invalidateJobSummaryCache();
 }
 
@@ -233,6 +237,7 @@ async function listJobsFromDisk() {
   );
   return jobs
     .filter((job): job is JobRecord => Boolean(job))
+    .filter((job) => isJobKindAllowedForAppMode(job.kind))
     .sort(compareJobsByUpdatedAtDesc);
 }
 
@@ -257,6 +262,7 @@ async function listJobSummariesFromDisk() {
   );
   const jobs = summaries
     .filter((job): job is JobSummaryRead => Boolean(job))
+    .filter((job) => isJobKindAllowedForAppMode(job.kind))
     .sort(compareJobsByUpdatedAtDesc);
 
   jobSummaryCache = {
@@ -310,7 +316,7 @@ export async function listJobs() {
   await ensureInitialized();
   const jobs = new Map((await listJobsFromDisk()).map((job) => [job.id, job]));
   for (const job of runtime.records.values()) {
-    jobs.set(job.id, job);
+    if (isJobKindAllowedForAppMode(job.kind)) jobs.set(job.id, job);
   }
   return [...jobs.values()].sort(compareJobsByUpdatedAtDesc);
 }
@@ -321,7 +327,7 @@ export async function listJobSummaries() {
     (await listJobSummariesFromDisk()).map((job) => [job.id, stripSummaryFilePath(job)])
   );
   for (const job of runtime.records.values()) {
-    summaries.set(job.id, toJobListItem(job));
+    if (isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
   }
   return [...summaries.values()].sort(compareJobsByUpdatedAtDesc).slice(0, JOB_SUMMARY_LIMIT);
 }
@@ -329,15 +335,20 @@ export async function listJobSummaries() {
 export async function getJob(jobId: string) {
   await ensureInitialized();
   const cached = runtime.records.get(jobId);
-  if (cached) return cached;
+  if (cached) {
+    assertJobKindAllowedForAppMode(cached.kind);
+    return cached;
+  }
 
   const job = await readJson<JobRecord>(jobJsonPath(jobId));
   if (!job) throw new Error("找不到任务记录");
+  assertJobKindAllowedForAppMode(job.kind);
   runtime.records.set(job.id, job);
   return job;
 }
 
 export async function createJob(input: JobStartInput) {
+  assertJobKindAllowedForAppMode(input.kind);
   await ensureInitialized();
   const now = nowIso();
   const job: JobRecord = {
@@ -897,7 +908,10 @@ async function runEngagementJob(jobId: string, start: Extract<JobStartInput, { k
     result,
     resultRef: {
       id: result.record.id,
-      href: start.input.sourceType === "draft" ? `/assets?draftId=${encodeURIComponent(start.input.draftId)}` : "/assets",
+      href: buildEngagementRecordHref(
+        result.record.id,
+        start.input.sourceType === "draft" ? `/assets?draftId=${encodeURIComponent(start.input.draftId)}` : "/assets"
+      ),
       label: "查看评论生成"
     }
   });
@@ -1354,11 +1368,42 @@ function jobHistoryLimit() {
   return Math.min(Math.max(parsed, 50), 1000);
 }
 
+function jobHistoryMaxBytes() {
+  const parsedMb = Number.parseInt(process.env.JOB_HISTORY_MAX_MB || "", 10);
+  if (!Number.isFinite(parsedMb)) return DEFAULT_JOB_HISTORY_MAX_BYTES;
+  return Math.min(Math.max(parsedMb, 5), 500) * 1024 * 1024;
+}
+
+function jobResultPersistBytes() {
+  const parsedKb = Number.parseInt(process.env.JOB_RESULT_PERSIST_KB || "", 10);
+  if (!Number.isFinite(parsedKb)) return DEFAULT_JOB_RESULT_PERSIST_BYTES;
+  return Math.min(Math.max(parsedKb, 16), 1024) * 1024;
+}
+
 async function pruneJobHistory() {
   const limit = jobHistoryLimit();
+  const maxBytes = jobHistoryMaxBytes();
   const jobs = await listJobSummariesFromDisk();
-  const keep = new Set(jobs.slice(0, limit).map((job) => job.id));
-  const removable = jobs.filter((job) => !keep.has(job.id) && isTerminalJob(job));
+  let terminalCount = 0;
+  let retainedBytes = 0;
+  const removable: JobSummaryRead[] = [];
+
+  for (const job of jobs) {
+    const size = await fs.stat(job.filePath).then((stat) => stat.size).catch(() => 0);
+    if (!isTerminalJob(job)) {
+      retainedBytes += size;
+      continue;
+    }
+
+    const withinCount = terminalCount < limit;
+    const withinBytes = retainedBytes + size <= maxBytes || terminalCount === 0;
+    if (withinCount && withinBytes) {
+      terminalCount += 1;
+      retainedBytes += size;
+    } else {
+      removable.push(job);
+    }
+  }
   if (!removable.length) return;
 
   await Promise.all(
@@ -1447,6 +1492,8 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
   const dataRevision = readOptionalNumber(target, raw, "dataRevision");
   const dataChange = readOptionalObject<JobRecord["dataChange"]>(target, raw, "dataChange");
   const completedAt = readOptionalString(target, raw, "completedAt");
+  const resultCompacted = readOptionalBoolean(target, raw, "resultCompacted");
+  const resultSizeBytes = readOptionalNumber(target, raw, "resultSizeBytes");
 
   return {
     id: readRequiredString(target, raw, "id"),
@@ -1467,6 +1514,8 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
     createdAt: readRequiredString(target, raw, "createdAt"),
     updatedAt: readRequiredString(target, raw, "updatedAt"),
     ...(completedAt ? { completedAt } : {}),
+    ...(resultCompacted !== undefined ? { resultCompacted } : {}),
+    ...(resultSizeBytes !== undefined ? { resultSizeBytes } : {}),
     hasPartialText: hasTopLevelProperty(raw, "partialText"),
     hasResult: hasTopLevelProperty(raw, "result"),
     filePath: target
@@ -1497,6 +1546,13 @@ function readOptionalNumber(target: string, raw: string, key: string) {
   if (!value.found) return undefined;
   if (typeof value.value === "number" && Number.isFinite(value.value)) return value.value;
   throw new Error(`任务记录字段无效：${target} 的 ${key} 不是数字。`);
+}
+
+function readOptionalBoolean(target: string, raw: string, key: string) {
+  const value = readOptionalTopLevelJsonValue(target, raw, key);
+  if (!value.found) return undefined;
+  if (typeof value.value === "boolean") return value.value;
+  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是布尔值。`);
 }
 
 function readOptionalObject<T>(target: string, raw: string, key: string): T | undefined {

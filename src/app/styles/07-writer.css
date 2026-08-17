@@ -91,6 +91,162 @@
   min-width: 0;
 }
 
+.writer-reference-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.writer-reference-picker-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
+  background: var(--panel-raised);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.writer-reference-picker-trigger:hover:not(:disabled),
+.writer-reference-picker-trigger[aria-expanded="true"] {
+  border-color: color-mix(in oklch, var(--accent) 48%, var(--line));
+  background: color-mix(in oklch, var(--accent-tint) 20%, var(--panel-raised));
+}
+
+.writer-reference-picker-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-shadow);
+}
+
+.writer-reference-picker-trigger > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writer-reference-picker-trigger > small {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.writer-reference-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  width: min(430px, calc(100vw - 40px));
+  max-height: min(520px, calc(100vh - 160px));
+  gap: 10px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel-raised);
+  box-shadow: var(--shadow-float);
+}
+
+.writer-reference-picker-group {
+  display: grid;
+  gap: 4px;
+}
+
+.writer-reference-picker-group > strong {
+  padding: 3px 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.writer-reference-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.writer-reference-option:hover,
+.writer-reference-option[aria-selected="true"] {
+  background: color-mix(in oklch, var(--accent-tint) 54%, transparent);
+}
+
+.writer-reference-check {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--panel-raised);
+}
+
+.writer-reference-check.selected {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.writer-reference-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.writer-reference-option-copy > span,
+.writer-reference-option-copy > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writer-reference-option-copy > span {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.writer-reference-option-copy > small,
+.writer-reference-menu > p {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.writer-reference-option > em {
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.writer-reference-menu > p {
+  margin: 0;
+  padding: 2px 7px 0;
+}
+
 .writer-reference-control {
   display: grid;
   grid-template-columns: auto minmax(260px, 1fr);
@@ -157,6 +313,48 @@
   width: 34px;
   min-height: 34px;
   border-radius: 10px;
+}
+
+.writer-style-card-list,
+.writer-style-card {
+  display: grid;
+  gap: 14px;
+}
+
+.writer-style-card + .writer-style-card {
+  padding-top: 16px;
+  border-top: 1px solid var(--line-subtle);
+}
+
+.writer-style-card > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.writer-style-card > header > span {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.writer-style-card > header h3,
+.writer-style-card > header p {
+  margin: 0;
+}
+
+.writer-style-card > header h3 {
+  font-size: var(--text-section-title);
+}
+
+.writer-style-card > header p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-caption);
 }
 
 .writer-content-grid {

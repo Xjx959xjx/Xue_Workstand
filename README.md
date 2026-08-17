@@ -83,6 +83,8 @@ npm run dev
 - `WECOM_CLI_BIN`、`WECOM_ACCOUNT_SHEET_CACHE_TTL_MS`、`WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL`：在线账号表读取命令、缓存时长和本地回退开关。
 - `JOB_MAX_ACTIVE`：后台任务最大同时运行数，默认 `2`，允许 `1-6`；多任务会先排队再执行。
 - `JOB_HISTORY_LIMIT`：任务历史保留条数，默认 `200`，允许 `50-1000`，超出后自动清理更早的已结束任务。
+- `JOB_HISTORY_MAX_MB`：任务历史磁盘预算，默认 `20MB`，允许 `5-500MB`；和条数上限任一先到即清理更早的已结束任务。
+- `JOB_RESULT_PERSIST_KB`：已结束任务结果的单条持久化上限，默认 `96KB`，允许 `16-1024KB`；超限时仅压缩磁盘历史，当前运行中的页面结果不受影响。
 - `VOLCENGINE_ASR_API_KEY`：火山引擎录音文件识别 2.0 API Key。
 - `VOLCENGINE_ASR_RESOURCE_ID`：火山引擎转写资源 ID，默认 `volc.seedasr.auc`。
 - `VOLCENGINE_ASR_POLL_INTERVAL_MS`：火山转写查询间隔，默认 `1000` 毫秒。
@@ -95,8 +97,8 @@ npm run dev
 - `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：第一备用对话模型配置。默认备用地址和模型是旧配置 `https://www.fhl.mom` / `gpt-5.5` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。还可按相同后缀配置 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`，系统会依次尝试。
 - `CHAT_PROXY_URL`：可选。若 Node/Next 直连模型服务失败，可设为本机代理，例如 `http://127.0.0.1:7890`。
 - `CHAT_HEALTH_PROBE_TIMEOUT_MS`：对话模型健康检查探针超时，默认 `8000` 毫秒，允许 `2000-30000`。
-- `WEB_RESEARCH_ENABLED`、`WEB_RESEARCH_API_KEY`、`WEB_RESEARCH_BASE_URL`、`WEB_RESEARCH_RESPONSES_URL`、`WEB_RESEARCH_MODEL`、`WEB_RESEARCH_REASONING_EFFORT`、`WEB_RESEARCH_SERVICE_TIER`、`WEB_RESEARCH_PROXY_URL`：写作台联网检索的独立 Responses API 配置，推理档位默认 `high`。它只负责 `web_search`，不会改变现有 Chat Completions 写作链；未配置独立接口时，系统仍可使用对话模型链里明确支持 Responses 的节点。密钥不会自动跨服务复用，如确实是同一服务，可在本地环境文件写 `WEB_RESEARCH_API_KEY=$CHAT_API_KEY`。
-- `STYLE_ONE_SHOT_MAX_INPUT_CHARS`、`STYLE_SAMPLE_ANALYSIS_CONCURRENCY`：账号风格卡在完整转写总字数不超过默认 `50000` 时，使用一次 `xhigh` 请求直接完成全量分析和风格卡生成；超过阈值后仍保持 `xhigh`，按默认并发 `1` 串行分析样本，再做最终整合，避免中转站并发 429。
+- `WEB_RESEARCH_ENABLED`、`WEB_RESEARCH_API_KEY`、`WEB_RESEARCH_BASE_URL`、`WEB_RESEARCH_RESPONSES_URL`、`WEB_RESEARCH_MODEL`、`WEB_RESEARCH_REASONING_EFFORT`、`WEB_RESEARCH_SERVICE_TIER`、`WEB_RESEARCH_PROXY_URL`：写作台联网检索的独立 Responses API 配置，推理档位默认 `medium`。它只负责 `web_search`，不会改变现有 Chat Completions 写作链；未配置独立接口时，系统仍可使用对话模型链里明确支持 Responses 的节点。密钥不会自动跨服务复用，如确实是同一服务，可在本地环境文件写 `WEB_RESEARCH_API_KEY=$CHAT_API_KEY`。
+- `STYLE_ONE_SHOT_MAX_INPUT_CHARS`、`STYLE_SAMPLE_ANALYSIS_CONCURRENCY`：账号风格卡在完整转写总字数不超过默认 `50000` 时，使用一次 `high` 请求直接完成全量分析和风格卡生成；超过阈值后仍保持 `high`，按默认并发 `1` 串行分析样本，再做最终整合，避免中转站并发 429。
 - `ENGAGEMENT_MODEL_CONCURRENCY`：评论生成并发批次数，默认 `4`，建议保持在 `1-4` 之间；中转站限流或超时时可先调回 `1`。
 - `ENGAGEMENT_COMMENT_CANDIDATE_RATIO`：评论首轮超采样倍率，默认 `1.4`，允许 `1.05-1.5`；模型会多写一批候选，再按长度、重复结构和事实约束筛到目标数量。
 - `IMAGE_API_KEY`、`IMAGE_BASE_URL`、`IMAGE_MODEL`、`IMAGE_SIZE`、`IMAGE_QUALITY`、`IMAGE_FORMAT`、`IMAGE_PROXY_URL`：可选。用于后续独立封面生成能力，默认按 OpenAI Images API / `gpt-image-2` / `2048x1152` 生成。
@@ -116,9 +118,11 @@ npm run dev
 
 抖音账号名采集会调用 `opencli douyin search <账号名> -f json` 解析 `sec_uid`；如果本机 opencli 暂未提供该适配器，可以先填写抖音主页链接或 `sec_uid` 采集。
 
-视频热榜页位于 `/douyin-hotlist`（历史路径保留）。它维护一个独立的本地对标账号池，可添加抖音或 B站账号；关注列表保存在 `style-library/douyin-hotlist/watchlist.json`，账号和抓取结果保存在 `style-library/douyin-hotlist/accounts/<account>/`；这里添加账号不会写入主账号库 `style-library/douyin/` 或 `style-library/bilibili/`。抓取通过任务中心在后台运行，可查看账号级进度或停止任务；自动刷新按最近一次全量检查计时，单账号手动抓取不会推迟全量刷新。
+视频热榜页位于 `/douyin-hotlist`（历史路径保留）。它维护一个独立的本地对标账号池，可添加抖音或 B站账号；关注列表保存在 `style-library/douyin-hotlist/watchlist.json`，账号和抓取结果保存在 `style-library/douyin-hotlist/accounts/<account>/`；这里添加账号不会写入主账号库 `style-library/douyin/` 或 `style-library/bilibili/`。抓取通过任务中心在后台运行，可查看账号级进度或停止任务；页面打开且可见时每 3 小时自动刷新一次，关闭页面不会抓取。自动刷新按最近一次全量检查计时，单账号手动抓取不会推迟全量刷新。
 
 抖音转写会优先复用已采集的媒体地址，必要时再调用 `opencli douyin user-videos` 刷新地址，然后由本机 `ffmpeg` 抽取 16kHz 单声道低码率 mp3，并通过火山引擎录音文件识别 2.0 的 `audio.data` 提交转写，避免火山服务端直接拉取带防盗链的抖音 URL。批量转写抖音视频时会先按账号预取一次媒体地址，再使用小并发转写，以减少重复 opencli 查询和火山任务排队带来的等待；如果本机网络、opencli、ffmpeg 或火山接口限流不稳定，可把 `DOUYIN_TRANSCRIBE_CONCURRENCY` 调回 `1`。B站视频仍优先使用公开字幕，没有字幕时会尝试下载后抽音频转写。
+
+开发验证可依次运行 `npm test`、`npm run lint`、`npm run typecheck` 和 `npm run check:library`。若一致性检查只报告可安全推导的转写元数据漂移，可在确认后运行 `npm run check:library:repair`；修复前的原文件会备份到 `style-library/.repairs/<timestamp>/`，孤立目录、损坏 JSON 和跨引用问题不会自动修改。
 
 ## 打包交付
 

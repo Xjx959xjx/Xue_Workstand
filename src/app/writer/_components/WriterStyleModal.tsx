@@ -1,14 +1,15 @@
 "use client";
 
 import { WriterDialogModal } from "./WriterDialogModal";
+import type { WriterStyleCard } from "../_hooks/useWriterReferenceDetails";
 
 type WriterStyleModalProps = {
-  activeStyle?: string;
   activeTitle?: string;
   onClose: () => void;
+  styleCards: WriterStyleCard[];
 };
 
-export function WriterStyleModal({ activeStyle, activeTitle, onClose }: WriterStyleModalProps) {
+export function WriterStyleModal({ activeTitle, onClose, styleCards }: WriterStyleModalProps) {
   return (
     <WriterDialogModal labelledBy="writer-style-dialog-title" onClose={onClose}>
       <div className="modal-header">
@@ -17,7 +18,20 @@ export function WriterStyleModal({ activeStyle, activeTitle, onClose }: WriterSt
           关闭
         </button>
       </div>
-      <div className="markdown-box modal-content">{activeStyle || "暂无风格卡"}</div>
+      <div className="modal-content writer-style-card-list">
+        {styleCards.length ? styleCards.map((card, index) => (
+          <section className="writer-style-card" key={card.key}>
+            <header>
+              <span>{index === 0 ? "主风格" : `补充风格 ${index}`}</span>
+              <div>
+                <h3>{card.title}</h3>
+                <p>{card.subtitle}</p>
+              </div>
+            </header>
+            <div className="markdown-box">{card.style || "暂无风格卡"}</div>
+          </section>
+        )) : <div className="markdown-box">暂无风格卡</div>}
+      </div>
     </WriterDialogModal>
   );
 }

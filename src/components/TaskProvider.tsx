@@ -17,6 +17,7 @@ import {
 } from "@/lib/client";
 import { invalidateAccountDetail, invalidateProjectDetail } from "@/lib/detail-cache";
 import { formatJobErrorMessage } from "@/lib/job-messages";
+import { getJobResultHref } from "@/lib/job-links";
 import type { JobKind, JobListItem, JobRecord, JobStartInput } from "@/lib/types";
 import { useLibrary } from "./LibraryProvider";
 
@@ -553,16 +554,17 @@ function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
   if (job.status === "cancelled") return;
   const hydrationFailed = job.status === "completed" && Boolean(job.error) && Boolean((job as { hasResult?: boolean }).hasResult);
   const failed = job.status === "failed" || hydrationFailed;
+  const resultHref = getJobResultHref(job);
   notify({
     tone: failed ? "error" : "success",
     title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : `${job.title}完成`,
     message: failed ? formatJobErrorMessage(job.error || job.message) : job.message,
-    durationMs: failed ? 15000 : job.resultRef?.href || job.href ? 10000 : 5000,
+    durationMs: failed ? 15000 : resultHref ? 10000 : 5000,
     action:
-      job.resultRef?.href || job.href
+      resultHref
         ? {
             label: job.resultRef?.label || (failed ? "查看任务" : "查看结果"),
-            href: job.resultRef?.href || job.href
+            href: resultHref
           }
         : undefined
   });

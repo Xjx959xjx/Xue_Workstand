@@ -35,6 +35,12 @@ export function EngagementHistoryPane({
   const [deleteTarget, setDeleteTarget] = useState<EngagementRecordSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const selectedRecordRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!resultRecord?.id) return;
+    selectedRecordRef.current?.scrollIntoView({ block: "nearest" });
+  }, [records.length, resultRecord?.id]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -114,6 +120,7 @@ export function EngagementHistoryPane({
                     y: event.clientY
                   });
                 }}
+                ref={resultRecord?.id === record.id ? selectedRecordRef : undefined}
                 title="右键可删除这条记录"
                 type="button"
               >

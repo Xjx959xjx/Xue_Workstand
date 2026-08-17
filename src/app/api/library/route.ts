@@ -1,12 +1,11 @@
-import { apiJson } from "@/lib/api-route";
-import { getLibrary } from "@/lib/storage";
-
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
-  return apiJson(() => getLibrary(), {
-    fallbackMessage: "读取风格库失败",
-    status: 500
-  });
+export function GET() {
+  return Response.json(
+    {
+      error: "完整素材库接口已停用，请改用 /api/library/overview 和各资源的按需接口。"
+    },
+    { status: 410 }
+  );
 }

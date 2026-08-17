@@ -114,7 +114,7 @@ async function buildQueryPlan(input: Required<PublishCopyInput>, options: { sign
 ${clampText(input.sourceText, 1800)}`
       }
     ],
-    "low",
+    "medium",
     { signal: options.signal, maxOutputTokens: 520 }
   );
   throwIfAborted(options.signal);

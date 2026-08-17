@@ -9,9 +9,27 @@ const disallowedDraftAssetsSchema = z.never({
   invalid_type_error: "草稿资产只能通过评论、弹幕或封面资产接口维护。"
 }).optional();
 
+const draftStyleReferenceSchema = z.discriminatedUnion("targetType", [
+  z.object({
+    targetType: z.literal("account"),
+    platform: z.enum(platforms),
+    accountId: z.string().min(1),
+    accountName: z.string().min(1),
+    videoIds: z.array(z.string()).optional()
+  }),
+  z.object({
+    targetType: z.literal("project"),
+    projectId: z.string().min(1),
+    projectName: z.string().min(1),
+    sourceAccountIds: z.array(z.string()).optional(),
+    sourceMaterialIds: z.array(z.string()).optional()
+  })
+]);
+
 const draftContextFields = {
   brief: z.string().optional(),
   research: z.string().max(120_000).optional(),
+  styleRefs: z.array(draftStyleReferenceSchema).min(1).optional(),
   sourceDigest: z.object({
     resolvedSourceText: z.string().optional(),
     materialCount: z.number().int().min(0),

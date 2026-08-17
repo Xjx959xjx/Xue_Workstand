@@ -25,13 +25,13 @@ import {
 } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
+import { WriterReferencePicker } from "./_components/WriterReferencePicker";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
 import { useFeishuPublish } from "./_hooks/useFeishuPublish";
 import { useWriterGeneration } from "./_hooks/useWriterGeneration";
 import { useWriterReferenceDetails } from "./_hooks/useWriterReferenceDetails";
 import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
@@ -47,6 +47,11 @@ import {
 } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import {
+  draftWriteStyleReferenceInputs,
+  parseWriteStyleReferenceKey,
+  writeStyleReferenceKey
+} from "@/lib/write-references";
+import {
   DEFAULT_REWRITE_PROMPT,
   extractRewriteSourceMaterial,
   mergeWriterSourceInput,
@@ -54,7 +59,7 @@ import {
   splitWriterSourceInput
 } from "@/lib/source-extraction";
 import { appendWriterSourceFiles, countWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
-import type { Draft, DraftSummary, WriteRevisionScope } from "@/lib/types";
+import type { Draft, DraftSummary, WriteRevisionScope, WriteStyleReferenceInput } from "@/lib/types";
 
 const WRITER_SESSION_DRAFT_KEY = "writer-mobile-session-draft-v1";
 
@@ -76,9 +81,7 @@ function WriterPageContent() {
   });
   const { notify } = useFeedback();
   const remoteStatus = useRemoteStatus();
-  const [targetType, setTargetType] = useState<"account" | "project">("account");
-  const [accountId, setAccountId] = useState("");
-  const [projectId, setProjectId] = useState("");
+  const [styleRefs, setStyleRefs] = useState<WriteStyleReferenceInput[]>([]);
   const [prompt, setPrompt] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [useWebResearch, setUseWebResearch] = useState(false);
@@ -116,15 +119,23 @@ function WriterPageContent() {
           targetType: "account" | "project";
           accountId: string;
           projectId: string;
+          styleRefs: WriteStyleReferenceInput[];
           prompt: string;
           sourceText: string;
           supportDocLinks: string;
           useWebResearch: boolean;
           revisionInstruction: string;
         }>;
-        if (draft.targetType === "account" || draft.targetType === "project") setTargetType(draft.targetType);
-        if (typeof draft.accountId === "string") setAccountId(draft.accountId);
-        if (typeof draft.projectId === "string") setProjectId(draft.projectId);
+        if (Array.isArray(draft.styleRefs) && draft.styleRefs.length) {
+          setStyleRefs(draft.styleRefs);
+        } else if (draft.targetType === "project" && typeof draft.projectId === "string") {
+          setStyleRefs([{ targetType: "project", projectId: draft.projectId }]);
+        } else if (typeof draft.accountId === "string") {
+          const platform = draft.accountId.split(":")[0];
+          if (platform === "bilibili" || platform === "douyin") {
+            setStyleRefs([{ targetType: "account", platform, accountId: draft.accountId }]);
+          }
+        }
         if (typeof draft.prompt === "string") setPrompt(draft.prompt);
         if (typeof draft.sourceText === "string" || typeof draft.supportDocLinks === "string") {
           setSourceText(mergeWriterSourceInput(draft.sourceText, draft.supportDocLinks));
@@ -142,34 +153,48 @@ function WriterPageContent() {
   useEffect(() => {
     if (!sessionDraftHydrated) return;
     window.sessionStorage.setItem(WRITER_SESSION_DRAFT_KEY, JSON.stringify({
-      targetType,
-      accountId,
-      projectId,
+      styleRefs,
       prompt,
       sourceText,
       useWebResearch,
       revisionInstruction
     }));
   }, [
-    accountId,
-    projectId,
     prompt,
     revisionInstruction,
     sessionDraftHydrated,
     sourceText,
-    targetType,
+    styleRefs,
     useWebResearch
   ]);
 
-  const selectedAccount = useMemo(() => {
-    const first = library?.accounts[0];
-    return library?.accounts.find((account) => account.id === accountId) || first || null;
-  }, [library?.accounts, accountId]);
-
-  const selectedProject = useMemo(() => {
-    const first = library?.projects[0];
-    return library?.projects.find((project) => project.id === projectId) || first || null;
-  }, [library?.projects, projectId]);
+  const selectedStyleRefs = useMemo(() => {
+    const availableKeys = new Set([
+      ...(library?.accounts || []).map((account) => writeStyleReferenceKey({
+        targetType: "account" as const,
+        platform: account.platform,
+        accountId: account.id
+      })),
+      ...(library?.projects || []).map((project) => writeStyleReferenceKey({
+        targetType: "project" as const,
+        projectId: project.id
+      }))
+    ]);
+    const selected = styleRefs.filter((reference) => availableKeys.has(writeStyleReferenceKey(reference)));
+    if (selected.length) return selected;
+    const firstAccount = library?.accounts[0];
+    if (firstAccount) return [{ targetType: "account" as const, platform: firstAccount.platform, accountId: firstAccount.id }];
+    const firstProject = library?.projects[0];
+    return firstProject ? [{ targetType: "project" as const, projectId: firstProject.id }] : [];
+  }, [library?.accounts, library?.projects, styleRefs]);
+  const primaryStyleRef = selectedStyleRefs[0];
+  const targetType = primaryStyleRef?.targetType || "account";
+  const selectedAccount = useMemo(() => primaryStyleRef?.targetType === "account"
+    ? library?.accounts.find((account) => account.id === primaryStyleRef.accountId && account.platform === primaryStyleRef.platform) || null
+    : null, [library?.accounts, primaryStyleRef]);
+  const selectedProject = useMemo(() => primaryStyleRef?.targetType === "project"
+    ? library?.projects.find((project) => project.id === primaryStyleRef.projectId) || null
+    : null, [library?.projects, primaryStyleRef]);
 
   const allDrafts = useMemo(() => draftSummaries || [], [draftSummaries]);
   const historyLoading = loading || draftSummaries === null;
@@ -182,11 +207,11 @@ function WriterPageContent() {
     []
   );
 
-  const { activeStyle, activeStyleLoading, activeSubtitle, activeTitle } = useWriterReferenceDetails({
-    selectedAccount,
-    selectedProject,
-    setNotice,
-    targetType
+  const { activeStyle, activeStyleLoading, activeSubtitle, activeTitle, styleCards } = useWriterReferenceDetails({
+    accounts: library?.accounts || [],
+    projects: library?.projects || [],
+    references: selectedStyleRefs,
+    setNotice
   });
   const separatedSourceInput = useMemo(() => splitWriterSourceInput(sourceText), [sourceText]);
   const sourceExtraction = useMemo(
@@ -198,22 +223,6 @@ function WriterPageContent() {
   const effectiveMode: Draft["mode"] = hasRewriteSource ? "rewrite" : "topic";
   const normalizedPrompt = useMemo(() => normalizeRewritePrompt(effectiveMode, prompt, sourceText), [effectiveMode, prompt, sourceText]);
   const hasTaskInput = Boolean(normalizedPrompt.trim() || hasRewriteSource);
-  const activeReference = targetType === "project" ? selectedProject : selectedAccount;
-  const activeReferenceValue = activeReference ? `${targetType}:${activeReference.id}` : "";
-  const handleReferenceChange = useCallback((value: string) => {
-    const separatorIndex = value.indexOf(":");
-    if (separatorIndex < 0) return;
-    const nextType = value.slice(0, separatorIndex);
-    const nextId = value.slice(separatorIndex + 1);
-    if (!nextId) return;
-    if (nextType === "project") {
-      setTargetType("project");
-      setProjectId(nextId);
-    } else if (nextType === "account") {
-      setTargetType("account");
-      setAccountId(nextId);
-    }
-  }, []);
   const noticeIsError = notice.includes("失败") || notice.includes("未配置");
 
   const handleRevisionCompleted = useCallback(() => {
@@ -263,6 +272,7 @@ function WriterPageContent() {
     routerReplace: router.replace,
     selectedAccount,
     selectedProject,
+    styleRefs: selectedStyleRefs,
     setBusy,
     setNotice,
     startTask,
@@ -325,14 +335,9 @@ function WriterPageContent() {
     setSelectedDraftText("");
     setHistoryOpen(false);
 
-    const params = new URLSearchParams({ targetType, mode: "topic" });
-    if (targetType === "project") {
-      if (selectedProject?.id) params.set("projectId", selectedProject.id);
-    } else if (selectedAccount?.id) {
-      params.set("accountId", selectedAccount.id);
-    }
+    const params = createWriterReferenceParams(selectedStyleRefs, "topic");
     router.replace(`/writer?${params.toString()}`, { scroll: false });
-  }, [busy, clearDraftResult, hasTaskInput, hasUnsavedChanges, lastContent, router, selectedAccount?.id, selectedProject?.id, sourceImporting, targetType]);
+  }, [busy, clearDraftResult, hasTaskInput, hasUnsavedChanges, lastContent, router, selectedStyleRefs, sourceImporting]);
 
   const handleSourceFiles = useCallback(async (files: File[]) => {
     if (!files.length || sourceImporting) return;
@@ -400,12 +405,7 @@ function WriterPageContent() {
   }, [draftSummaries, loading]);
 
   const applyLoadedDraft = useCallback((draft: Draft) => {
-    setTargetType(draft.targetType === "project" ? "project" : "account");
-    if (draft.targetType === "project") {
-      setProjectId(draft.projectId);
-    } else {
-      setAccountId(draft.accountId);
-    }
+    setStyleRefs(draftWriteStyleReferenceInputs(draft));
     setPrompt(draft.prompt);
     setSourceText(mergeWriterSourceInput(draft.input, draft.supportDocLinks));
     setUseWebResearch(Boolean(draft.sourceDigest?.webResearchEnabled) && webResearchAvailable);
@@ -424,6 +424,10 @@ function WriterPageContent() {
     const nextSourceText = searchParams.get("sourceText");
     const nextAccountId = searchParams.get("accountId");
     const nextProjectId = searchParams.get("projectId");
+    const nextStyleRefs = searchParams.getAll("styleRef").flatMap((value) => {
+      const reference = parseWriteStyleReferenceKey(value);
+      return reference ? [reference] : [];
+    });
     const draftId = searchParams.get("draftId");
 
     if (draftId && historyLoading) return;
@@ -449,7 +453,7 @@ function WriterPageContent() {
     if (appliedSearchParamRef.current === searchKey) return;
 
     const hasUrlState =
-      Boolean(target || nextMode || nextAccountId || nextProjectId) ||
+      Boolean(target || nextMode || nextAccountId || nextProjectId || nextStyleRefs.length) ||
       nextPrompt !== null ||
       nextSourceText !== null;
     if (!hasUrlState) {
@@ -457,11 +461,16 @@ function WriterPageContent() {
       return;
     }
 
-    const nextTargetType = target === "project" ? "project" : target === "account" ? "account" : undefined;
-
-    if (nextTargetType) setTargetType(nextTargetType);
-    if (nextAccountId) setAccountId(nextAccountId);
-    if (nextProjectId) setProjectId(nextProjectId);
+    if (nextStyleRefs.length) {
+      setStyleRefs(nextStyleRefs);
+    } else if (nextProjectId) {
+      setStyleRefs([{ targetType: "project", projectId: nextProjectId }]);
+    } else if (nextAccountId) {
+      const platform = nextAccountId.split(":")[0];
+      if (platform === "bilibili" || platform === "douyin") {
+        setStyleRefs([{ targetType: "account", platform, accountId: nextAccountId }]);
+      }
+    }
     if (nextPrompt !== null) setPrompt(nextPrompt);
     if (nextSourceText !== null) setSourceText(nextSourceText);
     setUseWebResearch(false);
@@ -507,17 +516,7 @@ function WriterPageContent() {
             setRevisionInstruction("");
             setRevisionScope("full");
             setSelectedDraftText("");
-            const params = new URLSearchParams({
-              targetType,
-              mode: effectiveMode
-            });
-            if (targetType === "project") {
-              const nextProjectId = selectedProject?.id || projectId;
-              if (nextProjectId) params.set("projectId", nextProjectId);
-            } else {
-              const nextAccountId = selectedAccount?.id || accountId;
-              if (nextAccountId) params.set("accountId", nextAccountId);
-            }
+            const params = createWriterReferenceParams(selectedStyleRefs, effectiveMode);
             router.replace(`/writer?${params.toString()}`, { scroll: false });
           }
         }
@@ -531,19 +530,15 @@ function WriterPageContent() {
       }
     },
     [
-      accountId,
       clearDraftResult,
       handleSelectHistoryDraft,
       historyDrafts,
       effectiveMode,
       lastDraftId,
       notify,
-      projectId,
       refresh,
       router,
-      selectedAccount?.id,
-      selectedProject?.id,
-      targetType
+      selectedStyleRefs
     ]
   );
 
@@ -570,17 +565,7 @@ function WriterPageContent() {
             setRevisionInstruction("");
             setRevisionScope("full");
             setSelectedDraftText("");
-            const params = new URLSearchParams({
-              targetType,
-              mode: effectiveMode
-            });
-            if (targetType === "project") {
-              const nextProjectId = selectedProject?.id || projectId;
-              if (nextProjectId) params.set("projectId", nextProjectId);
-            } else {
-              const nextAccountId = selectedAccount?.id || accountId;
-              if (nextAccountId) params.set("accountId", nextAccountId);
-            }
+            const params = createWriterReferenceParams(selectedStyleRefs, effectiveMode);
             router.replace(`/writer?${params.toString()}`, { scroll: false });
           }
         }
@@ -594,19 +579,15 @@ function WriterPageContent() {
       }
     },
     [
-      accountId,
       clearDraftResult,
       handleSelectHistoryDraft,
       historyDrafts,
       effectiveMode,
       lastDraftId,
       notify,
-      projectId,
       refresh,
       router,
-      selectedAccount?.id,
-      selectedProject?.id,
-      targetType
+      selectedStyleRefs
     ]
   );
 
@@ -678,36 +659,16 @@ function WriterPageContent() {
       <section className="writer-workbench">
         <section className="panel writer-main">
           <div className="writer-refbar">
-            <label className="writer-reference-control">
+            <div className="writer-reference-control">
               <span>参考风格</span>
-              <select
-                aria-label="选择参考风格"
-                className="writer-ref-select"
+              <WriterReferencePicker
+                accounts={library?.accounts || []}
                 disabled={loading}
-                name="writerReference"
-                value={activeReferenceValue}
-                onChange={(event) => handleReferenceChange(event.target.value)}
-              >
-                {library?.projects.length ? (
-                  <optgroup label="项目风格">
-                    {library.projects.map((project) => (
-                      <option key={`project:${project.id}`} value={`project:${project.id}`}>
-                        {project.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ) : null}
-                {library?.accounts.length ? (
-                  <optgroup label="账号风格">
-                    {library.accounts.map((account) => (
-                      <option key={`account:${account.id}`} value={`account:${account.id}`}>
-                        {formatPlatform(account.platform)} / {account.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ) : null}
-              </select>
-            </label>
+                onChange={setStyleRefs}
+                projects={library?.projects || []}
+                references={selectedStyleRefs}
+              />
+            </div>
 
             <div className="writer-reference-status" aria-label="当前风格卡状态">
               <span className="writer-reference-icon" aria-hidden="true">
@@ -716,7 +677,7 @@ function WriterPageContent() {
               <span className="writer-reference-copy">
                 <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
                 <small>
-                  {activeSubtitle || (targetType === "project" ? "项目风格" : "账号风格")}
+                  {activeSubtitle || "参考风格"}
                   {activeStyleLoading ? "" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
                 </small>
               </span>
@@ -1043,7 +1004,7 @@ function WriterPageContent() {
       </section>
 
       {styleOpen ? (
-        <WriterStyleModal activeStyle={activeStyle} activeTitle={activeTitle} onClose={() => setStyleOpen(false)} />
+        <WriterStyleModal activeTitle={activeTitle} onClose={() => setStyleOpen(false)} styleCards={styleCards} />
       ) : null}
 
       {feishuResult ? (
@@ -1106,6 +1067,18 @@ function findReplacementDraft(drafts: DraftSummary[], deletedIds: Set<string>, c
     });
 
   return sameSession[0] || remaining[0] || null;
+}
+
+function createWriterReferenceParams(references: WriteStyleReferenceInput[], mode: Draft["mode"]) {
+  const primary = references[0];
+  const params = new URLSearchParams({
+    targetType: primary?.targetType || "account",
+    mode
+  });
+  if (primary?.targetType === "project") params.set("projectId", primary.projectId);
+  if (primary?.targetType === "account") params.set("accountId", primary.accountId);
+  for (const reference of references) params.append("styleRef", writeStyleReferenceKey(reference));
+  return params;
 }
 
 function WriterFallback() {
