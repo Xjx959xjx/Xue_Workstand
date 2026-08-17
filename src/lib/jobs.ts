@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import { randomUUID } from "crypto";
 import path from "path";
 import {
   buildSavedProjectStyleResult,
@@ -27,7 +28,7 @@ import { hasSupportDocumentReference } from "./support-documents";
 import { extractRewriteSourceMaterial, splitWriterSourceInput } from "./source-extraction";
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
 import { buildEngagementRecordHref } from "./job-links";
-import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES } from "./job-persistence";
+import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES, isResumableJobKind } from "./job-persistence";
 import { libraryRoot } from "./storage";
 import { generatePublishCopy } from "./publish-copy";
 import { readJsonFile, writeJsonFile } from "./storage/fs";
@@ -54,6 +55,9 @@ type JobRuntime = {
   cancelRequests: Set<string>;
   pending: Map<string, JobStartInput>;
   records: Map<string, JobRecord>;
+  changeEpoch: string;
+  changeRevision: number;
+  changeLog: Array<{ revision: number; jobId: string; removed?: boolean }>;
 };
 
 type PatchJobOptions = {
@@ -83,6 +87,9 @@ const runtime = (() => {
     existing.cancelRequests ||= new Set();
     existing.pending ||= new Map();
     existing.records ||= new Map();
+    existing.changeEpoch ||= randomUUID();
+    existing.changeRevision ||= 0;
+    existing.changeLog ||= [];
     return existing;
   }
 
@@ -92,7 +99,10 @@ const runtime = (() => {
     abortControllers: new Map(),
     cancelRequests: new Set(),
     pending: new Map(),
-    records: new Map()
+    records: new Map(),
+    changeEpoch: randomUUID(),
+    changeRevision: 0,
+    changeLog: []
   };
   globalJobs.__styleWorkbenchJobs = created;
   return created;
@@ -104,6 +114,7 @@ const PARTIAL_TEXT_PATCH_INTERVAL_MS = 250;
 const PARTIAL_TEXT_PATCH_CHARS = 160;
 const JOB_SUMMARY_EVENT_LIMIT = 3;
 const JOB_SUMMARY_LIMIT = 80;
+const JOB_CHANGE_LOG_LIMIT = 1200;
 const DEFAULT_MAX_ACTIVE_JOBS = 2;
 const DEFAULT_JOB_HISTORY_LIMIT = 200;
 const DEFAULT_JOB_HISTORY_MAX_BYTES = 20 * 1024 * 1024;
@@ -125,12 +136,23 @@ function jobJsonPath(jobId: string) {
   return path.join(jobsPath(), `${normalizeJobId(jobId)}.json`);
 }
 
+function jobPayloadsPath() {
+  return path.join(jobsPath(), ".payloads");
+}
+
+function jobPayloadPath(jobId: string) {
+  return path.join(jobPayloadsPath(), `${normalizeJobId(jobId)}.json`);
+}
+
 function normalizeJobId(jobId: string) {
   return safeSegment(jobId.trim());
 }
 
 async function ensureJobs() {
-  await fs.mkdir(jobsPath(), { recursive: true });
+  await Promise.all([
+    fs.mkdir(jobsPath(), { recursive: true }),
+    fs.mkdir(jobPayloadsPath(), { recursive: true })
+  ]);
 }
 
 async function readJson<T>(target: string): Promise<T | null> {
@@ -143,6 +165,7 @@ async function writeJson(target: string, value: unknown) {
 
 async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
   runtime.records.set(job.id, job);
+  recordJobChange(job.id);
   if (options.persist === false) return;
   await writeJson(jobJsonPath(job.id), compactJobForPersistence(job, jobResultPersistBytes()));
   invalidateJobSummaryCache();
@@ -222,9 +245,9 @@ async function ensureInitialized() {
 
 async function initializeRuntimeJobs() {
   await ensureJobs();
-
-  await interruptStaleDiskJobs(await listJobSummariesFromDisk());
+  const resumable = await recoverStaleDiskJobs(await listJobSummariesFromDisk());
   runtime.initialized = true;
+  for (const item of resumable) queueBackgroundJob(item.jobId, item.input);
 }
 
 async function listJobsFromDisk() {
@@ -285,26 +308,43 @@ async function readJobSummary(target: string): Promise<JobSummaryRead | null> {
   return parseJobSummaryJson(target, raw);
 }
 
-async function interruptStaleDiskJobs(jobs: JobSummaryRead[]) {
+async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
   const staleJobs = jobs.filter((job) => (job.status === "running" || job.status === "queued") && !runtime.active.has(job.id));
-  if (!staleJobs.length) return;
+  if (!staleJobs.length) return [];
 
   const interruptedAt = nowIso();
+  const resumable: Array<{ jobId: string; input: JobStartInput }> = [];
   await Promise.all(
     staleJobs.map(async (summary) => {
       const job = await readJson<JobRecord>(summary.filePath);
       if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
+      const input = await readJobPayload(job.id);
+      if (input && input.kind === job.kind && isResumableJobKind(job.kind)) {
+        await writeJob({
+          ...job,
+          status: "queued",
+          stage: "queued",
+          message: "服务重启后已恢复到队列",
+          error: undefined,
+          completedAt: undefined,
+          resumedAt: interruptedAt,
+          updatedAt: interruptedAt
+        });
+        resumable.push({ jobId: job.id, input });
+        return;
+      }
       await writeJob({
         ...job,
         status: "interrupted",
         progress: job.progress || 0,
-        message: "开发服务器重启后任务已中断，请重新发起。",
-        error: "任务已中断，请重新发起。",
+        message: input ? "服务重启后任务已中断，可从任务中心重试。" : "服务重启后任务已中断，且缺少恢复参数。",
+        error: input ? "任务已中断，可重试。" : "任务恢复参数缺失，请重新发起。",
         updatedAt: interruptedAt,
         completedAt: interruptedAt
       });
     })
   );
+  return resumable;
 }
 
 function stripSummaryFilePath({ filePath, ...job }: JobSummaryRead): JobListItem {
@@ -330,6 +370,45 @@ export async function listJobSummaries() {
     if (isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
   }
   return [...summaries.values()].sort(compareJobsByUpdatedAtDesc).slice(0, JOB_SUMMARY_LIMIT);
+}
+
+export async function listJobSummaryChanges(cursor?: string) {
+  await ensureInitialized();
+  const currentCursor = jobChangeCursor();
+  const parsed = parseJobChangeCursor(cursor);
+  const firstRevision = runtime.changeLog[0]?.revision ?? runtime.changeRevision + 1;
+  const reset = !parsed
+    || parsed.epoch !== runtime.changeEpoch
+    || parsed.revision > runtime.changeRevision
+    || parsed.revision < firstRevision - 1;
+
+  if (reset) {
+    return {
+      jobs: await listJobSummaries(),
+      removedJobIds: [],
+      cursor: currentCursor,
+      reset: true
+    };
+  }
+
+  const changes = runtime.changeLog.filter((change) => change.revision > parsed.revision);
+  if (!changes.length) {
+    return { jobs: [], removedJobIds: [], cursor: currentCursor, reset: false };
+  }
+  const latestById = new Map<string, { revision: number; removed?: boolean }>();
+  for (const change of changes) latestById.set(change.jobId, change);
+  const current = new Map((await listJobSummaries()).map((job) => [job.id, job]));
+  return {
+    jobs: [...latestById.entries()]
+      .filter(([, change]) => !change.removed)
+      .map(([jobId]) => current.get(jobId))
+      .filter((job): job is JobListItem => Boolean(job)),
+    removedJobIds: [...latestById.entries()]
+      .filter(([jobId, change]) => change.removed || !current.has(jobId))
+      .map(([jobId]) => jobId),
+    cursor: currentCursor,
+    reset: false
+  };
 }
 
 export async function getJob(jobId: string) {
@@ -375,7 +454,13 @@ export async function createJob(input: JobStartInput) {
     updatedAt: now
   };
 
-  await writeJob(job);
+  await writeJobPayload(job.id, input);
+  try {
+    await writeJob(job);
+  } catch (error) {
+    await removeJobPayload(job.id);
+    throw error;
+  }
   queueBackgroundJob(job.id, input);
   return job;
 }
@@ -408,11 +493,13 @@ async function runJob(jobId: string, input: JobStartInput) {
   runtime.abortControllers.set(jobId, controller);
   try {
     throwIfCancelled(jobId);
+    const current = await getJob(jobId);
     await patchJob(jobId, {
       status: "running",
       stage: "start",
       message: "任务正在运行",
-      progress: 3
+      progress: 3,
+      attempt: (current.attempt || 0) + 1
     });
 
     if (input.kind === "write-copy") {
@@ -1097,9 +1184,19 @@ export async function cancelJob(jobId: string) {
     error: undefined,
     completedAt: nowIso()
   });
+  await removeJobPayload(jobId);
   await pruneJobHistory();
   pumpJobQueue();
   return next;
+}
+
+export async function retryJob(jobId: string) {
+  await ensureInitialized();
+  const current = await getJob(jobId);
+  if (!isTerminalJob(current)) throw new Error("任务仍在运行，无法重试");
+  const input = await readJobPayload(jobId);
+  if (!input) throw new Error("任务恢复参数缺失，请重新发起。");
+  return createJob(input);
 }
 
 async function completeJob(
@@ -1117,6 +1214,7 @@ async function completeJob(
       throwIfCancelled(jobId);
     }
   });
+  await removeJobPayload(jobId);
   await pruneJobHistory();
 }
 
@@ -1411,6 +1509,8 @@ async function pruneJobHistory() {
       runtime.records.delete(job.id);
       runtime.pending.delete(job.id);
       await fs.rm(job.filePath, { force: true }).catch(() => undefined);
+      await removeJobPayload(job.id);
+      recordJobChange(job.id, true);
     })
   );
   invalidateJobSummaryCache();
@@ -1418,6 +1518,43 @@ async function pruneJobHistory() {
 
 function invalidateJobSummaryCache() {
   jobSummaryCache = null;
+}
+
+async function writeJobPayload(jobId: string, input: JobStartInput) {
+  await ensureJobs();
+  await writeJson(jobPayloadPath(jobId), { version: 1, input });
+}
+
+async function readJobPayload(jobId: string) {
+  const payload = await readJson<{ version?: number; input?: JobStartInput }>(jobPayloadPath(jobId));
+  if (payload?.version !== 1 || !payload.input || !jobKindSet.has(payload.input.kind)) return null;
+  return payload.input;
+}
+
+async function removeJobPayload(jobId: string) {
+  await fs.rm(jobPayloadPath(jobId), { force: true }).catch(() => undefined);
+}
+
+function recordJobChange(jobId: string, removed = false) {
+  runtime.changeRevision += 1;
+  runtime.changeLog.push({ revision: runtime.changeRevision, jobId, ...(removed ? { removed: true } : {}) });
+  if (runtime.changeLog.length > JOB_CHANGE_LOG_LIMIT) {
+    runtime.changeLog.splice(0, runtime.changeLog.length - JOB_CHANGE_LOG_LIMIT);
+  }
+}
+
+function jobChangeCursor() {
+  return `${runtime.changeEpoch}.${runtime.changeRevision}`;
+}
+
+function parseJobChangeCursor(cursor?: string) {
+  if (!cursor) return null;
+  const separator = cursor.lastIndexOf(".");
+  if (separator < 1) return null;
+  const epoch = cursor.slice(0, separator);
+  const revision = Number.parseInt(cursor.slice(separator + 1), 10);
+  if (!epoch || !Number.isSafeInteger(revision) || revision < 0) return null;
+  return { epoch, revision };
 }
 
 function isTerminalJob(job: Pick<JobRecord, "status">) {
@@ -1491,6 +1628,8 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
   const events = readOptionalArray<JobEvent>(target, raw, "events");
   const dataRevision = readOptionalNumber(target, raw, "dataRevision");
   const dataChange = readOptionalObject<JobRecord["dataChange"]>(target, raw, "dataChange");
+  const attempt = readOptionalNumber(target, raw, "attempt");
+  const resumedAt = readOptionalString(target, raw, "resumedAt");
   const completedAt = readOptionalString(target, raw, "completedAt");
   const resultCompacted = readOptionalBoolean(target, raw, "resultCompacted");
   const resultSizeBytes = readOptionalNumber(target, raw, "resultSizeBytes");
@@ -1510,6 +1649,8 @@ function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
     ...(events ? { events: summarizeJobEvents(events) } : {}),
     ...(dataRevision !== undefined ? { dataRevision } : {}),
     ...(dataChange ? { dataChange } : {}),
+    ...(attempt !== undefined ? { attempt } : {}),
+    ...(resumedAt ? { resumedAt } : {}),
     ...(error ? { error: summarizeJobListText(error, 240) } : {}),
     createdAt: readRequiredString(target, raw, "createdAt"),
     updatedAt: readRequiredString(target, raw, "updatedAt"),

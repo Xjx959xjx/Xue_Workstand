@@ -1,6 +1,4 @@
-import { promises as fs } from "fs";
 import { randomUUID } from "crypto";
-import path from "path";
 import type { Response as UndiciResponse } from "undici";
 import {
   AccountDraftInput,
@@ -27,7 +25,6 @@ import {
   getTopTranscriptSamples,
   getProjectSummary,
   resolveCopySource,
-  libraryRoot,
   readAccountStyleSampleAnalysis,
   readAccountStyleMeta,
   readCopySourceStyleAnalysis,
@@ -47,7 +44,12 @@ import {
   upsertProject,
   type StyleSampleAnalysisCache
 } from "./storage";
-import { extractRewriteSourceMaterial, normalizeRewritePrompt, splitWriterSourceInput } from "./source-extraction";
+import {
+  extractRewriteSourceMaterial,
+  mergeWriterSourceInput,
+  normalizeRewritePrompt,
+  splitWriterSourceInput
+} from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
 import { draftWriteStyleReferenceInputs, normalizeWriteStyleReferenceInputs } from "./write-references";
 import {
@@ -109,6 +111,7 @@ export type WriteCopyInput = {
   styleRefs?: WriteStyleReferenceInput[];
   mode: Draft["mode"];
   prompt: string;
+  originalSourceInput?: string;
   sourceText?: string;
   supportDocLinks?: string;
   save?: boolean;
@@ -211,7 +214,7 @@ const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = 2;
 const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 1200;
 export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "high";
 export const WRITE_COPY_MAX_OUTPUT_TOKENS = 2600;
-const WRITE_PROMPT_VERSION = "writer-v4";
+const WRITE_PROMPT_VERSION = "writer-v5";
 const WRITE_ACCOUNT_SAMPLE_LIMIT = 8;
 const WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT = 4;
 const WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS = 4200;
@@ -2615,7 +2618,12 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
     if (!capability.available) throw new Error(capability.reason);
   }
 
-  const normalizedInput = await normalizeWriteCopyInput(input, options);
+  const originalSourceInput = input.originalSourceInput
+    ?? mergeWriterSourceInput(input.sourceText, input.supportDocLinks);
+  const normalizedInput = await normalizeWriteCopyInput({
+    ...input,
+    originalSourceInput
+  }, options);
   throwIfAborted(options.signal);
   const styleInputs = normalizeWriteStyleReferenceInputs(normalizedInput);
   if (!styleInputs.length) throw new Error("请选择至少一个参考风格");
@@ -2740,7 +2748,7 @@ async function prepareWriteRevisionContext(
         "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
         "只输出修改后的完整成稿，不解释修改过程，不输出差异说明。",
         "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
-        "表达方式以当前风格卡和原稿为准，不要补入跨账号通用结构。",
+        "表达方式以当前风格卡组和原稿为准；多风格冲突时保持原有选择顺序，不要补入跨账号通用结构。",
         "不得添加原稿、原始素材、历史策划备注或已保存参考资料中没有依据的新事实。"
       ].join("\n")
     },
@@ -2752,7 +2760,7 @@ async function prepareWriteRevisionContext(
         `本轮修改要求：\n${instruction}`,
         `修改范围：\n${scopeInstruction}`,
         ...(parent.brief ? [`历史策划备注：\n${clampText(parent.brief, 12_000)}`] : []),
-        `风格卡：\n${clampText(style, 12_000)}`,
+        `风格卡：\n${style}`,
         parent.input ? `原始素材：\n${clampText(parent.input, 16_000)}` : "原始素材：未保存",
         parent.research ? `已保存参考资料：\n${clampText(parent.research, 16_000)}` : "已保存参考资料：无",
         `当前完整稿件：\n${clampText(currentContent, 70_000)}`,
@@ -2761,7 +2769,7 @@ async function prepareWriteRevisionContext(
           "1. 输出必须是完整成稿，不能只返回局部段落。",
           "2. 本轮要求优先级最高，但不得突破已有事实边界。",
           "3. 修改范围外的内容不要无故换词、换结构或删减。",
-          "4. 保持当前账号或项目原有的句法、停顿、段落长度和收尾方式。"
+          "4. 保持当前所选风格组合原有的句法、停顿、段落长度和收尾方式。"
         ].join("\n")
       ].join("\n\n")
     }
@@ -2770,12 +2778,13 @@ async function prepareWriteRevisionContext(
     title: parent.title,
     mode: parent.mode,
     prompt: parent.prompt,
+    originalSourceInput: parent.originalSourceInput,
     input: parent.input,
     supportDocLinks: parent.supportDocLinks,
     brief: parent.brief,
     research: parent.research,
     sourceDigest,
-    styleRefs: styleContexts.map((context) => context.reference),
+    styleRefs: parent.styleRefs?.length ? parent.styleRefs : styleContexts.map((context) => context.reference),
     version
   };
   const draftBase: PreparedWriteContext["draftBase"] = isProject
@@ -2829,7 +2838,7 @@ async function resolveWriteStyleContext(
         platform: account.platform,
         accountId: account.id,
         accountName: account.name,
-        videoIds: samples.map((sample) => sample.video.id)
+        videoIds: includeSamples ? samples.map((sample) => sample.video.id) : undefined
       },
       title: account.name,
       subtitle: `账号风格｜${account.platform}`,
@@ -2893,6 +2902,9 @@ function buildPreparedWriteDraftBase(input: {
     title: makeTitleFromPrompt(input.input.prompt),
     mode: input.input.mode,
     prompt: input.input.prompt,
+    originalSourceInput: input.input.originalSourceInput?.trim()
+      ? input.input.originalSourceInput
+      : undefined,
     input: input.input.sourceText,
     supportDocLinks: input.input.supportDocLinks,
     research: input.research,
@@ -2902,24 +2914,32 @@ function buildPreparedWriteDraftBase(input: {
   };
 
   if (primary.targetType === "project") {
-    const { targetType: _targetType, ...styleRef } = primary;
     return {
       ...shared,
       targetType: "project",
       projectId: primary.projectId,
       projectName: primary.projectName,
-      styleRef
+      styleRef: {
+        projectId: primary.projectId,
+        projectName: primary.projectName,
+        sourceAccountIds: primary.sourceAccountIds,
+        sourceMaterialIds: primary.sourceMaterialIds
+      }
     };
   }
 
-  const { targetType: _targetType, ...styleRef } = primary;
   return {
     ...shared,
     targetType: "account",
     platform: primary.platform,
     accountId: primary.accountId,
     accountName: primary.accountName,
-    styleRef
+    styleRef: {
+      platform: primary.platform,
+      accountId: primary.accountId,
+      accountName: primary.accountName,
+      videoIds: primary.videoIds
+    }
   };
 }
 

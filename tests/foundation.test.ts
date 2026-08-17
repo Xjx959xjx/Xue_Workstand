@@ -13,14 +13,30 @@ import {
   isChatConfigConfigured,
   type ChatRuntimeConfig
 } from "../src/lib/model-runtime";
+import { prepareWriteCopyContext } from "../src/lib/ai";
 import {
+  deleteAccounts,
+  deleteProjects,
   getVideo,
   readTranscript,
+  resolveDraft,
+  saveDraft,
   saveTranscript,
   saveVideos,
   upsertAccount,
   upsertProject
 } from "../src/lib/storage";
+import { writeCopyInputSchema } from "../src/lib/write-validation";
+import {
+  normalizeWriteStyleReferenceInputs,
+  parseWriteStyleReferenceKey,
+  writeStyleReferenceKey
+} from "../src/lib/write-references";
+import {
+  extractRewriteSourceMaterial,
+  restoreWriterSourceInput,
+  splitWriterSourceInput
+} from "../src/lib/source-extraction";
 import type { Account, Video } from "../src/lib/types";
 
 const execFileAsync = promisify(execFile);
@@ -70,6 +86,188 @@ test("同名账号和项目不会覆盖彼此目录", async () => {
     assert.notEqual(firstProject.id, secondProject.id);
     assert.notEqual(firstProject.slug, secondProject.slug);
   });
+});
+
+test("写作风格引用支持混合多选、保序去重和旧参数兼容", () => {
+  const references = normalizeWriteStyleReferenceInputs({
+    styleRefs: [
+      { targetType: "account", platform: "bilibili", accountId: "bilibili:first" },
+      { targetType: "project", projectId: "project:demo" },
+      { targetType: "account", platform: "bilibili", accountId: "bilibili:first" }
+    ]
+  });
+
+  assert.deepEqual(references, [
+    { targetType: "account", platform: "bilibili", accountId: "bilibili:first" },
+    { targetType: "project", projectId: "project:demo" }
+  ]);
+  assert.deepEqual(parseWriteStyleReferenceKey(writeStyleReferenceKey(references[0])), references[0]);
+  assert.deepEqual(
+    normalizeWriteStyleReferenceInputs({ targetType: "project", projectId: "project:legacy" }),
+    [{ targetType: "project", projectId: "project:legacy" }]
+  );
+  assert.equal(writeCopyInputSchema.safeParse({
+    action: "create",
+    styleRefs: references,
+    mode: "topic",
+    prompt: "混合两种风格写一段"
+  }).success, true);
+});
+
+test("多风格草稿会保存全部引用并清理已删除的补充风格", async () => {
+  await withTemporaryLibrary(async () => {
+    const primary = await upsertAccount({ platform: "bilibili", name: "主风格", uid: "primary-style" });
+    const secondary = await upsertAccount({ platform: "douyin", name: "补充风格", uid: "secondary-style" });
+    const project = await upsertProject({ name: "项目风格", sourceAccountIds: [secondary.id] });
+    const draft = await saveDraft({
+      targetType: "account",
+      platform: primary.platform,
+      accountId: primary.id,
+      accountName: primary.name,
+      title: "多风格测试",
+      mode: "topic",
+      prompt: "测试多风格",
+      content: "测试成稿",
+      styleRef: {
+        platform: primary.platform,
+        accountId: primary.id,
+        accountName: primary.name
+      },
+      styleRefs: [
+        { targetType: "account", platform: primary.platform, accountId: primary.id, accountName: primary.name },
+        { targetType: "project", projectId: project.id, projectName: project.name, sourceAccountIds: project.sourceAccountIds },
+        { targetType: "account", platform: secondary.platform, accountId: secondary.id, accountName: secondary.name }
+      ]
+    });
+
+    assert.equal((await resolveDraft(draft.id)).draft.styleRefs?.length, 3);
+    await deleteProjects([project.id]);
+    assert.deepEqual((await resolveDraft(draft.id)).draft.styleRefs?.map((reference) => reference.targetType), ["account", "account"]);
+    await deleteAccounts([secondary.id]);
+    assert.deepEqual((await resolveDraft(draft.id)).draft.styleRefs?.map((reference) => writeStyleReferenceKey(reference)), [
+      `account:${primary.platform}:${primary.id}`
+    ]);
+  });
+});
+
+test("首稿上下文会同时装入主风格和补充风格", async () => {
+  await withTemporaryLibrary(async () => {
+    const account = await upsertAccount({ platform: "bilibili", name: "账号主风格", uid: "context-account" });
+    const project = await upsertProject({ name: "项目补充风格" });
+    const prepared = await prepareWriteCopyContext({
+      styleRefs: [
+        { targetType: "account", platform: account.platform, accountId: account.id },
+        { targetType: "project", projectId: project.id }
+      ],
+      mode: "topic",
+      prompt: "写一个混合风格测试"
+    });
+
+    assert.equal(prepared.draftBase?.styleRefs?.length, 2);
+    assert.match(prepared.messages[1].content, /账号主风格/);
+    assert.match(prepared.messages[1].content, /项目补充风格/);
+    assert.match(prepared.messages[1].content, /风格 1（主风格）/);
+    assert.match(prepared.messages[1].content, /风格 2（补充风格）/);
+  });
+});
+
+test("写作历史会单独保存原始素材输入", async () => {
+  await withTemporaryLibrary(async () => {
+    const account = await upsertAccount({ platform: "bilibili", name: "原始输入测试", uid: "original-source-input" });
+    const originalSourceInput = "第一段素材，保留这里的原始排版。\n\n\n第二段素材，前面有三个换行。";
+    const prepared = await prepareWriteCopyContext({
+      styleRefs: [{ targetType: "account", platform: account.platform, accountId: account.id }],
+      mode: "rewrite",
+      prompt: "按风格改写",
+      originalSourceInput,
+      sourceText: originalSourceInput
+    });
+
+    assert.ok(prepared.draftBase);
+    assert.equal(prepared.draftBase.originalSourceInput, originalSourceInput);
+    assert.equal(prepared.draftBase.input, originalSourceInput);
+
+    const saved = await saveDraft({ ...prepared.draftBase, content: "测试成稿" });
+    assert.equal((await resolveDraft(saved.id)).draft.originalSourceInput, originalSourceInput);
+  });
+});
+
+test("纯文字素材保留段落、空格和缩进，不按空行拆分", () => {
+  const source = "第一段保留  双空格。\n\n第二段保留换行。\n  这里还有缩进。";
+  const extracted = extractRewriteSourceMaterial(source);
+
+  assert.equal(extracted.materials.length, 1);
+  assert.equal(extracted.materials[0].text, source);
+  assert.equal(extracted.normalizedText, source);
+  assert.equal(extracted.linkCount, 0);
+  assert.equal(extracted.pendingLinkCount, 0);
+  assert.equal(extracted.textMaterialCount, 1);
+});
+
+test("本地文件素材保留文件正文排版", () => {
+  const source = "===== 本地文件：口播稿.txt =====\n第一行  保留双空格\n\n  第二段保留缩进\n===== 文件结束 =====";
+  const extracted = extractRewriteSourceMaterial(source);
+
+  assert.equal(extracted.materials.length, 1);
+  assert.equal(extracted.materials[0].text, source);
+  assert.equal(extracted.normalizedText, source);
+  assert.equal(extracted.linkCount, 0);
+});
+
+test("单个视频分享中的多段说明保持为一项素材", () => {
+  const source = "这是分享说明。\n\nhttps://v.douyin.com/abc123/\n\n这是补充说明。";
+  const extracted = extractRewriteSourceMaterial(source);
+
+  assert.equal(extracted.materials.length, 1);
+  assert.equal(extracted.linkCount, 1);
+  assert.match(extracted.materials[0].text, /这是分享说明。\n\n这是补充说明。/);
+});
+
+test("多个视频分享按链接边界拆成独立素材", () => {
+  const source = [
+    "第一条分享说明。\nhttps://v.douyin.com/abc123/",
+    "第二条分享说明。\nhttps://v.douyin.com/xyz456/"
+  ].join("\n\n");
+  const extracted = extractRewriteSourceMaterial(source);
+
+  assert.equal(extracted.materials.length, 2);
+  assert.equal(extracted.linkCount, 2);
+  assert.equal(extracted.materials[0].text, "第一条分享说明。");
+  assert.equal(extracted.materials[1].text, "第二条分享说明。");
+});
+
+test("多个视频分享只隔一个换行时也会拆成独立素材", () => {
+  const source = [
+    "第一条分享说明。 https://v.douyin.com/abc123/",
+    "第二条分享说明。 https://v.douyin.com/xyz456/"
+  ].join("\n");
+  const extracted = extractRewriteSourceMaterial(source);
+
+  assert.equal(extracted.materials.length, 2);
+  assert.equal(extracted.linkCount, 2);
+  assert.equal(extracted.materials[0].text, "第一条分享说明。");
+  assert.equal(extracted.materials[1].text, "第二条分享说明。");
+});
+
+test("支持文档链接分流时不压缩纯文字排版", () => {
+  const source = "第一段保留  双空格。\n\n  第二段保留缩进。\n\nhttps://example.com/reference";
+  const separated = splitWriterSourceInput(source);
+
+  assert.equal(separated.sourceText, "第一段保留  双空格。\n\n  第二段保留缩进。");
+  assert.equal(separated.supportDocLinks, "https://example.com/reference");
+  assert.equal(separated.supportDocumentCount, 1);
+});
+
+test("旧写作历史恢复时会移除内部素材包装", () => {
+  assert.equal(restoreWriterSourceInput({
+    sourceText: "素材 1：\n第一段原文\n\n---\n\n素材 2：\n第二段原文",
+    supportDocLinks: "https://example.com/support"
+  }), "第一段原文\n\n第二段原文\n\nhttps://example.com/support");
+
+  assert.equal(restoreWriterSourceInput({
+    originalSourceInput: "原始输入\n\n\n保留三个换行",
+    sourceText: "素材 1：\n处理后输入"
+  }), "原始输入\n\n\n保留三个换行");
 });
 
 test("视频刷新会修复失效转写状态", async () => {

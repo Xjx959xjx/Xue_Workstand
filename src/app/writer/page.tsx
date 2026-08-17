@@ -56,12 +56,22 @@ import {
   extractRewriteSourceMaterial,
   mergeWriterSourceInput,
   normalizeRewritePrompt,
+  restoreWriterSourceInput,
   splitWriterSourceInput
 } from "@/lib/source-extraction";
 import { appendWriterSourceFiles, countWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
-import type { Draft, DraftSummary, WriteRevisionScope, WriteStyleReferenceInput } from "@/lib/types";
+import type {
+  AccountListItem,
+  Draft,
+  DraftSummary,
+  ProjectListItem,
+  WriteRevisionScope,
+  WriteStyleReferenceInput
+} from "@/lib/types";
 
 const WRITER_SESSION_DRAFT_KEY = "writer-mobile-session-draft-v1";
+const EMPTY_ACCOUNTS: AccountListItem[] = [];
+const EMPTY_PROJECTS: ProjectListItem[] = [];
 
 export default function WriterPage() {
   return (
@@ -170,12 +180,12 @@ function WriterPageContent() {
 
   const selectedStyleRefs = useMemo(() => {
     const availableKeys = new Set([
-      ...(library?.accounts || []).map((account) => writeStyleReferenceKey({
+      ...(library?.accounts || EMPTY_ACCOUNTS).map((account) => writeStyleReferenceKey({
         targetType: "account" as const,
         platform: account.platform,
         accountId: account.id
       })),
-      ...(library?.projects || []).map((project) => writeStyleReferenceKey({
+      ...(library?.projects || EMPTY_PROJECTS).map((project) => writeStyleReferenceKey({
         targetType: "project" as const,
         projectId: project.id
       }))
@@ -208,8 +218,8 @@ function WriterPageContent() {
   );
 
   const { activeStyle, activeStyleLoading, activeSubtitle, activeTitle, styleCards } = useWriterReferenceDetails({
-    accounts: library?.accounts || [],
-    projects: library?.projects || [],
+    accounts: library?.accounts || EMPTY_ACCOUNTS,
+    projects: library?.projects || EMPTY_PROJECTS,
     references: selectedStyleRefs,
     setNotice
   });
@@ -260,6 +270,7 @@ function WriterPageContent() {
     mode: effectiveMode,
     normalizedPrompt,
     normalizedSourceText,
+    originalSourceInput: sourceText,
     supportDocLinks: separatedSourceInput.supportDocLinks,
     recentJobs,
     revisionInstruction,
@@ -407,7 +418,11 @@ function WriterPageContent() {
   const applyLoadedDraft = useCallback((draft: Draft) => {
     setStyleRefs(draftWriteStyleReferenceInputs(draft));
     setPrompt(draft.prompt);
-    setSourceText(mergeWriterSourceInput(draft.input, draft.supportDocLinks));
+    setSourceText(restoreWriterSourceInput({
+      originalSourceInput: draft.originalSourceInput,
+      sourceText: draft.input,
+      supportDocLinks: draft.supportDocLinks
+    }));
     setUseWebResearch(Boolean(draft.sourceDigest?.webResearchEnabled) && webResearchAvailable);
     setRevisionInstruction("");
     setRevisionScope("full");
@@ -662,10 +677,10 @@ function WriterPageContent() {
             <div className="writer-reference-control">
               <span>参考风格</span>
               <WriterReferencePicker
-                accounts={library?.accounts || []}
+                accounts={library?.accounts || EMPTY_ACCOUNTS}
                 disabled={loading}
                 onChange={setStyleRefs}
-                projects={library?.projects || []}
+                projects={library?.projects || EMPTY_PROJECTS}
                 references={selectedStyleRefs}
               />
             </div>
@@ -682,7 +697,7 @@ function WriterPageContent() {
                 </small>
               </span>
               <button
-                aria-label={`查看${activeTitle || "当前参考"}风格卡`}
+                aria-label={styleCards.length > 1 ? `查看${activeTitle}` : `查看${activeTitle || "当前参考"}风格卡`}
                 className="btn ghost icon-only writer-style-trigger"
                 disabled={activeStyleLoading || !activeStyle}
                 onClick={() => setStyleOpen(true)}

@@ -26,6 +26,7 @@ import {
   TranscriptVersion,
   Video,
   VideoListItem,
+  WriteStyleReference,
   platforms
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
@@ -34,7 +35,9 @@ import { libraryRoot, normalizeStorageSegment, toLibraryRelativePath } from "./s
 import { ensureDouyinHotlistDirs } from "./storage/douyin-hotlist";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
 import { parseStoredRecord, storedRecordKind, versionStoredRecord } from "./storage/schemas";
+import { runRecoverableLibraryMutation } from "./storage/transactions";
 export { libraryRoot } from "./storage/core";
+export { listLibraryTrashOperations, restoreLibraryTrashOperation } from "./storage/transactions";
 export {
   appendGrossMarginPlaySample,
   deleteGrossMarginCategories,
@@ -48,6 +51,7 @@ export {
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
   saveGrossMarginReviewTemplate,
+  updateGrossMarginMonitorRecord,
   upsertGrossMarginCategory,
   upsertGrossMarginMonitorRecord,
   upsertGrossMarginTier
@@ -541,6 +545,7 @@ export async function deleteAccounts(accountIds: string[]) {
   await ensureLibrary();
   const uniqueIds = [...new Set(accountIds)].filter(Boolean);
   const deleted: string[] = [];
+  const targets: string[] = [];
 
   for (const accountId of uniqueIds) {
     const [platform, slug] = accountId.split(":") as [Platform, string];
@@ -548,15 +553,24 @@ export async function deleteAccounts(accountIds: string[]) {
     const normalizedSlug = normalizeAccountSlug(slug);
     const target = accountPath(platform, normalizedSlug);
     if (!(await exists(target))) continue;
-    await fs.rm(target, { recursive: true, force: true });
+    targets.push(target);
     deleted.push(`${platform}:${normalizedSlug}`);
   }
 
-  if (deleted.length) {
-    await removeDeletedAccountsFromProjects(deleted);
-  }
+  if (!deleted.length) return { deleted };
+  const backupTargets = await collectProjectAndDraftJsonPaths();
+  const transaction = await runRecoverableLibraryMutation({
+    kind: "delete-accounts",
+    targets,
+    backupTargets,
+    run: async () => {
+      await removeDeletedAccountsFromProjects(deleted);
+      await updateAllDraftStyleRefs((styleRefs) => removeDeletedAccountsFromStyleRefs(styleRefs, new Set(deleted)));
+      return deleted;
+    }
+  });
 
-  return { deleted };
+  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
 export async function upsertProject(input: {
@@ -608,20 +622,33 @@ export async function deleteProjects(projectIds: string[]) {
   await ensureLibrary();
   const uniqueIds = [...new Set(projectIds)].filter(Boolean);
   const deleted: string[] = [];
+  const targets: string[] = [];
 
   for (const projectId of uniqueIds) {
     const slug = normalizeProjectSlug(projectId);
     const target = projectPath(slug);
     if (!(await exists(target))) continue;
-    await fs.rm(target, { recursive: true, force: true });
+    targets.push(target);
     deleted.push(`project:${slug}`);
   }
 
-  if (deleted.length) {
-    await removeCopySourceProjectRefs(deleted);
-  }
+  if (!deleted.length) return { deleted };
+  const backupTargets = [
+    ...(await collectCopySourceJsonPaths()),
+    ...(await collectAllDraftJsonPaths())
+  ];
+  const transaction = await runRecoverableLibraryMutation({
+    kind: "delete-projects",
+    targets,
+    backupTargets,
+    run: async () => {
+      await removeCopySourceProjectRefs(deleted);
+      await updateAllDraftStyleRefs((styleRefs) => removeDeletedProjectsFromStyleRefs(styleRefs, new Set(deleted)));
+      return deleted;
+    }
+  });
 
-  return { deleted };
+  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
 export async function saveCopySource(input: {
@@ -742,6 +769,7 @@ export async function deleteCopySources(sourceIds: string[]) {
   await ensureLibrary();
   const uniqueIds = [...new Set(sourceIds)].filter(Boolean).map(normalizeCopySourceId);
   const deleted: string[] = [];
+  const targets: string[] = [];
 
   for (const sourceId of uniqueIds) {
     const jsonFile = copySourceJsonPath(sourceId);
@@ -751,19 +779,24 @@ export async function deleteCopySources(sourceIds: string[]) {
     const hasTranscript = await exists(transcriptFile);
     const hasStyleAnalysis = await exists(styleAnalysisFile);
     if (!hasJson && !hasTranscript && !hasStyleAnalysis) continue;
-    await Promise.all([
-      fs.rm(jsonFile, { force: true }),
-      fs.rm(transcriptFile, { force: true }),
-      fs.rm(styleAnalysisFile, { force: true })
-    ]);
+    targets.push(jsonFile, transcriptFile, styleAnalysisFile);
     deleted.push(sourceId);
   }
 
-  if (deleted.length) {
-    await removeCopySourcesFromProjects(deleted);
-  }
+  if (!deleted.length) return { deleted };
+  const backupTargets = await collectProjectAndDraftJsonPaths();
+  const transaction = await runRecoverableLibraryMutation({
+    kind: "delete-copy-sources",
+    targets,
+    backupTargets,
+    run: async () => {
+      await removeCopySourcesFromProjects(deleted);
+      await updateAllDraftStyleRefs((styleRefs) => removeDeletedMaterialsFromStyleRefs(styleRefs, new Set(deleted)));
+      return deleted;
+    }
+  });
 
-  return { deleted };
+  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
 export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | "createdAt" | "updatedAt">) {
@@ -863,15 +896,22 @@ export async function deleteEngagementRecords(recordIds: string[]) {
   await ensureLibrary();
   const uniqueIds = [...new Set(recordIds)].filter(Boolean).map(normalizeEngagementRecordId);
   const deleted: string[] = [];
+  const targets: string[] = [];
 
   for (const recordId of uniqueIds) {
     const target = engagementRecordJsonPath(recordId);
     if (!(await exists(target))) continue;
-    await fs.rm(target, { force: true });
+    targets.push(target);
     deleted.push(recordId);
   }
 
-  return { deleted };
+  if (!deleted.length) return { deleted };
+  const transaction = await runRecoverableLibraryMutation({
+    kind: "delete-engagement-records",
+    targets,
+    run: async () => deleted
+  });
+  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
 export async function saveVideos(account: Account, incoming: Video[]) {
@@ -1208,53 +1248,83 @@ export async function deleteVideos(platform: Platform, accountId: string, videoI
   const account = await resolveAccount(platform, accountId);
   const uniqueIds = [...new Set(videoIds)].filter(Boolean);
   const deleted: string[] = [];
+  const targets: string[] = [];
 
   for (const videoId of uniqueIds) {
     const normalizedVideoId = normalizeVideoId(videoId);
-    const lockKey = `${account.platform}:${account.slug}:${normalizedVideoId}`;
-    const didDelete = await withVideoMutationLock(lockKey, async () => {
-      const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
-      if (!(await exists(videoFile))) return false;
-
-      await Promise.all([
-        fs.rm(videoFile, { force: true }),
-        fs.rm(path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`), { force: true }),
-        fs.rm(transcriptHistoryPath(account.platform, account.slug, normalizedVideoId), { recursive: true, force: true }),
-        fs.rm(accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId), { force: true })
-      ]);
-      return true;
-    });
-    if (didDelete) deleted.push(normalizedVideoId);
-  }
-
-  if (deleted.length) {
-    const draftFiles = await readDirNamesIfExists(draftsPath(account.platform, account.slug));
-    await Promise.all(
-      draftFiles
-        .filter((file) => file.endsWith(".json"))
-        .map(async (file) => {
-          const target = path.join(draftsPath(account.platform, account.slug), file);
-          const draft = await readJson<Draft>(target);
-          if (!draft || draft.targetType === "project") return;
-          const currentVideoIds = draft.styleRef.videoIds;
-          if (!currentVideoIds?.length) return;
-
-          const nextVideoIds = currentVideoIds.filter((videoId: string) => !deleted.includes(videoId));
-          if (nextVideoIds.length === currentVideoIds.length) return;
-
-          await writeJson(target, {
-            ...draft,
-            styleRef: {
-              ...draft.styleRef,
-              videoIds: nextVideoIds.length ? nextVideoIds : undefined
-            },
-            updatedAt: nowIso()
-          });
-        })
+    const videoFile = path.join(videosPath(account.platform, account.slug), `${normalizedVideoId}.json`);
+    if (!(await exists(videoFile))) continue;
+    targets.push(
+      videoFile,
+      path.join(transcriptsPath(account.platform, account.slug), `${normalizedVideoId}.txt`),
+      transcriptHistoryPath(account.platform, account.slug, normalizedVideoId),
+      accountStyleSampleAnalysisPath(account.platform, account.slug, normalizedVideoId)
     );
+    deleted.push(normalizedVideoId);
   }
 
-  return { account, deleted };
+  if (!deleted.length) return { account, deleted };
+  const backupTargets = await collectAllDraftJsonPaths();
+  const lockKeys = deleted
+    .map((videoId) => `${account.platform}:${account.slug}:${videoId}`)
+    .sort();
+  const transaction = await withVideoMutationLocks(lockKeys, () => runRecoverableLibraryMutation({
+    kind: "delete-videos",
+    targets,
+    backupTargets,
+    run: async () => {
+      const draftFiles = await readDirNamesIfExists(draftsPath(account.platform, account.slug));
+      await Promise.all(
+        draftFiles
+          .filter((file) => file.endsWith(".json"))
+          .map(async (file) => {
+            const target = path.join(draftsPath(account.platform, account.slug), file);
+            const draft = await readJson<Draft>(target);
+            if (!draft || draft.targetType === "project") return;
+            const currentVideoIds = draft.styleRef.videoIds;
+            if (!currentVideoIds?.length) return;
+
+            const nextVideoIds = currentVideoIds.filter((videoId: string) => !deleted.includes(videoId));
+            if (nextVideoIds.length === currentVideoIds.length) return;
+
+            await writeJson(target, {
+              ...draft,
+              styleRef: {
+                ...draft.styleRef,
+                videoIds: nextVideoIds.length ? nextVideoIds : undefined
+              },
+              updatedAt: nowIso()
+            });
+          })
+      );
+      const deletedSet = new Set(deleted);
+      await updateAllDraftStyleRefs((styleRefs) => {
+        let changed = false;
+        const next = styleRefs.map((reference) => {
+          if (
+            reference.targetType !== "account"
+            || reference.platform !== account.platform
+            || reference.accountId !== account.id
+            || !reference.videoIds?.length
+          ) return reference;
+          const videoIds = reference.videoIds.filter((videoId) => !deletedSet.has(videoId));
+          if (videoIds.length === reference.videoIds.length) return reference;
+          changed = true;
+          return { ...reference, videoIds: videoIds.length ? videoIds : undefined };
+        });
+        return changed ? next : null;
+      });
+      return deleted;
+    }
+  }));
+
+  return { account, deleted: transaction.result, trashOperationId: transaction.operation.id };
+}
+
+async function withVideoMutationLocks<T>(keys: string[], run: () => Promise<T>): Promise<T> {
+  const [key, ...remaining] = keys;
+  if (!key) return run();
+  return withVideoMutationLock(key, () => withVideoMutationLocks(remaining, run));
 }
 
 export async function saveStyle(platform: Platform, accountId: string, content: string) {
@@ -1430,19 +1500,22 @@ export async function deleteDrafts(draftIds: string[]) {
   await ensureLibrary();
   const uniqueIds = [...new Set(draftIds)].filter(Boolean).map(normalizeDraftId);
   const deleted: string[] = [];
+  const targets: string[] = [];
 
   for (const draftId of uniqueIds) {
     const resolved = await resolveDraft(draftId).catch(() => null);
     if (!resolved) continue;
-    const assetBase = getDraftAssetBase(resolved.draft);
-    await Promise.all([
-      fs.rm(resolved.file, { force: true }),
-      fs.rm(assetBase, { recursive: true, force: true })
-    ]);
+    targets.push(resolved.file, getDraftAssetBase(resolved.draft));
     deleted.push(draftId);
   }
 
-  return { deleted };
+  if (!deleted.length) return { deleted };
+  const transaction = await runRecoverableLibraryMutation({
+    kind: "delete-drafts",
+    targets,
+    run: async () => deleted
+  });
+  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
 export async function ensureDraftAssetDir(draftId: string, kind = "") {
@@ -2105,6 +2178,96 @@ function filterRemovedIds(ids: string[] | undefined, deleted: Set<string>) {
   if (!ids?.length) return null;
   const nextIds = ids.filter((id) => !deleted.has(id));
   return nextIds.length === ids.length ? null : nextIds;
+}
+
+function removeDeletedAccountsFromStyleRefs(styleRefs: WriteStyleReference[], deleted: Set<string>) {
+  let changed = false;
+  const next = styleRefs.flatMap((reference): WriteStyleReference[] => {
+    if (reference.targetType === "account") {
+      if (!deleted.has(reference.accountId)) return [reference];
+      changed = true;
+      return [];
+    }
+    const sourceAccountIds = reference.sourceAccountIds?.filter((accountId) => !deleted.has(accountId));
+    if (!reference.sourceAccountIds || sourceAccountIds?.length === reference.sourceAccountIds.length) return [reference];
+    changed = true;
+    return [{ ...reference, sourceAccountIds: sourceAccountIds?.length ? sourceAccountIds : undefined }];
+  });
+  return changed ? next : null;
+}
+
+function removeDeletedProjectsFromStyleRefs(styleRefs: WriteStyleReference[], deleted: Set<string>) {
+  const next = styleRefs.filter((reference) => reference.targetType !== "project" || !deleted.has(reference.projectId));
+  return next.length === styleRefs.length ? null : next;
+}
+
+function removeDeletedMaterialsFromStyleRefs(styleRefs: WriteStyleReference[], deleted: Set<string>) {
+  let changed = false;
+  const next = styleRefs.map((reference) => {
+    if (reference.targetType !== "project" || !reference.sourceMaterialIds?.length) return reference;
+    const sourceMaterialIds = reference.sourceMaterialIds.filter((sourceId) => !deleted.has(sourceId));
+    if (sourceMaterialIds.length === reference.sourceMaterialIds.length) return reference;
+    changed = true;
+    return { ...reference, sourceMaterialIds: sourceMaterialIds.length ? sourceMaterialIds : undefined };
+  });
+  return changed ? next : null;
+}
+
+async function updateAllDraftStyleRefs(
+  update: (styleRefs: WriteStyleReference[]) => WriteStyleReference[] | null
+) {
+  const targets = await collectAllDraftJsonPaths();
+
+  await Promise.all(targets.map(async (target) => {
+    const draft = await readJson<Draft>(target);
+    if (!draft?.styleRefs?.length) return;
+    const styleRefs = update(draft.styleRefs);
+    if (!styleRefs) return;
+    await writeJson(target, {
+      ...draft,
+      styleRefs: styleRefs.length ? styleRefs : undefined,
+      updatedAt: nowIso()
+    });
+  }));
+}
+
+async function collectAllDraftJsonPaths() {
+  const targets: string[] = [];
+  for (const platform of platforms) {
+    const accounts = await readDirEntriesIfExists(platformPath(platform));
+    for (const account of accounts) {
+      if (!account.isDirectory()) continue;
+      const files = await readDirNamesIfExists(draftsPath(platform, account.name));
+      targets.push(...files.filter((file) => file.endsWith(".json")).map((file) => path.join(draftsPath(platform, account.name), file)));
+    }
+  }
+  const projects = await readDirEntriesIfExists(projectsPath());
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const files = await readDirNamesIfExists(projectDraftsPath(project.name));
+    targets.push(...files.filter((file) => file.endsWith(".json")).map((file) => path.join(projectDraftsPath(project.name), file)));
+  }
+  return targets;
+}
+
+async function collectProjectJsonPaths() {
+  const projects = await readDirEntriesIfExists(projectsPath());
+  return projects
+    .filter((project) => project.isDirectory())
+    .map((project) => projectJsonPath(project.name));
+}
+
+async function collectCopySourceJsonPaths() {
+  return (await readDirNamesIfExists(copySourcesPath()))
+    .filter((file) => file.endsWith(".json") && !file.endsWith(".style-analysis.json"))
+    .map((file) => path.join(copySourcesPath(), file));
+}
+
+async function collectProjectAndDraftJsonPaths() {
+  return [
+    ...(await collectProjectJsonPaths()),
+    ...(await collectAllDraftJsonPaths())
+  ];
 }
 
 async function updateProjectDraftRefs(

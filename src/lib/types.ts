@@ -406,6 +406,7 @@ type DraftBase = {
   title: string;
   mode: "topic" | "rewrite";
   prompt: string;
+  originalSourceInput?: string;
   input?: string;
   supportDocLinks?: string;
   brief?: string;
@@ -757,6 +758,7 @@ export type GrossMarginMonitorPlaySample = {
 
 export type GrossMarginMonitorRecord = {
   id: string;
+  revision?: number;
   platform: GrossMarginPriceTable["platform"];
   accountName: string;
   projectId?: string;
@@ -1191,6 +1193,8 @@ export type JobRecord = {
   events?: JobEvent[];
   dataRevision?: number;
   dataChange?: JobDataChange;
+  attempt?: number;
+  resumedAt?: string;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -1200,6 +1204,35 @@ export type JobRecord = {
 export type JobListItem = Omit<JobRecord, "partialText" | "result"> & {
   hasPartialText?: boolean;
   hasResult?: boolean;
+};
+
+export type JobListResponse = {
+  jobs: JobListItem[];
+  removedJobIds: string[];
+  cursor: string;
+  reset: boolean;
+};
+
+export type LibraryTrashOperationStatus = "prepared" | "committed" | "rolled_back" | "restored" | "rollback_failed";
+
+export type LibraryTrashOperation = {
+  version: 1;
+  id: string;
+  kind: string;
+  status: LibraryTrashOperationStatus;
+  targets: Array<{
+    path: string;
+    kind: "file" | "directory";
+  }>;
+  backups: Array<{
+    path: string;
+    beforeHash: string;
+    afterHash?: string | null;
+  }>;
+  createdAt: string;
+  completedAt?: string;
+  restoredAt?: string;
+  error?: string;
 };
 
 export type JobStartInput =
@@ -1217,6 +1250,7 @@ export type JobStartInput =
         styleRefs?: WriteStyleReferenceInput[];
         mode: Draft["mode"];
         prompt: string;
+        originalSourceInput?: string;
         sourceText?: string;
         supportDocLinks?: string;
         save?: boolean;

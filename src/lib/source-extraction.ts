@@ -1,6 +1,6 @@
 import { extractLinksFromInput, isVideoLink, type ExtractedLinkInput } from "./platform-links";
 
-export const DEFAULT_REWRITE_PROMPT = "按当前选中的账号/项目风格改写，保留素材核心信息和话题角度。";
+export const DEFAULT_REWRITE_PROMPT = "按当前所选参考风格改写，保留素材核心信息和话题角度。";
 
 export type SourceMaterial = {
   index: number;
@@ -39,11 +39,12 @@ export function extractRewriteSourceMaterial(input: string): RewriteSourceExtrac
   const rawBlocks = splitSourceBlocks(input);
   const materials = rawBlocks
     .map((block, index) => {
-      const urls = isLocalFileBlock(block) ? [] : extractSourceUrls(block);
+      const localFile = isLocalFileBlock(block);
+      const urls = localFile ? [] : extractSourceUrls(block);
       return {
         index: index + 1,
         raw: block,
-        text: cleanShareText(block, urls),
+        text: localFile || !urls.length ? block.trim() : cleanShareText(block, urls),
         urls
       } satisfies SourceMaterial;
     })
@@ -106,6 +107,28 @@ export function mergeWriterSourceInput(sourceText?: string, supportDocLinks?: st
   return [sourceText?.trim(), supportDocLinks?.trim()].filter(Boolean).join("\n\n");
 }
 
+export function restoreWriterSourceInput(input: {
+  originalSourceInput?: string;
+  sourceText?: string;
+  supportDocLinks?: string;
+}) {
+  if (input.originalSourceInput !== undefined) return input.originalSourceInput;
+  return mergeWriterSourceInput(unwrapLegacyNormalizedSourceText(input.sourceText), input.supportDocLinks);
+}
+
+function unwrapLegacyNormalizedSourceText(sourceText?: string) {
+  const trimmed = sourceText?.trim() || "";
+  if (!/^素材\s*\d+\s*[：:]/.test(trimmed)) return sourceText;
+
+  const blocks = trimmed.split(/\n\s*---\s*\n(?=素材\s*\d+\s*[：:])/);
+  if (!blocks.length || blocks.some((block) => !/^素材\s*\d+\s*[：:]/.test(block))) return sourceText;
+
+  return blocks
+    .map((block) => block.replace(/^素材\s*\d+\s*[：:]\s*/, "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export function normalizeRewritePrompt(mode: "topic" | "rewrite", prompt: string | undefined, sourceText: string | undefined) {
   const trimmedPrompt = (prompt || "").trim();
   if (trimmedPrompt || mode === "topic") return trimmedPrompt;
@@ -134,11 +157,57 @@ function splitSourceBlocks(input: string) {
 }
 
 function splitPlainSourceBlocks(input: string) {
-  return input
-    .trim()
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+
+  const linkCount = extractSourceUrls(trimmed).length;
+  if (linkCount <= 1) return [trimmed];
+
+  const paragraphs = trimmed
     .split(/\n\s*\n+/)
     .map((block) => block.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .flatMap(splitMultiLinkParagraph);
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let currentHasLink = false;
+
+  for (const paragraph of paragraphs) {
+    const paragraphHasLink = extractSourceUrls(paragraph).length > 0;
+    if (paragraphHasLink && currentHasLink) {
+      blocks.push(current.join("\n\n"));
+      current = [];
+      currentHasLink = false;
+    }
+    current.push(paragraph);
+    currentHasLink ||= paragraphHasLink;
+  }
+
+  if (current.length) blocks.push(current.join("\n\n"));
+  return blocks;
+}
+
+function splitMultiLinkParagraph(paragraph: string) {
+  const lines = paragraph.split("\n");
+  if (lines.length <= 1 || extractSourceUrls(paragraph).length <= 1) return [paragraph];
+
+  const blocks: string[] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    current.push(line);
+    if (!extractSourceUrls(line).length) continue;
+    blocks.push(current.join("\n").trim());
+    current = [];
+  }
+
+  const trailingText = current.join("\n").trim();
+  if (trailingText && blocks.length) {
+    blocks[blocks.length - 1] = `${blocks[blocks.length - 1]}\n${trailingText}`;
+  } else if (trailingText) {
+    blocks.push(trailingText);
+  }
+
+  return blocks.filter(Boolean);
 }
 
 function getLocalFileBlockRanges(input: string) {
@@ -178,11 +247,13 @@ function cleanShareText(block: string, urls: string[]) {
     .replace(/复制(?:本条|这条)?(?:消息|链接).*?打开(?:抖音|Dou音|Douyin).*?$/gim, " ")
     .replace(/打开(?:抖音|Dou音|Douyin)(?:搜索)?.*?(?:观看视频|看视频)[！!。]?/gi, " ")
     .replace(/长按复制此条消息.*$/gim, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   text = stripDouyinSharePrefix(text);
-  return text.replace(/\s+/g, " ").trim();
+  return text.trim();
 }
 
 function stripDouyinSharePrefix(input: string) {
@@ -225,8 +296,6 @@ function removeLinksFromSourceInput(input: string, links: ExtractedLinkInput[]) 
 
   return sourceText
     .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n[ \t]+\n/g, "\n\n")
     .trim();
 }

@@ -70,6 +70,7 @@ const draftBaseSchema = versionedObject.extend({
   title: z.string().min(1),
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string(),
+  originalSourceInput: z.string().optional(),
   content: z.string(),
   styleRef: z.record(z.unknown()),
   styleRefs: z.array(draftStyleReferenceSchema).min(1).optional(),

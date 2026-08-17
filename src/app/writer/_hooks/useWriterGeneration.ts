@@ -30,6 +30,7 @@ type UseWriterGenerationInput = {
   mode: Draft["mode"];
   normalizedPrompt: string;
   normalizedSourceText: string;
+  originalSourceInput: string;
   supportDocLinks: string;
   recentJobs: JobRecord[];
   revisionInstruction: string;
@@ -59,6 +60,7 @@ export function useWriterGeneration({
   mode,
   normalizedPrompt,
   normalizedSourceText,
+  originalSourceInput,
   supportDocLinks,
   recentJobs,
   revisionInstruction,
@@ -254,6 +256,7 @@ export function useWriterGeneration({
           styleRefs,
           mode,
           prompt: normalizedPrompt,
+          originalSourceInput,
           sourceText: normalizedSourceText,
           supportDocLinks: supportDocLinks.trim() || undefined,
           save: true,
@@ -278,6 +281,7 @@ export function useWriterGeneration({
     mode,
     normalizedPrompt,
     normalizedSourceText,
+    originalSourceInput,
     selectedAccount,
     selectedProject,
     styleRefs,
@@ -475,6 +479,7 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
     title: draft.title,
     mode: draft.mode,
     prompt: draft.prompt,
+    originalSourceInput: draft.originalSourceInput,
     input: draft.input,
     supportDocLinks: draft.supportDocLinks,
     brief: draft.brief,

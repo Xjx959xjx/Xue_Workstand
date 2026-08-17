@@ -7,10 +7,9 @@ import {
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
   resetGrossMarginReviewTemplate,
-  resolveGrossMarginMonitorRecord,
-  saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
   saveGrossMarginReviewTemplate,
+  updateGrossMarginMonitorRecord,
   upsertGrossMarginMonitorRecord
 } from "@/lib/storage";
 import type {
@@ -226,32 +225,32 @@ async function bulkSaveMonitorRecordsFromInput(input: z.infer<typeof mutationSch
 }
 
 async function updateMonitorPlayTarget(recordId: string, target: number) {
-  const record = await resolveGrossMarginMonitorRecord(recordId);
-  return saveGrossMarginMonitorRecord({
+  return updateGrossMarginMonitorRecord(recordId, (record) => ({
     ...record,
     targetStats: {
       ...record.targetStats,
       play: Math.round(target)
     },
     updatedAt: new Date().toISOString()
-  });
+  }));
 }
 
 async function updateMonitorPlayCurrent(recordId: string, current: number) {
-  const record = await resolveGrossMarginMonitorRecord(recordId);
-  if (record.platform !== "douyin") {
-    throw new Error("只有抖音监控需要手动填写当前播放量。");
-  }
-  const updatedAt = new Date().toISOString();
-  const roundedCurrent = Math.round(current);
-  return saveGrossMarginMonitorRecord({
-    ...record,
-    currentStats: {
-      ...(record.currentStats || {}),
-      play: roundedCurrent
-    },
-    playSamples: appendGrossMarginPlaySample(record.playSamples, roundedCurrent, updatedAt, "manual"),
-    updatedAt
+  return updateGrossMarginMonitorRecord(recordId, (record) => {
+    if (record.platform !== "douyin") {
+      throw new Error("只有抖音监控需要手动填写当前播放量。");
+    }
+    const updatedAt = new Date().toISOString();
+    const roundedCurrent = Math.round(current);
+    return {
+      ...record,
+      currentStats: {
+        ...(record.currentStats || {}),
+        play: roundedCurrent
+      },
+      playSamples: appendGrossMarginPlaySample(record.playSamples, roundedCurrent, updatedAt, "manual"),
+      updatedAt
+    };
   });
 }
 

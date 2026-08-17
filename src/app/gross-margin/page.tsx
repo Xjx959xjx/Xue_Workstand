@@ -17,6 +17,24 @@ import {
   renderGrossMarginReviewTemplate,
   type GrossMarginReviewTemplateValues
 } from "@/lib/gross-margin-template";
+import {
+  GROSS_MARGIN_SERVICE_CONFIGS,
+  calculateGrossMargin,
+  formatAmountInput,
+  formatThreshold,
+  getAbsoluteServiceQuantity,
+  getActiveServiceOptions,
+  getMinimumQuantityWarning,
+  getSelectedOption,
+  getSplitRoundStep,
+  makeDefaultSelections,
+  makeEmptyQuantityInputs,
+  makePriceInputs,
+  roundUpToStep,
+  toAbsoluteMetricValue,
+  toAmount,
+  type GrossMarginServiceConfig
+} from "@/lib/gross-margin-calculator";
 import { detectVideoPlatform, normalizeVideoUrlInput } from "@/lib/platform-links";
 import { GrossMarginBulkMonitorModal } from "./_components/GrossMarginBulkMonitorModal";
 import { GrossMarginImportModal, type GrossMarginImportedTemplate } from "./_components/GrossMarginImportModal";
@@ -35,28 +53,14 @@ import type {
 } from "@/lib/types";
 
 type PlatformKey = GrossMarginPriceTable["platform"];
-
-type ServiceConfig = {
-  service: GrossMarginServiceKind;
-  label: string;
-};
+type ServiceConfig = GrossMarginServiceConfig;
 
 const platformOptions: Array<{ value: PlatformKey; label: string }> = [
   { value: "douyin", label: "抖音" },
   { value: "bilibili", label: "B站" }
 ];
 
-const serviceConfigs: ServiceConfig[] = [
-  { service: "play", label: "播放" },
-  { service: "like", label: "点赞" },
-  { service: "favorite", label: "收藏" },
-  { service: "share", label: "转发" },
-  { service: "comment", label: "评论" },
-  { service: "danmaku", label: "弹幕" },
-  { service: "douPlus", label: "dou+" },
-  { service: "coin", label: "投币" },
-  { service: "blueLink", label: "蓝链点击" }
-];
+const serviceConfigs = GROSS_MARGIN_SERVICE_CONFIGS;
 
 const pricePanelServiceConfigs = serviceConfigs.filter((config) => config.service !== "douPlus");
 
@@ -893,77 +897,6 @@ function MetricItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function calculateGrossMargin({
-  configs,
-  discountPrice,
-  originalPrice,
-  priceInputs,
-  quantityInputs,
-  selectedOptions,
-  table
-}: {
-  configs: ServiceConfig[];
-  discountPrice: number;
-  originalPrice: number;
-  priceInputs: Record<string, string>;
-  quantityInputs: Record<GrossMarginServiceKind, string>;
-  selectedOptions: Partial<Record<GrossMarginServiceKind, string>>;
-  table: GrossMarginPriceTable | null;
-}): GrossMarginCalculationResult {
-  const lines: GrossMarginCalculationLine[] = configs.map((config) => {
-    const options = table ? getActiveServiceOptions(table, config.service) : [];
-    const option = getSelectedOption(options, selectedOptions[config.service]);
-    const unitPrice = option ? toAmount(priceInputs[option.id] ?? option.unitPrice) : 0;
-    const quantity = toAmount(quantityInputs[config.service]);
-    return {
-      service: config.service,
-      label: config.label,
-      optionId: option?.id || "",
-      optionName: option?.name || "",
-      quantity,
-      unitPrice,
-      quantityUnit: option?.quantityUnit || "个",
-      total: quantity * unitPrice
-    };
-  });
-  const maintenanceCost = lines.reduce((sum, line) => sum + line.total, 0);
-  const grossProfit = discountPrice - maintenanceCost;
-
-  return {
-    originalPrice,
-    discountPrice,
-    maintenanceCost,
-    grossProfit,
-    grossMarginRate: originalPrice > 0 ? grossProfit / originalPrice : 0,
-    discountRate: originalPrice > 0 ? discountPrice / originalPrice : 0,
-    lines
-  };
-}
-
-function makePriceInputs(table: GrossMarginPriceTable) {
-  return Object.fromEntries(table.items.map((item) => [item.id, String(item.unitPrice)]));
-}
-
-function makeEmptyQuantityInputs(): Record<GrossMarginServiceKind, string> {
-  return {
-    play: "",
-    like: "",
-    douPlus: "",
-    coin: "",
-    comment: "",
-    share: "",
-    favorite: "",
-    danmaku: "",
-    blueLink: ""
-  };
-}
-
-function makeDefaultSelections(table: GrossMarginPriceTable) {
-  return Object.fromEntries(
-    serviceConfigs.map((config) => [config.service, getActiveServiceOptions(table, config.service)[0]?.id || ""])
-  ) as Partial<Record<GrossMarginServiceKind, string>>;
-}
-
 function getPlatformReviewTemplate(
   library: GrossMarginLibrary | null,
   platform: GrossMarginPriceTable["platform"]
@@ -986,18 +919,6 @@ function normalizeTemplateText(value: string) {
 
 function countTemplateLines(value: string) {
   return value.split("\n").filter((line) => line.trim()).length;
-}
-
-function getServiceOptions(table: GrossMarginPriceTable, service: GrossMarginServiceKind) {
-  return table.items.filter((item) => item.service === service);
-}
-
-function getActiveServiceOptions(table: GrossMarginPriceTable, service: GrossMarginServiceKind) {
-  return getServiceOptions(table, service).filter((item) => item.active !== false);
-}
-
-function getSelectedOption(options: GrossMarginPriceOption[], selectedId?: string) {
-  return options.find((option) => option.id === selectedId) || options[0] || null;
 }
 
 function findImportedOption(options: GrossMarginPriceOption[], metric: GrossMarginImportedTemplate["metrics"][number]) {
@@ -1065,21 +986,6 @@ function normalizeAccountName(value: string) {
 
 function formatTypeOptionName(name: string) {
   return name.replace(/（[^）]*）/g, "").replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
-}
-
-function getMinimumQuantityWarning(option: GrossMarginPriceOption | null, rawQuantity: string, quantity: number) {
-  if (!option?.minimumQuantity) return "";
-  if (!rawQuantity.trim()) return "";
-  if (quantity >= option.minimumQuantity) return "";
-  return `未达起量，至少 ${formatThreshold(option.minimumQuantity)}${option.quantityUnit}`;
-}
-
-function formatThreshold(value: number) {
-  if (Number.isInteger(value)) return String(value);
-  return value.toLocaleString("zh-CN", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 6
-  });
 }
 
 function buildGrossMarginTemplateValues({
@@ -1186,12 +1092,6 @@ function formatSplitRoundMetricValue(line: GrossMarginCalculationLine | undefine
   return formatSplitRoundCount(line.service, roundedValue);
 }
 
-function toAbsoluteMetricValue(line: GrossMarginCalculationLine) {
-  if (line.quantityUnit === "万") return line.quantity * 10000;
-  if (line.quantityUnit === "千") return line.quantity * 1000;
-  return line.quantity;
-}
-
 function buildEngagementTarget(lines: GrossMarginCalculationLine[], videoUrl: string) {
   const params = new URLSearchParams();
   const commentCount = getAbsoluteServiceQuantity(lines, "comment");
@@ -1209,30 +1109,12 @@ function buildEngagementTarget(lines: GrossMarginCalculationLine[], videoUrl: st
   };
 }
 
-function getAbsoluteServiceQuantity(lines: GrossMarginCalculationLine[], service: GrossMarginServiceKind) {
-  const line = lines.find((item) => item.service === service);
-  if (!line || line.quantity <= 0) return 0;
-  return Math.max(1, Math.round(toAbsoluteMetricValue(line)));
-}
-
 function formatEngagementTargetCounts({ commentCount, danmakuCount }: { commentCount: number; danmakuCount: number }) {
   const parts = [
     commentCount > 0 ? `评论 ${formatReviewNumber(commentCount)}` : "评论",
     danmakuCount > 0 ? `弹幕 ${formatReviewNumber(danmakuCount)}` : "弹幕"
   ];
   return parts.join(" · ");
-}
-
-function getSplitRoundStep(service: GrossMarginServiceKind) {
-  if (service === "play") return 10000;
-  if (service === "like") return 1000;
-  if (service === "comment" || service === "favorite" || service === "share") return 10;
-  return 1;
-}
-
-function roundUpToStep(value: number, step: number) {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.ceil(value / step) * step;
 }
 
 function formatSplitRoundCount(service: GrossMarginServiceKind, value: number) {
@@ -1276,17 +1158,6 @@ function formatReviewMoney(value: number) {
 
 function formatReviewPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
-}
-
-function toAmount(value: string | number | undefined) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function formatAmountInput(value: number) {
-  if (!Number.isFinite(value)) return "";
-  if (Math.abs(value - Math.round(value)) < 0.000001) return String(Math.round(value));
-  return String(Number(value.toFixed(2)));
 }
 
 function formatMoney(value: number) {

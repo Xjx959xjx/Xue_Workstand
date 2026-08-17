@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { RefreshCw, WifiOff } from "lucide-react";
 import { getRemoteStatus } from "@/lib/client";
 import type { RemoteStatusResponse } from "@/lib/types";
+import { confirmDiscardUnsavedChanges } from "./UnsavedChangesGuard";
 
 type RemoteConnectionState = "checking" | "online" | "degraded" | "offline";
 
@@ -83,10 +84,8 @@ export function RemoteStatusProvider({
   );
 
   const reloadForUpdate = useCallback(() => {
-    if (document.querySelector('[data-unsaved-changes="true"]')) {
-      const confirmed = window.confirm("当前页面有未保存内容。刷新会丢失这些修改，仍要更新吗？");
-      if (!confirmed) return;
-    }
+    const confirmed = confirmDiscardUnsavedChanges("当前页面有未保存内容。刷新会丢失这些修改，仍要更新吗？");
+    if (!confirmed) return;
     window.location.reload();
   }, []);
 

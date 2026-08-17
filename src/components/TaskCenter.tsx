@@ -25,6 +25,7 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
   const [recentExpanded, setRecentExpanded] = useState(false);
   const [drawerPosition, setDrawerPosition] = useState<TaskDrawerPosition>();
   const [stoppingJobId, setStoppingJobId] = useState("");
+  const [retryingJobId, setRetryingJobId] = useState("");
   const activeJobs = tasks?.activeJobs ?? [];
   const activeJobIds = new Set(activeJobs.map((job) => job.id));
   const recentJobs = tasks?.jobs.filter((job) => !activeJobIds.has(job.id)) ?? [];
@@ -189,8 +190,19 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
                   } : undefined}
                   jobs={visibleRecentJobs}
                   onCancel={async () => undefined}
+                  onRetry={async (jobId) => {
+                    setRetryingJobId(jobId);
+                    try {
+                      await tasks.retryTask(jobId);
+                    } catch {
+                      // TaskProvider 会在任务中心展示可操作的错误信息。
+                    } finally {
+                      setRetryingJobId((current) => (current === jobId ? "" : current));
+                    }
+                  }}
                   onNavigate={() => setOpen(false)}
                   readOnly
+                  retryingJobId={retryingJobId}
                   stoppingJobId={stoppingJobId}
                   title="最近任务"
                   totalCount={recentJobs.length}
@@ -211,6 +223,8 @@ function TaskSection({
   jobs,
   onCancel,
   onNavigate,
+  onRetry,
+  retryingJobId = "",
   stoppingJobId,
   title,
   totalCount = jobs.length,
@@ -220,6 +234,8 @@ function TaskSection({
   jobs: JobRecord[];
   onCancel: (jobId: string) => Promise<void>;
   onNavigate: () => void;
+  onRetry?: (jobId: string) => Promise<void>;
+  retryingJobId?: string;
   stoppingJobId: string;
   title: string;
   totalCount?: number;
@@ -255,7 +271,9 @@ function TaskSection({
             key={job.id}
             onCancel={onCancel}
             onNavigate={onNavigate}
+            onRetry={onRetry}
             readOnly={readOnly}
+            retrying={retryingJobId === job.id}
             stopping={stoppingJobId === job.id}
           />
         ))}
@@ -268,13 +286,17 @@ function TaskRow({
   job,
   onCancel,
   onNavigate,
+  onRetry,
   stopping,
+  retrying,
   readOnly
 }: {
   job: JobRecord;
   onCancel: (jobId: string) => Promise<void>;
   onNavigate: () => void;
+  onRetry?: (jobId: string) => Promise<void>;
   stopping: boolean;
+  retrying?: boolean;
   readOnly?: boolean;
 }) {
   const detail = taskDetail(job);
@@ -310,6 +332,17 @@ function TaskRow({
           <Link className="btn small ghost task-center-row-action" href={resultHref} onClick={onNavigate}>
             {job.kind === "write-copy" ? "查看文案" : job.resultRef?.label || "查看结果"}
           </Link>
+        ) : null}
+        {readOnly && (job.status === "failed" || job.status === "interrupted") && onRetry ? (
+          <button
+            aria-busy={retrying}
+            className="btn small ghost task-center-row-action"
+            disabled={retrying}
+            onClick={() => void onRetry(job.id)}
+            type="button"
+          >
+            {retrying ? "重试中…" : "重试"}
+          </button>
         ) : null}
       </div>
       {job.status === "running" ? (

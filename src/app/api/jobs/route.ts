@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
-import { createJob, listJobSummaries } from "@/lib/jobs";
+import { createJob, listJobSummaryChanges } from "@/lib/jobs";
 import { createUrlPreprocessor } from "@/lib/platform-links";
 import { platforms } from "@/lib/types";
 import { writeCopyInputSchema } from "@/lib/write-validation";
@@ -199,8 +199,8 @@ const startJobSchema = z.discriminatedUnion("kind", [
   engagementSchema
 ]);
 
-export async function GET() {
-  return apiJson(async () => ({ jobs: await listJobSummaries() }), {
+export async function GET(request: Request) {
+  return apiJson(async () => listJobSummaryChanges(new URL(request.url).searchParams.get("cursor") || undefined), {
     fallbackMessage: "读取任务失败",
     status: 500
   });

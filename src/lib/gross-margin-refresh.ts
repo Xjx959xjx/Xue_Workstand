@@ -8,7 +8,7 @@ import {
   appendGrossMarginPlaySample,
   getGrossMarginMonitorRecords,
   resolveGrossMarginMonitorRecord,
-  saveGrossMarginMonitorRecord
+  updateGrossMarginMonitorRecord
 } from "./storage";
 import type {
   GrossMarginMonitorRecord,
@@ -119,39 +119,41 @@ async function saveRefreshedMonitorRecord(
   const warnings: string[] = [];
   try {
     if ("warning" in fetched && fetched.warning) warnings.push(fetched.warning);
-    const fetchedStats = normalizeFetchedStatsForMonitor(record.platform, fetched.stats);
-    const currentStats =
-      record.platform === "douyin" && typeof record.currentStats?.play === "number"
-        ? { ...fetchedStats, play: record.currentStats.play }
-        : fetchedStats;
     const refreshedAt = new Date().toISOString();
-    const shouldCapturePlaySample =
-      typeof fetchedStats.play === "number" && Number.isFinite(fetchedStats.play) && currentStats.play === fetchedStats.play;
-    const playSamples = shouldCapturePlaySample
-      ? appendGrossMarginPlaySample(record.playSamples, currentStats.play, refreshedAt, "refresh")
-      : record.playSamples;
     return timeMonitorOperation(
       onTiming,
       "storage.save-monitor-record",
-      () => saveGrossMarginMonitorRecord({
-        ...record,
-        accountName: record.accountName || getFetchedAuthorName(fetched),
-        title: fetched.title || record.title,
-        videoUrl: fetched.url || record.videoUrl,
-        videoKey:
-          "videoKey" in fetched && typeof fetched.videoKey === "string" && fetched.videoKey
-            ? fetched.videoKey
-            : fetched.url
-              ? getVideoComparableKey(fetched.url)
-              : record.videoKey,
-        publishedAt: fetched.publishedAt || record.publishedAt,
-        previousStats: record.currentStats,
-        currentStats,
-        playSamples,
-        status: warnings.length ? "partial" : "completed",
-        warnings,
-        lastRefreshedAt: refreshedAt,
-        updatedAt: refreshedAt
+      () => updateGrossMarginMonitorRecord(record.id, (current) => {
+        const fetchedStats = normalizeFetchedStatsForMonitor(current.platform, fetched.stats);
+        const currentStats =
+          current.platform === "douyin" && typeof current.currentStats?.play === "number"
+            ? { ...fetchedStats, play: current.currentStats.play }
+            : fetchedStats;
+        const shouldCapturePlaySample =
+          typeof fetchedStats.play === "number" && Number.isFinite(fetchedStats.play) && currentStats.play === fetchedStats.play;
+        const playSamples = shouldCapturePlaySample
+          ? appendGrossMarginPlaySample(current.playSamples, currentStats.play, refreshedAt, "refresh")
+          : current.playSamples;
+        return {
+          ...current,
+          accountName: current.accountName || getFetchedAuthorName(fetched),
+          title: fetched.title || current.title,
+          videoUrl: fetched.url || current.videoUrl,
+          videoKey:
+            "videoKey" in fetched && typeof fetched.videoKey === "string" && fetched.videoKey
+              ? fetched.videoKey
+              : fetched.url
+                ? getVideoComparableKey(fetched.url)
+                : current.videoKey,
+          publishedAt: fetched.publishedAt || current.publishedAt,
+          previousStats: current.currentStats,
+          currentStats,
+          playSamples,
+          status: warnings.length ? "partial" : "completed",
+          warnings,
+          lastRefreshedAt: refreshedAt,
+          updatedAt: refreshedAt
+        };
       }),
       recordTimingMeta(record)
     );
@@ -170,16 +172,17 @@ function getFetchedAuthorName(
 }
 
 function saveFailedMonitorRecord(record: GrossMarginMonitorRecord, error: unknown, onTiming?: OpenCliTimingSink) {
+  const failedAt = new Date().toISOString();
   return timeMonitorOperation(
     onTiming,
     "storage.save-failed-monitor-record",
-    () => saveGrossMarginMonitorRecord({
-      ...record,
+    () => updateGrossMarginMonitorRecord(record.id, (current) => ({
+      ...current,
       status: "failed",
       warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
-      lastRefreshedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }),
+      lastRefreshedAt: failedAt,
+      updatedAt: failedAt
+    })),
     recordTimingMeta(record)
   );
 }

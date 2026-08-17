@@ -13,11 +13,13 @@ import {
   invalidateEngagementRecordsCache,
   invalidateGrossMarginLibraryCache,
   invalidateHotspotRadarCache,
+  retryJob as retryJobRequest,
   startJob
 } from "@/lib/client";
 import { invalidateAccountDetail, invalidateProjectDetail } from "@/lib/detail-cache";
 import { formatJobErrorMessage } from "@/lib/job-messages";
 import { getJobResultHref } from "@/lib/job-links";
+import { applyJobListResponse } from "@/lib/job-sync";
 import type { JobKind, JobListItem, JobRecord, JobStartInput } from "@/lib/types";
 import { useLibrary } from "./LibraryProvider";
 
@@ -30,6 +32,7 @@ type TaskContextValue = {
   refreshJobs: () => Promise<void>;
   startTask: (input: JobStartInput) => Promise<JobRecord>;
   cancelTask: (jobId: string) => Promise<JobRecord>;
+  retryTask: (jobId: string) => Promise<JobRecord>;
 };
 
 const TaskContext = createContext<TaskContextValue | null>(null);
@@ -48,6 +51,7 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const jobsRef = useRef<JobRecord[]>([]);
+  const cursorRef = useRef<string | undefined>(undefined);
   const firstLoadRef = useRef(true);
   const fullJobCacheRef = useRef<Map<string, JobRecord>>(new Map());
   const initialFailureShownRef = useRef(false);
@@ -78,8 +82,13 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
 
     const run = async (): Promise<void> => {
       try {
-        const data = await getJobs();
-        const summaries = data.jobs;
+        const data = await getJobs(cursorRef.current);
+        cursorRef.current = data.cursor;
+        const summaries = applyJobListResponse(jobsRef.current, data);
+        for (const removedJobId of data.removedJobIds) {
+          fullJobCacheRef.current.delete(removedJobId);
+          hydrationErrorsRef.current.delete(removedJobId);
+        }
         await hydrateTrackedJobs(
           summaries,
           previousStatusRef.current,
@@ -95,6 +104,7 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
           hydrationErrorsRef.current,
           pathnameRef.current
         ).filter((job) => !allowedKindKey || allowedKindKey.split("|").includes(job.kind));
+        jobsRef.current = mergedJobs;
         setJobs(mergedJobs);
         setError("");
         handleJobDataSync(
@@ -242,6 +252,21 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
     return result.job;
   }, [refreshJobs]);
 
+  const retryTask = useCallback(async (jobId: string) => {
+    try {
+      const result = await retryJobRequest(jobId);
+      watchedRef.current.add(result.job.id);
+      persistWatchedJobIds(watchedRef.current);
+      setError("");
+      emitTasksChanged();
+      await refreshJobs();
+      return result.job;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重试后台任务失败");
+      throw err;
+    }
+  }, [refreshJobs]);
+
   const value = useMemo(
     () => ({
       jobs,
@@ -251,9 +276,10 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
       error,
       refreshJobs,
       startTask,
-      cancelTask
+      cancelTask,
+      retryTask
     }),
-    [activeJobs, cancelTask, error, jobs, loading, refreshJobs, startTask]
+    [activeJobs, cancelTask, error, jobs, loading, refreshJobs, retryTask, startTask]
   );
 
   return (
@@ -300,7 +326,8 @@ export function useScopedTasks(options: UseScopedTasksOptions = {}) {
       error: context.error,
       refreshJobs: context.refreshJobs,
       startTask: context.startTask,
-      cancelTask: context.cancelTask
+      cancelTask: context.cancelTask,
+      retryTask: context.retryTask
     };
   }, [context, includeRecent, scopedJobs]);
 

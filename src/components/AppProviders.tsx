@@ -5,6 +5,7 @@ import { LibraryProvider } from "./LibraryProvider";
 import { TaskProvider } from "./TaskProvider";
 import { FeedbackProvider } from "./FeedbackProvider";
 import { RemoteStatusProvider } from "./RemoteStatusProvider";
+import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import type { AppMode } from "@/lib/app-mode";
 
 export function AppProviders({
@@ -21,6 +22,7 @@ export function AppProviders({
 
   return (
     <RemoteStatusProvider currentBuildId={buildId}>
+      <UnsavedChangesGuard />
       <FeedbackProvider>
         <LibraryProvider enabled={needsLibrary}>
           <TaskProvider allowedKinds={appMode === "gross-margin" ? ["gross-margin-refresh"] : undefined}>

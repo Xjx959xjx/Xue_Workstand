@@ -1,6 +1,19 @@
-import type { JobRecord } from "./types";
+import type { JobKind, JobRecord } from "./types";
 
 export const DEFAULT_JOB_RESULT_PERSIST_BYTES = 96 * 1024;
+
+const resumableJobKinds = new Set<JobKind>([
+  "account-style",
+  "transcribe-video",
+  "batch-transcribe",
+  "hotlist-refresh",
+  "hotspot-refresh",
+  "gross-margin-refresh"
+]);
+
+export function isResumableJobKind(kind: JobKind) {
+  return resumableJobKinds.has(kind);
+}
 
 export function compactJobForPersistence(
   job: JobRecord,

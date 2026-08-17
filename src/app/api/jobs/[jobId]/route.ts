@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
-import { cancelJob, getJob } from "@/lib/jobs";
+import { cancelJob, getJob, retryJob } from "@/lib/jobs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ export async function GET(
 }
 
 const patchSchema = z.object({
-  action: z.literal("cancel")
+  action: z.enum(["cancel", "retry"])
 });
 
 export async function PATCH(
@@ -29,11 +29,8 @@ export async function PATCH(
   return apiJson(async () => {
     const input = await parseJsonBody(request, patchSchema);
     const { jobId } = await params;
-    if (input.action !== "cancel") {
-      throw new Error("不支持的任务操作");
-    }
-    return { job: await cancelJob(jobId) };
+    return { job: input.action === "cancel" ? await cancelJob(jobId) : await retryJob(jobId) };
   }, {
-    fallbackMessage: "停止任务失败"
+    fallbackMessage: "更新任务失败"
   });
 }

@@ -23,11 +23,13 @@ import {
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { fileExists, readJsonFile, writeJsonFile } from "./fs";
 import { libraryRoot, normalizeStorageSegment } from "./core";
+import { runRecoverableLibraryMutation } from "./transactions";
 import { resolveGrossMarginAccounts } from "../wecom-account-source";
 
 const grossMarginTablePlatforms = ["douyin", "bilibili"] as const;
 const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"] as const;
 const maxGrossMarginPlaySamples = 180;
+const grossMarginMonitorRecordQueues = new Map<string, Promise<unknown>>();
 
 function grossMarginPath() {
   return path.join(libraryRoot(), "gross-margin");
@@ -202,40 +204,81 @@ export async function upsertGrossMarginMonitorRecord(input: {
   if (!videoKey) throw new Error("监控记录缺少视频标识");
   const projectId = input.projectId?.trim();
   const id = await resolveExistingGrossMarginMonitorRecordId({ platform, videoKey, projectId });
-  const existing = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
-  const record = normalizeGrossMarginMonitorRecord({
-    id,
-    platform,
-    accountName: input.accountName.trim() || existing?.accountName || "",
-    projectId: projectId || existing?.projectId,
-    projectName: input.projectName?.trim() || existing?.projectName,
-    videoUrl: input.videoUrl.trim(),
-    videoKey,
-    title: existing?.title,
-    publishedAt: existing?.publishedAt,
-    sourceText: input.sourceText,
-    targetStats: normalizeGrossMarginTargetStats(input.targetStats, platform),
-    currentStats: existing?.currentStats,
-    previousStats: existing?.previousStats,
-    playSamples: existing?.playSamples,
-    metrics: [],
-    maxDifferencePercent: 0,
-    highRisk: false,
-    status: existing?.status || "pending",
-    warnings: uniqueStrings(input.warnings ?? existing?.warnings ?? []),
-    lastRefreshedAt: existing?.lastRefreshedAt,
-    createdAt: existing?.createdAt || now,
-    updatedAt: now
+  return withGrossMarginMonitorRecordLock(id, async () => {
+    const existingRaw = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
+    const existing = existingRaw ? normalizeGrossMarginMonitorRecord(existingRaw) : null;
+    const record = normalizeGrossMarginMonitorRecord({
+      id,
+      revision: nextGrossMarginRevision(existing),
+      platform,
+      accountName: input.accountName.trim() || existing?.accountName || "",
+      projectId: projectId || existing?.projectId,
+      projectName: input.projectName?.trim() || existing?.projectName,
+      videoUrl: input.videoUrl.trim(),
+      videoKey,
+      title: existing?.title,
+      publishedAt: existing?.publishedAt,
+      sourceText: input.sourceText,
+      targetStats: normalizeGrossMarginTargetStats(input.targetStats, platform),
+      currentStats: existing?.currentStats,
+      previousStats: existing?.previousStats,
+      playSamples: existing?.playSamples,
+      metrics: [],
+      maxDifferencePercent: 0,
+      highRisk: false,
+      status: existing?.status || "pending",
+      warnings: uniqueStrings(input.warnings ?? existing?.warnings ?? []),
+      lastRefreshedAt: existing?.lastRefreshedAt,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    });
+    await writeJson(grossMarginMonitorRecordJsonPath(id), record);
+    return record;
   });
-  await writeJson(grossMarginMonitorRecordJsonPath(id), record);
-  return record;
 }
 
 export async function saveGrossMarginMonitorRecord(record: GrossMarginMonitorRecord) {
   await ensureGrossMarginDirs();
-  const normalized = normalizeGrossMarginMonitorRecord(record);
-  await writeJson(grossMarginMonitorRecordJsonPath(normalized.id), normalized);
-  return normalized;
+  const id = normalizeGrossMarginMonitorRecordId(record.id);
+  return withGrossMarginMonitorRecordLock(id, async () => {
+    const currentRaw = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
+    const current = currentRaw ? normalizeGrossMarginMonitorRecord(currentRaw) : null;
+    if (current && record.revision !== current.revision) {
+      throw createGrossMarginRevisionConflictError(id);
+    }
+    const normalized = normalizeGrossMarginMonitorRecord({
+      ...record,
+      id,
+      revision: nextGrossMarginRevision(current),
+      createdAt: current?.createdAt || record.createdAt,
+      updatedAt: nowIso()
+    });
+    await writeJson(grossMarginMonitorRecordJsonPath(id), normalized);
+    return normalized;
+  });
+}
+
+export async function updateGrossMarginMonitorRecord(
+  recordId: string,
+  update: (current: GrossMarginMonitorRecord) => GrossMarginMonitorRecord | Promise<GrossMarginMonitorRecord>
+) {
+  await ensureGrossMarginDirs();
+  const id = normalizeGrossMarginMonitorRecordId(recordId);
+  return withGrossMarginMonitorRecordLock(id, async () => {
+    const currentRaw = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
+    if (!currentRaw) throw new Error(`找不到维护监控记录：${id}`);
+    const current = normalizeGrossMarginMonitorRecord(currentRaw);
+    const updated = await update(current);
+    const normalized = normalizeGrossMarginMonitorRecord({
+      ...updated,
+      id: current.id,
+      revision: nextGrossMarginRevision(current),
+      createdAt: current.createdAt,
+      updatedAt: nowIso()
+    });
+    await writeJson(grossMarginMonitorRecordJsonPath(id), normalized);
+    return normalized;
+  });
 }
 
 export async function resolveGrossMarginMonitorRecord(recordId: string) {
@@ -251,11 +294,16 @@ export async function resolveGrossMarginMonitorRecord(recordId: string) {
 export async function deleteGrossMarginMonitorRecord(recordId: string) {
   await ensureGrossMarginDirs();
   const id = normalizeGrossMarginMonitorRecordId(recordId);
-  const target = grossMarginMonitorRecordJsonPath(id);
-  if (await exists(target)) {
-    await fs.rm(target, { force: true });
-  }
-  return { deleted: id };
+  return withGrossMarginMonitorRecordLock(id, async () => {
+    const target = grossMarginMonitorRecordJsonPath(id);
+    if (!(await exists(target))) return { deleted: id };
+    const transaction = await runRecoverableLibraryMutation({
+      kind: "delete-gross-margin-record",
+      targets: [target],
+      run: async () => id
+    });
+    return { deleted: transaction.result, trashOperationId: transaction.operation.id };
+  });
 }
 
 export async function saveGrossMarginPriceTable(input: {
@@ -560,6 +608,7 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
 
   return {
     id: normalizeGrossMarginMonitorRecordId(record.id || `${platform}-${shortHash(record.videoUrl || record.videoKey || nowIso())}`),
+    revision: normalizeGrossMarginRevision(record.revision),
     platform,
     accountName: record.accountName?.trim() || "",
     projectId: record.projectId?.trim() || undefined,
@@ -582,6 +631,40 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     createdAt: record.createdAt || nowIso(),
     updatedAt: record.updatedAt || record.createdAt || nowIso()
   };
+}
+
+function normalizeGrossMarginRevision(revision: number | undefined) {
+  return Number.isInteger(revision) && Number(revision) >= 0 ? Number(revision) : 0;
+}
+
+function nextGrossMarginRevision(record: GrossMarginMonitorRecord | null) {
+  return normalizeGrossMarginRevision(record?.revision) + 1;
+}
+
+function createGrossMarginRevisionConflictError(recordId: string) {
+  const error = new Error(`维护监控记录已被其他操作更新，请刷新后重试：${recordId}`) as Error & { statusCode: number };
+  error.statusCode = 409;
+  return error;
+}
+
+async function withGrossMarginMonitorRecordLock<T>(recordId: string, run: () => Promise<T>) {
+  const previous = grossMarginMonitorRecordQueues.get(recordId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.then(() => current, () => current);
+  grossMarginMonitorRecordQueues.set(recordId, next);
+
+  try {
+    await previous.catch(() => undefined);
+    return await run();
+  } finally {
+    release();
+    if (grossMarginMonitorRecordQueues.get(recordId) === next) {
+      grossMarginMonitorRecordQueues.delete(recordId);
+    }
+  }
 }
 
 function normalizeGrossMarginPlaySamples(

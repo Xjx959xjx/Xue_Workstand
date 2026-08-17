@@ -21,9 +21,10 @@ import {
   GrossMarginServiceKind,
   HotspotRadarRefreshResult,
   HotspotRadarResponse,
-  JobListItem,
+  JobListResponse,
   JobRecord,
   JobStartInput,
+  LibraryTrashOperation,
   LibraryOverviewResponse,
   Platform,
   ProjectDraftInput,
@@ -75,6 +76,7 @@ type WriteCopyRequest = {
   styleRefs?: WriteStyleReferenceInput[];
   mode: Draft["mode"];
   prompt?: string;
+  originalSourceInput?: string;
   sourceText?: string;
   supportDocLinks?: string;
   save?: boolean;
@@ -646,8 +648,22 @@ export function getProjectDetail(projectId: string, options: { includeStyle?: bo
   return requestJson<ProjectDetail>(`/api/projects?${params.toString()}`);
 }
 
-export function getJobs() {
-  return requestJson<{ jobs: JobListItem[] }>("/api/jobs");
+export function getJobs(cursor?: string) {
+  const params = new URLSearchParams();
+  if (cursor) params.set("cursor", cursor);
+  const query = params.size ? `?${params.toString()}` : "";
+  return requestJson<JobListResponse>(`/api/jobs${query}`);
+}
+
+export function getLibraryTrashOperations() {
+  return requestJson<{ operations: LibraryTrashOperation[] }>("/api/library/trash");
+}
+
+export function restoreLibraryTrashOperation(operationId: string) {
+  return requestJson<{ operation: LibraryTrashOperation }>("/api/library/trash", {
+    method: "POST",
+    body: JSON.stringify({ action: "restore", operationId })
+  });
 }
 
 export function getJob(jobId: string) {
@@ -669,6 +685,13 @@ export function cancelJob(jobId: string) {
   return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`, {
     method: "PATCH",
     body: JSON.stringify({ action: "cancel" })
+  });
+}
+
+export function retryJob(jobId: string) {
+  return requestJson<{ job: JobRecord }>(`/api/jobs/${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action: "retry" })
   });
 }
 

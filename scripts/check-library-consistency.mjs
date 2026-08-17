@@ -97,10 +97,12 @@ function writeRepair(file, value, reason) {
 }
 
 const accountIds = new Set();
+const accountVideoIds = new Map();
 const copySourceIds = new Set();
 const copySourceProjectRefs = new Map();
 const projectIds = new Set();
 const projectSourceRefs = new Map();
+const draftsWithStyleRefs = [];
 
 for (const platform of platforms) {
   for (const slug of dirs(path.join(root, platform))) {
@@ -123,6 +125,7 @@ for (const platform of platforms) {
     const transcriptDir = path.join(base, "transcripts");
     const draftDir = path.join(base, "drafts");
     const videoIds = new Set(files(videoDir, ".json").map((file) => file.slice(0, -5)));
+    accountVideoIds.set(expectedAccountId, videoIds);
 
     for (const file of files(videoDir, ".json")) {
       const id = file.slice(0, -5);
@@ -186,6 +189,7 @@ for (const platform of platforms) {
           pushIssue("draft-missing-video-ref", draftFile, missing.join(","));
         }
       }
+      if (Array.isArray(draft.styleRefs)) draftsWithStyleRefs.push({ draft, draftFile });
     }
   }
 }
@@ -276,6 +280,36 @@ for (const slug of dirs(path.join(root, "projects"))) {
         pushIssue("project-draft-missing-copy-source-ref", draftFile, missing.join(","));
       }
     }
+    if (Array.isArray(draft.styleRefs)) draftsWithStyleRefs.push({ draft, draftFile });
+  }
+}
+
+for (const { draft, draftFile } of draftsWithStyleRefs) {
+  const seen = new Set();
+  for (const reference of draft.styleRefs) {
+    const key = reference.targetType === "project"
+      ? `project:${reference.projectId}`
+      : `account:${reference.platform}:${reference.accountId}`;
+    if (seen.has(key)) pushIssue("draft-duplicate-style-ref", draftFile, key);
+    seen.add(key);
+
+    if (reference.targetType === "project") {
+      if (!projectIds.has(reference.projectId)) {
+        pushIssue("draft-missing-project-style-ref", draftFile, reference.projectId);
+      }
+      const missingAccounts = (reference.sourceAccountIds || []).filter((id) => !accountIds.has(id));
+      if (missingAccounts.length) pushIssue("draft-style-ref-missing-account", draftFile, missingAccounts.join(","));
+      const missingSources = (reference.sourceMaterialIds || []).filter((id) => !copySourceIds.has(id));
+      if (missingSources.length) pushIssue("draft-style-ref-missing-copy-source", draftFile, missingSources.join(","));
+      continue;
+    }
+
+    if (!accountIds.has(reference.accountId)) {
+      pushIssue("draft-missing-account-style-ref", draftFile, reference.accountId);
+      continue;
+    }
+    const missingVideos = (reference.videoIds || []).filter((id) => !accountVideoIds.get(reference.accountId)?.has(id));
+    if (missingVideos.length) pushIssue("draft-style-ref-missing-video", draftFile, missingVideos.join(","));
   }
 }
 

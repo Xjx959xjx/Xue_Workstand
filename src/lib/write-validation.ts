@@ -23,6 +23,7 @@ export const writeCopyInputSchema = z.object({
   styleRefs: z.array(writeStyleReferenceSchema).min(1).optional(),
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().optional().default(""),
+  originalSourceInput: z.string().optional(),
   sourceText: z.string().optional(),
   supportDocLinks: z.string().optional(),
   save: z.boolean().optional(),

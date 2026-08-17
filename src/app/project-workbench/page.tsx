@@ -560,7 +560,7 @@ export default function ProjectWorkbenchPage() {
   }
 
   return (
-    <div className="page project-workbench-page">
+    <div className="page project-workbench-page" data-unsaved-changes={isDirty ? "true" : undefined}>
       <header className="page-header">
         <div className="page-title-group">
           <span className="page-title-eyebrow">项目策划台</span>
