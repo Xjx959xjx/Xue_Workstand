@@ -132,7 +132,7 @@
 
 .gross-price-summary-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(164px, 0.58fr) minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -155,12 +155,23 @@
 }
 
 .gross-rate-input input {
+  width: 100%;
   min-width: 0;
   min-height: 40px;
+  padding-right: 4px;
   border: 0;
   background: transparent;
   box-shadow: none;
   outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.gross-rate-input input::-webkit-inner-spin-button,
+.gross-rate-input input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .gross-rate-input small {
@@ -896,12 +907,12 @@
 }
 
 .gross-price-editor-modal {
-  width: min(1320px, calc(100vw - 32px));
-  max-height: min(88vh, 840px);
+  width: min(1480px, calc(100vw - 24px));
+  max-height: min(92dvh, 900px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  gap: 12px;
-  padding: 16px;
+  gap: 16px;
+  padding: 20px;
 }
 
 .gross-price-editor-header {
@@ -914,7 +925,7 @@
 .gross-price-editor-header h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .gross-price-editor-toolbar {
@@ -925,6 +936,7 @@
 .gross-price-editor-table-wrap {
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
@@ -932,10 +944,10 @@
 
 .gross-price-editor-table {
   width: 100%;
-  min-width: 1180px;
+  min-width: 1320px;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 12px;
+  font-size: var(--text-body);
 }
 
 .gross-price-editor-table th,
@@ -943,7 +955,7 @@
   border-bottom: 1px solid var(--line-subtle);
   text-align: left;
   vertical-align: middle;
-  padding: 8px 9px;
+  padding: 10px;
 }
 
 .gross-price-editor-table th {
@@ -952,7 +964,7 @@
   z-index: 1;
   color: var(--muted);
   background: color-mix(in oklch, var(--panel-raised) 96%, var(--panel));
-  font-size: 11px;
+  font-size: var(--text-meta);
   font-weight: 600;
 }
 
@@ -968,12 +980,13 @@
 .gross-price-editor-table input,
 .gross-price-editor-table select {
   width: 100%;
-  min-height: 32px;
-  padding: 6px 8px;
+  min-height: var(--control-height-md);
+  padding: 8px 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   color: var(--text);
   background: var(--panel);
+  font-size: var(--text-body);
   outline: 2px solid transparent;
   outline-offset: 2px;
 }
@@ -988,19 +1001,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  min-height: 32px;
+  min-width: var(--control-height-md);
+  min-height: var(--control-height-md);
 }
 
 .gross-price-editor-toggle input {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   accent-color: var(--accent);
 }
 
 .gross-price-editor-static {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-meta);
   font-weight: 600;
 }
 
@@ -1009,6 +1022,10 @@
   color: var(--rose);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.gross-price-editor-actions {
+  justify-content: flex-end;
 }
 
 .gross-bulk-monitor-modal {
@@ -1897,6 +1914,66 @@
 
 }
 
+@media (max-width: 1100px) {
+  .gross-price-editor-modal {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .gross-price-editor-table-wrap {
+    border: 0;
+    background: transparent;
+  }
+
+  .gross-price-editor-table {
+    display: block;
+    min-width: 0;
+  }
+
+  .gross-price-editor-table thead {
+    display: none;
+  }
+
+  .gross-price-editor-table tbody {
+    display: grid;
+    gap: var(--space-3);
+    padding: 1px;
+  }
+
+  .gross-price-editor-table tr {
+    display: grid;
+    grid-template-columns: minmax(76px, 0.45fr) repeat(3, minmax(140px, 1fr));
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--panel-raised);
+  }
+
+  .gross-price-editor-table td,
+  .gross-price-editor-table tbody tr:last-child td {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .gross-price-editor-table td::before {
+    content: attr(data-label);
+    color: var(--muted-strong);
+    font-size: var(--text-caption);
+    font-weight: var(--font-weight-label);
+    line-height: var(--line-height-caption);
+  }
+
+  .gross-price-editor-toggle {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 780px) {
   .gross-margin-workspace,
   .gross-account-row,
@@ -1955,8 +2032,9 @@
   }
 
   .gross-price-editor-modal {
-    width: min(100vw - 18px, 1320px);
-    max-height: 92vh;
+    width: calc(100vw - 12px);
+    height: calc(100dvh - 12px);
+    max-height: calc(100dvh - 12px);
     gap: 10px;
     padding: 12px;
   }
@@ -2033,6 +2111,12 @@
 
   .gross-monitor-card {
     width: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .gross-price-editor-table tr {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

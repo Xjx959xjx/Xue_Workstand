@@ -4,15 +4,12 @@
   page CSS should only add route-specific density and business components.
 */
 
-body {
-  background: var(--bg);
-}
-
 .page,
 .workbench-frame-page {
   width: min(100%, var(--workbench-page-max-width));
   align-content: start;
   gap: var(--workbench-page-gap);
+  animation: page-content-enter var(--motion-slow) var(--ease-apple) both;
 }
 
 .page-header {
@@ -53,7 +50,7 @@ body {
   color: var(--text-strong);
   font-size: var(--text-page-title);
   font-weight: var(--font-weight-page-title);
-  letter-spacing: 0;
+  letter-spacing: -0.025em;
   line-height: var(--line-height-page-title);
 }
 
@@ -103,11 +100,12 @@ body {
 
 .panel,
 .pane {
-  border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
+  border: 1px solid color-mix(in oklch, var(--line) 74%, transparent);
   border-radius: var(--radius-xl);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 94%, white) 0%, var(--panel) 100%);
-  box-shadow: 0 18px 42px color-mix(in oklch, var(--text-strong) 4%, transparent);
+  background: var(--glass-panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-saturation));
   transition:
     border-color var(--motion-base) var(--ease-apple),
     box-shadow var(--motion-base) var(--ease-apple),
@@ -118,8 +116,7 @@ body {
 .modal-header {
   padding: var(--pane-header-pad);
   border-bottom-color: color-mix(in oklch, var(--line-subtle) 82%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, white) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
+  background: color-mix(in oklch, var(--panel-raised) 76%, transparent);
 }
 
 .pane-header h2,
@@ -136,8 +133,8 @@ body {
 .style-summary-card {
   border-color: color-mix(in oklch, var(--line) 80%, transparent);
   border-radius: var(--radius-lg);
-  background: color-mix(in oklch, var(--panel-raised) 86%, var(--panel));
-  box-shadow: none;
+  background: color-mix(in oklch, var(--panel-raised) 72%, transparent);
+  box-shadow: var(--surface-inset-highlight);
   transition:
     background-color var(--motion-base) var(--ease-apple),
     border-color var(--motion-base) var(--ease-apple),
@@ -146,8 +143,7 @@ body {
 }
 
 .empty-state-panel {
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 54%, var(--panel-raised)) 0%, var(--panel) 100%);
+  background: color-mix(in oklch, var(--accent-tint) 46%, var(--glass-panel));
 }
 
 .modal-panel {

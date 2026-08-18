@@ -94,6 +94,10 @@ export function hasFeishuDocLink(input?: string) {
   return uniqueFeishuDocRefs(input || "").length > 0;
 }
 
+export function extractFeishuSupportDocumentRefs(input?: string) {
+  return uniqueFeishuDocRefs(input || "");
+}
+
 async function publishWithOpenCli(config: FeishuConfig, input: { title: string; content: string }) {
   const args = [
     "lark-cli",

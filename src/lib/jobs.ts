@@ -585,7 +585,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   if (!isRevision && hasSupportDocumentReference(separatedSourceInput.supportDocLinks)) {
     await patchJob(jobId, {
       stage: "fetch-support-docs",
-      message: "正在读取商单支持文档",
+      message: "正在准备商单支持文档（已读内容会自动复用）",
       progress: 24
     });
   }

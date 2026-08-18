@@ -8,7 +8,7 @@
 .pane {
   min-width: 0;
   border-right: 1px solid var(--line);
-  background: var(--surface-panel);
+  background: color-mix(in oklch, var(--surface-panel) 82%, transparent);
 }
 
 .pane:last-child {
@@ -48,7 +48,7 @@
 .pane-search {
   padding: 10px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface-raised);
+  background: color-mix(in oklch, var(--surface-raised) 74%, transparent);
 }
 
 .selection-toolbar {
@@ -59,7 +59,7 @@
   gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface-selection-bar);
+  background: color-mix(in oklch, var(--surface-selection-bar) 78%, var(--panel-raised));
 }
 
 .selection-copy {
@@ -113,11 +113,18 @@
   color: var(--text);
   background: transparent;
   text-align: left;
+  transition:
+    color var(--motion-base) var(--ease-apple),
+    background-color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
 }
 
 .list-button:hover {
-  border-color: var(--line);
-  background: var(--surface-soft);
+  border-color: color-mix(in oklch, var(--line) 72%, transparent);
+  background: color-mix(in oklch, var(--panel-raised) 62%, transparent);
+  transform: translateY(-1px);
 }
 
 .list-button.active {
@@ -209,8 +216,10 @@
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  background: color-mix(in oklch, var(--surface-panel) 96%, white);
+  background: var(--glass-popover);
   box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
 
 .history-context-menu-item {
@@ -319,13 +328,18 @@
   padding: 5px 6px;
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-sm);
-  background: var(--surface-soft);
+  background: color-mix(in oklch, var(--surface-soft) 82%, transparent);
+  transition:
+    border-color var(--motion-base) var(--ease-apple),
+    background-color var(--motion-base) var(--ease-apple),
+    transform var(--motion-base) var(--ease-apple);
   line-height: 1.15;
 }
 
 .metric-item:hover {
   border-color: var(--line-strong);
   background: var(--surface-hover);
+  transform: translateY(-1px);
 }
 
 .metric-item span {

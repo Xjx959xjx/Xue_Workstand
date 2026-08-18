@@ -15,6 +15,7 @@ import {
   removeDouyinHotlistAccount
 } from "@/lib/client";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useFeedback } from "@/components/FeedbackProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
 import type {
   DouyinHotlistAccount,
@@ -71,6 +72,7 @@ function DouyinHotlistPageContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tasks = useScopedTasks({ href: "/douyin-hotlist", kinds: ["hotlist-refresh"] });
+  const { notify } = useFeedback();
   const initialWindowFilter = parseWindowFilter(searchParams.get("window"));
   const [snapshot, setSnapshot] = useState<DouyinHotlistResponse | null>(() => getCachedDouyinHotlist({ window: initialWindowFilter }));
   const [query, setQuery] = useState("");
@@ -79,7 +81,6 @@ function DouyinHotlistPageContent() {
   const [sortMode, setSortMode] = useState<SortMode>(() => parseSortMode(searchParams.get("sort")));
   const [windowFilter, setWindowFilter] = useState<WindowFilter>(() => initialWindowFilter);
   const [busy, setBusy] = useState<BusyState>(() => getCachedDouyinHotlist({ window: initialWindowFilter }) ? "" : "load");
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [removeTarget, setRemoveTarget] = useState<DouyinHotlistAccount | null>(null);
   const [accountDrawerOpen, setAccountDrawerOpen] = useState(false);
@@ -254,15 +255,14 @@ function DouyinHotlistPageContent() {
 
     busyRef.current = "add";
     setBusy("add");
-    setMessage("");
     setError("");
     try {
       const next = await addDouyinHotlistAccount({ platform: accountPlatform, query, window: windowFilter });
       setSnapshot(next);
       setQuery("");
-      setMessage(`已加入${getPlatformLabel(accountPlatform)}视频热榜账号池。`);
+      notify({ tone: "success", message: `已加入${getPlatformLabel(accountPlatform)}视频热榜账号池。` });
     } catch (err) {
-      setError(err instanceof Error ? err.message : `添加${getPlatformLabel(accountPlatform)}账号失败`);
+      notify({ tone: "error", message: err instanceof Error ? err.message : `添加${getPlatformLabel(accountPlatform)}账号失败` });
     } finally {
       busyRef.current = "";
       setBusy("");
@@ -293,7 +293,6 @@ function DouyinHotlistPageContent() {
       return;
     }
 
-    setMessage("");
     setError("");
     try {
       const job = await tasks.startTask({
@@ -314,7 +313,9 @@ function DouyinHotlistPageContent() {
       });
       trackedRefreshJobIdsRef.current.add(job.id);
       activeRefreshJobRef.current = job;
-      if (!automatic) setMessage("刷新任务已开始，可在任务中心查看进度或停止。");
+      if (!automatic) {
+        notify({ tone: "info", message: "刷新任务已开始，可在任务中心查看进度或停止。" });
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "未知错误";
       const refreshBusy = isRefreshBusyMessage(errorMessage);
@@ -324,12 +325,12 @@ function DouyinHotlistPageContent() {
         text: `${automatic ? "自动" : "手动"}刷新${refreshBusy ? "跳过" : "失败"}：${errorMessage}`
       });
       if (refreshBusy) {
-        if (!automatic) setMessage(errorMessage);
+        if (!automatic) notify({ tone: "warning", message: errorMessage });
       } else {
-        setError(errorMessage);
+        notify({ tone: "error", message: errorMessage });
       }
     }
-  }, [appendRefreshLog, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, tasks, windowFilter]);
+  }, [appendRefreshLog, notify, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, tasks, windowFilter]);
 
   useEffect(() => {
     if (tasks.loading) return;
@@ -356,8 +357,6 @@ function DouyinHotlistPageContent() {
         const settlement = getRefreshJobSettlement(job);
         if (settlement.reload) await loadHotlist({ force: true });
         appendRefreshLog(settlement.log);
-        if (settlement.error) setError(settlement.error);
-        if (settlement.message) setMessage(settlement.message);
       }
     })();
   }, [appendRefreshLog, loadHotlist, tasks.activeJobs, tasks.jobs, tasks.loading]);
@@ -407,7 +406,6 @@ function DouyinHotlistPageContent() {
   async function handleRemoveAccount(accountId: string) {
     busyRef.current = `remove:${accountId}`;
     setBusy(`remove:${accountId}`);
-    setMessage("");
     setError("");
     try {
       setSnapshot(await removeDouyinHotlistAccount(accountId, { window: windowFilter }));
@@ -415,9 +413,9 @@ function DouyinHotlistPageContent() {
       if (selectedAccountId === accountId) {
         setSelectedAccountId("all");
       }
-      setMessage("已从热榜账号池移除。");
+      notify({ tone: "success", message: "已从热榜账号池移除。" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "移除视频热榜账号失败");
+      notify({ tone: "error", message: err instanceof Error ? err.message : "移除视频热榜账号失败" });
     } finally {
       busyRef.current = "";
       setBusy("");
@@ -456,7 +454,6 @@ function DouyinHotlistPageContent() {
         </div>
       </header>
 
-      {message ? <div className="notice" role="status">{message}</div> : null}
       {error ? <div className="error" role="alert">{error}</div> : null}
 
       <section className="douyin-hotlist-workspace workbench-frame-workspace">

@@ -2,7 +2,7 @@
 
 ## 1. 产品定位
 
-本项目是桌面优先的本地内容运营工作台，用于采集、转写、整理账号 / 项目风格，生成可编辑文案、评论素材，并维护毛利数据。界面气质应接近专业编辑控制台，而不是营销型 SaaS 官网。
+本项目是桌面优先的本地内容运营工作台，用于采集、转写、整理账号 / 项目风格，生成可编辑文案、评论素材，并维护毛利数据。界面气质应接近原生 macOS 专业编辑工具，而不是营销型 SaaS 官网。苹果化体现在克制的系统材质、清晰层级和自然反馈，不照搬消费级官网的大留白。
 
 核心原则：
 
@@ -11,6 +11,7 @@
 - 本地素材和转写稿是长期资产，删除、批量操作和失败恢复必须清楚。
 - 新页面默认复用 token、primitives 和 `16-workbench-system.css` 的通用视觉层；页面布局和业务密度写回对应页面 CSS，避免后置全局补丁。
 - 动效保持短、轻、可解释，只服务状态变化。
+- 壳层、浮层和少量抬升面板可使用受控的半透明材质；正文工作区仍以稳定、清晰的浅色表面为主。
 
 ## 2. 颜色系统
 
@@ -18,19 +19,19 @@
 
 | 角色 | Token | 值 | 用法 |
 | --- | --- | --- | --- |
-| 应用背景 | `--bg` | `oklch(0.958 0.004 255)` | 页面主背景 |
-| 外壳背景 | `--chrome` | `oklch(0.934 0.005 255)` | 导航、应用框架 |
-| 默认面板 | `--panel` | `oklch(0.992 0.002 255)` | 卡片、窗格、表单底色 |
-| 抬升面板 | `--panel-raised` | `oklch(0.998 0.001 255)` | 弹窗、强调容器 |
-| 柔和面板 | `--panel-soft` | `oklch(0.948 0.006 255)` | 内嵌区块、弱分组 |
-| 强文本 | `--text-strong` | `oklch(0.18 0.03 250)` | 标题、关键数值、激活标签 |
-| 正文 | `--text` | `oklch(0.255 0.026 248)` | 主要 UI 文本 |
-| 弱文本 | `--muted` | `oklch(0.51 0.026 248)` | 描述、时间、辅助信息 |
-| 默认描边 | `--line` | `oklch(0.86 0.01 255)` | 卡片和区块边框 |
-| 强描边 | `--line-strong` | `oklch(0.72 0.018 255)` | 输入框、关键控件 |
-| 强调色 | `--accent` | `oklch(0.61 0.16 258)` | 聚焦、选中、主强调 |
-| 强调文本 | `--accent-strong` | `oklch(0.52 0.17 258)` | 链接和强调控件文字 |
-| 强调底色 | `--accent-tint` | `oklch(0.968 0.025 258)` | 选中行、高亮面板 |
+| 应用背景 | `--bg` | `oklch(0.965 0.003 264)` | 页面主背景 |
+| 外壳背景 | `--chrome` | `oklch(0.948 0.005 264)` | 导航、应用框架 |
+| 默认面板 | `--panel` | `oklch(0.992 0.002 264)` | 卡片、窗格、表单底色 |
+| 抬升面板 | `--panel-raised` | `oklch(0.998 0.001 264)` | 弹窗、强调容器 |
+| 柔和面板 | `--panel-soft` | `oklch(0.955 0.004 264)` | 内嵌区块、弱分组 |
+| 强文本 | `--text-strong` | `oklch(0.205 0.01 264)` | 标题、关键数值、激活标签 |
+| 正文 | `--text` | `oklch(0.275 0.012 264)` | 主要 UI 文本 |
+| 弱文本 | `--muted` | `oklch(0.53 0.012 264)` | 描述、时间、辅助信息 |
+| 默认描边 | `--line` | `oklch(0.875 0.006 264)` | 卡片和区块边框 |
+| 强描边 | `--line-strong` | `oklch(0.735 0.012 264)` | 输入框、关键控件 |
+| 强调色 | `--accent` | `oklch(0.62 0.19 253)` | 聚焦、选中、主强调 |
+| 强调文本 | `--accent-strong` | `oklch(0.545 0.205 254)` | 链接和强调控件文字 |
+| 强调底色 | `--accent-tint` | `oklch(0.966 0.026 253)` | 选中行、高亮面板 |
 | 信息 | `--blue` / `--blue-soft` | 现有 token | 链接、信息提示、主按钮 |
 | 成功 | `--green` / `--green-soft` | 现有 token | 已完成、可用、已同步 |
 | 等待 | `--amber` / `--amber-soft` | 现有 token | 排队、处理中、待处理 |
@@ -40,6 +41,7 @@
 
 - 组件内不要直接写 raw hex。若需要新颜色，先在 `src/app/styles/00-tokens.css` 增加语义 token。
 - 结构性容器优先使用中性色面板，只有选中、激活、状态和提示使用带色底。
+- 半透明材质统一复用 `--glass-panel`、`--glass-chrome`、`--glass-popover` 与模糊 token，不在业务页散写透明度和 blur。
 - 成功和失败不能只靠颜色表达，必须配合文字或图标。
 - 正文与背景对比度保持 WCAG AA，避免浅灰字叠浅灰底。
 
@@ -49,7 +51,7 @@
 
 | 角色 | Token | 大小 | 字重 | 行高 | 用法 |
 | --- | --- | --- | --- | --- | --- |
-| 页面标题 | `--text-page-title` | `26px` | `740` | `1.08` | 页面主标题 |
+| 页面标题 | `--text-page-title` | `28px` | `700` | `1.08` | 页面主标题 |
 | 区块标题 | `--text-section-title` | `16px` | `700` | `1.25` | 面板和窗格标题 |
 | 卡片标题 | `--text-card-title` | `13px` | `700` | `1.35` | 列表项、卡片标题 |
 | 正文 | `--text-body` | `13px` | `400` | `1.55` | 默认 UI 文案 |
@@ -59,7 +61,7 @@
 
 字体 token：
 
-- `--font-ui`: `Inter, "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif`
+- `--font-ui`: `"SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif`
 - `--font-mono`: `"SF Mono", "SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace`
 - 语义字重：`--font-weight-regular`、`--font-weight-medium`、`--font-weight-label`、`--font-weight-heading`、`--font-weight-page-title`。
 - 语义行高：`--line-height-caption`、`--line-height-meta`、`--line-height-body`、`--line-height-card-title`、`--line-height-section-title`、`--line-height-page-title`、`--line-height-reading`。
@@ -130,8 +132,8 @@
 
 面板规则：
 
-- 面板圆角使用 `--radius-xl`，当前值为 `22px`；紧凑卡片使用 `--radius-lg`，当前值为 `16px`。
-- 控件圆角常用 `14px`，基础 token `--radius-md` 为 `12px`。
+- 面板圆角使用 `--radius-xl`，当前值为 `24px`；紧凑卡片使用 `--radius-lg`，当前值为 `18px`。
+- 控件圆角常用 `13px`，基础 token `--radius-md` 为 `12px`。
 - 默认靠边框、柔和背景和很轻的阴影建立层级，强阴影只给弹窗、抽屉和 toast。
 - 选中态用边框和底色表达，不使用重阴影。
 - 避免无意义嵌套卡片。若必须嵌套，每一层都要有明确任务。
@@ -161,15 +163,16 @@
 
 | Token | 值 | 用法 |
 | --- | --- | --- |
-| `--motion-fast` | `150ms` | hover、颜色变化 |
-| `--motion-base` | `190ms` | 常规状态切换 |
-| `--motion-slow` | `230ms` | toast、弹窗进入 |
-| `--ease-apple` / `--ease-out` | `cubic-bezier(0.16, 1, 0.3, 1)` | 进入、抬升和状态切换 |
+| `--motion-fast` | `140ms` | 按压、即时 hover |
+| `--motion-base` | `220ms` | 常规状态切换 |
+| `--motion-slow` | `320ms` | 页面、toast、弹窗进入 |
+| `--ease-apple` | `cubic-bezier(0.32, 0.72, 0, 1)` | 进入、抬升和状态切换 |
 
 交互规则：
 
 - 只动画化 color、border、shadow、opacity 和 transform。
 - 不动画化 width、height、top、left。
+- 页面进入只做极轻的淡入和纵向位移；按压反馈使用小幅 scale，避免持续漂浮或弹跳。
 - 必须尊重 `prefers-reduced-motion`。
 - hover 只能作为增强，关键操作必须支持键盘和触摸。
 

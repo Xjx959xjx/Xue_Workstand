@@ -581,12 +581,13 @@ function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
   if (job.status === "cancelled") return;
   const hydrationFailed = job.status === "completed" && Boolean(job.error) && Boolean((job as { hasResult?: boolean }).hasResult);
   const failed = job.status === "failed" || hydrationFailed;
+  const partialFailure = !failed && hasPartialRefreshFailure(job);
   const resultHref = getJobResultHref(job);
   notify({
-    tone: failed ? "error" : "success",
-    title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : `${job.title}完成`,
+    tone: failed ? "error" : partialFailure ? "warning" : "success",
+    title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : partialFailure ? `${job.title}部分完成` : `${job.title}完成`,
     message: failed ? formatJobErrorMessage(job.error || job.message) : job.message,
-    durationMs: failed ? 15000 : resultHref ? 10000 : 5000,
+    durationMs: failed || partialFailure ? 15000 : resultHref ? 10000 : 5000,
     action:
       resultHref
         ? {
@@ -595,6 +596,12 @@ function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
           }
         : undefined
   });
+}
+
+function hasPartialRefreshFailure(job: JobRecord) {
+  if (job.kind !== "hotlist-refresh" || job.status !== "completed" || !job.result || typeof job.result !== "object") return false;
+  const refresh = (job.result as { refresh?: { failed?: unknown } }).refresh;
+  return typeof refresh?.failed === "number" && refresh.failed > 0;
 }
 
 function readNotifiedJobIds() {

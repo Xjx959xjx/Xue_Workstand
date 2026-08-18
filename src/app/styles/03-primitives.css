@@ -52,11 +52,12 @@
 .panel {
   position: relative;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 86%, white) 0%, var(--panel) 100%);
+  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  border-radius: var(--radius-xl);
+  background: var(--glass-panel);
   box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-saturation));
 }
 
 .panel::before {
@@ -187,8 +188,7 @@
 .empty-state-panel {
   border-style: solid;
   border-color: color-mix(in oklch, var(--accent) 20%, var(--line));
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 58%, var(--panel-raised)) 0%, var(--panel) 100%);
+  background: color-mix(in oklch, var(--accent-tint) 48%, var(--glass-panel));
 }
 
 .empty-state-panel .panel-inner {
@@ -205,6 +205,6 @@
   border: 1px solid color-mix(in oklch, var(--accent) 28%, var(--line));
   border-radius: 12px;
   color: var(--accent-strong);
-  background: color-mix(in oklch, var(--accent-tint) 90%, white);
-  box-shadow: 0 10px 18px rgba(45, 110, 170, 0.1);
+  background: color-mix(in oklch, var(--accent-tint) 88%, white);
+  box-shadow: var(--shadow-soft);
 }

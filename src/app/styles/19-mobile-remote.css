@@ -26,6 +26,8 @@
   color: var(--notice-text);
   background: color-mix(in oklch, var(--notice-bg) 92%, var(--panel-raised));
   box-shadow: var(--shadow-float);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
 
 .remote-update-banner span,
@@ -90,9 +92,11 @@
   border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--line));
   border-radius: var(--radius-xl);
   background:
-    radial-gradient(circle at 100% 0, color-mix(in oklch, var(--accent-soft) 78%, transparent), transparent 180px),
-    var(--panel-raised);
+    radial-gradient(circle at 100% 0, color-mix(in oklch, var(--accent-soft) 62%, transparent), transparent 180px),
+    var(--glass-panel);
   box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(18px) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-saturation));
 }
 
 .mobile-connection-card.degraded {
@@ -151,8 +155,8 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   color: var(--text);
-  background: var(--panel);
-  box-shadow: var(--surface-card-highlight);
+  background: var(--glass-panel);
+  box-shadow: var(--surface-card-highlight), var(--shadow-soft);
   transition:
     border-color var(--motion-base) var(--ease-apple),
     background-color var(--motion-base) var(--ease-apple),
@@ -200,7 +204,10 @@
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--panel);
+  background: var(--glass-panel);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(18px) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-saturation));
 }
 
 .mobile-list-row {
@@ -548,8 +555,10 @@
     padding: 6px;
     border: 1px solid var(--line);
     border-radius: 16px;
-    background: color-mix(in oklch, var(--panel-raised) 94%, transparent);
-    backdrop-filter: blur(18px);
+    background: var(--glass-popover);
+    box-shadow: var(--shadow-soft);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   }
 
   .mobile-writer-steps a {
@@ -590,8 +599,10 @@
     gap: 12px;
     padding: calc(8px + env(safe-area-inset-top)) 14px 8px;
     border-bottom: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
-    background: color-mix(in oklch, var(--panel-raised) 92%, transparent);
-    backdrop-filter: blur(18px);
+    background: var(--glass-popover);
+    box-shadow: 0 1px 0 color-mix(in oklch, white 62%, transparent);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   }
 
   .mobile-top-brand {
@@ -613,6 +624,7 @@
     border-radius: 11px;
     color: var(--control-primary-text);
     background: var(--control-primary-bg);
+    box-shadow: var(--control-primary-shadow);
     font-size: 18px;
     font-weight: 780;
   }
@@ -718,9 +730,11 @@
     min-height: calc(58px + env(safe-area-inset-bottom));
     padding: 4px 8px env(safe-area-inset-bottom);
     border-top: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
-    background: color-mix(in oklch, var(--panel-raised) 94%, transparent);
-    box-shadow: 0 -10px 30px color-mix(in oklch, var(--text-strong) 7%, transparent);
-    backdrop-filter: blur(20px);
+    background: var(--glass-popover);
+    box-shadow: 0 -1px 0 color-mix(in oklch, white 60%, transparent),
+      0 -10px 30px color-mix(in oklch, var(--text-strong) 6%, transparent);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   }
 
   .mobile-tab-link {
@@ -735,6 +749,9 @@
     color: var(--muted);
     font-size: 10px;
     font-weight: 660;
+    transition:
+      color var(--motion-base) var(--ease-apple),
+      transform var(--motion-fast) var(--ease-press);
   }
 
   .mobile-tab-link::before {
@@ -745,15 +762,24 @@
     border-radius: 999px;
     background: transparent;
     content: "";
+    transform: scaleX(0);
+    transition:
+      background-color var(--motion-base) var(--ease-apple),
+      transform var(--motion-base) var(--ease-apple);
   }
 
   .mobile-tab-link.active {
     color: var(--accent-strong);
-    background: color-mix(in oklch, var(--accent-tint) 42%, transparent);
+    background: transparent;
   }
 
   .mobile-tab-link.active::before {
     background: var(--accent-strong);
+    transform: scaleX(1);
+  }
+
+  .mobile-tab-link:active {
+    transform: scale(0.94);
   }
 
   .remote-update-banner,

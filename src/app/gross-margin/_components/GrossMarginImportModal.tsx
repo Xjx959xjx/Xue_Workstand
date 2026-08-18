@@ -7,22 +7,12 @@ import { useFeedback } from "@/components/FeedbackProvider";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { detectVideoPlatform, extractVideoUrl } from "@/lib/platform-links";
 import type { GrossMarginPriceTable, GrossMarginServiceKind } from "@/lib/types";
+import type {
+  GrossMarginImportedMetric,
+  GrossMarginImportedTemplate
+} from "../_lib/gross-margin-workbench-model";
 
 type PlatformKey = GrossMarginPriceTable["platform"];
-
-export type GrossMarginImportedMetric = {
-  service: GrossMarginServiceKind;
-  label: string;
-  optionHint: string;
-  rawValue: string;
-};
-
-export type GrossMarginImportedTemplate = {
-  platform: PlatformKey;
-  accountName: string;
-  videoUrl: string;
-  metrics: GrossMarginImportedMetric[];
-};
 
 const metricPatterns: Array<{
   service: GrossMarginServiceKind;

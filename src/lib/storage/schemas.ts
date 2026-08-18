@@ -121,13 +121,23 @@ const engagementRecordSchema = versionedObject.extend({
   updatedAt: timestampSchema
 }).passthrough();
 
-type StoredRecordKind =
+const supportDocumentCacheSchema = versionedObject.extend({
+  cacheKey: z.string().min(1),
+  url: z.string().min(1),
+  provider: z.enum(["feishu", "lingxi", "wecom", "tencent-docs", "web"]),
+  title: z.string().optional(),
+  content: z.string().min(1),
+  fetchedAt: timestampSchema
+}).passthrough();
+
+export type StoredRecordKind =
   | "account"
   | "video"
   | "project"
   | "draft"
   | "copy-source"
-  | "engagement";
+  | "engagement"
+  | "support-document-cache";
 
 const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
   account: accountSchema,
@@ -135,7 +145,8 @@ const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
   project: projectSchema,
   draft: z.union([accountDraftSchema, projectDraftSchema]),
   "copy-source": copySourceSchema,
-  engagement: engagementRecordSchema
+  engagement: engagementRecordSchema,
+  "support-document-cache": supportDocumentCacheSchema
 };
 
 export function storedRecordKind(target: string, root: string): StoredRecordKind | null {
@@ -164,6 +175,9 @@ export function storedRecordKind(target: string, root: string): StoredRecordKind
   }
   if (segments[0] === "engagement" && segments.length === 2 && file.endsWith(".json")) {
     return "engagement";
+  }
+  if (segments[0] === ".cache" && segments[1] === "support-documents" && segments.length === 3 && file.endsWith(".json")) {
+    return "support-document-cache";
   }
   return null;
 }

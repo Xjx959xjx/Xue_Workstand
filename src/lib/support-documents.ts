@@ -3,9 +3,10 @@ import { randomBytes } from "crypto";
 import { promises as dns } from "dns";
 import { isIP } from "net";
 import { promisify } from "util";
-import { fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
+import { extractFeishuSupportDocumentRefs, fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
 import { runOpenCli } from "./opencli-runtime";
 import { extractLinksFromInput } from "./platform-links";
+import { readSupportDocumentCache, writeSupportDocumentCache } from "./storage/support-documents";
 import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
@@ -66,11 +67,10 @@ export async function fetchSupportDocuments(
   }
 
   if (!urls.length && hasFeishuDocLink(input)) {
-    const feishuDocuments = await fetchFeishuSupportDocuments(input, options);
-    documents.push(...feishuDocuments.slice(0, MAX_SUPPORT_DOCUMENTS).map((document) => ({
-      ...document,
-      provider: "feishu" as const
-    })));
+    for (const ref of extractFeishuSupportDocumentRefs(input).slice(0, MAX_SUPPORT_DOCUMENTS)) {
+      throwIfAborted(options.signal);
+      documents.push(await fetchSupportDocument(ref, options));
+    }
   }
 
   return documents;
@@ -98,15 +98,26 @@ async function fetchSupportDocument(
   const provider = detectSupportDocumentProvider(url);
 
   try {
-    if (provider === "feishu") {
-      const document = (await fetchFeishuSupportDocuments(url, options))[0];
-      return document
-        ? { ...document, provider }
-        : { url, provider, error: "没有识别到可读取的飞书文档" };
+    const cached = await readSupportDocumentCache(url);
+    if (cached) {
+      return {
+        url,
+        provider: cached.provider,
+        title: cached.title,
+        content: cached.content
+      };
     }
-    if (provider === "lingxi") return await fetchLingxiDocument(url, options);
-    if (provider === "wecom") return await fetchWecomDocument(url, options);
-    return await fetchPublicWebDocument(url, provider, options);
+
+    const document = await fetchSupportDocumentFresh(url, provider, options);
+    if (document.content?.trim()) {
+      await writeSupportDocumentCache({
+        url,
+        provider: document.provider,
+        title: document.title,
+        content: document.content
+      });
+    }
+    return document;
   } catch (error) {
     if (isAbortError(error, options.signal)) throw error;
     return {
@@ -117,7 +128,24 @@ async function fetchSupportDocument(
   }
 }
 
+async function fetchSupportDocumentFresh(
+  url: string,
+  provider: SupportDocumentProvider,
+  options: FetchSupportDocumentOptions
+): Promise<FetchedSupportDocument> {
+  if (provider === "feishu") {
+    const document = (await fetchFeishuSupportDocuments(url, options))[0];
+    return document
+      ? { ...document, provider }
+      : { url, provider, error: "没有识别到可读取的飞书文档" };
+  }
+  if (provider === "lingxi") return fetchLingxiDocument(url, options);
+  if (provider === "wecom") return fetchWecomDocument(url, options);
+  return fetchPublicWebDocument(url, provider, options);
+}
+
 function detectSupportDocumentProvider(url: string): SupportDocumentProvider {
+  if (!/^https?:\/\//i.test(url) && hasFeishuDocLink(url)) return "feishu";
   const host = new URL(url).hostname.toLowerCase();
   if (matchesHost(host, "feishu.cn") || matchesHost(host, "larksuite.com") || matchesHost(host, "feishu-boe.cn")) {
     return "feishu";

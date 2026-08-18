@@ -12,14 +12,19 @@ import type {
 export const DEFAULT_WINDOW = "3d";
 export const MAX_REFRESH_LOGS = 6;
 
-const MAX_REFRESH_LOG_DETAILS = 6;
-
 export type BusyState = "" | "load" | "add" | `remove:${string}`;
 export type AccountSelection = "all" | string;
 export type MetricTone = "views" | "likes" | "comments" | "favorites" | "shares";
 export type SortMode = "heat" | "likes" | "comments" | "saves" | "recent";
 export type WindowFilter = "3h" | "6h" | "12h" | "24h" | "3d";
 export type RefreshLogStatus = "success" | "warning" | "failed" | "skipped";
+export type RefreshLogGroupKind = "failed" | "recovered" | "unchanged";
+
+export type RefreshLogGroup = {
+  kind: RefreshLogGroupKind;
+  accounts: string[];
+  reason?: string;
+};
 
 export type RefreshLogEntry = {
   id: string;
@@ -27,6 +32,8 @@ export type RefreshLogEntry = {
   automatic: boolean;
   status: RefreshLogStatus;
   text: string;
+  groups?: RefreshLogGroup[];
+  /** 兼容旧版本已经写入 localStorage 的逐条明细。 */
   details?: string[];
 };
 
@@ -38,8 +45,6 @@ export type RefreshJobSettlement = {
   automatic: boolean;
   reload: boolean;
   log: Omit<RefreshLogEntry, "id" | "at">;
-  error?: string;
-  message?: string;
 };
 
 export const sortOptions: { value: SortMode; label: string }[] = [
@@ -150,7 +155,20 @@ function isRefreshLogEntry(value: unknown): value is RefreshLogEntry {
     typeof entry.automatic === "boolean" &&
     typeof entry.text === "string" &&
     isRefreshLogStatus(entry.status) &&
+    (entry.groups === undefined || (Array.isArray(entry.groups) && entry.groups.every(isRefreshLogGroup))) &&
     (entry.details === undefined || (Array.isArray(entry.details) && entry.details.every((detail) => typeof detail === "string")))
+  );
+}
+
+function isRefreshLogGroup(value: unknown): value is RefreshLogGroup {
+  if (!value || typeof value !== "object") return false;
+  const group = value as Partial<RefreshLogGroup>;
+  return (
+    (group.kind === "failed" || group.kind === "recovered" || group.kind === "unchanged") &&
+    Array.isArray(group.accounts) &&
+    group.accounts.length > 0 &&
+    group.accounts.every((account) => typeof account === "string" && Boolean(account.trim())) &&
+    (group.reason === undefined || typeof group.reason === "string")
   );
 }
 
@@ -294,22 +312,18 @@ export function getRefreshJobSettlement(job: JobRecord): RefreshJobSettlement {
       return {
         automatic,
         reload: true,
-        log: { automatic, status: job.error ? "warning" : "success", text: message },
-        error: job.error ? message : undefined,
-        message: !job.error && !automatic ? message : undefined
+        log: { automatic, status: job.error ? "warning" : "success", text: message }
       };
     }
-    const summaryText = buildRefreshSummaryText(result.refresh);
     return {
       automatic,
       reload: true,
       log: {
         automatic,
         status: result.refresh.failed ? "warning" : "success",
-        text: `${automatic ? "自动" : "手动"}刷新：${summaryText} · ${result.summary.windowLabel}`,
-        details: describeRefreshLogDetails(result.refresh.accounts)
-      },
-      message: automatic ? undefined : summaryText
+        text: buildRefreshLogText(result.refresh, result.summary.windowLabel),
+        groups: buildRefreshLogGroups(result.refresh.accounts)
+      }
     };
   }
 
@@ -318,8 +332,7 @@ export function getRefreshJobSettlement(job: JobRecord): RefreshJobSettlement {
     return {
       automatic,
       reload: false,
-      log: { automatic, status: "skipped", text: `${automatic ? "自动" : "手动"}${message}` },
-      message: automatic ? undefined : message
+      log: { automatic, status: "skipped", text: message }
     };
   }
 
@@ -327,8 +340,7 @@ export function getRefreshJobSettlement(job: JobRecord): RefreshJobSettlement {
   return {
     automatic,
     reload: false,
-    log: { automatic, status: "failed", text: `${automatic ? "自动" : "手动"}刷新失败：${error}` },
-    error
+    log: { automatic, status: "failed", text: compactRefreshError(error) }
   };
 }
 
@@ -343,53 +355,65 @@ function getRefreshJobResult(job: JobRecord): DouyinHotlistRefreshJobResult | nu
   return result as DouyinHotlistRefreshJobResult;
 }
 
-function describeRefreshLogDetails(accounts: DouyinHotlistRefreshAccountResult[]) {
-  const issueAccounts = accounts.filter((account) => account.status === "failed" || account.status === "unchanged" || account.retried);
-  const details = issueAccounts.slice(0, MAX_REFRESH_LOG_DETAILS).map(describeRefreshAccountResult);
-  const omitted = issueAccounts.length - details.length;
-  if (omitted > 0) details.push(`还有 ${omitted} 个账号也无更新、触发了重试或失败。`);
-  return details;
-}
+function buildRefreshLogGroups(accounts: DouyinHotlistRefreshAccountResult[]): RefreshLogGroup[] {
+  const groups: RefreshLogGroup[] = [];
+  const failedByReason = new Map<string, string[]>();
 
-function describeRefreshAccountResult(account: DouyinHotlistRefreshAccountResult) {
-  if (account.status === "unchanged") {
-    const countText = formatRefreshCountText(account);
-    return `${account.name}：无更新${countText}${account.error ? `，${compactRefreshError(account.error)}` : ""}`;
-  }
-  if (account.status === "failed") {
-    const retryText = account.retried ? "重试后未更新" : "失败";
-    const countText = formatRefreshCountText(account);
-    return `${account.name}：${retryText}${countText}${account.error ? `，${compactRefreshError(account.error)}` : ""}`;
-  }
-  const countText = formatRefreshCountText(account);
-  return `${account.name}：批量抓取失败后单账号重试成功${countText}${account.retryReason ? `，原因为 ${compactRefreshError(account.retryReason)}` : ""}`;
-}
+  accounts.filter((account) => account.status === "failed").forEach((account) => {
+    const reason = compactRefreshError(account.error || "未返回可用结果");
+    failedByReason.set(reason, [...(failedByReason.get(reason) || []), account.name]);
+  });
 
-function formatRefreshCountText(account: DouyinHotlistRefreshAccountResult) {
-  if (account.changedCount !== undefined && account.observedCount !== undefined) {
-    return `，观察 ${account.observedCount} 条，变更 ${account.changedCount} 条`;
+  failedByReason.forEach((failedAccounts, reason) => {
+    groups.push({ kind: "failed", accounts: failedAccounts, reason });
+  });
+
+  const recoveredAccounts = accounts
+    .filter((account) => account.status === "completed" && account.retried)
+    .map((account) => account.name);
+  if (recoveredAccounts.length) {
+    groups.push({
+      kind: "recovered",
+      accounts: recoveredAccounts,
+      reason: "批量抓取失败后，单账号重试成功"
+    });
   }
-  if (account.savedCount !== undefined) return `，变更 ${account.savedCount} 条`;
-  if (account.rawCount !== undefined) return `，抓到 ${account.rawCount} 条`;
-  return "";
+
+  const unchangedAccounts = accounts
+    .filter((account) => account.status === "unchanged")
+    .map((account) => account.name);
+  if (unchangedAccounts.length) groups.push({ kind: "unchanged", accounts: unchangedAccounts });
+
+  return groups;
 }
 
 function compactRefreshError(message: string) {
-  return message.replace(/\s+/g, " ").trim().slice(0, 120);
+  const normalized = message.replace(/\s+/g, " ").trim();
+  const platform = /opencli bilibili|B站/i.test(normalized) ? "B站" : /opencli douyin|抖音/i.test(normalized) ? "抖音" : "平台";
+  if (/Unexpected token.*<|<!DOCTYPE|not valid JSON/i.test(normalized)) {
+    return `${platform}返回异常页面，数据解析失败`;
+  }
+  if (/timed?\s*out|timeout|超时/i.test(normalized)) return "抓取超时";
+  if (/热榜关注列表里的账号已经不存在/.test(normalized)) return "账号已不在热榜关注列表中";
+  if (/没有返回这个账号的结果/.test(normalized)) return "抓取未返回该账号结果";
+  if (/Command failed: opencli bilibili/i.test(normalized)) return "B站数据抓取失败";
+  if (/Command failed: opencli douyin/i.test(normalized)) return "抖音数据抓取失败";
+  return normalized.slice(0, 80);
 }
 
 export function isRefreshBusyMessage(message: string) {
   return /热榜正在刷新中|正在刷新中|已有.*刷新/i.test(message);
 }
 
-function buildRefreshSummaryText(refresh: DouyinHotlistRefreshJobResult["refresh"]) {
+function buildRefreshLogText(refresh: DouyinHotlistRefreshJobResult["refresh"], windowLabel: string) {
   const handledCount = refresh.completed + refresh.unchanged + refresh.failed;
   const changedVideoCount = refresh.accounts.reduce((sum, account) => sum + (account.changedCount || 0), 0);
-  const parts = [`已处理 ${handledCount}/${refresh.requested} 个账号`];
-  if (refresh.completed) parts.push(`${refresh.completed} 个有更新${changedVideoCount ? `（${changedVideoCount} 条内容）` : ""}`);
-  if (refresh.unchanged) parts.push(`${refresh.unchanged} 个无变化`);
-  if (refresh.failed) parts.push(`${refresh.failed} 个失败`);
-  return `${parts.join("，")}。`;
+  const parts = [handledCount === refresh.requested ? `${handledCount} 个账号` : `已处理 ${handledCount}/${refresh.requested}`];
+  if (refresh.completed) parts.push(`更新 ${refresh.completed}${changedVideoCount ? `（${changedVideoCount} 条）` : ""}`);
+  if (refresh.unchanged) parts.push(`无变化 ${refresh.unchanged}`);
+  if (refresh.failed) parts.push(`失败 ${refresh.failed}`);
+  parts.push(windowLabel);
+  return parts.join(" · ");
 }
 
 export function getSelectedAccount(

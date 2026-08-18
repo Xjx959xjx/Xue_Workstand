@@ -32,6 +32,8 @@
   place-items: center;
   padding: 24px;
   background: var(--overlay);
+  backdrop-filter: blur(12px) saturate(0.9);
+  -webkit-backdrop-filter: blur(12px) saturate(0.9);
   overscroll-behavior: contain;
 }
 
@@ -57,9 +59,10 @@
   overflow: hidden;
   border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
   border-radius: var(--radius-xl);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 94%, var(--panel)) 0%, var(--panel) 100%);
+  background: var(--glass-popover);
   box-shadow: var(--shadow-lift);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
 
 .modal-panel:focus {

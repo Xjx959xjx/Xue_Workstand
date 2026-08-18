@@ -31,7 +31,12 @@ export async function POST(request: Request) {
         emit({ type: "stage", stage: "transcribe-links", message: "正在转写链接里的视频文稿", progress: 18 });
       }
       if (!isRevision && hasSupportDocumentReference(separatedSourceInput.supportDocLinks)) {
-        emit({ type: "stage", stage: "fetch-support-docs", message: "正在读取商单支持文档", progress: 24 });
+        emit({
+          type: "stage",
+          stage: "fetch-support-docs",
+          message: "正在准备商单支持文档（已读内容会自动复用）",
+          progress: 24
+        });
       }
       const prepared = await prepareWriteCopyContext(input, { signal });
 

@@ -69,7 +69,7 @@ test("本地刷新日志会丢弃损坏记录并限制保留数量", () => {
   assert.deepEqual(parseStoredRefreshLogs("not-json"), []);
 });
 
-test("刷新任务结算把部分失败转成可展示日志与手动提示", () => {
+test("刷新任务结算把部分失败转成简短摘要和失败优先的分组明细", () => {
   const result: DouyinHotlistRefreshJobResult = {
     automatic: false,
     refresh: {
@@ -110,17 +110,54 @@ test("刷新任务结算把部分失败转成可展示日志与手动提示", ()
 
   assert.equal(settlement.reload, true);
   assert.equal(settlement.log.status, "warning");
-  assert.match(settlement.log.text, /已处理 2\/2 个账号/);
-  assert.deepEqual(settlement.log.details, ["账号 B：失败，抓取失败"]);
-  assert.match(settlement.message || "", /1 个有更新/);
+  assert.equal(settlement.log.text, "2 个账号 · 更新 1（3 条） · 失败 1 · 近 3 天");
+  assert.deepEqual(settlement.log.groups, [
+    { kind: "failed", accounts: ["账号 B"], reason: "抓取失败" }
+  ]);
 });
 
-test("自动刷新中断不会生成页面提示，但会留下跳过日志", () => {
+test("刷新日志合并相同失败原因并把无变化账号压缩为一组", () => {
+  const htmlError = "Command failed: opencli bilibili user-videos 1 -f json\nSyntaxError: Unexpected token '<', <!DOCTYPE is not valid JSON";
+  const result: DouyinHotlistRefreshJobResult = {
+    automatic: true,
+    refresh: {
+      requested: 4,
+      completed: 0,
+      unchanged: 2,
+      failed: 2,
+      limit: 10,
+      accounts: [
+        { accountId: "same-a", name: "无变化 A", status: "unchanged" },
+        { accountId: "failed-a", name: "失败 A", status: "failed", error: htmlError },
+        { accountId: "same-b", name: "无变化 B", status: "unchanged" },
+        { accountId: "failed-b", name: "失败 B", status: "failed", error: htmlError }
+      ]
+    },
+    summary: {
+      windowKey: "3d",
+      windowLabel: "近 3 天",
+      windowDays: 3,
+      fromDate: "2026-08-14",
+      toDate: "2026-08-17",
+      accountCount: 4,
+      staleAccountIds: [],
+      totalVideoCount: 8,
+      recentVideoCount: 8
+    }
+  };
+
+  const settlement = getRefreshJobSettlement(makeJob({ status: "completed", result }));
+  assert.deepEqual(settlement.log.groups, [
+    { kind: "failed", accounts: ["失败 A", "失败 B"], reason: "B站返回异常页面，数据解析失败" },
+    { kind: "unchanged", accounts: ["无变化 A", "无变化 B"] }
+  ]);
+});
+
+test("自动刷新中断只留下跳过日志", () => {
   const settlement = getRefreshJobSettlement(makeJob({ status: "interrupted", title: "自动刷新视频热榜" }));
 
   assert.equal(settlement.automatic, true);
   assert.equal(settlement.reload, false);
-  assert.equal(settlement.message, undefined);
   assert.equal(settlement.log.status, "skipped");
   assert.match(settlement.log.text, /服务重启中断/);
 });

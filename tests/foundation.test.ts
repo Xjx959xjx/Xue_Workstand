@@ -37,6 +37,8 @@ import {
   restoreWriterSourceInput,
   splitWriterSourceInput
 } from "../src/lib/source-extraction";
+import { fetchSupportDocuments } from "../src/lib/support-documents";
+import { writeSupportDocumentCache } from "../src/lib/storage/support-documents";
 import type { Account, Video } from "../src/lib/types";
 
 const execFileAsync = promisify(execFile);
@@ -256,6 +258,53 @@ test("支持文档链接分流时不压缩纯文字排版", () => {
   assert.equal(separated.sourceText, "第一段保留  双空格。\n\n  第二段保留缩进。");
   assert.equal(separated.supportDocLinks, "https://example.com/reference");
   assert.equal(separated.supportDocumentCount, 1);
+});
+
+test("已成功读取的支持文档会跨写作风格复用缓存", async () => {
+  await withTemporaryLibrary(async () => {
+    const url = "https://example.com/merchant-brief#section";
+    const feishuRef = "docxcnCacheReuse123456";
+    await writeSupportDocumentCache({
+      url,
+      provider: "web",
+      title: "商单说明",
+      content: "这是已读取的商单支持文档正文。"
+    });
+    await writeSupportDocumentCache({
+      url: feishuRef,
+      provider: "feishu",
+      title: "飞书商单说明",
+      content: "这是用文档标识读取过的飞书正文。"
+    });
+
+    const webDocuments = await fetchSupportDocuments(url);
+    assert.deepEqual(webDocuments, [{
+      url,
+      provider: "web",
+      title: "商单说明",
+      content: "这是已读取的商单支持文档正文。"
+    }]);
+    const [firstStyle, secondStyle] = await Promise.all([
+      upsertAccount({ platform: "bilibili", name: "缓存风格一", uid: "support-cache-style-1" }),
+      upsertAccount({ platform: "douyin", name: "缓存风格二", uid: "support-cache-style-2" })
+    ]);
+    const contexts = await Promise.all([firstStyle, secondStyle].map((account) => prepareWriteCopyContext({
+      styleRefs: [{ targetType: "account", platform: account.platform, accountId: account.id }],
+      mode: "topic",
+      prompt: "基于同一份商单资料生成文案",
+      supportDocLinks: url
+    })));
+    assert.match(contexts[0].messages[1].content, /这是已读取的商单支持文档正文/);
+    assert.match(contexts[1].messages[1].content, /这是已读取的商单支持文档正文/);
+
+    const feishuDocuments = await fetchSupportDocuments(feishuRef);
+    assert.deepEqual(feishuDocuments, [{
+      url: feishuRef,
+      provider: "feishu",
+      title: "飞书商单说明",
+      content: "这是用文档标识读取过的飞书正文。"
+    }]);
+  });
 });
 
 test("旧写作历史恢复时会移除内部素材包装", () => {

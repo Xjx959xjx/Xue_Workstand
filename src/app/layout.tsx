@@ -27,7 +27,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#f2f4f7"
+  themeColor: "#f5f5f7"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

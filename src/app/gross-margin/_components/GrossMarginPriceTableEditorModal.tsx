@@ -147,7 +147,7 @@ export function GrossMarginPriceTableEditorModal({
             <tbody>
               {rows.map((row) => (
                 <tr className={row.active ? "" : "inactive"} key={row.id}>
-                  <td>
+                  <td data-label="启用">
                     <label className="gross-price-editor-toggle">
                       <input
                         aria-label={`${row.name || "未命名类型"}是否启用`}
@@ -157,7 +157,7 @@ export function GrossMarginPriceTableEditorModal({
                       />
                     </label>
                   </td>
-                  <td>
+                  <td data-label="维护项">
                     <select
                       aria-label="维护项"
                       value={row.service}
@@ -170,7 +170,7 @@ export function GrossMarginPriceTableEditorModal({
                       ))}
                     </select>
                   </td>
-                  <td>
+                  <td data-label="类型名">
                     <input
                       aria-label="类型名"
                       value={row.name}
@@ -178,7 +178,7 @@ export function GrossMarginPriceTableEditorModal({
                       placeholder="例如 普通千川"
                     />
                   </td>
-                  <td>
+                  <td data-label="单价">
                     <input
                       aria-label="单价"
                       inputMode="decimal"
@@ -189,7 +189,7 @@ export function GrossMarginPriceTableEditorModal({
                       placeholder="0.00"
                     />
                   </td>
-                  <td>
+                  <td data-label="单位">
                     <input
                       aria-label="数量单位"
                       value={row.quantityUnit}
@@ -197,7 +197,7 @@ export function GrossMarginPriceTableEditorModal({
                       placeholder="万/千/个"
                     />
                   </td>
-                  <td>
+                  <td data-label="起量">
                     <input
                       aria-label="起量"
                       inputMode="decimal"
@@ -208,7 +208,7 @@ export function GrossMarginPriceTableEditorModal({
                       placeholder="可不填"
                     />
                   </td>
-                  <td>
+                  <td data-label="备注">
                     <input
                       aria-label="备注"
                       value={row.note}
@@ -216,7 +216,7 @@ export function GrossMarginPriceTableEditorModal({
                       placeholder="备注"
                     />
                   </td>
-                  <td>
+                  <td data-label="操作">
                     {row.isNew ? (
                       <button className="btn compact" onClick={() => removeDraftRow(row.id)} type="button">
                         移除草稿
