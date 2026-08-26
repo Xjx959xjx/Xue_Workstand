@@ -24,7 +24,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback, type FeedbackTone } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
-import { exportAccountTranscripts, getHealth } from "@/lib/client";
+import { exportAccountTranscripts } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import type { AccountListItem, CollectOrder, CollectResult, Platform, VideoListItem } from "@/lib/types";
 
@@ -70,10 +70,8 @@ function LibraryPageContent() {
   const [collectTimeRange, setCollectTimeRange] = useState<TimeRange>("all");
   const [customFromDate, setCustomFromDate] = useState("");
   const [customToDate, setCustomToDate] = useState("");
-  const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null);
-  const [healthBusy, setHealthBusy] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
-  const [collectPanelOpen, setCollectPanelOpen] = useState(false);
+  const [collectPanelOpen, setCollectPanelOpen] = useState(true);
   const [lastCollect, setLastCollect] = useState<CollectResult | null>(null);
   const [activeCollectJobId, setActiveCollectJobId] = useState("");
   const editModalRef = useRef<HTMLDivElement>(null);
@@ -267,7 +265,7 @@ function LibraryPageContent() {
   ]);
   const activeTimeLabel = formatTimeRangeLabel(collectTimeRange, collectDateFilter.fromDate, collectDateFilter.toDate);
   const activeOrderOptions = collectOrderOptions[collectPlatform];
-  const canCollect = Boolean(collectName.trim()) && !busy && !healthBusy;
+  const canCollect = Boolean(collectName.trim()) && !busy;
 
   useBilibiliStatsHydration({ refresh, reloadSelectedAccountDetail, selectedAccount });
   useRestoreFocus(Boolean(openModal), editModalRef);
@@ -336,20 +334,6 @@ function LibraryPageContent() {
       setRefreshBusy(false);
     }
   }, [refresh, refreshBusy, reloadSelectedAccountDetail, selectedAccount, setMessage]);
-
-  const handleHealthCheck = useCallback(async () => {
-    setHealthBusy(true);
-    setMessage("");
-    setLastCollect(null);
-    try {
-      setHealth(await getHealth());
-      setMessage("环境检查完成。", "success");
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "环境检查失败，请确认 opencli、模型或飞书配置后重试。", "error");
-    } finally {
-      setHealthBusy(false);
-    }
-  }, [setMessage]);
 
   const handleCollect = useCallback(async () => {
     if (!canCollect) return;
@@ -504,11 +488,10 @@ function LibraryPageContent() {
         </header>
         <LibraryQuickStartPanel
           activeOrderOptions={activeOrderOptions}
-          busy={healthBusy ? "health" : busy}
+          busy={busy}
           canSubmit={canCollect}
           customFromDate={customFromDate}
           customToDate={customToDate}
-          health={health}
           limit={collectLimit}
           name={collectName}
           order={collectOrder}
@@ -517,7 +500,6 @@ function LibraryPageContent() {
           onCollect={handleCollect}
           onCustomFromDateChange={setCustomFromDate}
           onCustomToDateChange={setCustomToDate}
-          onHealthCheck={handleHealthCheck}
           onLimitChange={setCollectLimit}
           onNameChange={setCollectName}
           onOrderChange={setCollectOrder}
@@ -548,26 +530,33 @@ function LibraryPageContent() {
           <button
             aria-controls="library-collect-panel"
             aria-expanded={collectPanelOpen}
-            className={`btn ${collectPanelOpen ? "" : "primary"}`}
+            className={`btn compact ${collectPanelOpen ? "" : "primary"}`}
             onClick={() => setCollectPanelOpen((current) => !current)}
             type="button"
           >
             {collectPanelOpen ? <X aria-hidden="true" size={16} /> : <Plus aria-hidden="true" size={16} />}
-            {collectPanelOpen ? "收起采集" : "采集账号"}
+            {collectPanelOpen ? "收起" : "采集"}
           </button>
           <button
             aria-busy={busy === "recollect"}
-            className="btn"
+            className="btn compact"
             disabled={!selectedAccount || Boolean(busy)}
             onClick={handleRecollectSelectedAccount}
             type="button"
           >
             <RefreshCw aria-hidden="true" size={16} />
-            {busy === "recollect" ? "更新中" : "更新账号"}
+            {busy === "recollect" ? "更新中" : "更新"}
           </button>
-          <button className="btn ghost" aria-busy={refreshBusy} disabled={refreshBusy} onClick={() => void handleRefresh()} type="button">
+          <button
+            aria-busy={refreshBusy}
+            aria-label={refreshBusy ? "正在刷新账号库" : "刷新账号库"}
+            className="btn ghost compact icon-btn icon-only"
+            disabled={refreshBusy}
+            onClick={() => void handleRefresh()}
+            title={refreshBusy ? "正在刷新账号库" : "刷新账号库"}
+            type="button"
+          >
             <RefreshCw aria-hidden="true" size={16} />
-            {refreshBusy ? "刷新中" : "刷新"}
           </button>
         </div>
       </header>
@@ -595,11 +584,10 @@ function LibraryPageContent() {
       {collectPanelOpen ? (
         <LibraryQuickStartPanel
           activeOrderOptions={activeOrderOptions}
-          busy={healthBusy ? "health" : busy}
+          busy={busy}
           canSubmit={canCollect}
           customFromDate={customFromDate}
           customToDate={customToDate}
-          health={health}
           limit={collectLimit}
           name={collectName}
           order={collectOrder}
@@ -608,7 +596,6 @@ function LibraryPageContent() {
           onCollect={handleCollect}
           onCustomFromDateChange={setCustomFromDate}
           onCustomToDateChange={setCustomToDate}
-          onHealthCheck={handleHealthCheck}
           onLimitChange={setCollectLimit}
           onNameChange={setCollectName}
           onOrderChange={setCollectOrder}

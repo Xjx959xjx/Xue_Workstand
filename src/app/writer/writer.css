@@ -10,9 +10,9 @@
 }
 
 .writer-page-header {
-  min-height: 54px;
+  min-height: 72px;
   align-items: center;
-  padding-bottom: 8px;
+  padding: 10px 16px;
 }
 
 .writer-page-header .page-header-meta {
@@ -48,7 +48,7 @@
 
 .writer-history-trigger {
   flex: 0 0 auto;
-  border-radius: var(--radius-md);
+  border-radius: var(--button-radius);
 }
 
 .writer-history-count {
@@ -194,6 +194,11 @@
 .writer-reference-option:hover,
 .writer-reference-option[aria-selected="true"] {
   background: color-mix(in oklch, var(--accent-tint) 54%, transparent);
+}
+
+.writer-reference-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .writer-reference-check {
@@ -651,6 +656,61 @@
 .writer-generation-status div > span {
   color: var(--muted);
   font-size: 10px;
+}
+
+.writer-variant-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  padding: 5px;
+  overflow-x: auto;
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--surface-soft) 78%, transparent);
+}
+
+.writer-variant-tabs > button {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 220px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--muted-strong);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.writer-variant-tabs > button:hover,
+.writer-variant-tabs > button.active {
+  border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
+  color: var(--text-strong);
+  background: var(--panel-raised);
+}
+
+.writer-variant-tabs > button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-shadow);
+}
+
+.writer-variant-tabs > button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.writer-variant-tabs > button > small {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .writer-activity-dot {

@@ -13,6 +13,8 @@ import type {
   JobStartInput,
   ProjectDraftInput,
   ProjectListItem,
+  WriteBatchResult,
+  WriteGenerationResult,
   WriteResult,
   WriteRevisionScope,
   WriteStyleReferenceInput
@@ -21,6 +23,21 @@ import type {
 type DraftSaveBase = Omit<AccountDraftInput, "assets" | "content"> | Omit<ProjectDraftInput, "assets" | "content">;
 type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput, "assets">;
 const PENDING_WRITE_JOB_STORAGE_KEY = "style-workbench-pending-write-job";
+
+type WriterVariantState = {
+  key: string;
+  title: string;
+  content: string;
+  research: string;
+  savedContent: string;
+  draftBase: DraftSaveBase | null;
+  draftId: string;
+};
+
+export type WriterGeneratedVariant = Pick<WriterVariantState, "key" | "title" | "draftId"> & {
+  version?: DraftVersion;
+  hasUnsavedChanges: boolean;
+};
 
 type UseWriterGenerationInput = {
   activeJobs: JobRecord[];
@@ -86,6 +103,8 @@ export function useWriterGeneration({
   const [lastSavedContent, setLastSavedContent] = useState("");
   const [lastDraftBase, setLastDraftBase] = useState<DraftSaveBase | null>(null);
   const [lastDraftId, setLastDraftId] = useState("");
+  const [generatedVariants, setGeneratedVariants] = useState<WriterVariantState[]>([]);
+  const [activeVariantKey, setActiveVariantKey] = useState("");
   const [generateStage, setGenerateStage] = useState("");
   const [generateProgress, setGenerateProgress] = useState(0);
   const [activeWriteJobId, setActiveWriteJobId] = useState(readPendingWriteJobId);
@@ -145,6 +164,38 @@ export function useWriterGeneration({
   );
   const canStopGenerate = Boolean(activeWriteJobId && isGenerating);
   const hasUnsavedChanges = Boolean(lastDraftId && lastContent !== lastSavedContent);
+  const hasAnyUnsavedChanges = hasUnsavedChanges || generatedVariants.some((variant) =>
+    Boolean(variant.draftId && variant.content !== variant.savedContent)
+  );
+  const variantSummaries = useMemo<WriterGeneratedVariant[]>(() => generatedVariants.map((variant) => ({
+    key: variant.key,
+    title: variant.title,
+    draftId: variant.draftId,
+    version: variant.draftBase?.version,
+    hasUnsavedChanges: Boolean(variant.draftId && variant.content !== variant.savedContent)
+  })), [generatedVariants]);
+
+  const applyVariantState = useCallback((variant: WriterVariantState) => {
+    setActiveVariantKey(variant.key);
+    setLastContent(variant.content);
+    setLastResearch(variant.research);
+    setLastSavedContent(variant.savedContent);
+    setLastDraftBase(variant.draftBase);
+    setLastDraftId(variant.draftId);
+  }, []);
+
+  const updateActiveVariant = useCallback((patch: Partial<WriterVariantState>) => {
+    if (!activeVariantKey) return;
+    setGeneratedVariants((current) => current.map((variant) =>
+      variant.key === activeVariantKey ? { ...variant, ...patch } : variant
+    ));
+  }, [activeVariantKey]);
+
+  const selectGeneratedVariant = useCallback((variantKey: string) => {
+    const target = generatedVariants.find((variant) => variant.key === variantKey);
+    if (!target || target.key === activeVariantKey) return;
+    applyVariantState(target);
+  }, [activeVariantKey, applyVariantState, generatedVariants]);
 
   useEffect(() => {
     if (!activeWriteJob) return;
@@ -158,7 +209,7 @@ export function useWriterGeneration({
       return;
     }
 
-    const result = activeWriteJob.result as WriteResult | undefined;
+    const result = activeWriteJob.result as WriteGenerationResult | undefined;
     const isWaitingForHydratedResult = activeWriteJob.status === "completed" && !result && Boolean((activeWriteJob as { hasResult?: boolean }).hasResult);
     if (isWaitingForHydratedResult) {
       if (activeWriteJob.error) {
@@ -186,20 +237,40 @@ export function useWriterGeneration({
     if (activeWriteJob.status === "completed") {
       if (result) {
         generationBaseContentRef.current = "";
-        setLastContent(result.content);
-        setLastResearch(result.research || "");
-        setLastSavedContent(result.draft ? result.content : "");
-        setLastDraftId(result.draft?.id || "");
-        setLastDraftBase(result.draft ? draftToSaveBase(result.draft) : null);
-        if (result.draft) {
-          onDraftSaved?.(result.draft);
-          routerReplace(buildWriterDraftHref(result.draft), { scroll: false });
-          if (result.draft.version?.origin === "revision") onRevisionCompleted?.();
+        if (isWriteBatchResult(result)) {
+          const nextVariants = result.results.map((item) => variantStateFromWriteResult(item));
+          setGeneratedVariants(nextVariants);
+          if (nextVariants[0]) applyVariantState(nextVariants[0]);
+          for (const item of result.results) {
+            if (item.draft) onDraftSaved?.(item.draft);
+          }
           void refresh();
+          const failureNotice = result.failures.length
+            ? `；${result.failures.map((failure) => `${failure.styleTitle}失败`).join("、")}`
+            : "";
+          setNotice(`已并发生成并分别保存 ${result.results.length} 篇独立文案${failureNotice}。`);
+        } else {
+          const nextVariant = variantStateFromWriteResult(result, activeTitle || "当前稿件", activeVariantKey);
+          const isRevision = result.draft?.version?.origin === "revision";
+          if (isRevision && activeVariantKey && generatedVariants.length > 1) {
+            setGeneratedVariants((current) => current.map((variant) =>
+              variant.key === activeVariantKey ? { ...nextVariant, key: variant.key, title: variant.title } : variant
+            ));
+            applyVariantState({ ...nextVariant, key: activeVariantKey, title: generatedVariants.find((item) => item.key === activeVariantKey)?.title || nextVariant.title });
+          } else {
+            setGeneratedVariants([nextVariant]);
+            applyVariantState(nextVariant);
+          }
+          if (result.draft) {
+            onDraftSaved?.(result.draft);
+            if (generatedVariants.length <= 1) routerReplace(buildWriterDraftHref(result.draft), { scroll: false });
+            if (isRevision) onRevisionCompleted?.();
+            void refresh();
+          }
+          setNotice(
+            `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到版本历史。`
+          );
         }
-        setNotice(
-          `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到版本历史。`
-        );
       } else {
         generationBaseContentRef.current = "";
         setNotice("文案生成完成。");
@@ -229,7 +300,20 @@ export function useWriterGeneration({
       setLastContent(generationBaseContentRef.current);
       generationBaseContentRef.current = "";
     }
-  }, [activeWriteJob, onDraftSaved, onRevisionCompleted, refresh, routerReplace, setBusy, setNotice, useWebResearch]);
+  }, [
+    activeTitle,
+    activeVariantKey,
+    activeWriteJob,
+    applyVariantState,
+    generatedVariants,
+    onDraftSaved,
+    onRevisionCompleted,
+    refresh,
+    routerReplace,
+    setBusy,
+    setNotice,
+    useWebResearch
+  ]);
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;
@@ -240,12 +324,19 @@ export function useWriterGeneration({
     setGenerateProgress(6);
     setLastContent("");
     setLastResearch("");
+    setLastSavedContent("");
+    setLastDraftBase(null);
+    setLastDraftId("");
+    setGeneratedVariants([]);
+    setActiveVariantKey("");
 
     try {
       const job = await startTask({
         kind: "write-copy",
-        title: "生成文案",
-        inputSummary: activeTitle ? `${activeTitle} · ${mode === "topic" ? "自由输入" : "素材改写"}` : undefined,
+        title: styleRefs.length > 1 ? `并发生成 ${styleRefs.length} 篇文案` : "生成文案",
+        inputSummary: activeTitle
+          ? `${activeTitle} · ${mode === "topic" ? "自由输入" : "素材改写"}${styleRefs.length > 1 ? ` · ${styleRefs.length} 篇` : ""}`
+          : undefined,
         href: "/writer",
         input: {
           action: "create",
@@ -267,7 +358,9 @@ export function useWriterGeneration({
       setActiveWriteJobId(job.id);
       setGenerateStage(job.message);
       setGenerateProgress(job.progress);
-      setNotice("文案生成已在后台开始，可以切换到其他模块。");
+      setNotice(styleRefs.length > 1
+        ? `${styleRefs.length} 张风格卡已开始并发生成，每张会得到一篇独立文案。`
+        : "文案生成已在后台开始，可以切换到其他模块。");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "生成失败，请检查模型配置、代理或输入内容后重试。");
       setGenerateStage("任务启动失败");
@@ -373,11 +466,27 @@ export function useWriterGeneration({
     setLastDraftId(draft.id);
     setLastSavedContent(lastContent);
     setLastDraftBase(draftToSaveBase(draft));
+    updateActiveVariant({
+      content: lastContent,
+      savedContent: lastContent,
+      draftId: draft.id,
+      draftBase: draftToSaveBase(draft)
+    });
     onDraftSaved?.(draft);
-    routerReplace(buildWriterDraftHref(draft), { scroll: false });
+    if (generatedVariants.length <= 1) routerReplace(buildWriterDraftHref(draft), { scroll: false });
     await refresh();
     return { draftId: draft.id, draft };
-  }, [lastContent, lastDraftBase, lastDraftId, lastSavedContent, onDraftSaved, refresh, routerReplace]);
+  }, [
+    generatedVariants.length,
+    lastContent,
+    lastDraftBase,
+    lastDraftId,
+    lastSavedContent,
+    onDraftSaved,
+    refresh,
+    routerReplace,
+    updateActiveVariant
+  ]);
 
   const handleSaveEdit = useCallback(async () => {
     if (!hasUnsavedChanges) return;
@@ -414,16 +523,19 @@ export function useWriterGeneration({
     setNotice("生成结果已复制到剪贴板。");
   }, [lastContent, setNotice]);
 
+  const handleContentChange = useCallback((content: string) => {
+    setLastContent(content);
+    updateActiveVariant({ content });
+  }, [updateActiveVariant]);
+
   const loadDraftResult = useCallback((draft: Draft) => {
     generationBaseContentRef.current = "";
-    setLastContent(draft.content);
-    setLastResearch(draft.research || "");
-    setLastSavedContent(draft.content);
-    setLastDraftId(draft.id);
-    setLastDraftBase(draftToSaveBase(draft));
+    const variant = variantStateFromDraft(draft);
+    setGeneratedVariants([variant]);
+    applyVariantState(variant);
     setGenerateStage("");
     setGenerateProgress(100);
-  }, []);
+  }, [applyVariantState]);
 
   const clearDraftResult = useCallback(() => {
     generationBaseContentRef.current = "";
@@ -432,6 +544,8 @@ export function useWriterGeneration({
     setLastSavedContent("");
     setLastDraftBase(null);
     setLastDraftId("");
+    setGeneratedVariants([]);
+    setActiveVariantKey("");
     setGenerateStage("");
     setGenerateProgress(0);
     clearPendingWriteJobId(activeWriteJobId);
@@ -446,19 +560,56 @@ export function useWriterGeneration({
     copyLast,
     generateProgress,
     generateStage,
-    handleContentChange: setLastContent,
+    activeVariantKey,
+    generatedVariants: variantSummaries,
+    handleContentChange,
     handleGenerate,
     handleOpenAssets,
     handleRevise,
     handleSaveEdit,
     handleStopGenerate,
+    hasAnyUnsavedChanges,
     hasUnsavedChanges,
     lastContent,
     lastDraftBase,
     lastDraftId,
     lastDraftVersion: lastDraftBase?.version,
     lastResearch,
-    loadDraftResult
+    loadDraftResult,
+    selectGeneratedVariant
+  };
+}
+
+function isWriteBatchResult(result: WriteGenerationResult): result is WriteBatchResult {
+  return "kind" in result && result.kind === "write-batch";
+}
+
+function variantStateFromWriteResult(
+  result: WriteResult,
+  fallbackTitle = "当前稿件",
+  fallbackKey = ""
+): WriterVariantState {
+  const metadata = result as WriteResult & { styleKey?: string; styleTitle?: string };
+  return {
+    key: metadata.styleKey || fallbackKey || result.draft?.id || "current",
+    title: metadata.styleTitle || fallbackTitle,
+    content: result.content,
+    research: result.research || "",
+    savedContent: result.draft ? result.content : "",
+    draftBase: result.draft ? draftToSaveBase(result.draft) : null,
+    draftId: result.draft?.id || ""
+  };
+}
+
+function variantStateFromDraft(draft: Draft): WriterVariantState {
+  return {
+    key: draft.id,
+    title: draft.targetType === "project" ? draft.projectName : draft.accountName,
+    content: draft.content,
+    research: draft.research || "",
+    savedContent: draft.content,
+    draftBase: draftToSaveBase(draft),
+    draftId: draft.id
   };
 }
 

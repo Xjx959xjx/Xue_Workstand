@@ -34,6 +34,8 @@ import {
   TranscriptVersion,
   Video,
   WriteAction,
+  WriteBatchResult,
+  WriteGenerationResult,
   WriteRevisionScope,
   WriteResult,
   WriteStyleReferenceInput,
@@ -318,10 +320,16 @@ function rememberDraftFromJob(job: JobRecord) {
   const result = job.result;
   if (!result || typeof result !== "object") return;
 
-  const draft = (result as Partial<WriteResult>).draft;
-  if (!draft || typeof draft !== "object" || typeof draft.id !== "string") return;
+  if ((result as { kind?: string }).kind === "write-batch") {
+    const drafts = ((result as { results?: Array<Partial<WriteResult>> }).results || [])
+      .map((item) => item.draft)
+      .filter((draft): draft is Draft => Boolean(draft && typeof draft === "object" && typeof draft.id === "string"));
+    rememberDrafts(drafts);
+    return;
+  }
 
-  rememberDrafts([draft as Draft]);
+  const draft = (result as Partial<WriteResult>).draft;
+  if (draft && typeof draft === "object" && typeof draft.id === "string") rememberDrafts([draft as Draft]);
 }
 
 function rememberEngagementRecordFromJob(job: JobRecord) {
@@ -1249,7 +1257,7 @@ export function saveStyle(platform: Platform, accountId: string, content: string
 }
 
 export function writeCopy(input: WriteCopyRequest) {
-  return requestJson<WriteResult>("/api/write", {
+  return requestJson<WriteGenerationResult>("/api/write", {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -1279,13 +1287,13 @@ export async function streamWriteCopy(
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
     onDelta?: (delta: string) => void;
     onResearch?: (research: string) => void;
-    onResult?: (result: WriteResult) => void;
+    onResult?: (result: WriteGenerationResult) => void;
   }
 ) {
   await readNdjsonStream<
     | { type: "stage"; stage: string; message: string; progress?: number }
     | { type: "delta"; delta: string }
-    | { type: "result"; data: Partial<WriteResult> & { phase?: string } }
+    | { type: "result"; data: (Partial<WriteResult> & { phase?: string }) | WriteBatchResult }
     | { type: "error"; message: string }
     | { type: "done" }
   >(
@@ -1302,20 +1310,27 @@ export async function streamWriteCopy(
       if (event.type === "delta") {
         handlers.onDelta?.(event.delta);
       }
-      if (event.type === "result" && event.data.phase === "research" && event.data.research) {
-        handlers.onResearch?.(event.data.research);
-      }
-      if (event.type === "result" && typeof event.data.content === "string" && typeof event.data.usedModel === "string") {
-        handlers.onResult?.({
-          content: event.data.content,
-          research: event.data.research,
-          contextFingerprint: event.data.contextFingerprint,
-          sourceDigest: event.data.sourceDigest,
-          draft: event.data.draft,
-          usedModel: event.data.usedModel,
-          fallback: Boolean(event.data.fallback),
-          fallbackReason: event.data.fallbackReason
-        });
+      if (event.type === "result") {
+        if ("kind" in event.data && event.data.kind === "write-batch") {
+          handlers.onResult?.(event.data);
+          return;
+        }
+        const singleData = event.data as Partial<WriteResult> & { phase?: string };
+        if (singleData.phase === "research" && singleData.research) {
+          handlers.onResearch?.(singleData.research);
+        }
+        if (typeof singleData.content === "string" && typeof singleData.usedModel === "string") {
+          handlers.onResult?.({
+            content: singleData.content,
+            research: singleData.research,
+            contextFingerprint: singleData.contextFingerprint,
+            sourceDigest: singleData.sourceDigest,
+            draft: singleData.draft,
+            usedModel: singleData.usedModel,
+            fallback: Boolean(singleData.fallback),
+            fallbackReason: singleData.fallbackReason
+          });
+        }
       }
     }
   );

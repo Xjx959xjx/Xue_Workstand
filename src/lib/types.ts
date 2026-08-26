@@ -1085,6 +1085,29 @@ export type WriteResult = {
   fallbackReason?: string;
 };
 
+export type WriteVariantResult = WriteResult & {
+  styleKey: string;
+  styleTitle: string;
+  styleReference: WriteStyleReference;
+};
+
+export type WriteVariantFailure = {
+  styleKey: string;
+  styleTitle: string;
+  styleReference: WriteStyleReference;
+  error: string;
+};
+
+export type WriteBatchResult = {
+  kind: "write-batch";
+  results: WriteVariantResult[];
+  failures: WriteVariantFailure[];
+  research?: string;
+  sourceDigest?: WriteSourceDigest;
+};
+
+export type WriteGenerationResult = WriteResult | WriteBatchResult;
+
 export type WriterSourceFileImport = {
   name: string;
   mimeType: string;

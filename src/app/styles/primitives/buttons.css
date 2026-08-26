@@ -9,7 +9,7 @@
   gap: var(--space-2);
   padding: 0 var(--control-padding-x);
   border: 1px solid color-mix(in oklch, var(--line-strong) 44%, var(--line));
-  border-radius: var(--control-radius);
+  border-radius: var(--button-radius);
   color: var(--text);
   background: color-mix(in oklch, var(--panel-raised) 74%, var(--control-bg));
   box-shadow: var(--surface-inset-highlight), 0 1px 2px color-mix(in oklch, var(--text-strong) 4%, transparent);
@@ -121,7 +121,7 @@
 .btn.small {
   min-height: 28px;
   padding: 0 8px;
-  border-radius: 10px;
+  border-radius: var(--button-radius);
   font-size: var(--text-caption);
 }
 

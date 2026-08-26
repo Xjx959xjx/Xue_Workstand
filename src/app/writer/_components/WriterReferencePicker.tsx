@@ -21,6 +21,8 @@ type ReferenceOption = {
   reference: WriteStyleReferenceInput;
 };
 
+const MAX_CONCURRENT_STYLES = 8;
+
 export function WriterReferencePicker({
   accounts,
   disabled,
@@ -50,7 +52,7 @@ export function WriterReferencePicker({
     return option ? [option] : [];
   });
   const summary = selectedOptions.length > 1
-    ? `${selectedOptions[0].label} 等 ${selectedOptions.length} 个风格`
+    ? `已选 ${selectedOptions.length} 个风格 · 分别生成`
     : selectedOptions[0]?.label || "选择参考风格";
 
   useEffect(() => {
@@ -72,6 +74,7 @@ export function WriterReferencePicker({
   const toggleReference = (option: ReferenceOption) => {
     const selected = selectedKeys.includes(option.key);
     if (selected && references.length === 1) return;
+    if (!selected && references.length >= MAX_CONCURRENT_STYLES) return;
     onChange(selected
       ? references.filter((reference) => writeStyleReferenceKey(reference) !== option.key)
       : [...references, option.reference]);
@@ -82,11 +85,11 @@ export function WriterReferencePicker({
       <strong>{label}</strong>
       {group.map((option) => {
         const selected = selectedKeys.includes(option.key);
-        const order = selectedKeys.indexOf(option.key);
         return (
           <button
             aria-selected={selected}
             className="writer-reference-option"
+            disabled={!selected && references.length >= MAX_CONCURRENT_STYLES}
             key={option.key}
             onClick={() => toggleReference(option)}
             role="option"
@@ -99,7 +102,7 @@ export function WriterReferencePicker({
               <span>{option.label}</span>
               <small>{option.meta}</small>
             </span>
-            {selected ? <em>{order === 0 ? "主风格" : `补充 ${order}`}</em> : null}
+            {selected ? <em>独立成稿</em> : null}
           </button>
         );
       })}
@@ -124,7 +127,7 @@ export function WriterReferencePicker({
         <div aria-label="选择参考风格" aria-multiselectable="true" className="writer-reference-menu" role="listbox">
           {renderGroup("项目风格", options.filter((option) => option.reference.targetType === "project"))}
           {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account"))}
-          <p>至少保留 1 个；选择顺序决定优先级。</p>
+          <p>至少保留 1 个，最多 8 个；多选会按每张风格卡并发生成独立文案，不会混合风格。</p>
         </div>
       ) : null}
     </div>

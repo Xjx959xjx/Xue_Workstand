@@ -207,7 +207,7 @@ h3 {
   place-items: center;
   flex: 0 0 auto;
   border: 1px solid color-mix(in oklch, var(--line-strong) 28%, var(--line));
-  border-radius: 12px;
+  border-radius: 10px;
   color: color-mix(in oklch, var(--accent-strong) 78%, var(--text-strong));
   background: var(--glass-panel);
   box-shadow: var(--surface-inset-highlight), var(--shadow-soft);

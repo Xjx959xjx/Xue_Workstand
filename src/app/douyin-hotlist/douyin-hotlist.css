@@ -6,9 +6,9 @@
 }
 
 .douyin-hotlist-page .page-header {
-  min-height: 66px;
-  padding: 0 0 10px;
-  border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 68%, transparent);
+  min-height: 72px;
+  padding: 10px 16px;
+  border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
 }
 
 .douyin-hotlist-page .page-title-group {
@@ -25,7 +25,7 @@
 .douyin-hotlist-page .page-title-copy h1 {
   font-size: var(--text-page-title);
   font-weight: var(--font-weight-page-title);
-  letter-spacing: 0;
+  letter-spacing: -0.025em;
   line-height: var(--line-height-page-title);
 }
 
@@ -40,13 +40,13 @@
 .douyin-hotlist-page .page-header-meta {
   flex-wrap: nowrap;
   gap: 8px;
-  padding-top: 14px;
+  padding-top: 0;
 }
 
 .douyin-hotlist-page .page-header-meta .btn {
   min-height: 36px;
   padding-inline: 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--button-radius);
 }
 
 .douyin-hotlist-refresh-log {
@@ -636,14 +636,14 @@
 .douyin-hotlist-item-head {
   grid-area: head;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 30px;
   gap: 6px;
   align-items: center;
   min-width: 0;
 }
 
 .douyin-hotlist-item.has-cover .douyin-hotlist-item-head {
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
 }
 
 .douyin-hotlist-cover {
@@ -707,39 +707,12 @@
   line-height: var(--line-height-card-title);
 }
 
-.douyin-hotlist-title-link {
-  display: inline-block;
-  box-sizing: border-box;
-  max-width: 100%;
-  overflow: hidden;
-  padding: 1px 3px;
-  border-radius: 5px;
-  color: inherit;
-  cursor: pointer;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  vertical-align: top;
-  white-space: nowrap;
-  transition:
-    color var(--motion-fast) var(--ease-apple),
-    background-color var(--motion-fast) var(--ease-apple),
-    box-shadow var(--motion-fast) var(--ease-apple);
-}
-
-.douyin-hotlist-title-link:hover,
-.douyin-hotlist-title-link:focus-visible {
-  color: var(--accent-strong);
-  background-color: color-mix(in oklch, var(--accent-tint) 82%, transparent);
-}
-
-.douyin-hotlist-title-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  box-shadow: var(--focus-ring-shadow);
-}
-
-.douyin-hotlist-title-link:active {
-  background-color: color-mix(in oklch, var(--accent-tint) 96%, transparent);
+.douyin-hotlist-item-head .btn {
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 999px;
 }
 
 .douyin-hotlist-item-meta {
@@ -1557,7 +1530,13 @@
   }
 
   .douyin-hotlist-item.has-cover .douyin-hotlist-item-head {
-    grid-template-columns: 42px minmax(0, 1fr);
+    grid-template-columns: 42px minmax(0, 1fr) 44px;
+  }
+
+  .douyin-hotlist-item-head .btn {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .douyin-hotlist-window-filter,
@@ -1599,10 +1578,6 @@
   }
 
   .douyin-hotlist-item-main h3 {
-    display: block;
-  }
-
-  .douyin-hotlist-title-link {
     display: -webkit-box;
     white-space: normal;
     -webkit-box-orient: vertical;

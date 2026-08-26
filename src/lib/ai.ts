@@ -7,10 +7,14 @@ import {
   CopySource,
   ProjectDraftInput,
   ProjectSummary,
+  WriteBatchResult,
+  WriteGenerationResult,
   WriteResult,
   WriteSourceDigest,
   WriteStyleReference,
   WriteStyleReferenceInput,
+  WriteVariantFailure,
+  WriteVariantResult,
   platforms
 } from "./types";
 import { clampText, makeTitleFromPrompt, nowIso, shortHash } from "./utils";
@@ -51,7 +55,11 @@ import {
   splitWriterSourceInput
 } from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
-import { draftWriteStyleReferenceInputs, normalizeWriteStyleReferenceInputs } from "./write-references";
+import {
+  draftWriteStyleReferenceInputs,
+  normalizeWriteStyleReferenceInputs,
+  writeStyleReferenceKey
+} from "./write-references";
 import {
   buildChatFallbackReason,
   chatCompletionPayload,
@@ -129,6 +137,19 @@ export type PreparedWriteContext = {
   contextFingerprint: string;
   sourceDigest: WriteSourceDigest;
   draftBase?: Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
+};
+
+export type PreparedWriteVariantContext = {
+  styleKey: string;
+  styleTitle: string;
+  styleReference: WriteStyleReference;
+  prepared: PreparedWriteContext;
+};
+
+export type PreparedWriteBatchContext = {
+  variants: PreparedWriteVariantContext[];
+  research?: string;
+  sourceDigest: WriteSourceDigest;
 };
 
 export type SaveAndGenerateProjectStyleInput = {
@@ -543,8 +564,13 @@ async function streamResponseApi(
     throw error;
   }
 
+  const text = aggregatedText.trim();
+  if (!text) {
+    throw new Error("对话模型流式响应没有返回可用内容");
+  }
+
   return {
-    text: aggregatedText.trim(),
+    text,
     model: config.model,
     fallback: false,
     ok: true,
@@ -619,8 +645,13 @@ async function streamChatCompletion(
     throw error;
   }
 
+  const text = aggregatedText.trim();
+  if (!text) {
+    throw new Error("对话模型流式响应没有返回可用内容");
+  }
+
   return {
-    text: aggregatedText.trim(),
+    text,
     model: config.model,
     fallback: false,
     ok: true,
@@ -684,7 +715,11 @@ async function chatCompleteWithEffort(
   let lastError: unknown;
   for (const config of configs) {
     try {
-      return await chatCompleteWithConfig(config, messages, reasoningEffort, tools, options);
+      const result = await chatCompleteWithConfig(config, messages, reasoningEffort, tools, options);
+      if (!result.text.trim()) {
+        throw new Error("对话模型没有返回可用内容");
+      }
+      return result;
     } catch (error) {
       if (isAbortError(error)) throw error;
       lastError = error;
@@ -2564,26 +2599,42 @@ export async function saveAndGenerateProjectStyleProfile(
   return buildSavedProjectStyleResult(prepared, result);
 }
 
-export async function writeCopy(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteResult> {
-  const prepared = await prepareWriteCopyContext(input, options);
-  const result = await chatCompleteWithFallback(prepared.messages, WRITE_COPY_REASONING_EFFORT, undefined, {
-    signal: options.signal,
-    maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS
-  });
-  throwIfAborted(options.signal);
-  const content = resolvePreparedWriteContent(result);
-  const draft = await savePreparedDraft(input, prepared, content);
+export async function writeCopy(
+  input: WriteCopyInput,
+  options: { signal?: AbortSignal } = {}
+): Promise<WriteGenerationResult> {
+  if (input.action === "revise") {
+    const prepared = await prepareWriteCopyContext(input, options);
+    const result = await chatCompleteWithFallback(prepared.messages, WRITE_COPY_REASONING_EFFORT, undefined, {
+      signal: options.signal,
+      maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS
+    });
+    throwIfAborted(options.signal);
+    return completePreparedWriteCopy({ prepared, result, save: input.save, signal: options.signal });
+  }
 
-  return {
-    content,
-    research: prepared.research,
-    contextFingerprint: prepared.contextFingerprint,
-    sourceDigest: prepared.sourceDigest,
-    draft,
-    usedModel: result.model,
-    fallback: result.fallback,
-    fallbackReason: result.fallbackReason
-  };
+  const batch = await prepareWriteCopyBatchContext(input, options);
+  const outcomes = await Promise.all(batch.variants.map(async (variant) => {
+    try {
+      const result = await chatCompleteWithFallback(variant.prepared.messages, WRITE_COPY_REASONING_EFFORT, undefined, {
+        signal: options.signal,
+        maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS
+      });
+      return {
+        result: await completePreparedWriteVariant({
+          variant,
+          result,
+          save: input.save,
+          signal: options.signal
+        })
+      };
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      return { failure: writeVariantFailure(variant, error) };
+    }
+  }));
+  throwIfAborted(options.signal);
+  return resolveWriteBatchOutcome(batch, outcomes);
 }
 
 export async function completePreparedWriteCopy(input: {
@@ -2608,11 +2659,77 @@ export async function completePreparedWriteCopy(input: {
   };
 }
 
+export async function completePreparedWriteVariant(input: {
+  variant: PreparedWriteVariantContext;
+  result: ChatCompletionResult;
+  save?: boolean;
+  signal?: AbortSignal;
+}): Promise<WriteVariantResult> {
+  const completed = await completePreparedWriteCopy({
+    prepared: input.variant.prepared,
+    result: input.result,
+    save: input.save,
+    signal: input.signal
+  });
+  return {
+    ...completed,
+    styleKey: input.variant.styleKey,
+    styleTitle: input.variant.styleTitle,
+    styleReference: input.variant.styleReference
+  };
+}
+
+export function writeVariantFailure(
+  variant: PreparedWriteVariantContext,
+  error: unknown
+): WriteVariantFailure {
+  return {
+    styleKey: variant.styleKey,
+    styleTitle: variant.styleTitle,
+    styleReference: variant.styleReference,
+    error: error instanceof Error ? error.message : "文案生成失败"
+  };
+}
+
+export function resolveWriteBatchOutcome(
+  batch: PreparedWriteBatchContext,
+  outcomes: Array<{ result?: WriteVariantResult; failure?: WriteVariantFailure }>
+): WriteGenerationResult {
+  const results = outcomes.flatMap((outcome) => outcome.result ? [outcome.result] : []);
+  const failures = outcomes.flatMap((outcome) => outcome.failure ? [outcome.failure] : []);
+  if (!results.length) {
+    const reasons = failures.map((failure) => `${failure.styleTitle}：${failure.error}`).join("；");
+    throw new Error(reasons || "所有风格的文案都生成失败，请检查模型配置后重试。");
+  }
+  if (batch.variants.length === 1 && failures.length === 0) return results[0];
+  const result: WriteBatchResult = {
+    kind: "write-batch",
+    results,
+    failures,
+    research: batch.research,
+    sourceDigest: batch.sourceDigest
+  };
+  return result;
+}
+
 export async function prepareWriteCopyContext(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<PreparedWriteContext> {
   throwIfAborted(options.signal);
   if (input.action === "revise") {
     return prepareWriteRevisionContext(input, options);
   }
+  const batch = await prepareWriteCopyBatchContext(input, options);
+  if (batch.variants.length !== 1) {
+    throw new Error("多选风格会分别生成多篇文案，请使用并发写作流程");
+  }
+  return batch.variants[0].prepared;
+}
+
+export async function prepareWriteCopyBatchContext(
+  input: WriteCopyInput,
+  options: { signal?: AbortSignal } = {}
+): Promise<PreparedWriteBatchContext> {
+  throwIfAborted(options.signal);
+  if (input.action === "revise") throw new Error("续改只针对当前选中的单篇稿件");
   if (input.useWebResearch) {
     const capability = getWebResearchCapability();
     if (!capability.available) throw new Error(capability.reason);
@@ -2633,7 +2750,6 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
     normalizedInput.mode === "topic"
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
       : `请按所选参考风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
-  const contextFingerprint = buildWriteContextFingerprint(normalizedInput);
   const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
   const webContext = normalizedInput.useWebResearch
     ? await buildWebResearchContext({ ...normalizedInput, supportDocContext }, options)
@@ -2647,41 +2763,72 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
   const sourceDigest = buildWriteSourceDigest(normalizedInput);
 
   return {
-    messages: [
-      {
-        role: "system",
-        content:
-          "你是中文短视频文案写手。直接根据用户任务、所选风格卡、代表样本和已核验资料完成成稿，不要输出中间策划过程、创作思路或审稿意见。选择顺序代表风格优先级：第一项是主风格，其余作为补充。应融合兼容特征并处理冲突，不得把不同风格机械拼段，也不得套用跨账号通用的短视频结构。"
-      },
-      {
-        role: "user",
-        content: [
-          `参考风格（共 ${styleContexts.length} 项，按优先级排列）：\n${formatWriteStyleContexts(styleContexts, true)}`,
-          `支持文档资料：\n${supportDocContext}`,
-          `联网检索资料：\n${webContext}`,
-          `任务：\n${userTask}`,
-          [
-            "写作边界：",
-            "1. 只输出可直接使用的成稿，不解释创作思路。",
-            "2. 开头方式、句长、节奏、具象程度和结尾方式服从所选风格卡与代表样本，不自行补统一模板。",
-            "3. 多个风格存在冲突时按选择顺序取舍；同一风格的风格卡与样本有差异时，以代表样本反复出现的表达模式为准。",
-            "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
-            "5. 保留用户给出的具体梗、场景、原话和事实线索。"
-          ].join("\n")
-        ].join("\n\n")
-      }
-    ],
+    variants: styleContexts.map((styleContext, index) => {
+      const styleInput = styleInputs[index];
+      const variantInput: WriteCopyInput = {
+        ...normalizedInput,
+        targetType: styleInput.targetType,
+        platform: styleInput.targetType === "account" ? styleInput.platform : undefined,
+        accountId: styleInput.targetType === "account" ? styleInput.accountId : undefined,
+        projectId: styleInput.targetType === "project" ? styleInput.projectId : undefined,
+        styleRefs: [styleInput]
+      };
+      const contextFingerprint = buildWriteContextFingerprint(variantInput);
+      return {
+        styleKey: writeStyleReferenceKey(styleContext.reference),
+        styleTitle: styleContext.title,
+        styleReference: styleContext.reference,
+        prepared: {
+          messages: buildInitialWriteMessages({ styleContext, supportDocContext, webContext, userTask }),
+          research,
+          contextFingerprint,
+          sourceDigest,
+          draftBase: buildPreparedWriteDraftBase({
+            input: variantInput,
+            styleContexts: [styleContext],
+            research,
+            sourceDigest,
+            contextFingerprint,
+            includeStyleInTitle: styleContexts.length > 1
+          })
+        }
+      };
+    }),
     research,
-    contextFingerprint,
-    sourceDigest,
-    draftBase: buildPreparedWriteDraftBase({
-      input: normalizedInput,
-      styleContexts,
-      research,
-      sourceDigest,
-      contextFingerprint
-    })
+    sourceDigest
   };
+}
+
+function buildInitialWriteMessages(input: {
+  styleContext: WriteStyleContext;
+  supportDocContext: string;
+  webContext: string;
+  userTask: string;
+}): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "你是中文短视频文案写手。本次只使用用户指定的这一张风格卡及其代表样本，独立完成一篇成稿。不要融合、借用或补入其他账号或项目的风格，也不要输出中间策划过程、创作思路或审稿意见。"
+    },
+    {
+      role: "user",
+      content: [
+        `本篇唯一参考风格：\n${formatWriteStyleContexts([input.styleContext], true)}`,
+        `支持文档资料：\n${input.supportDocContext}`,
+        `联网检索资料：\n${input.webContext}`,
+        `任务：\n${input.userTask}`,
+        [
+          "写作边界：",
+          "1. 只输出可直接使用的成稿，不解释创作思路。",
+          "2. 开头方式、句长、节奏、具象程度和结尾方式只服从本篇风格卡与代表样本，不自行补统一模板。",
+          "3. 风格卡与样本有差异时，以代表样本反复出现的表达模式为准。",
+          "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
+          "5. 保留用户给出的具体梗、场景、原话和事实线索。"
+        ].join("\n")
+      ].join("\n\n")
+    }
+  ];
 }
 
 async function prepareWriteRevisionContext(
@@ -2748,7 +2895,7 @@ async function prepareWriteRevisionContext(
         "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
         "只输出修改后的完整成稿，不解释修改过程，不输出差异说明。",
         "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
-        "表达方式以当前风格卡组和原稿为准；多风格冲突时保持原有选择顺序，不要补入跨账号通用结构。",
+        "表达方式以当前稿件和它保存的风格卡为准；不要在续改时引入其他账号或项目的风格。",
         "不得添加原稿、原始素材、历史策划备注或已保存参考资料中没有依据的新事实。"
       ].join("\n")
     },
@@ -2769,7 +2916,7 @@ async function prepareWriteRevisionContext(
           "1. 输出必须是完整成稿，不能只返回局部段落。",
           "2. 本轮要求优先级最高，但不得突破已有事实边界。",
           "3. 修改范围外的内容不要无故换词、换结构或删减。",
-          "4. 保持当前所选风格组合原有的句法、停顿、段落长度和收尾方式。"
+          "4. 保持当前稿件原有的句法、停顿、段落长度和收尾方式。"
         ].join("\n")
       ].join("\n\n")
     }
@@ -2883,7 +3030,7 @@ async function resolveWriteStyleContext(
 
 function formatWriteStyleContexts(contexts: WriteStyleContext[], includeSamples: boolean) {
   return contexts.map((context, index) => [
-    `## 风格 ${index + 1}${index === 0 ? "（主风格）" : "（补充风格）"}｜${context.title}`,
+    `## ${contexts.length > 1 ? `风格卡 ${index + 1}` : "风格卡"}｜${context.title}`,
     context.subtitle,
     `风格卡：\n${includeSamples ? context.style : clampText(context.style, 12_000)}`,
     ...(includeSamples ? [`代表样本：\n${context.sampleContext || "暂无样本，仅参考风格卡。"}`] : [])
@@ -2896,10 +3043,13 @@ function buildPreparedWriteDraftBase(input: {
   research?: string;
   sourceDigest: WriteSourceDigest;
   contextFingerprint: string;
+  includeStyleInTitle?: boolean;
 }): PreparedWriteContext["draftBase"] {
-  const primary = input.styleContexts[0].reference;
+  const reference = input.styleContexts[0].reference;
   const shared = {
-    title: makeTitleFromPrompt(input.input.prompt),
+    title: input.includeStyleInTitle
+      ? `${makeTitleFromPrompt(input.input.prompt)} · ${input.styleContexts[0].title}`
+      : makeTitleFromPrompt(input.input.prompt),
     mode: input.input.mode,
     prompt: input.input.prompt,
     originalSourceInput: input.input.originalSourceInput?.trim()
@@ -2913,17 +3063,17 @@ function buildPreparedWriteDraftBase(input: {
     version: createInitialDraftVersion(input.contextFingerprint)
   };
 
-  if (primary.targetType === "project") {
+  if (reference.targetType === "project") {
     return {
       ...shared,
       targetType: "project",
-      projectId: primary.projectId,
-      projectName: primary.projectName,
+      projectId: reference.projectId,
+      projectName: reference.projectName,
       styleRef: {
-        projectId: primary.projectId,
-        projectName: primary.projectName,
-        sourceAccountIds: primary.sourceAccountIds,
-        sourceMaterialIds: primary.sourceMaterialIds
+        projectId: reference.projectId,
+        projectName: reference.projectName,
+        sourceAccountIds: reference.sourceAccountIds,
+        sourceMaterialIds: reference.sourceMaterialIds
       }
     };
   }
@@ -2931,14 +3081,14 @@ function buildPreparedWriteDraftBase(input: {
   return {
     ...shared,
     targetType: "account",
-    platform: primary.platform,
-    accountId: primary.accountId,
-    accountName: primary.accountName,
+    platform: reference.platform,
+    accountId: reference.accountId,
+    accountName: reference.accountName,
     styleRef: {
-      platform: primary.platform,
-      accountId: primary.accountId,
-      accountName: primary.accountName,
-      videoIds: primary.videoIds
+      platform: reference.platform,
+      accountId: reference.accountId,
+      accountName: reference.accountName,
+      videoIds: reference.videoIds
     }
   };
 }

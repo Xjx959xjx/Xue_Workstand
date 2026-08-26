@@ -8,11 +8,15 @@ import {
   completePreparedAccountStyle,
   completePreparedProjectStyle,
   completePreparedWriteCopy,
+  completePreparedWriteVariant,
   prepareAccountStyleContext,
   prepareSavedProjectStyleContext,
+  prepareWriteCopyBatchContext,
   prepareWriteCopyContext,
+  resolveWriteBatchOutcome,
   streamStyleResponseTextWithFallback,
   streamResponseTextWithFallback,
+  writeVariantFailure,
   WRITE_COPY_MAX_OUTPUT_TOKENS,
   WRITE_COPY_REASONING_EFFORT
 } from "./ai";
@@ -42,7 +46,8 @@ import {
   JobRecord,
   JobScope,
   JobStartInput,
-  WriteResult,
+  WriteBatchResult,
+  WriteGenerationResult,
   jobKinds
 } from "./types";
 import { nowIso, safeSegment, shortHash } from "./utils";
@@ -560,17 +565,9 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   const isRevision = start.input.action === "revise";
   const separatedSourceInput = splitWriterSourceInput(start.input.sourceText || "", start.input.supportDocLinks || "");
   const sourceExtraction = extractRewriteSourceMaterial(separatedSourceInput.sourceText);
-  let partialText = "";
-  const partialUpdater = createPartialTextUpdater(jobId, {
-    stage: "generate",
-    message: isRevision ? "正在生成新版本" : "正在生成文案",
-    progress(text) {
-      return Math.min(86, 60 + Math.floor(text.length / 120));
-    }
-  });
   await patchJob(jobId, {
     stage: "prepare",
-    message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡和代表样本",
+    message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡、代表样本和共享资料",
     progress: 10
   });
 
@@ -590,26 +587,110 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     });
   }
 
-  const prepared = await prepareWriteCopyContext(start.input, { signal: getJobAbortSignal(jobId) });
+  if (isRevision) {
+    await runWriteRevisionJob(jobId, start);
+    return;
+  }
+
+  const batch = await prepareWriteCopyBatchContext(start.input, { signal: getJobAbortSignal(jobId) });
   throwIfCancelled(jobId);
 
-  if (!isRevision && start.input.useWebResearch) {
+  if (start.input.useWebResearch) {
     await patchJob(jobId, {
       stage: "research",
-      message: prepared.research?.startsWith("联网资料：模型联网暂时不可用")
+      message: batch.research?.startsWith("联网资料：模型联网暂时不可用")
         ? "联网检索暂不可用，正在继续生成"
         : "联网检索已完成，正在整理资料",
       progress: 35,
-      result: prepared.research ? { research: prepared.research } : undefined
+      result: batch.research ? { research: batch.research } : undefined
     });
   }
 
+  const variantCount = batch.variants.length;
   await patchJob(jobId, {
     stage: "generate",
-    message: isRevision ? "正在按本轮要求生成新版本" : "正在生成文案",
+    message: variantCount > 1 ? `正在并发生成 ${variantCount} 篇独立文案` : "正在生成文案",
     progress: 55
   });
 
+  let completedCount = 0;
+  const outcomes = await Promise.all(batch.variants.map(async (variant) => {
+    try {
+      const result = await streamResponseTextWithFallback({
+        messages: variant.prepared.messages,
+        reasoningEffort: WRITE_COPY_REASONING_EFFORT,
+        maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
+        signal: getJobAbortSignal(jobId),
+        onDelta() {
+          // Concurrent variants are kept separate; exposing one combined partial text would corrupt the drafts.
+        }
+      });
+      const completed = await completePreparedWriteVariant({
+        variant,
+        result,
+        save: start.input.save,
+        signal: getJobAbortSignal(jobId)
+      });
+      completedCount += 1;
+      await patchTransientJob(jobId, {
+        stage: "generate",
+        message: variantCount > 1
+          ? `已完成 ${completedCount}/${variantCount} 篇，其他风格仍在生成`
+          : "正在整理生成结果",
+        progress: Math.min(91, 55 + Math.floor((completedCount / variantCount) * 34))
+      });
+      return { result: completed };
+    } catch (error) {
+      if (isCancelledJobError(error, getJobAbortSignal(jobId))) throw error;
+      completedCount += 1;
+      await patchTransientJob(jobId, {
+        stage: "generate",
+        message: `已处理 ${completedCount}/${variantCount} 篇，正在等待其余结果`,
+        progress: Math.min(91, 55 + Math.floor((completedCount / variantCount) * 34))
+      });
+      return { failure: writeVariantFailure(variant, error) };
+    }
+  }));
+  throwIfCancelled(jobId);
+
+  if (start.input.save) {
+    await patchJob(jobId, {
+      stage: "save-draft",
+      message: "正在整理已保存的独立草稿",
+      progress: 92
+    });
+  }
+
+  const finalResult = resolveWriteBatchOutcome(batch, outcomes);
+  const isBatchResult = "kind" in finalResult && finalResult.kind === "write-batch";
+  const successfulCount = isBatchResult ? finalResult.results.length : 1;
+  const failedCount = isBatchResult ? finalResult.failures.length : 0;
+  await completeJob(jobId, {
+    message: failedCount
+      ? `已生成 ${successfulCount} 篇，${failedCount} 篇失败`
+      : successfulCount > 1 ? `${successfulCount} 篇独立文案已生成` : "文案生成完成",
+    result: finalResult,
+    partialText: firstWriteResultContent(finalResult),
+    resultRef: writeResultRef(finalResult)
+  });
+}
+
+async function runWriteRevisionJob(jobId: string, start: Extract<JobStartInput, { kind: "write-copy" }>) {
+  let partialText = "";
+  const partialUpdater = createPartialTextUpdater(jobId, {
+    stage: "generate",
+    message: "正在生成新版本",
+    progress(text) {
+      return Math.min(86, 60 + Math.floor(text.length / 120));
+    }
+  });
+  const prepared = await prepareWriteCopyContext(start.input, { signal: getJobAbortSignal(jobId) });
+  throwIfCancelled(jobId);
+  await patchJob(jobId, {
+    stage: "generate",
+    message: "正在按本轮要求生成新版本",
+    progress: 55
+  });
   const result = await streamResponseTextWithFallback({
     messages: prepared.messages,
     reasoningEffort: WRITE_COPY_REASONING_EFFORT,
@@ -622,7 +703,6 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   });
   await partialUpdater.flush(partialText);
   throwIfCancelled(jobId);
-
   if (start.input.save) {
     await patchJob(jobId, {
       stage: "save-draft",
@@ -630,7 +710,6 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
       progress: 88
     });
   }
-
   const finalResult = await completePreparedWriteCopy({
     prepared,
     result,
@@ -638,9 +717,8 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     signal: getJobAbortSignal(jobId)
   });
   throwIfCancelled(jobId);
-
   await completeJob(jobId, {
-    message: "文案生成完成",
+    message: "文案新版本已生成",
     result: finalResult,
     partialText: finalResult.content,
     resultRef: writeResultRef(finalResult)
@@ -1415,8 +1493,25 @@ function defaultHref(input: JobStartInput) {
   return "/assets";
 }
 
-function writeResultRef(result: WriteResult) {
-  if (!result.draft) {
+function firstWriteResultContent(result: WriteGenerationResult) {
+  return isWriteBatchResult(result) ? result.results[0]?.content : result.content;
+}
+
+function writeResultRef(result: WriteGenerationResult) {
+  if (isWriteBatchResult(result)) {
+    const firstResult = result.results[0];
+    if (!firstResult?.draft) {
+      return { href: "/writer", label: "查看写作台" };
+    }
+    return {
+      id: firstResult.draft.id,
+      href: "/writer",
+      label: `查看 ${result.results.length} 篇文案`
+    };
+  }
+
+  const firstResult = result;
+  if (!firstResult?.draft) {
     return {
       href: "/writer",
       label: "查看写作台"
@@ -1424,10 +1519,14 @@ function writeResultRef(result: WriteResult) {
   }
 
   return {
-    id: result.draft.id,
-    href: buildWriterDraftHref(result.draft),
+    id: firstResult.draft.id,
+    href: buildWriterDraftHref(firstResult.draft),
     label: "查看文案"
   };
+}
+
+function isWriteBatchResult(result: WriteGenerationResult): result is WriteBatchResult {
+  return "kind" in result && result.kind === "write-batch";
 }
 
 function summarizeBatchResult(result: BatchTranscribeResult) {

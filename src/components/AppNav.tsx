@@ -23,19 +23,22 @@ type NavItem = {
   href: string;
   label: string;
   icon: typeof Activity;
+  group: "内容发现" | "创作工作区" | "数据与工具";
 };
 
 const navItems: NavItem[] = [
-  { href: "/hotspots", label: "热点雷达", icon: Radar },
-  { href: "/douyin-hotlist", label: "视频热榜", icon: Flame },
-  { href: "/library", label: "账号库", icon: FileText },
-  { href: "/project-workbench", label: "项目工作台", icon: FolderKanban },
-  { href: "/writer", label: "对话写作", icon: PenLine },
-  { href: "/assets", label: "评论生成", icon: MessageSquarePlus },
-  { href: "/tools", label: "工具台", icon: Wrench },
-  { href: "/gross-margin", label: "数据维护", icon: Calculator },
-  { href: "/gross-margin/monitor", label: "数据监控", icon: Activity }
+  { href: "/hotspots", label: "热点雷达", icon: Radar, group: "内容发现" },
+  { href: "/douyin-hotlist", label: "视频热榜", icon: Flame, group: "内容发现" },
+  { href: "/library", label: "账号库", icon: FileText, group: "创作工作区" },
+  { href: "/project-workbench", label: "项目工作台", icon: FolderKanban, group: "创作工作区" },
+  { href: "/writer", label: "对话写作", icon: PenLine, group: "创作工作区" },
+  { href: "/assets", label: "评论生成", icon: MessageSquarePlus, group: "创作工作区" },
+  { href: "/tools", label: "工具台", icon: Wrench, group: "数据与工具" },
+  { href: "/gross-margin", label: "数据维护", icon: Calculator, group: "数据与工具" },
+  { href: "/gross-margin/monitor", label: "数据监控", icon: Activity, group: "数据与工具" }
 ];
+
+const navGroupOrder: NavItem["group"][] = ["内容发现", "创作工作区", "数据与工具"];
 
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
 const devRouteApiWarmups: Record<string, string[]> = {
@@ -63,6 +66,9 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   const [showRouteBusy, setShowRouteBusy] = useState(false);
   const grossMarginMode = appMode === "gross-margin";
   const visibleNavItems = useMemo(() => grossMarginMode ? grossMarginNavItems : navItems, [grossMarginMode]);
+  const visibleNavGroups = useMemo(() => navGroupOrder
+    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label) }))
+    .filter((group) => group.items.length), [visibleNavItems]);
   const brandHref = grossMarginMode ? "/gross-margin" : "/douyin-hotlist";
   const activeHref = visibleNavItems
     .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
@@ -161,11 +167,6 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   return (
     <aside className="sidebar">
       {showRouteBusy ? <span className="route-progress" aria-hidden="true" /> : null}
-      <div className="window-controls" aria-hidden="true">
-        <span className="window-control close" />
-        <span className="window-control minimize" />
-        <span className="window-control zoom" />
-      </div>
       <Link
         href={brandHref}
         className="brand"
@@ -182,26 +183,35 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         </span>
       </Link>
       <nav className="nav-list" aria-label="主导航">
-        {visibleNavItems.map((item) => {
-          const active = item.href === activeHref;
-          const pending = item.href === pendingHref && !active;
-          const Icon = item.icon;
+        {visibleNavGroups.map((group) => {
           return (
-            <div className="nav-group" key={item.href}>
-              <Link
-                href={item.href}
-                className={`nav-link ${active ? "active" : ""} ${pending ? "pending" : ""}`}
-                aria-current={active ? "page" : undefined}
-                onFocus={() => void prewarmRoute(item.href)}
-                onClick={(event) => handleNavClick(event, item.href)}
-                onPointerEnter={() => void prewarmRoute(item.href)}
-              >
-                <span className="nav-emoji" aria-hidden="true">
-                  <Icon size={17} strokeWidth={2.1} />
-                </span>
-                <span>{item.label}</span>
-              </Link>
-            </div>
+            <section className="nav-section" key={group.label} aria-labelledby={`nav-${group.label}`}>
+              <h2 className="nav-section-label" id={`nav-${group.label}`}>{group.label}</h2>
+              <div className="nav-section-items">
+                {group.items.map((item) => {
+                  const active = item.href === activeHref;
+                  const pending = item.href === pendingHref && !active;
+                  const Icon = item.icon;
+                  return (
+                    <div className="nav-group" key={item.href}>
+                      <Link
+                        href={item.href}
+                        className={`nav-link ${active ? "active" : ""} ${pending ? "pending" : ""}`}
+                        aria-current={active ? "page" : undefined}
+                        onFocus={() => void prewarmRoute(item.href)}
+                        onClick={(event) => handleNavClick(event, item.href)}
+                        onPointerEnter={() => void prewarmRoute(item.href)}
+                      >
+                        <span className="nav-emoji" aria-hidden="true">
+                          <Icon size={17} strokeWidth={2.1} />
+                        </span>
+                        <span>{item.label}</span>
+                      </Link>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           );
         })}
       </nav>

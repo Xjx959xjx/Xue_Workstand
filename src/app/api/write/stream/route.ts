@@ -1,7 +1,11 @@
 import {
   completePreparedWriteCopy,
+  completePreparedWriteVariant,
+  prepareWriteCopyBatchContext,
   prepareWriteCopyContext,
+  resolveWriteBatchOutcome,
   streamResponseTextWithFallback,
+  writeVariantFailure,
   WRITE_COPY_MAX_OUTPUT_TOKENS,
   WRITE_COPY_REASONING_EFFORT
 } from "@/lib/ai";
@@ -38,48 +42,89 @@ export async function POST(request: Request) {
           progress: 24
         });
       }
-      const prepared = await prepareWriteCopyContext(input, { signal });
+      if (isRevision) {
+        const prepared = await prepareWriteCopyContext(input, { signal });
+        emit({
+          type: "stage",
+          stage: "generate",
+          message: "正在按本轮要求生成新版本",
+          progress: 55
+        });
+        const result = await streamResponseTextWithFallback({
+          messages: prepared.messages,
+          reasoningEffort: WRITE_COPY_REASONING_EFFORT,
+          maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
+          signal,
+          onDelta(delta) {
+            emit({ type: "delta", delta });
+          }
+        });
+        if (input.save) {
+          emit({ type: "stage", stage: "save-draft", message: "正在保存历史记录", progress: 88 });
+        }
+        const finalResult = await completePreparedWriteCopy({ prepared, result, save: input.save, signal });
+        emit({ type: "stage", stage: "finalize", message: "正在整理最终结果", progress: 95 });
+        emit({ type: "result", data: finalResult });
+        return;
+      }
 
-      if (!isRevision && input.useWebResearch) {
-        const researchUnavailable = prepared.research?.startsWith("联网资料：模型联网暂时不可用");
+      const batch = await prepareWriteCopyBatchContext(input, { signal });
+      if (input.useWebResearch) {
+        const researchUnavailable = batch.research?.startsWith("联网资料：模型联网暂时不可用");
         emit({
           type: "stage",
           stage: "research",
           message: researchUnavailable ? "联网检索暂不可用，正在继续生成" : "联网检索已完成，正在整理资料",
           progress: 35
         });
-        if (prepared.research) {
-          emit({ type: "result", data: { research: prepared.research, phase: "research" } });
-        }
+        if (batch.research) emit({ type: "result", data: { research: batch.research, phase: "research" } });
       }
 
+      const variantCount = batch.variants.length;
       emit({
         type: "stage",
         stage: "generate",
-        message: isRevision ? "正在按本轮要求生成新版本" : "正在生成文案",
+        message: variantCount > 1 ? `正在并发生成 ${variantCount} 篇独立文案` : "正在生成文案",
         progress: 55
       });
-      const result = await streamResponseTextWithFallback({
-        messages: prepared.messages,
-        reasoningEffort: WRITE_COPY_REASONING_EFFORT,
-        maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
-        signal,
-        onDelta(delta) {
-          emit({ type: "delta", delta });
+
+      let completedCount = 0;
+      const outcomes = await Promise.all(batch.variants.map(async (variant) => {
+        try {
+          const result = await streamResponseTextWithFallback({
+            messages: variant.prepared.messages,
+            reasoningEffort: WRITE_COPY_REASONING_EFFORT,
+            maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
+            signal,
+            onDelta(delta) {
+              if (variantCount === 1) emit({ type: "delta", delta });
+            }
+          });
+          const completed = await completePreparedWriteVariant({
+            variant,
+            result,
+            save: input.save,
+            signal
+          });
+          completedCount += 1;
+          emit({
+            type: "stage",
+            stage: "generate",
+            message: variantCount > 1 ? `已完成 ${completedCount}/${variantCount} 篇` : "正在整理生成结果",
+            progress: Math.min(90, 55 + Math.floor((completedCount / variantCount) * 34))
+          });
+          return { result: completed };
+        } catch (error) {
+          completedCount += 1;
+          return { failure: writeVariantFailure(variant, error) };
         }
-      });
+      }));
 
       if (input.save) {
-        emit({ type: "stage", stage: "save-draft", message: "正在保存历史记录", progress: 88 });
+        emit({ type: "stage", stage: "save-draft", message: "正在整理已保存的独立草稿", progress: 92 });
       }
 
-      const finalResult = await completePreparedWriteCopy({
-        prepared,
-        result,
-        save: input.save,
-        signal
-      });
-
+      const finalResult = resolveWriteBatchOutcome(batch, outcomes);
       emit({ type: "stage", stage: "finalize", message: "正在整理最终结果", progress: 95 });
       emit({ type: "result", data: finalResult });
     }, { signal: request.signal });

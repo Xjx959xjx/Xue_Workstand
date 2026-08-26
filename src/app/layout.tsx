@@ -18,7 +18,8 @@ export function generateMetadata(): Metadata {
       title: appMode === "gross-margin" ? "数据维护" : "风格库"
     },
     icons: {
-      icon: "/favicon.svg"
+      icon: "/favicon.svg",
+      apple: "/apple-icon"
     }
   };
 }

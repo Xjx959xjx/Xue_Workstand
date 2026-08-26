@@ -20,6 +20,8 @@
   --accent-tint: oklch(0.966 0.026 253);
   --blue: oklch(0.62 0.19 253);
   --blue-soft: oklch(0.947 0.032 253);
+  --teal: oklch(0.72 0.13 220);
+  --purple: oklch(0.62 0.18 315);
   --green: oklch(0.55 0.084 158);
   --green-soft: oklch(0.948 0.034 158);
   --amber: oklch(0.63 0.13 76);
@@ -47,11 +49,11 @@
     0 28px 80px color-mix(in oklch, var(--text-strong) 18%, transparent);
   --focus: color-mix(in oklch, var(--accent) 20%, transparent);
   --overlay: color-mix(in oklch, var(--text-strong) 32%, transparent);
-  --glass-panel: color-mix(in oklch, var(--panel-raised) 84%, transparent);
-  --glass-chrome: color-mix(in oklch, var(--chrome) 82%, transparent);
-  --glass-popover: color-mix(in oklch, var(--panel-raised) 92%, transparent);
-  --glass-blur: 24px;
-  --glass-saturation: 1.18;
+  --glass-panel: color-mix(in oklch, var(--panel-raised) 78%, transparent);
+  --glass-chrome: color-mix(in oklch, var(--panel-raised) 64%, transparent);
+  --glass-popover: color-mix(in oklch, var(--panel-raised) 90%, transparent);
+  --glass-blur: 28px;
+  --glass-saturation: 1.3;
   --surface-raised: var(--panel-raised);
   --surface-panel: var(--panel);
   --surface-soft: var(--panel-soft);
@@ -70,6 +72,10 @@
   --control-primary-bg: linear-gradient(180deg, color-mix(in oklch, var(--accent) 96%, white) 0%, var(--accent-strong) 100%);
   --control-primary-hover-border: color-mix(in oklch, var(--accent-strong) 86%, var(--line));
   --control-primary-hover-bg: linear-gradient(180deg, color-mix(in oklch, var(--accent) 92%, var(--panel-raised)) 0%, color-mix(in oklch, var(--accent-strong) 92%, var(--text-strong)) 100%);
+  --control-hero-bg: linear-gradient(180deg, color-mix(in oklch, var(--text-strong) 92%, white) 0%, var(--text-strong) 100%);
+  --control-hero-hover-bg: linear-gradient(180deg, color-mix(in oklch, var(--text) 94%, white) 0%, color-mix(in oklch, var(--text-strong) 94%, var(--text)) 100%);
+  --control-hero-shadow: 0 2px 4px color-mix(in oklch, var(--text-strong) 16%, transparent),
+    0 12px 24px color-mix(in oklch, var(--text-strong) 16%, transparent);
   --control-hover-shadow: 0 1px 2px color-mix(in oklch, var(--text-strong) 5%, transparent),
     0 7px 18px color-mix(in oklch, var(--text-strong) 6%, transparent);
   --control-field-hover-shadow: 0 1px 1px color-mix(in oklch, var(--text-strong) 4%, transparent),
@@ -115,15 +121,16 @@
   --space-8: 32px;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
+  --radius-lg: 16px;
+  --radius-xl: 18px;
   --control-radius: 13px;
+  --button-radius: 999px;
   --text-caption: 11px;
   --text-meta: 12px;
   --text-body: 13px;
   --text-card-title: 13px;
   --text-section-title: 16px;
-  --text-page-title: 28px;
+  --text-page-title: 30px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-label: 650;
@@ -169,7 +176,9 @@
   --status-danger-text: var(--rose);
   --status-danger-bg: var(--rose-soft);
   --status-danger-border: color-mix(in oklch, var(--rose) 28%, transparent);
-  --page-pad: 18px;
+  --sidebar-width: 260px;
+  --sidebar-width-compact: 214px;
+  --page-pad: 22px;
   --workspace-page-height: calc(100vh - (var(--page-pad) * 2));
   --workspace-default-height: clamp(520px, calc(100vh - 165px), 850px);
   --library-quick-start-height: var(--workbench-leading-panel-height);

@@ -245,8 +245,10 @@ function WriterPageContent() {
     canGenerate,
     canRevise,
     canStopGenerate,
+    activeVariantKey,
     clearDraftResult,
     copyLast,
+    generatedVariants,
     generateStage,
     handleContentChange,
     handleGenerate,
@@ -254,13 +256,15 @@ function WriterPageContent() {
     handleRevise,
     handleSaveEdit,
     handleStopGenerate,
+    hasAnyUnsavedChanges,
     hasUnsavedChanges,
     lastContent,
     lastDraftBase,
     lastDraftId,
     lastDraftVersion,
     lastResearch,
-    loadDraftResult
+    loadDraftResult,
+    selectGeneratedVariant
   } = useWriterGeneration({
     activeJobs,
     activeTitle,
@@ -329,9 +333,16 @@ function WriterPageContent() {
     setRevisionScope("full");
   }, []);
 
+  const handleSelectGeneratedVariant = useCallback((variantKey: string) => {
+    selectGeneratedVariant(variantKey);
+    setRevisionInstruction("");
+    setRevisionScope("full");
+    setSelectedDraftText("");
+  }, [selectGeneratedVariant]);
+
   const handleStartNewTask = useCallback(() => {
     if (busy || sourceImporting) return;
-    if ((hasTaskInput || lastContent || hasUnsavedChanges) && !window.confirm("新建任务会清空当前输入；已经保存的版本仍会保留。继续吗？")) {
+    if ((hasTaskInput || lastContent || hasAnyUnsavedChanges) && !window.confirm("新建任务会清空当前输入；已经保存的版本仍会保留。继续吗？")) {
       return;
     }
 
@@ -348,7 +359,7 @@ function WriterPageContent() {
 
     const params = createWriterReferenceParams(selectedStyleRefs, "topic");
     router.replace(`/writer?${params.toString()}`, { scroll: false });
-  }, [busy, clearDraftResult, hasTaskInput, hasUnsavedChanges, lastContent, router, selectedStyleRefs, sourceImporting]);
+  }, [busy, clearDraftResult, hasAnyUnsavedChanges, hasTaskInput, lastContent, router, selectedStyleRefs, sourceImporting]);
 
   const handleSourceFiles = useCallback(async (files: File[]) => {
     if (!files.length || sourceImporting) return;
@@ -647,7 +658,7 @@ function WriterPageContent() {
   return (
     <div
       className="page writer-page"
-      data-unsaved-changes={hasUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()) ? "true" : undefined}
+      data-unsaved-changes={hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()) ? "true" : undefined}
     >
       <header className="page-header writer-page-header">
         <div className="page-title-group">
@@ -824,11 +835,15 @@ function WriterPageContent() {
                     className="btn primary writer-generate-button"
                     disabled={!canGenerate}
                     onClick={() => void handleGenerate()}
-                    title={canGenerate ? "生成文案" : "先填写素材或写作要求"}
+                    title={canGenerate
+                      ? selectedStyleRefs.length > 1 ? `并发生成 ${selectedStyleRefs.length} 篇独立文案` : "生成文案"
+                      : "先填写素材或写作要求"}
                     type="button"
                   >
                     <Sparkles aria-hidden="true" size={16} />
-                    {busy === "generate" ? "生成中" : "生成文案"}
+                    {busy === "generate"
+                      ? "生成中"
+                      : selectedStyleRefs.length > 1 ? `并发生成 ${selectedStyleRefs.length} 篇` : "生成文案"}
                   </button>
                   {canStopGenerate ? (
                     <button className="btn ghost" onClick={() => void handleStopGenerate()} type="button">
@@ -909,6 +924,25 @@ function WriterPageContent() {
                       停止
                     </button>
                   ) : null}
+                </div>
+              ) : null}
+              {generatedVariants.length > 1 ? (
+                <div aria-label="并发生成的独立稿件" className="writer-variant-tabs" role="tablist">
+                  {generatedVariants.map((variant, index) => (
+                    <button
+                      aria-selected={variant.key === activeVariantKey}
+                      className={variant.key === activeVariantKey ? "active" : ""}
+                      key={variant.key}
+                      onClick={() => handleSelectGeneratedVariant(variant.key)}
+                      role="tab"
+                      type="button"
+                    >
+                      <span>{variant.title || `风格 ${index + 1}`}</span>
+                      <small>
+                        {variant.hasUnsavedChanges ? "未保存" : `V${variant.version?.revision || 1}`}
+                      </small>
+                    </button>
+                  ))}
                 </div>
               ) : null}
               {displayResearch ? (

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { Clock3, Flame, Zap } from "lucide-react";
+import { Clock3, ExternalLink, Flame, Zap } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { DouyinHotlistItem } from "@/lib/types";
 import {
@@ -79,18 +79,7 @@ export function HotlistTable({
               <div className="douyin-hotlist-item-head">
                 <HotlistCover item={item} />
                 <div className="douyin-hotlist-item-main">
-                  <h3>
-                    <a
-                      className="douyin-hotlist-title-link"
-                      href={getVideoExternalUrl(item.video)}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={item.video.title}
-                      aria-label={`${item.video.title}（新标签页打开）`}
-                    >
-                      {item.video.title}
-                    </a>
-                  </h3>
+                  <h3 title={item.video.title}>{item.video.title}</h3>
                   <div className="douyin-hotlist-item-meta">
                     <span className="douyin-hotlist-account-meta">
                       <span
@@ -123,6 +112,9 @@ export function HotlistTable({
                     </div>
                   ) : null}
                 </div>
+                <a className="btn icon-only compact" href={getVideoExternalUrl(item.video)} target="_blank" rel="noreferrer" aria-label={`打开 ${item.video.title}`}>
+                  <ExternalLink aria-hidden="true" size={15} />
+                </a>
               </div>
 
               <div className="douyin-hotlist-item-data">

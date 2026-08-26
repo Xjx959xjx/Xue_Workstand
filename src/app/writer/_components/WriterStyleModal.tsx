@@ -22,7 +22,7 @@ export function WriterStyleModal({ activeTitle, onClose, styleCards }: WriterSty
         {styleCards.length ? styleCards.map((card, index) => (
           <section className="writer-style-card" key={card.key}>
             <header>
-              <span>{index === 0 ? "主风格" : `补充风格 ${index}`}</span>
+              <span>{styleCards.length > 1 ? `独立稿 ${index + 1}` : "当前风格"}</span>
               <div>
                 <h3>{card.title}</h3>
                 <p>{card.subtitle}</p>

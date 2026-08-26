@@ -20,7 +20,7 @@ export const writeCopyInputSchema = z.object({
   platform: z.enum(platforms).optional(),
   accountId: z.string().optional(),
   projectId: z.string().optional(),
-  styleRefs: z.array(writeStyleReferenceSchema).min(1).optional(),
+  styleRefs: z.array(writeStyleReferenceSchema).min(1).max(8, "一次最多并发生成 8 个风格").optional(),
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().optional().default(""),
   originalSourceInput: z.string().optional(),

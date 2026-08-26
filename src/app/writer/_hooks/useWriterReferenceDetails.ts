@@ -117,9 +117,9 @@ export function useWriterReferenceDetails({
       activeStyle,
       activeStyleLoading: loadingKeys.length > 0,
       activeSubtitle: styleCards.length > 1
-        ? `${styleCards.length} 个风格 · 首项为主风格`
+        ? `${styleCards.length} 个风格 · 将分别生成 ${styleCards.length} 篇`
         : styleCards[0]?.subtitle || "",
-      activeTitle: styleCards.length > 1 ? `${styleCards.length} 个参考风格` : styleCards[0]?.title,
+      activeTitle: styleCards.length > 1 ? `${styleCards.length} 个并发风格` : styleCards[0]?.title,
       styleCards
     };
   }, [accounts, loadingKeys.length, projects, references, styles]);

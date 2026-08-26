@@ -13,7 +13,7 @@ import {
   isChatConfigConfigured,
   type ChatRuntimeConfig
 } from "../src/lib/model-runtime";
-import { prepareWriteCopyContext } from "../src/lib/ai";
+import { prepareWriteCopyBatchContext, prepareWriteCopyContext } from "../src/lib/ai";
 import {
   deleteAccounts,
   deleteProjects,
@@ -90,7 +90,7 @@ test("同名账号和项目不会覆盖彼此目录", async () => {
   });
 });
 
-test("写作风格引用支持混合多选、保序去重和旧参数兼容", () => {
+test("写作风格引用支持并发多选、保序去重和旧参数兼容", () => {
   const references = normalizeWriteStyleReferenceInputs({
     styleRefs: [
       { targetType: "account", platform: "bilibili", accountId: "bilibili:first" },
@@ -112,15 +112,25 @@ test("写作风格引用支持混合多选、保序去重和旧参数兼容", ()
     action: "create",
     styleRefs: references,
     mode: "topic",
-    prompt: "混合两种风格写一段"
+    prompt: "分别按两种风格各写一段"
   }).success, true);
+  assert.equal(writeCopyInputSchema.safeParse({
+    action: "create",
+    styleRefs: Array.from({ length: 9 }, (_, index) => ({
+      targetType: "account" as const,
+      platform: "douyin" as const,
+      accountId: `douyin:style-${index}`
+    })),
+    mode: "topic",
+    prompt: "超出并发上限"
+  }).success, false);
 });
 
-test("多风格草稿会保存全部引用并清理已删除的补充风格", async () => {
+test("旧版多风格草稿仍会清理已删除的引用", async () => {
   await withTemporaryLibrary(async () => {
-    const primary = await upsertAccount({ platform: "bilibili", name: "主风格", uid: "primary-style" });
-    const secondary = await upsertAccount({ platform: "douyin", name: "补充风格", uid: "secondary-style" });
-    const project = await upsertProject({ name: "项目风格", sourceAccountIds: [secondary.id] });
+    const primary = await upsertAccount({ platform: "bilibili", name: "风格 A", uid: "primary-style" });
+    const secondary = await upsertAccount({ platform: "douyin", name: "风格 B", uid: "secondary-style" });
+    const project = await upsertProject({ name: "风格项目", sourceAccountIds: [secondary.id] });
     const draft = await saveDraft({
       targetType: "account",
       platform: primary.platform,
@@ -152,24 +162,27 @@ test("多风格草稿会保存全部引用并清理已删除的补充风格", as
   });
 });
 
-test("首稿上下文会同时装入主风格和补充风格", async () => {
+test("多选风格会拆成互不混合的独立写作上下文", async () => {
   await withTemporaryLibrary(async () => {
-    const account = await upsertAccount({ platform: "bilibili", name: "账号主风格", uid: "context-account" });
-    const project = await upsertProject({ name: "项目补充风格" });
-    const prepared = await prepareWriteCopyContext({
+    const account = await upsertAccount({ platform: "bilibili", name: "账号风格", uid: "context-account" });
+    const project = await upsertProject({ name: "项目风格" });
+    const prepared = await prepareWriteCopyBatchContext({
       styleRefs: [
         { targetType: "account", platform: account.platform, accountId: account.id },
         { targetType: "project", projectId: project.id }
       ],
       mode: "topic",
-      prompt: "写一个混合风格测试"
+      prompt: "分别生成风格测试"
     });
 
-    assert.equal(prepared.draftBase?.styleRefs?.length, 2);
-    assert.match(prepared.messages[1].content, /账号主风格/);
-    assert.match(prepared.messages[1].content, /项目补充风格/);
-    assert.match(prepared.messages[1].content, /风格 1（主风格）/);
-    assert.match(prepared.messages[1].content, /风格 2（补充风格）/);
+    assert.equal(prepared.variants.length, 2);
+    assert.equal(prepared.variants[0].prepared.draftBase?.styleRefs?.length, 1);
+    assert.equal(prepared.variants[1].prepared.draftBase?.styleRefs?.length, 1);
+    assert.match(prepared.variants[0].prepared.messages[1].content, /账号风格/);
+    assert.doesNotMatch(prepared.variants[0].prepared.messages[1].content, /项目风格/);
+    assert.match(prepared.variants[1].prepared.messages[1].content, /项目风格/);
+    assert.doesNotMatch(prepared.variants[1].prepared.messages[1].content, /账号风格/);
+    assert.match(prepared.variants[0].prepared.messages[0].content, /只使用.*这一张风格卡/);
   });
 });
 
