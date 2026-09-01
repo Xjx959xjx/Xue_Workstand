@@ -650,10 +650,10 @@ export async function exportAccountTranscripts(input: { platform: Platform; acco
 
   if (!response.ok) {
     const fallbackResponse = response.clone();
-    const data = await response.json().catch(async () => {
+    const data = (await response.json().catch(async () => {
       const text = await fallbackResponse.text().catch(() => "");
       return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
-    });
+    })) as { error?: unknown };
     throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
   }
 
@@ -1083,10 +1083,10 @@ export async function downloadSingleVideoAsset(input: { url: string; kind: Singl
 
   if (!response.ok) {
     const fallbackResponse = response.clone();
-    const data = await response.json().catch(async () => {
+    const data = (await response.json().catch(async () => {
       const text = await fallbackResponse.text().catch(() => "");
       return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
-    });
+    })) as { error?: unknown };
     throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
   }
 
@@ -1461,10 +1461,10 @@ export async function exportEngagementRecord(recordId: string) {
 
   if (!response.ok) {
     const fallbackResponse = response.clone();
-    const data = await response.json().catch(async () => {
+    const data = (await response.json().catch(async () => {
       const text = await fallbackResponse.text().catch(() => "");
       return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
-    });
+    })) as { error?: unknown };
     throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
   }
 
@@ -1540,15 +1540,15 @@ export async function uploadDraftCoverReferences(input: { draftId: string; files
   });
 
   const fallbackResponse = response.clone();
-  const data = await response.json().catch(async () => {
+  const data = (await response.json().catch(async () => {
     const text = await fallbackResponse.text().catch(() => "");
     return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
-  });
+  })) as { error?: unknown; draft?: Draft };
 
   if (!response.ok) {
-    throw new Error(data.error || summarizeHttpError(response.status));
+    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
   }
-  if (data.draft) rememberDrafts([data.draft as Draft]);
+  if (data.draft) rememberDrafts([data.draft]);
   return data as { draft: Draft; references: DraftCoverReference[] };
 }
 

@@ -1,4 +1,3 @@
-import { promises as fs } from "fs";
 import { randomUUID } from "crypto";
 import path from "path";
 import {
@@ -35,7 +34,16 @@ import { buildEngagementRecordHref } from "./job-links";
 import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES, isResumableJobKind } from "./job-persistence";
 import { libraryRoot } from "./storage";
 import { generatePublishCopy } from "./publish-copy";
-import { readJsonFile, writeJsonFile } from "./storage/fs";
+import { isCloudStorageMode, readJsonFile, storageFs as fs, writeJsonFile } from "./storage/fs";
+import {
+  claimCloudJob,
+  deleteCloudJob,
+  getCloudJobEventBounds,
+  listCloudJobEvents,
+  listCloudJobs,
+  readCloudJob,
+  writeCloudJob
+} from "./jobs-cloud";
 import { transcribeLinkSource, transcribeVideo } from "./transcription";
 import {
   BatchTranscribeResult,
@@ -92,7 +100,7 @@ const runtime = (() => {
     existing.cancelRequests ||= new Set();
     existing.pending ||= new Map();
     existing.records ||= new Map();
-    existing.changeEpoch ||= randomUUID();
+    existing.changeEpoch ||= "";
     existing.changeRevision ||= 0;
     existing.changeLog ||= [];
     return existing;
@@ -105,7 +113,7 @@ const runtime = (() => {
     cancelRequests: new Set(),
     pending: new Map(),
     records: new Map(),
-    changeEpoch: randomUUID(),
+    changeEpoch: "",
     changeRevision: 0,
     changeLog: []
   };
@@ -172,7 +180,9 @@ async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
   runtime.records.set(job.id, job);
   recordJobChange(job.id);
   if (options.persist === false) return;
-  await writeJson(jobJsonPath(job.id), compactJobForPersistence(job, jobResultPersistBytes()));
+  const persisted = compactJobForPersistence(job, jobResultPersistBytes());
+  if (isCloudStorageMode()) await writeCloudJob(persisted);
+  else await writeJson(jobJsonPath(job.id), persisted);
   invalidateJobSummaryCache();
 }
 
@@ -249,6 +259,7 @@ async function ensureInitialized() {
 }
 
 async function initializeRuntimeJobs() {
+  runtime.changeEpoch ||= randomUUID();
   await ensureJobs();
   const resumable = await recoverStaleDiskJobs(await listJobSummariesFromDisk());
   runtime.initialized = true;
@@ -256,8 +267,13 @@ async function initializeRuntimeJobs() {
 }
 
 async function listJobsFromDisk() {
+  if (isCloudStorageMode()) {
+    return (await listCloudJobs())
+      .filter((job) => isJobKindAllowedForAppMode(job.kind))
+      .sort(compareJobsByUpdatedAtDesc);
+  }
   await ensureJobs();
-  const files = await fs.readdir(jobsPath()).catch(() => []);
+  const files = await fs.readdir(jobsPath()).catch(() => [] as string[]);
   const jobs = await Promise.all(
     files
       .filter((file) => file.endsWith(".json"))
@@ -270,8 +286,14 @@ async function listJobsFromDisk() {
 }
 
 async function listJobSummariesFromDisk() {
+  if (isCloudStorageMode()) {
+    return (await listCloudJobs())
+      .filter((job) => isJobKindAllowedForAppMode(job.kind))
+      .sort(compareJobsByUpdatedAtDesc)
+      .map((job) => ({ ...toJobListItem(job), filePath: "" }));
+  }
   await ensureJobs();
-  const files = await fs.readdir(jobsPath()).catch(() => []);
+  const files = await fs.readdir(jobsPath()).catch(() => [] as string[]);
   const stats = await fs.stat(jobsPath());
   const jsonFileCount = files.filter((file) => file.endsWith(".json")).length;
 
@@ -321,7 +343,9 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
   const resumable: Array<{ jobId: string; input: JobStartInput }> = [];
   await Promise.all(
     staleJobs.map(async (summary) => {
-      const job = await readJson<JobRecord>(summary.filePath);
+      const job = isCloudStorageMode()
+        ? await readCloudJob(summary.id)
+        : await readJson<JobRecord>(summary.filePath);
       if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
       const input = await readJobPayload(job.id);
       if (input && input.kind === job.kind && isResumableJobKind(job.kind)) {
@@ -379,6 +403,42 @@ export async function listJobSummaries() {
 
 export async function listJobSummaryChanges(cursor?: string) {
   await ensureInitialized();
+  if (isCloudStorageMode()) {
+    const bounds = await getCloudJobEventBounds();
+    const currentCursor = `d1.${bounds.lastId}`;
+    const parsedId = cursor?.match(/^d1\.(\d+)$/)?.[1];
+    const afterId = parsedId === undefined ? null : Number(parsedId);
+    const invalidCursor = afterId === null || !Number.isSafeInteger(afterId) || afterId < 0 || afterId > bounds.lastId;
+    const expiredCursor = afterId !== null && bounds.firstId !== null && afterId < bounds.firstId - 1;
+    if (invalidCursor || expiredCursor) {
+      return { jobs: await listJobSummaries(), removedJobIds: [], cursor: currentCursor, reset: true };
+    }
+
+    const events = await listCloudJobEvents(afterId);
+    if (events.length > 1200) {
+      return { jobs: await listJobSummaries(), removedJobIds: [], cursor: currentCursor, reset: true };
+    }
+    if (!events.length) return { jobs: [], removedJobIds: [], cursor: currentCursor, reset: false };
+
+    const latestById = new Map<string, { kind: string; id: number }>();
+    for (const event of events) latestById.set(event.job_id, { kind: event.kind, id: event.id });
+    const jobs = await Promise.all(
+      [...latestById.entries()].map(async ([jobId, event]) => {
+        if (event.kind === "removed") return null;
+        const job = await readCloudJob(jobId);
+        return job && isJobKindAllowedForAppMode(job.kind) ? toJobListItem(job) : null;
+      })
+    );
+    const removedJobIds = [...latestById.entries()]
+      .filter(([, event]) => event.kind === "removed")
+      .map(([jobId]) => jobId);
+    return {
+      jobs: jobs.filter((job): job is JobListItem => Boolean(job)),
+      removedJobIds,
+      cursor: currentCursor,
+      reset: false
+    };
+  }
   const currentCursor = jobChangeCursor();
   const parsed = parseJobChangeCursor(cursor);
   const firstRevision = runtime.changeLog[0]?.revision ?? runtime.changeRevision + 1;
@@ -424,7 +484,9 @@ export async function getJob(jobId: string) {
     return cached;
   }
 
-  const job = await readJson<JobRecord>(jobJsonPath(jobId));
+  const job = isCloudStorageMode()
+    ? await readCloudJob(jobId)
+    : await readJson<JobRecord>(jobJsonPath(jobId));
   if (!job) throw new Error("找不到任务记录");
   assertJobKindAllowedForAppMode(job.kind);
   runtime.records.set(job.id, job);
@@ -473,7 +535,42 @@ export async function createJob(input: JobStartInput) {
 function queueBackgroundJob(jobId: string, input: JobStartInput) {
   if (runtime.active.has(jobId) || runtime.pending.has(jobId)) return;
   runtime.pending.set(jobId, input);
+  if (isCloudStorageMode()) {
+    void scheduleCloudJob(jobId, input);
+    return;
+  }
   pumpJobQueue();
+}
+
+async function scheduleCloudJob(jobId: string, input: JobStartInput) {
+  try {
+    const workersModule = "cloudflare:" + "workers";
+    const { waitUntil } = await import(workersModule) as unknown as {
+      waitUntil(promise: Promise<unknown>): void;
+    };
+    waitUntil(runCloudJobAndRelease(jobId, input));
+  } catch (error) {
+    runtime.pending.delete(jobId);
+    await patchJob(jobId, {
+      status: "failed",
+      stage: "error",
+      message: "云端任务调度失败",
+      error: error instanceof Error ? error.message : "无法注册 Worker 后台任务"
+    }).catch(() => undefined);
+  }
+}
+
+async function runCloudJobAndRelease(jobId: string, input: JobStartInput) {
+  runtime.pending.delete(jobId);
+  const claimed = await claimCloudJob(jobId, `${jobId}:${Date.now()}`);
+  if (!claimed) return;
+  const promise = runJob(jobId, input);
+  runtime.active.set(jobId, promise);
+  try {
+    await promise;
+  } finally {
+    runtime.active.delete(jobId);
+  }
 }
 
 function pumpJobQueue() {
@@ -534,7 +631,9 @@ async function runJob(jobId: string, input: JobStartInput) {
     }
   } catch (error) {
     if (isCancelledJobError(error, controller.signal)) {
-      const current = runtime.records.get(jobId) || (await readJson<JobRecord>(jobJsonPath(jobId)));
+      const current = runtime.records.get(jobId) || (isCloudStorageMode()
+        ? await readCloudJob(jobId)
+        : await readJson<JobRecord>(jobJsonPath(jobId)));
       await patchJob(jobId, {
         status: "cancelled",
         stage: "cancelled",
@@ -1607,7 +1706,8 @@ async function pruneJobHistory() {
     removable.map(async (job) => {
       runtime.records.delete(job.id);
       runtime.pending.delete(job.id);
-      await fs.rm(job.filePath, { force: true }).catch(() => undefined);
+      if (isCloudStorageMode()) await deleteCloudJob(job.id);
+      else await fs.rm(job.filePath, { force: true }).catch(() => undefined);
       await removeJobPayload(job.id);
       recordJobChange(job.id, true);
     })

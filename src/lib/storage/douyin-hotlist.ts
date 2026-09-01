@@ -1,4 +1,3 @@
-import { promises as fs } from "fs";
 import path from "path";
 import {
   createHotlistSurgeState,
@@ -12,7 +11,7 @@ import type { Account, Platform, Video, VideoHotlistSurgeState, VideoHotlistTren
 import { calculateHotlistBaseScore, HOTLIST_SCORE_VERSION } from "../douyin-hotlist-score";
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { libraryRoot, normalizeStorageSegment } from "./core";
-import { readJsonFile, writeJsonFile } from "./fs";
+import { readJsonFile, storageFs as fs, writeJsonFile } from "./fs";
 
 const HOTLIST_DIR = "douyin-hotlist";
 const ACCOUNTS_DIR = "accounts";
@@ -308,7 +307,7 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
 }
 
 async function readDouyinHotlistAccountSlugs() {
-  const entries = await fs.readdir(hotlistAccountsPath(), { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdirEntries(hotlistAccountsPath()).catch(() => []);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
 

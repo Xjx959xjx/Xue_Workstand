@@ -6,7 +6,9 @@ import { getChatRuntimeConfig, getWebResearchCapability } from "./ai";
 import { getImageRuntimeConfig } from "./cover";
 import { getAppMode } from "./app-mode";
 import { resolveOpenCliCommand } from "./opencli-runtime";
+import { hasRemoteCapabilityBridge } from "./remote-capabilities";
 import { libraryRoot } from "./storage";
+import { isCloudStorageMode, storageFs } from "./storage/fs";
 import type { RemoteServiceHealth, RemoteStatusResponse } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -39,7 +41,11 @@ async function buildRemoteStatus(): Promise<RemoteStatusResponse> {
   const [storage, opencli, ffmpeg] = await Promise.all([
     checkStorage(),
     checkOpenCli(),
-    checkCommand(process.env.FFMPEG_BIN || "ffmpeg", ["-version"], "ffmpeg")
+    isCloudStorageMode()
+      ? Promise.resolve(hasRemoteCapabilityBridge()
+        ? service("ok", "远程媒体处理能力已配置")
+        : service("unavailable", "未配置远程媒体处理能力服务"))
+      : checkCommand(process.env.FFMPEG_BIN || "ffmpeg", ["-version"], "ffmpeg")
   ]);
   const browserBridge = await checkBrowserBridge(opencli.status === "ok");
   const services = {
@@ -73,6 +79,14 @@ async function buildRemoteStatus(): Promise<RemoteStatusResponse> {
 }
 
 async function checkStorage(): Promise<RemoteServiceHealth> {
+  if (isCloudStorageMode()) {
+    try {
+      await storageFs.stat(libraryRoot());
+      return service("ok", "Sites D1/R2 云存储已连接");
+    } catch (error) {
+      return service("unavailable", error instanceof Error ? error.message : "Sites D1/R2 云存储不可用");
+    }
+  }
   try {
     await fs.access(libraryRoot(), fsConstants.R_OK | fsConstants.W_OK);
     return service("ok", "本地素材库可读写");
@@ -82,12 +96,18 @@ async function checkStorage(): Promise<RemoteServiceHealth> {
 }
 
 async function checkOpenCli(): Promise<RemoteServiceHealth> {
+  if (isCloudStorageMode()) {
+    return hasRemoteCapabilityBridge()
+      ? service("ok", "远程 OpenCLI 能力已配置")
+      : service("unavailable", "未配置远程 OpenCLI 能力服务");
+  }
   const runtime = resolveOpenCliCommand();
   return checkCommand(runtime.command, [...runtime.argsPrefix, "--version"], "OpenCLI");
 }
 
 async function checkBrowserBridge(openCliAvailable: boolean): Promise<RemoteServiceHealth> {
   if (!openCliAvailable) return service("unavailable", "OpenCLI 不可用，无法检查浏览器桥接");
+  if (isCloudStorageMode()) return service("ok", "远程浏览器采集能力已配置");
 
   const runtime = resolveOpenCliCommand();
   try {

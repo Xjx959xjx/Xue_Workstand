@@ -5,6 +5,7 @@ import { isIP } from "net";
 import { promisify } from "util";
 import { extractFeishuSupportDocumentRefs, fetchFeishuSupportDocuments, hasFeishuDocLink } from "./feishu";
 import { runOpenCli } from "./opencli-runtime";
+import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 import { extractLinksFromInput } from "./platform-links";
 import { readSupportDocumentCache, writeSupportDocumentCache } from "./storage/support-documents";
 import { clampText } from "./utils";
@@ -319,6 +320,12 @@ async function callWecomDocumentCommand(
   options: FetchSupportDocumentOptions
 ): Promise<WecomDocumentResponse> {
   throwIfAborted(options.signal);
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时不支持本机 wecom-cli；请配置远程企业微信文档服务。");
+    }
+    return callRemoteCapability<WecomDocumentResponse>("wecom-doc", { method, input }, options);
+  }
   const command = process.env.WECOM_CLI_BIN?.trim() || "wecom-cli";
   let stdout = "";
   try {

@@ -1,10 +1,59 @@
 import { promises as fs } from "fs";
 import { randomUUID } from "crypto";
 import path from "path";
+import {
+  cloudAccess,
+  cloudLstat,
+  cloudMkdir,
+  cloudReadFile,
+  cloudReaddir,
+  cloudRename,
+  cloudRm,
+  cloudStat,
+  cloudWriteFile
+} from "./cloud-fs";
+import type { CloudDirent } from "./cloud-fs";
+
+export type StorageDirent = Pick<CloudDirent, "name" | "isFile" | "isDirectory">;
+export type StorageStats = {
+  size: number;
+  mtimeMs: number;
+  mtime: Date;
+  isFile(): boolean;
+  isDirectory(): boolean;
+};
+
+export function isCloudStorageMode() {
+  return process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud";
+}
+
+export const storageFs = {
+  access: async (target: string): Promise<void> => (isCloudStorageMode() ? cloudAccess(target) : fs.access(target)),
+  readFile: async (target: string, encoding: BufferEncoding): Promise<string> =>
+    isCloudStorageMode() ? await cloudReadFile(target, encoding) as string : await fs.readFile(target, encoding),
+  readFileBytes: async (target: string): Promise<Buffer> =>
+    isCloudStorageMode() ? Buffer.from(await cloudReadFile(target) as Uint8Array) : await fs.readFile(target),
+  mkdir: async (target: string, options?: { recursive?: boolean }): Promise<void> => {
+    if (isCloudStorageMode()) await cloudMkdir(target);
+    else await fs.mkdir(target, options);
+  },
+  readdir: async (target: string): Promise<string[]> =>
+    isCloudStorageMode() ? await cloudReaddir(target) as string[] : await fs.readdir(target),
+  readdirEntries: async (target: string): Promise<StorageDirent[]> =>
+    isCloudStorageMode() ? await cloudReaddir(target, { withFileTypes: true }) as StorageDirent[] : await fs.readdir(target, { withFileTypes: true }),
+  stat: async (target: string): Promise<StorageStats> =>
+    isCloudStorageMode() ? await cloudStat(target) : await fs.stat(target),
+  lstat: async (target: string): Promise<StorageStats> =>
+    isCloudStorageMode() ? await cloudLstat(target) : await fs.lstat(target),
+  rm: async (target: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> =>
+    isCloudStorageMode() ? await cloudRm(target, options) : await fs.rm(target, options),
+  rename: async (source: string, destination: string): Promise<void> =>
+    isCloudStorageMode() ? await cloudRename(source, destination) : await fs.rename(source, destination)
+};
 
 export async function fileExists(target: string) {
   try {
-    await fs.access(target);
+    await storageFs.access(target);
     return true;
   } catch (error) {
     if (isMissingFileError(error)) return false;
@@ -15,7 +64,7 @@ export async function fileExists(target: string) {
 export async function readJsonFile<T>(target: string): Promise<T | null> {
   let raw: string;
   try {
-    raw = await fs.readFile(target, "utf8");
+    raw = await storageFs.readFile(target, "utf8");
   } catch (error) {
     if (isMissingFileError(error)) return null;
     throw new Error(`读取 JSON 文件失败：${target}。${describeFsError(error)}`);
@@ -37,6 +86,10 @@ export async function writeTextFileAtomic(target: string, value: string) {
 }
 
 export async function writeFileAtomic(target: string, value: string | Uint8Array, encoding?: BufferEncoding) {
+  if (isCloudStorageMode()) {
+    await cloudWriteFile(target, value, encoding);
+    return;
+  }
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
 

@@ -9,6 +9,8 @@ import { getImageRuntimeConfig } from "@/lib/cover";
 import { checkFeishuRuntime } from "@/lib/feishu";
 import { probeChatModel } from "@/lib/model-runtime";
 import { resolveOpenCliCommand } from "@/lib/opencli";
+import { hasRemoteCapabilityBridge } from "@/lib/remote-capabilities";
+import { isCloudStorageMode, storageFs } from "@/lib/storage/fs";
 
 export const runtime = "nodejs";
 
@@ -22,7 +24,11 @@ export async function GET(request: Request) {
   let opencliVersion = "";
   let opencliError = "";
 
-  try {
+  if (isCloudStorageMode()) {
+    opencliOk = hasRemoteCapabilityBridge();
+    opencliVersion = opencliOk ? "remote-capability" : "";
+    opencliError = opencliOk ? "" : "未配置远程 OpenCLI 能力服务";
+  } else try {
     const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       timeout: 5000
@@ -82,6 +88,18 @@ export async function GET(request: Request) {
 
 async function checkGrossMarginStorage() {
   const root = path.join(libraryRoot(), "gross-margin");
+  if (isCloudStorageMode()) {
+    try {
+      await storageFs.stat(libraryRoot());
+      return { ok: true, root };
+    } catch (error) {
+      return {
+        ok: false,
+        root,
+        error: error instanceof Error ? error.message : "Sites D1/R2 云存储不可用"
+      };
+    }
+  }
   const probe = path.join(root, ".healthcheck");
   try {
     await fs.mkdir(root, { recursive: true });

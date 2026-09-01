@@ -325,7 +325,11 @@ async function planEngagementResearchQueries(
     const planned = normalizeList(object?.queries, MAX_RESEARCH_QUERIES)
       .map(cleanSearchQuery)
       .filter(isUsefulSearchQuery);
-    const queries = uniqueText([...planned, ...localQueries]).slice(0, MAX_RESEARCH_QUERIES);
+    const primary = localQueries[0] || planned[0] || "";
+    const plannedSecondary = planned.filter((query) => searchKey(query) !== searchKey(primary));
+    const queries = uniqueText([primary, ...plannedSecondary, ...localQueries.slice(1)])
+      .filter(Boolean)
+      .slice(0, MAX_RESEARCH_QUERIES);
     return queries.length
       ? { queries, error: undefined as string | undefined }
       : { queries: localQueries, error: "模型检索词不可用，已使用本地关键词。" };

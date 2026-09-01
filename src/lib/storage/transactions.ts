@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "crypto";
-import { promises as fs } from "fs";
 import path from "path";
 import { libraryRoot, normalizeStorageSegment, toLibraryRelativePath } from "./core";
-import { fileExists, readJsonFile, writeFileAtomic, writeJsonFile } from "./fs";
+import { fileExists, readJsonFile, storageFs as fs, writeFileAtomic, writeJsonFile } from "./fs";
 import type { LibraryTrashOperation } from "../types";
 
 type RecoverableLibraryMutationOptions<T> = {
@@ -36,7 +35,7 @@ export async function runRecoverableLibraryMutation<T>(
 
 export async function listLibraryTrashOperations() {
   await fs.mkdir(trashRoot(), { recursive: true });
-  const entries = await fs.readdir(trashRoot(), { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdirEntries(trashRoot()).catch(() => []);
   const operations = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory())
@@ -160,7 +159,7 @@ async function createMutationBackups(base: string, backupTargets: string[], move
     });
     if (!stat?.isFile()) continue;
     const relativePath = assertMutableLibraryPath(absolutePath);
-    const bytes = await fs.readFile(absolutePath);
+    const bytes = await fs.readFileBytes(absolutePath);
     const backup = path.join(base, "backups", fromLibraryPath(relativePath));
     await fs.mkdir(path.dirname(backup), { recursive: true });
     await writeFileAtomic(backup, bytes);
@@ -204,7 +203,7 @@ async function restoreOperationFiles(operationId: string, manifest: LibraryTrash
   for (const backup of manifest.backups) {
     const source = path.join(base, "backups", fromLibraryPath(backup.path));
     if (!(await fileExists(source))) continue;
-    await writeFileAtomic(path.join(libraryRoot(), fromLibraryPath(backup.path)), await fs.readFile(source));
+    await writeFileAtomic(path.join(libraryRoot(), fromLibraryPath(backup.path)), await fs.readFileBytes(source));
   }
 
   for (const target of [...manifest.targets].reverse()) {
@@ -250,7 +249,7 @@ function fromLibraryPath(relativePath: string) {
 
 async function hashFileIfExists(target: string) {
   try {
-    return hashBytes(await fs.readFile(target));
+    return hashBytes(await fs.readFileBytes(target));
   } catch (error) {
     if (isMissingFileError(error)) return null;
     throw error;

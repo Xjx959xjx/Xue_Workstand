@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 import type { GrossMarginAccountPrice } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -144,6 +145,16 @@ async function fetchWecomSheetContent(url: string) {
 }
 
 async function callWecomDoc(input: Record<string, unknown>): Promise<WecomResponse> {
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时不支持本机 wecom-cli；请配置远程企业微信文档服务。");
+    }
+    return callRemoteCapability<WecomResponse>(
+      "wecom-doc",
+      { method: "get_doc_content", input },
+      { timeoutMs: timeoutMs() }
+    );
+  }
   const command = process.env.WECOM_CLI_BIN?.trim() || "wecom-cli";
   let stdout = "";
   for (let attempt = 0; attempt < MAX_COMMAND_ATTEMPTS; attempt += 1) {

@@ -2,6 +2,7 @@ import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { extractLinksFromInput } from "./platform-links";
 import { resolveOpenCliCommand } from "./opencli";
+import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
@@ -43,6 +44,18 @@ export function getFeishuRuntimeConfig() {
 export async function checkFeishuRuntime() {
   const config = feishuConfig();
   const runtimeConfig = getFeishuRuntimeConfig();
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    const available = hasRemoteCapabilityBridge();
+    return {
+      ...runtimeConfig,
+      configured: available,
+      available,
+      doctor: {
+        ok: available,
+        message: available ? "远程飞书文档能力已配置" : "未配置远程飞书文档能力服务"
+      }
+    };
+  }
   try {
     const runtime = resolveOpenCliCommand();
     const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, "lark-cli", "doctor", "--offline"], {
@@ -99,6 +112,12 @@ export function extractFeishuSupportDocumentRefs(input?: string) {
 }
 
 async function publishWithOpenCli(config: FeishuConfig, input: { title: string; content: string }) {
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时不支持本机飞书 CLI；请配置远程飞书文档服务。");
+    }
+    return callRemoteCapability<{ title: string; documentId: string; url: string }>("feishu-publish", input);
+  }
   const args = [
     "lark-cli",
     "docs",
@@ -161,6 +180,14 @@ async function fetchFeishuDocument(
 
   try {
     throwIfAborted(options.signal);
+    if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+      if (!hasRemoteCapabilityBridge()) {
+        throw new Error("Sites 云端运行时不支持本机飞书 CLI；请配置远程飞书文档服务。");
+      }
+      const remote = await callRemoteCapability<{ title?: string; content?: string }>("feishu-doc-read", { url }, options);
+      if (!remote || typeof remote.content !== "string") throw new Error("远程飞书文档服务返回了无效正文。");
+      return { url, title: remote.title, content: clampText(remote.content.trim(), 5000) };
+    }
     const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, ...args], {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 20,

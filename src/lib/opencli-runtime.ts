@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 
 const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
@@ -51,6 +52,16 @@ export function resolveOpenCliCommand() {
 }
 
 export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时不支持本机 OpenCLI；请配置受鉴权的远程采集服务后再执行此操作。");
+    }
+    const remote = await callRemoteCapability<{ stdout?: string }>("opencli", { args }, options);
+    if (!remote || typeof remote.stdout !== "string") {
+      throw new Error("远程 OpenCLI 服务返回了无效结果，缺少 stdout。");
+    }
+    return remote.stdout;
+  }
   let stdout = "";
   let stderr = "";
   const runtime = resolveOpenCliCommand();

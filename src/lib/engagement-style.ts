@@ -1,6 +1,6 @@
-import { promises as fs } from "fs";
 import path from "path";
 import { libraryRoot } from "./storage/core";
+import { storageFs as fs } from "./storage/fs";
 import type { Platform } from "./types";
 
 export const engagementCommentIntents = [
@@ -246,7 +246,7 @@ async function collectJsonSamples(
   fallbackPlatform: Platform | "unknown",
   corpus: LocalStyleCorpus
 ) {
-  const entries = await fs.readdir(target, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+  const entries = await fs.readdirEntries(target).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return [];
     throw new Error(`读取互动风格样本目录失败：${target}。${error.message}`);
   });

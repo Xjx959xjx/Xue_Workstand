@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     const path = url.searchParams.get("path") || "";
     if (!draftId || !path) throw new Error("缺少素材路径");
     const file = await getDraftAssetFile(draftId, path);
-    return new Response(file.bytes, {
+    return new Response(file.bytes as unknown as BodyInit, {
       headers: {
         "Content-Type": file.contentType,
         "Cache-Control": "no-store"

@@ -5,6 +5,7 @@ import path from "path";
 import { promisify } from "util";
 import { analyzeMaterialFrames } from "./ai";
 import { browserUserAgent } from "./platform-links";
+import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 import type { CopySource, Platform } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +23,22 @@ export async function analyzeCopySourceMaterial(input: {
   signal?: AbortSignal;
 }): Promise<CopySource["materialAnalysis"]> {
   throwIfAborted(input.signal);
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时暂不支持本机 FFmpeg 抽帧；请配置远程媒体分析服务。");
+    }
+    return callRemoteCapability<CopySource["materialAnalysis"]>(
+      "material-analysis",
+      {
+        mediaUrls: input.mediaUrls,
+        platform: input.platform,
+        title: input.title,
+        transcript: input.transcript,
+        url: input.url
+      },
+      { signal: input.signal }
+    );
+  }
   if (!input.mediaUrls.length) {
     return {
       mode: "textual",

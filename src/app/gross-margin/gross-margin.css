@@ -1,8 +1,9 @@
 /* Gross margin route family */
 .gross-margin-workspace {
-  grid-template-columns: minmax(250px, 272px) minmax(0, 1fr) minmax(286px, 300px);
+  grid-template-columns: minmax(250px, 272px) minmax(600px, 1fr) minmax(286px, 300px);
   min-height: 0;
   height: 100%;
+  overflow-x: auto;
 }
 
 .gross-margin-workspace .pane {
@@ -141,6 +142,95 @@
   grid-template-columns: minmax(180px, 0.68fr) minmax(240px, 1fr);
   gap: 10px;
   align-items: flex-start;
+}
+
+.gross-account-combobox,
+.gross-account-input-row {
+  position: relative;
+  min-width: 0;
+}
+
+.gross-account-input-row > input {
+  padding-right: 38px;
+}
+
+.gross-account-toggle {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted-strong);
+  background: transparent;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.gross-account-toggle:hover {
+  color: var(--text-strong);
+  background: var(--surface-soft);
+}
+
+.gross-account-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.gross-account-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.gross-account-options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: 224px;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel-raised);
+  box-shadow: var(--shadow-lift);
+}
+
+.gross-account-option {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gross-account-option:hover,
+.gross-account-option.active {
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+}
+
+.gross-account-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .gross-rate-input {
@@ -1944,19 +2034,6 @@
 }
 
 @media (max-width: 1180px) {
-  .gross-margin-workspace {
-    grid-template-columns: 300px minmax(0, 1fr);
-  }
-
-  .gross-result-pane {
-    grid-column: 1 / -1;
-    max-width: none;
-  }
-
-  .gross-result-pane .pane-body {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .gross-monitor-card-grid {
     grid-template-columns: repeat(auto-fill, minmax(286px, 1fr));
   }
@@ -2028,24 +2105,8 @@
 }
 
 @media (max-width: 780px) {
-  .gross-margin-workspace,
-  .gross-account-row,
-  .gross-price-summary-grid,
-  .gross-result-pane .pane-body {
-    grid-template-columns: 1fr;
-  }
-
   .gross-result-pane .pane-header .btn.primary.compact {
     width: 100%;
-  }
-
-  .gross-margin-workspace .pane {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .gross-margin-workspace .pane:last-child {
-    border-bottom: 0;
   }
 
   .gross-price-option,

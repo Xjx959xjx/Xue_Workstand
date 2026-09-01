@@ -1,4 +1,3 @@
-import { promises as fs } from "fs";
 import path from "path";
 import {
   GrossMarginAccountPrice,
@@ -21,7 +20,7 @@ import {
   validateGrossMarginReviewTemplate
 } from "../gross-margin-template";
 import { nowIso, safeSegment, shortHash } from "../utils";
-import { fileExists, readJsonFile, writeJsonFile } from "./fs";
+import { fileExists, readJsonFile, storageFs as fs, writeJsonFile } from "./fs";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { runRecoverableLibraryMutation } from "./transactions";
 import { resolveGrossMarginAccounts } from "../wecom-account-source";

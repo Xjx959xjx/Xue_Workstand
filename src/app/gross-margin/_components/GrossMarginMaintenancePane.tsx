@@ -1,9 +1,14 @@
+"use client";
+
+import { Check, ChevronDown } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   getActiveServiceOptions,
   getMinimumQuantityWarning,
   getSelectedOption,
   toAmount
 } from "@/lib/gross-margin-calculator";
+import type { GrossMarginAccountPrice } from "@/lib/types";
 import type { GrossMarginWorkbenchController } from "../_hooks/useGrossMarginWorkbench";
 import {
   describeQuantityInput,
@@ -40,6 +45,152 @@ type GrossMarginMaintenancePaneProps = Pick<
   | "videoUrl"
   | "videoAccountLookup"
 >;
+
+type GrossMarginAccountComboboxProps = {
+  accounts: GrossMarginAccountPrice[];
+  busy: boolean;
+  onChange: (value: string) => void;
+  value: string;
+};
+
+function normalizeAccountQuery(value: string) {
+  return value.trim().replace(/\s+/g, "").toLocaleLowerCase("zh-CN");
+}
+
+function GrossMarginAccountCombobox({ accounts, busy, onChange, value }: GrossMarginAccountComboboxProps) {
+  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(true);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listboxId = useId();
+  const query = normalizeAccountQuery(value);
+  const visibleAccounts = useMemo(() => {
+    if (showAll || !query) return accounts;
+    return accounts.filter((account) => normalizeAccountQuery(account.name).includes(query));
+  }, [accounts, query, showAll]);
+
+  useEffect(() => {
+    if (!open) return;
+    function handlePointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (activeIndex < visibleAccounts.length) return;
+    setActiveIndex(Math.max(visibleAccounts.length - 1, 0));
+  }, [activeIndex, visibleAccounts.length]);
+
+  useEffect(() => {
+    if (!open || !visibleAccounts.length) return;
+    document.getElementById(`${listboxId}-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, listboxId, open, visibleAccounts.length]);
+
+  function openAccountList() {
+    setShowAll(true);
+    setActiveIndex(Math.max(accounts.findIndex((account) => account.name === value), 0));
+    setOpen(true);
+  }
+
+  function selectAccount(account: GrossMarginAccountPrice) {
+    onChange(account.name);
+    setOpen(false);
+    setShowAll(true);
+    inputRef.current?.focus();
+  }
+
+  return (
+    <div className="gross-account-combobox" ref={rootRef}>
+      <div className="gross-account-input-row">
+        <input
+          aria-activedescendant={open && visibleAccounts[activeIndex] ? `${listboxId}-option-${activeIndex}` : undefined}
+          aria-autocomplete="list"
+          aria-busy={busy}
+          aria-controls={listboxId}
+          aria-expanded={open}
+          autoComplete="off"
+          id="gross-account-name"
+          name="accountName"
+          placeholder="输入账号名自动带价格…"
+          ref={inputRef}
+          role="combobox"
+          type="text"
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setShowAll(false);
+            setActiveIndex(0);
+            setOpen(true);
+          }}
+          onFocus={openAccountList}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              if (!open) {
+                openAccountList();
+                return;
+              }
+              if (!visibleAccounts.length) return;
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              setActiveIndex((current) => (current + direction + visibleAccounts.length) % visibleAccounts.length);
+              return;
+            }
+            if (event.key === "Enter" && open && visibleAccounts[activeIndex]) {
+              event.preventDefault();
+              selectAccount(visibleAccounts[activeIndex]);
+              return;
+            }
+            if (event.key === "Escape") setOpen(false);
+          }}
+        />
+        <button
+          aria-label={open ? "收起账号列表" : "展开账号列表"}
+          aria-controls={listboxId}
+          aria-expanded={open}
+          className="gross-account-toggle"
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (open) {
+              setOpen(false);
+              return;
+            }
+            openAccountList();
+            inputRef.current?.focus();
+          }}
+        >
+          <ChevronDown aria-hidden="true" size={16} />
+        </button>
+      </div>
+      {open && visibleAccounts.length ? (
+        <div aria-label="账号列表" className="gross-account-options" id={listboxId} role="listbox">
+          {visibleAccounts.map((account, index) => {
+            const selected = account.name === value;
+            return (
+              <button
+                aria-selected={selected}
+                className={`gross-account-option${index === activeIndex ? " active" : ""}`}
+                id={`${listboxId}-option-${index}`}
+                key={`${account.platform}-${account.name}`}
+                role="option"
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => selectAccount(account)}
+              >
+                <span>{account.name}</span>
+                {selected ? <Check aria-hidden="true" size={15} /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function GrossMarginMaintenancePane({
   accountName,
@@ -87,22 +238,12 @@ export function GrossMarginMaintenancePane({
           <div className="gross-account-row">
             <div className="field">
               <label htmlFor="gross-account-name">账号名</label>
-              <input
-                aria-busy={videoAccountLookup.status === "loading"}
-                autoComplete="off"
-                id="gross-account-name"
-                list="gross-account-options"
-                name="accountName"
-                type="text"
+              <GrossMarginAccountCombobox
+                accounts={platformAccounts}
+                busy={videoAccountLookup.status === "loading"}
+                onChange={handleAccountNameChange}
                 value={accountName}
-                onChange={(event) => handleAccountNameChange(event.target.value)}
-                placeholder="输入账号名自动带价格…"
               />
-              <datalist id="gross-account-options">
-                {platformAccounts.map((account) => (
-                  <option key={`${account.platform}-${account.name}`} value={account.name} />
-                ))}
-              </datalist>
               {matchedAccount ? (
                 <span className="field-hint">
                   已匹配{selectedAccountPrice?.label}：{formatMoney(selectedAccountPrice?.value || 0)}

@@ -1,4 +1,4 @@
-import { promises as fs, type Dirent } from "fs";
+import { type Dirent } from "fs";
 import { createHash, randomUUID } from "crypto";
 import path from "path";
 import {
@@ -30,7 +30,7 @@ import {
   platforms
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
-import { fileExists, readJsonFile, writeFileAtomic, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
+import { fileExists, readJsonFile, storageFs as fs, writeFileAtomic, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
 import { libraryRoot, normalizeStorageSegment, toLibraryRelativePath } from "./storage/core";
 import { ensureDouyinHotlistDirs } from "./storage/douyin-hotlist";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
@@ -340,9 +340,9 @@ async function readDirNamesIfExists(target: string) {
   }
 }
 
-async function readDirEntriesIfExists(target: string): Promise<Dirent[]> {
+async function readDirEntriesIfExists(target: string): Promise<Array<Pick<Dirent, "name" | "isFile" | "isDirectory">>> {
   try {
-    return await fs.readdir(target, { withFileTypes: true });
+    return await fs.readdirEntries(target);
   } catch (error) {
     if (isFsErrorCode(error, "ENOENT")) return [];
     throw new Error(`读取目录失败：${target}。${error instanceof Error ? error.message : "文件系统异常"}`);
@@ -1614,7 +1614,7 @@ export async function getDraftAssetFile(draftId: string, assetPath: string) {
     throw new Error("素材路径不在当前草稿目录内");
   }
 
-  const bytes = await fs.readFile(target);
+  const bytes = await fs.readFileBytes(target);
   return {
     bytes,
     file: target,

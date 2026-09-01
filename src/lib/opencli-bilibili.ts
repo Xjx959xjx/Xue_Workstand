@@ -229,7 +229,7 @@ async function getBilibiliCommentReplies(bvid: string, rpid: string, limit: numb
     String(Math.max(1, Math.min(limit, 20))),
     "-f",
     "json"
-  ], { signal });
+  ], { timeout: 30_000, signal });
   return asArray(parseJsonish(stdout))
     .map((row, index) => normalizeBilibiliComment(row, index))
     .filter((comment) => comment.text);
@@ -270,7 +270,7 @@ export async function getBilibiliComments(
     String(Math.max(1, Math.min(limit, 50))),
     "-f",
     "json"
-  ], { signal: options.signal });
+  ], { timeout: 30_000, signal: options.signal });
   return asArray(parseJsonish(stdout))
     .map((row, index) => normalizeBilibiliComment(row, index))
     .filter((comment) => comment.text) as BilibiliCommentSample[];

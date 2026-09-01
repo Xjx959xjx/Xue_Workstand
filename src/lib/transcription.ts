@@ -32,6 +32,7 @@ import {
   videoMediaUrlScore
 } from "./platform-links";
 import { runOpenCli } from "./opencli-runtime";
+import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 import { getTranscriptSnapshot, getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
@@ -140,6 +141,33 @@ export async function transcribeVideo(input: {
   signal?: AbortSignal;
 }) {
   throwIfAborted(input.signal);
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时暂不支持本机转写进程；请配置远程 ASR 服务后再转写。");
+    }
+    const remotePayload = {
+      platform: input.platform,
+      accountId: input.accountId,
+      videoId: input.videoId,
+      mediaUrl: input.mediaUrl,
+      douyinMediaUrl: input.douyinMediaUrl,
+      allowRemoteDownload: input.allowRemoteDownload
+    };
+    const remote = await callRemoteCapability<Partial<LinkTranscriptionResult> & { text?: string }>("transcribe-video", remotePayload, { signal: input.signal });
+    if (!remote || typeof remote.text !== "string" || !remote.text.trim()) {
+      throw new Error("远程 ASR 服务返回了无效结果，缺少 text。");
+    }
+    const snapshot = await getTranscriptSnapshot(input.platform, input.accountId, input.videoId);
+    const saved = await saveTranscript({
+      platform: input.platform,
+      accountId: input.accountId,
+      videoId: input.videoId,
+      text: remote.text,
+      source: "volcengine",
+      expectedRevision: snapshot.revision
+    });
+    return { ...saved, usedProvider: "remote-asr", remote: true };
+  }
   const timings: Timing[] = [];
   const totalStartedAt = Date.now();
   const { account, video } = await getVideo(input.platform, input.accountId, input.videoId);
@@ -318,6 +346,20 @@ export async function transcribeLinkSource(input: {
   signal?: AbortSignal;
 }): Promise<LinkTranscriptionResult> {
   throwIfAborted(input.signal);
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时暂不支持本机链接采集与转写；请配置远程采集/ASR 服务。");
+    }
+    const remote = await callRemoteCapability<LinkTranscriptionResult>(
+      "transcribe-link",
+      { url: input.url, titleHint: input.titleHint, analyzeVideo: input.analyzeVideo },
+      { signal: input.signal }
+    );
+    if (!remote || typeof remote.text !== "string") {
+      throw new Error("远程链接转写服务返回了无效结果，缺少 text。");
+    }
+    return remote;
+  }
   const startedAt = Date.now();
   const resolvedUrl = await resolveShareUrl(input.url, { signal: input.signal }).catch((error) => {
     if (isAbortError(error)) throw error;
@@ -468,7 +510,7 @@ export async function resolveLinkSourceAccountName(url: string) {
   if (platform !== "douyin" && platform !== "bilibili") return "";
   const metadata = await resolveLinkStatsMetadata(resolvedUrl || inputUrl, platform);
   if (metadata.sourceAccountName) return metadata.sourceAccountName;
-  const media = await resolveLinkMediaUrl({
+  const media = await resolveLinkSourceMedia({
     url: inputUrl,
     resolvedUrl,
     platform
@@ -486,6 +528,29 @@ export async function resolveLinkSourceMedia(input: {
   platform?: Platform | "unknown";
   signal?: AbortSignal;
 }): Promise<LinkSourceResolvedMedia> {
+  throwIfAborted(input.signal);
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时不支持本机链接媒体解析；请配置远程媒体解析服务。");
+    }
+    const remote = await callRemoteCapability<LinkSourceResolvedMedia>(
+      "link-media",
+      { url: input.url, resolvedUrl: input.resolvedUrl, platform: input.platform },
+      { signal: input.signal }
+    );
+    if (!remote || remote.url !== input.url || !Array.isArray(remote.mediaUrls)) {
+      throw new Error("远程媒体解析服务返回了无效结果，缺少 url 或 mediaUrls。");
+    }
+    return {
+      url: remote.url,
+      resolvedUrl: remote.resolvedUrl,
+      platform: remote.platform,
+      title: remote.title,
+      sourceAccountName: remote.sourceAccountName,
+      coverUrl: remote.coverUrl,
+      mediaUrls: remote.mediaUrls.filter((value): value is string => typeof value === "string")
+    };
+  }
   const resolvedUrl = input.resolvedUrl || (await resolveShareUrl(input.url, { signal: input.signal }).catch((error) => {
     if (isAbortError(error)) throw error;
     return input.url;
@@ -525,6 +590,39 @@ export async function prepareLinkSourceDownload(input: {
   url: string;
   kind: LinkSourceAssetKind;
 }, options: AbortableOptions = {}): Promise<LinkSourceDownloadAsset> {
+  throwIfAborted(options.signal);
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    if (!hasRemoteCapabilityBridge()) {
+      throw new Error("Sites 云端运行时不支持本机媒体下载；请配置远程媒体下载服务。");
+    }
+    const remote = await callRemoteCapability<LinkSourceDownloadAsset>(
+      "link-download",
+      input,
+      { signal: options.signal }
+    );
+    if (!remote || remote.kind !== input.kind || typeof remote.remoteUrl !== "string") {
+      throw new Error("远程媒体下载服务返回了无效结果，缺少匹配的 kind 或 remoteUrl。");
+    }
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(remote.remoteUrl);
+    } catch {
+      throw new Error("远程媒体下载服务返回的 remoteUrl 格式无效。");
+    }
+    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+      throw new Error("远程媒体下载服务只允许返回 http(s) remoteUrl。");
+    }
+    if (!remote.fileName?.trim() || !remote.contentType?.trim()) {
+      throw new Error("远程媒体下载服务返回了无效结果，缺少 fileName 或 contentType。");
+    }
+    return {
+      kind: remote.kind,
+      fileName: remote.fileName,
+      contentType: remote.contentType,
+      remoteUrl: parsedUrl.toString(),
+      requestHeaders: remote.requestHeaders
+    };
+  }
   if (input.kind === "cover") {
     return prepareLinkSourceCoverDownload(input.url, options);
   }
@@ -2162,6 +2260,9 @@ function buildMissingMediaReason(input: {
   hadBilibiliSubtitle: boolean;
   bilibiliSubtitleError?: string;
 }) {
+  if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
+    throw new Error("Sites 云端运行时暂不支持本机链接采集与转写；请配置远程采集/ASR 服务。");
+  }
   if (input.platform === "bilibili" && input.bilibiliSubtitleError) {
     if (input.mediaError) {
       return `B站字幕抓取失败：${input.bilibiliSubtitleError}。已改走远程媒体音频提取和火山转写，但音频提取失败：${input.mediaError}`;
