@@ -130,7 +130,11 @@ function AssetsPageContent() {
     setSourceInput(detail.sourceType === "url"
       ? detail.sourceUrl || detail.resolvedUrl || detail.sourceText
       : detail.sourceText);
-    setGenerationMode(detail.options.generationMode === "reference" ? "reference" : "quick");
+    setGenerationMode(detail.options.generationMode === "research"
+      ? "research"
+      : detail.options.generationMode === "reference"
+        ? "reference"
+        : "quick");
     setTargetPlatform(restoredPlatform);
     setIncludeComments(detail.options.includeComments);
     setCommentCount(clampCount(detail.options.commentCount, 1, 200, 50));

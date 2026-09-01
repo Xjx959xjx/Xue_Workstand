@@ -17,7 +17,7 @@ const optionsSchema = {
   commentCount: z.number().int().min(1).max(200).optional().default(50),
   includeDanmaku: z.boolean().optional().default(false),
   danmakuCount: z.number().int().min(1).max(300).optional().default(50),
-  generationMode: z.enum(["quick", "reference"]).optional().default("quick"),
+  generationMode: z.enum(["quick", "reference", "research"]).optional().default("quick"),
   targetPlatform: z.enum(["bilibili", "douyin"]).optional()
 };
 

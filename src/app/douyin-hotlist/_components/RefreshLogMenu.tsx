@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import { ChevronDown, Clock3 } from "lucide-react";
 import {
   formatLogTime,
@@ -7,7 +8,15 @@ import {
   type RefreshLogGroupKind
 } from "../_lib/douyin-hotlist-model";
 
-export function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
+export function RefreshLogMenu({
+  error,
+  loading,
+  logs
+}: {
+  error: string;
+  loading: boolean;
+  logs: RefreshLogEntry[];
+}) {
   const latestLog = logs[0];
 
   return (
@@ -19,47 +28,51 @@ export function RefreshLogMenu({ logs }: { logs: RefreshLogEntry[] }) {
       <div className="douyin-hotlist-refresh-log-panel" role="log" aria-label="刷新日志">
         <div className="douyin-hotlist-refresh-log-head">
           <strong>刷新日志</strong>
-          <span>页面打开时每 3 小时自动检查，失败会记录</span>
+          <span>所有浏览器共享抓取结果，失败会保留明细</span>
         </div>
+        {error ? <p className="douyin-hotlist-refresh-log-error" role="alert">{error}</p> : null}
         {logs.length ? (
           <ol>
             {logs.map((log) => <RefreshLogItem key={log.id} log={log} />)}
           </ol>
-        ) : (
-          <p>暂无记录，下一次自动刷新会写在这里。</p>
-        )}
+        ) : !error ? (
+          <p>{loading ? "正在读取共享刷新日志…" : "暂无记录，下一次手动抓取后会写在这里。"}</p>
+        ) : null}
       </div>
     </details>
   );
 }
 
 function RefreshLogItem({ log }: { log: RefreshLogEntry }) {
-  const hasDetails = Boolean(log.groups?.length || log.details?.length);
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  const hasDetails = Boolean(log.groups?.length);
   const summary = <RefreshLogSummary log={log} />;
 
   return (
     <li className={`tone-${log.status}`}>
       {hasDetails ? (
-        <details className="douyin-hotlist-refresh-log-entry">
-          <summary>
+        <div className={`douyin-hotlist-refresh-log-entry${expanded ? " is-open" : ""}`}>
+          <button
+            aria-controls={detailsId}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+            type="button"
+          >
             {summary}
             <span className="douyin-hotlist-refresh-log-disclosure">
               {getDisclosureLabel(log)}
               <ChevronDown aria-hidden="true" size={13} />
             </span>
-          </summary>
-          <div className="douyin-hotlist-refresh-log-details">
-            {log.groups?.map((group, index) => (
-              <RefreshLogGroupBlock group={group} key={`${group.kind}-${group.reason || ""}-${index}`} />
-            ))}
-            {log.details?.length ? (
-              <div className="douyin-hotlist-refresh-log-legacy">
-                <strong>历史明细</strong>
-                {log.details.map((detail) => <span key={detail}>{detail}</span>)}
-              </div>
-            ) : null}
-          </div>
-        </details>
+          </button>
+          {expanded ? (
+            <div className="douyin-hotlist-refresh-log-details" id={detailsId}>
+              {log.groups?.map((group, index) => (
+                <RefreshLogGroupBlock group={group} key={`${group.kind}-${group.reason || ""}-${index}`} />
+              ))}
+            </div>
+          ) : null}
+        </div>
       ) : (
         <div className="douyin-hotlist-refresh-log-entry-static">{summary}</div>
       )}
@@ -94,7 +107,7 @@ function RefreshLogGroupBlock({ group }: { group: RefreshLogGroup }) {
 }
 
 function getDisclosureLabel(log: RefreshLogEntry) {
-  if (!log.groups?.length) return `查看明细 · ${log.details?.length || 0} 条`;
+  if (!log.groups?.length) return "查看明细";
   const counts = new Map<RefreshLogGroupKind, number>();
   log.groups.forEach((group) => counts.set(group.kind, (counts.get(group.kind) || 0) + group.accounts.length));
   const parts: string[] = [];

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MessageSquareText, Send, Zap } from "lucide-react";
+import { Globe2, MessageSquareText, Send, Zap } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
 import type { EngagementGenerationMode, Platform } from "@/lib/types";
@@ -88,6 +88,17 @@ export function EngagementGeneratorPane({
               >
                 <MessageSquareText aria-hidden="true" size={14} />
                 原评增强
+              </button>
+              <button
+                aria-pressed={generationMode === "research"}
+                className={generationMode === "research" ? "active" : ""}
+                disabled={busy === "generate"}
+                onClick={() => onGenerationModeChange("research")}
+                title="调研当前原评、B站与抖音相关视频评论及公开论坛讨论"
+                type="button"
+              >
+                <Globe2 aria-hidden="true" size={14} />
+                全网调研
               </button>
             </div>
           </div>

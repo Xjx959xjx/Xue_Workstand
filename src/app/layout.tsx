@@ -6,6 +6,16 @@ import { MobileAppChrome } from "@/components/MobileAppChrome";
 import { getAppMode } from "@/lib/app-mode";
 import "./globals.css";
 
+const skinBootstrapScript = `
+  try {
+    if (window.localStorage.getItem("content-workbench-skin") === "shinigami") {
+      document.documentElement.dataset.skin = "shinigami";
+    }
+  } catch (_) {
+    // 本地偏好不可用时继续使用默认皮肤。
+  }
+`;
+
 export function generateMetadata(): Metadata {
   const appMode = getAppMode();
   return {
@@ -36,7 +46,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const buildId = process.env.APP_BUILD_ID || "dev-0.1.0";
 
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: skinBootstrapScript }} />
+      </head>
       <body>
         <a className="skip-link" href="#main-content">
           跳到主要内容

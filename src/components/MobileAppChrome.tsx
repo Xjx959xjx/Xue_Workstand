@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Flame, Home, Menu, PenLine } from "lucide-react";
+import { BookOpen, Flame, Home, Menu, PenLine, Sword } from "lucide-react";
+import { SkinToggle } from "./SkinToggle";
 import { TaskCenter } from "./TaskCenter";
 import { useRemoteStatus } from "./RemoteStatusProvider";
 import type { AppMode } from "@/lib/app-mode";
@@ -26,13 +27,21 @@ export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
     <>
       <header className="mobile-top-bar">
         <Link className="mobile-top-brand" href="/mobile">
-          <span className="mobile-top-mark" aria-hidden="true">P</span>
-          <span>
+          <span className="mobile-top-mark" aria-hidden="true">
+            <span className="mobile-top-mark-default">P</span>
+            <Sword className="mobile-top-mark-shinigami" size={19} strokeWidth={2} />
+          </span>
+          <span className="mobile-brand-copy mobile-brand-copy-default">
             <strong>风格库</strong>
             <small>私人远程工作台</small>
           </span>
+          <span className="mobile-brand-copy mobile-brand-copy-shinigami">
+            <strong>BLEACH</strong>
+            <small>SOUL SOCIETY</small>
+          </span>
         </Link>
         <div className="mobile-top-actions">
+          <SkinToggle compact />
           <Link
             className={`remote-status-chip ${remote.connection}`}
             href="/mobile/more#service-status"

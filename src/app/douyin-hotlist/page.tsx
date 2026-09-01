@@ -12,6 +12,7 @@ import {
   addDouyinHotlistAccount,
   getCachedDouyinHotlist,
   getDouyinHotlist,
+  getDouyinHotlistRefreshLogs,
   removeDouyinHotlistAccount
 } from "@/lib/client";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -24,26 +25,21 @@ import type {
   Platform
 } from "@/lib/types";
 import {
-  MAX_REFRESH_LOGS,
   buildHotlistHref,
   formatDate,
   getPlatformAccountSelection,
   getPlatformLabel,
-  getRefreshJobSettlement,
   getSelectedAccount,
   getSelectionPlatform,
-  getTimeValue,
   getVisibleHotlistItems,
   getWindowLabel,
   isRefreshBusyMessage,
   isTerminalRefreshJob,
   parseSortMode,
-  parseStoredRefreshLogs,
   parseWindowFilter,
   sortOptions,
   type AccountSelection,
   type BusyState,
-  type RefreshHotlistOptions,
   type RefreshLogEntry,
   type SortMode,
   type WindowFilter
@@ -54,10 +50,6 @@ import { EmptyHotlist, HotlistLoadingRows, HotlistTable } from "./_components/Ho
 import { RefreshLogMenu } from "./_components/RefreshLogMenu";
 
 const REFRESH_LIMIT = 10;
-const AUTO_REFRESH_INTERVAL_MS = 3 * 60 * 60 * 1000;
-const AUTO_REFRESH_CHECK_INTERVAL_MS = 60 * 1000;
-const AUTO_REFRESH_START_DELAY_MS = AUTO_REFRESH_CHECK_INTERVAL_MS;
-const REFRESH_LOG_STORAGE_KEY = "douyin-hotlist-refresh-logs";
 
 export default function DouyinHotlistPage() {
   return (
@@ -85,54 +77,51 @@ function DouyinHotlistPageContent() {
   const [removeTarget, setRemoveTarget] = useState<DouyinHotlistAccount | null>(null);
   const [accountDrawerOpen, setAccountDrawerOpen] = useState(false);
   const [refreshLogs, setRefreshLogs] = useState<RefreshLogEntry[]>([]);
-  const [refreshLogsReady, setRefreshLogsReady] = useState(false);
+  const [refreshLogsLoading, setRefreshLogsLoading] = useState(true);
+  const [refreshLogsError, setRefreshLogsError] = useState("");
   const busyRef = useRef<BusyState>(busy);
-  const accountCountRef = useRef(snapshot?.accounts.length ?? 0);
-  const lastFullRefreshAttemptAtRef = useRef<string | undefined>(snapshot?.summary.lastFullRefreshAttemptAt);
-  const lastAutoRefreshAttemptAtRef = useRef(0);
-  const autoRefreshReadyAtRef = useRef(0);
   const activeRefreshJobRef = useRef<JobRecord | null>(null);
-  const refreshJobsReadyRef = useRef(false);
-  const trackedRefreshJobIdsRef = useRef<Set<string>>(new Set());
-  const handledRefreshJobIdsRef = useRef<Set<string>>(new Set());
   const syncedRefreshDataRevisionsRef = useRef<Map<string, number>>(new Map());
+  const syncedTerminalRefreshJobRef = useRef<string | null>(null);
   const loadRequestIdRef = useRef(0);
-  const refreshHotlistRef = useRef<(options?: RefreshHotlistOptions) => Promise<void>>(async () => {});
+  const refreshLogRequestIdRef = useRef(0);
   const activeRefreshJob = tasks.activeJobs[0] || null;
+  const latestTerminalRefreshJob = tasks.jobs.find(isTerminalRefreshJob) || null;
+  const latestTerminalRefreshJobId = latestTerminalRefreshJob?.id || "";
+  const latestTerminalRefreshJobStatus = latestTerminalRefreshJob?.status || "";
+  const latestTerminalRefreshJobUpdatedAt = latestTerminalRefreshJob?.updatedAt || "";
+  const latestTerminalRefreshDataRevision = latestTerminalRefreshJob?.dataRevision || 0;
+  const latestTerminalRefreshSignature = latestTerminalRefreshJobId
+    ? `${latestTerminalRefreshJobId}:${latestTerminalRefreshJobUpdatedAt}:${latestTerminalRefreshDataRevision}`
+    : "";
   const refreshing = Boolean(activeRefreshJob);
 
-  const appendRefreshLog = useCallback((entry: Omit<RefreshLogEntry, "id" | "at">) => {
-    const at = new Date().toISOString();
-    setRefreshLogs((current) => [
-      {
-        ...entry,
-        at,
-        id: `${at}-${entry.status}-${current.length}`
-      },
-      ...current
-    ].slice(0, MAX_REFRESH_LOGS));
+  const loadRefreshLogs = useCallback(async (options: { signal?: AbortSignal } = {}) => {
+    const requestId = refreshLogRequestIdRef.current + 1;
+    refreshLogRequestIdRef.current = requestId;
+    setRefreshLogsLoading(true);
+    try {
+      const result = await getDouyinHotlistRefreshLogs({ signal: options.signal });
+      if (refreshLogRequestIdRef.current !== requestId) return;
+      setRefreshLogs(result.logs);
+      setRefreshLogsError("");
+    } catch (error) {
+      if (options.signal?.aborted || refreshLogRequestIdRef.current !== requestId) return;
+      setRefreshLogsError(error instanceof Error ? error.message : "读取共享刷新日志失败");
+    } finally {
+      if (refreshLogRequestIdRef.current === requestId) setRefreshLogsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const storedLogs = parseStoredRefreshLogs(window.localStorage.getItem(REFRESH_LOG_STORAGE_KEY));
-    if (storedLogs.length) setRefreshLogs(storedLogs);
-    setRefreshLogsReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !refreshLogsReady) return;
-    window.localStorage.setItem(REFRESH_LOG_STORAGE_KEY, JSON.stringify(refreshLogs));
-  }, [refreshLogs, refreshLogsReady]);
+    const controller = new AbortController();
+    void loadRefreshLogs({ signal: controller.signal });
+    return () => controller.abort();
+  }, [loadRefreshLogs]);
 
   useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
-
-  useEffect(() => {
-    accountCountRef.current = snapshot?.accounts.length ?? 0;
-    lastFullRefreshAttemptAtRef.current = snapshot?.summary.lastFullRefreshAttemptAt;
-  }, [snapshot?.accounts.length, snapshot?.summary.lastFullRefreshAttemptAt]);
 
   useEffect(() => {
     activeRefreshJobRef.current = activeRefreshJob;
@@ -269,29 +258,8 @@ function DouyinHotlistPageContent() {
     }
   }
 
-  const refreshHotlist = useCallback(async (options: RefreshHotlistOptions = {}) => {
-    const automatic = Boolean(options.automatic);
-    if (!snapshot?.accounts.length) {
-      if (automatic) {
-        appendRefreshLog({
-          automatic,
-          status: "skipped",
-          text: "账号池为空，自动刷新跳过。"
-        });
-      }
-      return;
-    }
-
-    if (activeRefreshJobRef.current || busyRef.current) {
-      if (automatic) {
-        appendRefreshLog({
-          automatic,
-          status: "skipped",
-          text: "已有任务运行中，自动刷新跳过。"
-        });
-      }
-      return;
-    }
+  const refreshHotlist = useCallback(async () => {
+    if (!snapshot?.accounts.length || activeRefreshJobRef.current || busyRef.current) return;
 
     setError("");
     try {
@@ -299,104 +267,51 @@ function DouyinHotlistPageContent() {
         kind: "hotlist-refresh",
         href: "/douyin-hotlist",
         input: {
-          accountIds: automatic
-            ? undefined
-            : selectedAccount
-              ? [selectedAccount.id]
-              : selectedPlatform
-                ? selectedPlatformAccounts.map((account) => account.id)
-                : undefined,
-          automatic,
+          accountIds: selectedAccount
+            ? [selectedAccount.id]
+            : selectedPlatform
+              ? selectedPlatformAccounts.map((account) => account.id)
+              : undefined,
+          automatic: false,
           limit: REFRESH_LIMIT,
           window: windowFilter
         }
       });
-      trackedRefreshJobIdsRef.current.add(job.id);
       activeRefreshJobRef.current = job;
-      if (!automatic) {
-        notify({ tone: "info", message: "刷新任务已开始，可在任务中心查看进度或停止。" });
-      }
+      notify({ tone: "info", message: "刷新任务已开始，可在任务中心查看进度或停止。" });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "未知错误";
       const refreshBusy = isRefreshBusyMessage(errorMessage);
-      appendRefreshLog({
-        automatic,
-        status: refreshBusy ? "skipped" : "failed",
-        text: `${automatic ? "自动" : "手动"}刷新${refreshBusy ? "跳过" : "失败"}：${errorMessage}`
-      });
       if (refreshBusy) {
-        if (!automatic) notify({ tone: "warning", message: errorMessage });
+        notify({ tone: "warning", message: errorMessage });
       } else {
         notify({ tone: "error", message: errorMessage });
       }
     }
-  }, [appendRefreshLog, notify, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, tasks, windowFilter]);
+  }, [notify, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, tasks, windowFilter]);
 
   useEffect(() => {
     if (tasks.loading) return;
-
-    if (!refreshJobsReadyRef.current) {
-      tasks.activeJobs.forEach((job) => trackedRefreshJobIdsRef.current.add(job.id));
-      tasks.jobs.filter(isTerminalRefreshJob).forEach((job) => handledRefreshJobIdsRef.current.add(job.id));
-      refreshJobsReadyRef.current = true;
+    if (syncedTerminalRefreshJobRef.current === null) {
+      syncedTerminalRefreshJobRef.current = latestTerminalRefreshSignature;
       return;
     }
+    if (!latestTerminalRefreshSignature) return;
 
-    tasks.activeJobs.forEach((job) => trackedRefreshJobIdsRef.current.add(job.id));
-    const completedJobs = tasks.jobs.filter(
-      (job) =>
-        isTerminalRefreshJob(job) &&
-        trackedRefreshJobIdsRef.current.has(job.id) &&
-        !handledRefreshJobIdsRef.current.has(job.id)
-    );
-    if (!completedJobs.length) return;
-
-    completedJobs.forEach((job) => handledRefreshJobIdsRef.current.add(job.id));
-    void (async () => {
-      for (const job of completedJobs) {
-        const settlement = getRefreshJobSettlement(job);
-        if (settlement.reload) await loadHotlist({ force: true });
-        appendRefreshLog(settlement.log);
-      }
-    })();
-  }, [appendRefreshLog, loadHotlist, tasks.activeJobs, tasks.jobs, tasks.loading]);
-
-  useEffect(() => {
-    refreshHotlistRef.current = refreshHotlist;
-  }, [refreshHotlist]);
-
-  const runAutoRefreshIfDue = useCallback(() => {
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-    if (!accountCountRef.current || busyRef.current) return;
-
-    const now = Date.now();
-    if (autoRefreshReadyAtRef.current && now < autoRefreshReadyAtRef.current) return;
-
-    const lastCompletedRefreshAt = getTimeValue(lastFullRefreshAttemptAtRef.current);
-    const lastAutoRefreshAttemptAt = lastAutoRefreshAttemptAtRef.current;
-    const lastAutoRefreshBaseline = Math.max(lastCompletedRefreshAt, lastAutoRefreshAttemptAt);
-    if (lastAutoRefreshBaseline && now - lastAutoRefreshBaseline < AUTO_REFRESH_INTERVAL_MS) return;
-
-    lastAutoRefreshAttemptAtRef.current = now;
-    void refreshHotlistRef.current({ automatic: true });
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    autoRefreshReadyAtRef.current = Date.now() + AUTO_REFRESH_START_DELAY_MS;
-    const timer = window.setInterval(runAutoRefreshIfDue, AUTO_REFRESH_CHECK_INTERVAL_MS);
-    const handlePageAvailable = () => runAutoRefreshIfDue();
-
-    window.addEventListener("focus", handlePageAvailable);
-    document.addEventListener("visibilitychange", handlePageAvailable);
-
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", handlePageAvailable);
-      document.removeEventListener("visibilitychange", handlePageAvailable);
-    };
-  }, [runAutoRefreshIfDue]);
+    if (syncedTerminalRefreshJobRef.current === latestTerminalRefreshSignature) return;
+    syncedTerminalRefreshJobRef.current = latestTerminalRefreshSignature;
+    void loadRefreshLogs();
+    if (latestTerminalRefreshJobStatus === "completed" || latestTerminalRefreshDataRevision > 0) {
+      void loadHotlist({ force: true });
+    }
+  }, [
+    latestTerminalRefreshDataRevision,
+    latestTerminalRefreshJobStatus,
+    latestTerminalRefreshSignature,
+    loadHotlist,
+    loadRefreshLogs,
+    tasks.loading
+  ]);
 
   async function handleRefresh() {
     if (!canRefresh) return;
@@ -442,7 +357,7 @@ function DouyinHotlistPageContent() {
             <SlidersHorizontal aria-hidden="true" size={16} />
             管理账号
           </button>
-          <RefreshLogMenu logs={refreshLogs} />
+          <RefreshLogMenu error={refreshLogsError} loading={refreshLogsLoading} logs={refreshLogs} />
           <button className="btn" aria-busy={busy === "load"} disabled={operationBusy} onClick={() => void loadHotlist({ force: true })} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             重载
@@ -502,7 +417,7 @@ function DouyinHotlistPageContent() {
           {initialLoading ? (
             <HotlistLoadingRows />
           ) : visibleItems.length ? (
-            <HotlistTable items={visibleItems} showGlobalRank={selectedAccountId !== "all" || sortMode !== "heat"} />
+            <HotlistTable items={visibleItems} showGlobalRank={selectedAccountId !== "all"} />
           ) : (
             <EmptyHotlist hasAccounts={Boolean(snapshot?.accounts.length)} selectedAccount={selectedAccount?.name} windowLabel={windowLabel} />
           )}

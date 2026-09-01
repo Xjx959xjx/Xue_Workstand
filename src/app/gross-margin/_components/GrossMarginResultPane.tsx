@@ -60,7 +60,7 @@ export function GrossMarginResultPane({
         <div className="gross-result-grid">
           <MetricItem label="折前价格" value={formatMoney(calculation.originalPrice)} />
           <MetricItem label="折后价格" value={formatMoney(calculation.discountPrice)} />
-          <MetricItem label="折扣率" value={formatPercent(calculation.discountRate)} />
+          <MetricItem label="返点" value={formatPercent(calculation.rebateRate)} />
           <MetricItem
             label="维护成本占折前"
             value={formatPercent(calculation.originalPrice ? calculation.maintenanceCost / calculation.originalPrice : 0)}

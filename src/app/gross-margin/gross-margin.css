@@ -167,6 +167,15 @@
   -moz-appearance: textfield;
 }
 
+.gross-rate-input input:hover,
+.gross-rate-input input:focus,
+.gross-rate-input input:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
 .gross-rate-input input::-webkit-inner-spin-button,
 .gross-rate-input input::-webkit-outer-spin-button {
   margin: 0;
@@ -197,6 +206,50 @@
 
 .gross-price-summary-form .field-hint.warning {
   color: var(--amber);
+}
+
+.gross-original-price-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.gross-account-price-kinds {
+  display: inline-flex;
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.gross-account-price-kinds button {
+  min-height: 38px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-strong);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.gross-account-price-kinds button.active {
+  color: var(--accent-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+
+.gross-account-price-kinds button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.gross-account-price-kinds button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .gross-maintenance-table-wrap {

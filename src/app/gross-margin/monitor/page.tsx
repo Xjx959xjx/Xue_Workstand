@@ -805,15 +805,16 @@ function formatTargetSummary(record: GrossMarginMonitorRecord) {
 
 function buildMonitorDifferenceText(record: GrossMarginMonitorRecord) {
   const lines = getDisplayMetrics(record)
+    .filter((metric) => metric.difference > 0)
     .map((metric) => `${getMetricLabel(metric)}：${formatGapMetric(metric.difference, metric.service, record.platform)}`)
     .filter(Boolean);
   const dailyPlayGain = getDailyPlayGainSummary(record);
   const dailyGainLines =
     dailyPlayGain?.state === "ready"
-      ? ["", `当天新增：${formatDailyPlayGainSummary(dailyPlayGain, record.platform)}`]
+      ? [`当天新增：${formatDailyPlayGainSummary(dailyPlayGain, record.platform)}`]
       : [];
 
-  return ["@罗月琴 目前差额：", "", ...lines, ...dailyGainLines].join("\n");
+  return ["目前差额：", ...lines, ...dailyGainLines].join("\n");
 }
 
 function isBlueLinkFetchWarning(warning: string) {

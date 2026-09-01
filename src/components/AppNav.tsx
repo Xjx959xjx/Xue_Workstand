@@ -14,9 +14,11 @@ import {
   PenLine,
   Radar,
   Sparkles,
+  Sword,
   Wrench
 } from "lucide-react";
 import { TaskCenter } from "./TaskCenter";
+import { SkinToggle } from "./SkinToggle";
 import type { AppMode } from "@/lib/app-mode";
 
 type NavItem = {
@@ -39,6 +41,11 @@ const navItems: NavItem[] = [
 ];
 
 const navGroupOrder: NavItem["group"][] = ["内容发现", "创作工作区", "数据与工具"];
+const navGroupCodes: Record<NavItem["group"], string> = {
+  "内容发现": "壱 · RECON",
+  "创作工作区": "弐 · CREATION",
+  "数据与工具": "参 · ARSENAL"
+};
 
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
 const devRouteApiWarmups: Record<string, string[]> = {
@@ -175,18 +182,26 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         onPointerEnter={() => void prewarmRoute(brandHref)}
       >
         <span className="brand-mark" aria-hidden="true">
-          <Sparkles size={18} strokeWidth={2.1} />
+          <Sparkles className="brand-mark-default" size={18} strokeWidth={2.1} />
+          <Sword className="brand-mark-shinigami" size={20} strokeWidth={1.9} />
         </span>
-        <span>
+        <span className="brand-copy brand-copy-default">
           <strong>{grossMarginMode ? "数据维护监控" : "风格库"}</strong>
           <small>{grossMarginMode ? "Windows 便携版" : "本地"}</small>
+        </span>
+        <span className="brand-copy brand-copy-shinigami">
+          <strong>BLEACH</strong>
+          <small>死神 · SOUL SOCIETY</small>
         </span>
       </Link>
       <nav className="nav-list" aria-label="主导航">
         {visibleNavGroups.map((group) => {
           return (
             <section className="nav-section" key={group.label} aria-labelledby={`nav-${group.label}`}>
-              <h2 className="nav-section-label" id={`nav-${group.label}`}>{group.label}</h2>
+              <h2 className="nav-section-label" id={`nav-${group.label}`}>
+                <span>{group.label}</span>
+                <small className="nav-section-code" aria-hidden="true">{navGroupCodes[group.label]}</small>
+              </h2>
               <div className="nav-section-items">
                 {group.items.map((item) => {
                   const active = item.href === activeHref;
@@ -206,6 +221,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                           <Icon size={17} strokeWidth={2.1} />
                         </span>
                         <span>{item.label}</span>
+                        <span className="nav-soul-mark" aria-hidden="true">魂</span>
                       </Link>
                     </div>
                   );
@@ -216,6 +232,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         })}
       </nav>
       <div className="sidebar-bottom">
+        <SkinToggle />
         <TaskCenter />
       </div>
     </aside>

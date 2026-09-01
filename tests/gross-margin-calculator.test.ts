@@ -44,7 +44,7 @@ test("毛利计算按选中档位和手工单价汇总成本与比例", () => {
   assert.equal(result.maintenanceCost, 40);
   assert.equal(result.grossProfit, 760);
   assert.equal(result.grossMarginRate, 0.76);
-  assert.equal(result.discountRate, 0.8);
+  assert.equal(result.rebateRate, 0.2);
 });
 
 test("毛利计算在价格为零或输入无效时返回稳定边界值", () => {
@@ -61,7 +61,7 @@ test("毛利计算在价格为零或输入无效时返回稳定边界值", () =>
   assert.equal(result.maintenanceCost, 0);
   assert.equal(result.grossProfit, 200);
   assert.equal(result.grossMarginRate, 0);
-  assert.equal(result.discountRate, 0);
+  assert.equal(result.rebateRate, 0);
   assert.equal(result.lines[0]?.total, 0);
 });
 

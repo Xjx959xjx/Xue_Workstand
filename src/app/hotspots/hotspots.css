@@ -1,10 +1,4 @@
 /* Hotspot radar route: monitor type -> subject -> event */
-.hotspots-page {
-  width: 100%;
-  align-content: start;
-  gap: 12px;
-}
-
 @media (min-width: 1181px) {
   .hotspots-page {
     grid-template-rows: auto auto minmax(0, 1fr);
@@ -21,59 +15,14 @@
   }
 }
 
-.hotspots-header {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto auto;
-  gap: 12px;
-  align-items: center;
-  min-width: 0;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
-  border-radius: var(--radius-xl);
-  background: var(--panel);
-  box-shadow: var(--shadow-soft);
-}
-
-.hotspots-title-block {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  min-width: 0;
-}
-
-.hotspots-title-icon {
-  display: inline-grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border: 1px solid color-mix(in oklch, var(--accent) 26%, var(--line));
-  border-radius: 14px;
-  color: var(--accent-strong);
-  background: var(--accent-tint);
-}
-
-.hotspots-title-block h1,
-.hotspots-title-block p,
 .hotspots-header-health strong,
 .hotspots-header-health em {
   min-width: 0;
   margin: 0;
 }
 
-.hotspots-title-block h1 {
-  color: var(--text-strong);
-  font-size: 20px;
-  font-weight: 820;
-  line-height: 1.2;
-}
-
-.hotspots-title-block p {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 620;
-  line-height: 1.3;
+.hotspots-header-meta {
+  flex-wrap: nowrap;
 }
 
 .hotspots-header-health {
@@ -127,15 +76,10 @@
   line-height: 1.2;
 }
 
-.hotspots-refresh {
-  min-width: 104px;
-  min-height: 42px;
-}
-
 .hotspots-monitor-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -144,10 +88,10 @@
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) auto;
   grid-template-rows: auto auto auto;
-  gap: 7px 10px;
+  gap: var(--space-2);
   min-width: 0;
   min-height: 122px;
-  padding: 13px;
+  padding: var(--card-pad-md);
   border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
   border-radius: var(--radius-lg);
   color: var(--text);
@@ -1433,7 +1377,7 @@
 @media (max-width: 1240px) {
   .hotspots-monitor-option {
     grid-template-columns: 34px minmax(0, 1fr) auto;
-    padding: 12px;
+    padding: var(--card-pad-sm) var(--card-pad-md);
   }
 
   .hotspots-monitor-copy em {
@@ -1489,13 +1433,7 @@
 }
 
 @media (max-width: 840px) {
-  .hotspots-header {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
   .hotspots-header-health {
-    grid-column: 1 / -1;
-    grid-row: 2;
     min-width: 0;
   }
 
@@ -1549,32 +1487,7 @@
 
 @media (max-width: 720px) {
   .hotspots-page {
-    gap: 9px;
-  }
-
-  .hotspots-header {
-    gap: 10px;
-    padding: 12px;
-    border-radius: var(--radius-lg);
-  }
-
-  .hotspots-title-block {
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 9px;
-  }
-
-  .hotspots-title-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 12px;
-  }
-
-  .hotspots-title-block h1 {
-    font-size: 17px;
-  }
-
-  .hotspots-title-block p {
-    display: none;
+    gap: var(--space-2);
   }
 
   .hotspots-refresh {
@@ -1585,15 +1498,15 @@
   }
 
   .hotspots-monitor-strip {
-    gap: 7px;
+    gap: var(--space-2);
   }
 
   .hotspots-monitor-option {
     grid-template-columns: 30px minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
-    gap: 7px 8px;
+    gap: var(--space-2);
     min-height: 86px;
-    padding: 10px;
+    padding: var(--card-pad-sm);
     border-radius: 14px;
   }
 

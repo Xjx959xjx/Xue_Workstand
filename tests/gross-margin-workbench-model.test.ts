@@ -5,6 +5,7 @@ import {
   buildGrossMarginTemplateValues,
   buildImportedMaintenanceState,
   findGrossMarginAccount,
+  getGrossMarginAccountPrice,
   normalizeTemplateText
 } from "../src/app/gross-margin/_lib/gross-margin-workbench-model";
 import type {
@@ -110,6 +111,28 @@ test("账号匹配和模板换行归一化保持稳定", () => {
   assert.equal(normalizeTemplateText(" 第一行\r\n第二行\r\n"), "第一行\n第二行");
 });
 
+test("账号报价可在定制和植入间切换", () => {
+  const account: GrossMarginAccountPrice = {
+    platform: "douyin",
+    name: "双报价账号",
+    defaultPrice: 10_500,
+    priceLabel: "定制报价",
+    secondaryPrice: 8_680,
+    secondaryPriceLabel: "植入报价"
+  };
+
+  assert.deepEqual(getGrossMarginAccountPrice(account, "custom"), {
+    kind: "custom",
+    label: "定制报价",
+    value: 10_500
+  });
+  assert.deepEqual(getGrossMarginAccountPrice(account, "implant"), {
+    kind: "implant",
+    label: "植入报价",
+    value: 8_680
+  });
+});
+
 function makePriceTable(items: GrossMarginPriceOption[]): GrossMarginPriceTable {
   return { platform: "douyin", items, updatedAt };
 }
@@ -139,7 +162,7 @@ function makeCalculation(lines: GrossMarginCalculationLine[]): GrossMarginCalcul
     maintenanceCost: 100,
     grossProfit: 700,
     grossMarginRate: 0.7,
-    discountRate: 0.8,
+    rebateRate: 0.2,
     lines
   };
 }

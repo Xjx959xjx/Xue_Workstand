@@ -629,7 +629,7 @@
     font-weight: 780;
   }
 
-  .mobile-top-brand > span:last-child {
+  .mobile-brand-copy {
     display: grid;
     min-width: 0;
   }

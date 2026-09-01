@@ -6,9 +6,15 @@
 }
 
 .douyin-hotlist-page .page-header {
+  z-index: 30;
+  overflow: visible;
   min-height: 72px;
   padding: 10px 16px;
   border: 1px solid color-mix(in oklch, var(--line) 72%, transparent);
+}
+
+html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
+  overflow: visible;
 }
 
 .douyin-hotlist-page .page-title-group {
@@ -113,6 +119,10 @@
   padding: 8px;
 }
 
+.douyin-hotlist-refresh-log-panel .douyin-hotlist-refresh-log-error {
+  color: var(--status-danger-text);
+}
+
 .douyin-hotlist-refresh-log-panel ol {
   display: grid;
   max-height: min(420px, calc(100dvh - 150px));
@@ -126,7 +136,7 @@
 .douyin-hotlist-refresh-log-panel li {
   --log-color: var(--blue);
   display: block;
-  overflow: hidden;
+  overflow: visible;
   padding: 0;
   border: 1px solid color-mix(in oklch, var(--log-color) 18%, var(--line));
   border-radius: 12px;
@@ -171,36 +181,40 @@
   background: color-mix(in oklch, var(--log-color) 10%, var(--panel));
 }
 
-.douyin-hotlist-refresh-log-entry,
 .douyin-hotlist-refresh-log-entry-static,
-.douyin-hotlist-refresh-log-entry > summary {
+.douyin-hotlist-refresh-log-entry > button {
   display: grid;
   min-width: 0;
   gap: 6px;
 }
 
-.douyin-hotlist-refresh-log-entry > summary,
+.douyin-hotlist-refresh-log-entry {
+  min-width: 0;
+}
+
+.douyin-hotlist-refresh-log-entry > button,
 .douyin-hotlist-refresh-log-entry-static {
   padding: 9px 10px;
 }
 
-.douyin-hotlist-refresh-log-entry > summary {
-  list-style: none;
+.douyin-hotlist-refresh-log-entry > button {
+  width: 100%;
+  border: 0;
+  color: inherit;
+  background: transparent;
   cursor: pointer;
+  font: inherit;
+  text-align: left;
   transition:
     color var(--motion-fast) var(--ease-out),
     background var(--motion-fast) var(--ease-out);
 }
 
-.douyin-hotlist-refresh-log-entry > summary::-webkit-details-marker {
-  display: none;
-}
-
-.douyin-hotlist-refresh-log-entry > summary:hover {
+.douyin-hotlist-refresh-log-entry > button:hover {
   background: color-mix(in oklch, var(--log-color) 5%, var(--panel-raised));
 }
 
-.douyin-hotlist-refresh-log-entry > summary:focus-visible {
+.douyin-hotlist-refresh-log-entry > button:focus-visible {
   outline: 0;
   box-shadow: var(--focus-ring-shadow);
 }
@@ -224,7 +238,7 @@
   transition: transform var(--motion-fast) var(--ease-out);
 }
 
-.douyin-hotlist-refresh-log-entry[open] .douyin-hotlist-refresh-log-disclosure svg {
+.douyin-hotlist-refresh-log-entry.is-open .douyin-hotlist-refresh-log-disclosure svg {
   transform: rotate(180deg);
 }
 

@@ -22,6 +22,7 @@ const BILIBILI_DETAIL_CONCURRENCY = 6;
 
 export type BilibiliCommentSample = {
   rank: number;
+  rpid?: string;
   author: string;
   text: string;
   likes: number;
@@ -49,6 +50,7 @@ export type BilibiliRelatedCommentResult = {
   query: string;
   videos: BilibiliRelatedCommentVideo[];
   comments: string[];
+  replyCommentCount: number;
 };
 
 export type BilibiliVideoStatsResult = {
@@ -155,15 +157,16 @@ export async function collectBilibiliVideos(input: {
 
 export async function getBilibiliRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number; signal?: AbortSignal } = {}
+  options: { videoLimit?: number; commentLimit?: number; replyLimit?: number; signal?: AbortSignal } = {}
 ): Promise<BilibiliRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
-    return { query: "", videos: [], comments: [] };
+    return { query: "", videos: [], comments: [], replyCommentCount: 0 };
   }
 
   const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
   const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 50));
+  const replyLimit = Math.max(0, Math.min(options.replyLimit ?? 8, 20));
   const stdout = await runOpenCli([
     "bilibili",
     "search",
@@ -183,6 +186,7 @@ export async function getBilibiliRelatedTopicComments(
     .slice(0, videoLimit);
 
   const comments: string[] = [];
+  let replyCommentCount = 0;
   for (const video of videos) {
     const rows = await getBilibiliComments(
       { id: video.id, url: video.url, raw: video.url },
@@ -193,13 +197,42 @@ export async function getBilibiliRelatedTopicComments(
       return [];
     });
     comments.push(...rows.map((comment) => comment.text).filter(Boolean));
+    const replyRoot = rows
+      .filter((comment) => comment.rpid && comment.replies > 0)
+      .sort((left, right) => right.replies - left.replies || right.likes - left.likes)[0];
+    if (replyLimit && replyRoot?.rpid) {
+      const replies = await getBilibiliCommentReplies(video.id, replyRoot.rpid, replyLimit, options.signal).catch((error) => {
+        if (isAbortError(error, options.signal)) throw error;
+        return [];
+      });
+      replyCommentCount += replies.length;
+      comments.push(...replies.map((comment) => comment.text).filter(Boolean));
+    }
   }
 
   return {
     query: cleanQuery,
     videos,
-    comments: uniqueStrings(comments)
+    comments: uniqueStrings(comments),
+    replyCommentCount
   };
+}
+
+async function getBilibiliCommentReplies(bvid: string, rpid: string, limit: number, signal?: AbortSignal) {
+  const stdout = await runOpenCli([
+    "bilibili",
+    "comments",
+    bvid,
+    "--parent",
+    rpid,
+    "--limit",
+    String(Math.max(1, Math.min(limit, 20))),
+    "-f",
+    "json"
+  ], { signal });
+  return asArray(parseJsonish(stdout))
+    .map((row, index) => normalizeBilibiliComment(row, index))
+    .filter((comment) => comment.text);
 }
 
 export async function getBilibiliSubtitle(video: Video, options: { signal?: AbortSignal } = {}) {
@@ -736,6 +769,7 @@ function normalizeBilibiliComment(row: unknown, index: number): BilibiliCommentS
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   return {
     rank: toNumber(object.rank) || index + 1,
+    rpid: String(object.rpid || object.id || "").trim() || undefined,
     author: String(object.author || object.uname || ""),
     text: normalizeCommentText(object.text || object.content || object.message),
     likes: toNumber(object.likes || object.like),

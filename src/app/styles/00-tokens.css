@@ -187,3 +187,80 @@
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "SF Mono", "SFMono-Regular", "Cascadia Code", Menlo, Monaco, Consolas, monospace;
 }
+
+html[data-skin="shinigami"] {
+  color-scheme: dark;
+  --bg: oklch(0.105 0.008 24);
+  --bg-elevated: oklch(0.14 0.01 24);
+  --chrome: oklch(0.13 0.012 24);
+  --panel: oklch(0.175 0.011 24);
+  --panel-raised: oklch(0.205 0.013 24);
+  --panel-soft: oklch(0.155 0.01 24);
+  --panel-muted: oklch(0.245 0.014 24);
+  --text: oklch(0.885 0.018 78);
+  --text-strong: oklch(0.965 0.018 82);
+  --muted: oklch(0.71 0.018 68);
+  --muted-strong: oklch(0.8 0.02 72);
+  --line: oklch(0.32 0.014 26);
+  --line-strong: oklch(0.43 0.022 27);
+  --line-subtle: oklch(0.25 0.011 26);
+  --accent: oklch(0.61 0.205 25);
+  --accent-strong: oklch(0.72 0.19 29);
+  --accent-soft: oklch(0.235 0.085 24);
+  --accent-tint: oklch(0.205 0.068 24);
+  --blue: oklch(0.72 0.12 232);
+  --blue-soft: oklch(0.235 0.052 232);
+  --teal: oklch(0.72 0.11 205);
+  --purple: oklch(0.7 0.15 315);
+  --green: oklch(0.7 0.105 154);
+  --green-soft: oklch(0.225 0.05 154);
+  --amber: oklch(0.78 0.13 78);
+  --amber-soft: oklch(0.245 0.064 78);
+  --rose: oklch(0.69 0.205 23);
+  --rose-soft: oklch(0.235 0.078 23);
+  --hotlist-rising: oklch(0.72 0.16 48);
+  --hotlist-rising-soft: oklch(0.24 0.07 48);
+  --hotlist-rising-accent: oklch(0.78 0.15 48);
+  --hotlist-rising-strong: oklch(0.85 0.12 48);
+  --hotlist-rising-border: oklch(0.56 0.11 48);
+  --shadow: 0 1px 1px color-mix(in oklch, black 48%, transparent),
+    0 18px 42px color-mix(in oklch, black 34%, transparent);
+  --shadow-sm: 0 1px 1px color-mix(in oklch, black 42%, transparent),
+    0 10px 26px color-mix(in oklch, black 26%, transparent);
+  --shadow-soft: 0 1px 1px color-mix(in oklch, black 36%, transparent),
+    0 8px 20px color-mix(in oklch, black 20%, transparent);
+  --shadow-notice: 0 1px 1px color-mix(in oklch, black 38%, transparent),
+    0 12px 30px color-mix(in oklch, black 24%, transparent);
+  --shadow-float: 0 4px 12px color-mix(in oklch, black 48%, transparent),
+    0 22px 54px color-mix(in oklch, black 38%, transparent);
+  --shadow-lift: 0 6px 18px color-mix(in oklch, black 54%, transparent),
+    0 30px 90px color-mix(in oklch, black 48%, transparent);
+  --focus: color-mix(in oklch, var(--accent-strong) 42%, transparent);
+  --overlay: color-mix(in oklch, black 72%, transparent);
+  --glass-panel: color-mix(in oklch, var(--panel-raised) 92%, transparent);
+  --glass-chrome: color-mix(in oklch, var(--chrome) 95%, transparent);
+  --glass-popover: color-mix(in oklch, var(--panel-raised) 98%, transparent);
+  --glass-saturation: 1.08;
+  --surface-sheen: color-mix(in oklch, var(--accent) 18%, transparent);
+  --surface-hover: oklch(0.245 0.024 24);
+  --surface-selected: var(--accent-tint);
+  --control-bg: color-mix(in oklch, var(--panel-soft) 72%, var(--panel-raised));
+  --control-hover-bg: color-mix(in oklch, var(--accent-tint) 38%, var(--panel-raised));
+  --control-hover-border: color-mix(in oklch, var(--accent-strong) 48%, var(--line));
+  --control-active-text: color-mix(in oklch, var(--accent-strong) 88%, var(--text-strong));
+  --control-primary-border: color-mix(in oklch, var(--accent-strong) 86%, black);
+  --control-primary-text: oklch(0.975 0.018 82);
+  --control-primary-bg: linear-gradient(180deg, color-mix(in oklch, var(--accent) 88%, var(--accent-strong)) 0%, color-mix(in oklch, var(--accent) 72%, black) 100%);
+  --control-primary-hover-border: var(--accent-strong);
+  --control-primary-hover-bg: linear-gradient(180deg, var(--accent-strong) 0%, color-mix(in oklch, var(--accent) 80%, black) 100%);
+  --control-hero-bg: linear-gradient(135deg, color-mix(in oklch, var(--accent) 82%, black) 0%, color-mix(in oklch, var(--panel-raised) 68%, black) 100%);
+  --control-hero-hover-bg: linear-gradient(135deg, var(--accent) 0%, color-mix(in oklch, var(--accent) 48%, black) 100%);
+  --surface-inset-highlight: inset 0 1px 0 color-mix(in oklch, var(--text-strong) 9%, transparent);
+  --surface-card-highlight: inset 0 1px 0 color-mix(in oklch, var(--text-strong) 8%, transparent);
+  --control-radius: 8px;
+  --button-radius: 8px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+}

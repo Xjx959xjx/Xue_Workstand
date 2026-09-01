@@ -47,7 +47,11 @@ export function EngagementResultsPane({
         {generation && !isGenerating ? (
           <div className="engagement-diagnostics">
             {resultRecord?.comments?.generationMode ? (
-              <span>{resultRecord.comments.generationMode === "reference" ? (styleProfile ? "原评增强" : "参考热评") : (styleProfile ? "平台自然" : "快速自然")}</span>
+              <span>{resultRecord.comments.generationMode === "research"
+                ? "全网调研"
+                : resultRecord.comments.generationMode === "reference"
+                  ? (styleProfile ? "原评增强" : "参考热评")
+                  : (styleProfile ? "平台自然" : "快速自然")}</span>
             ) : null}
             <span>{generation.mode === "keyword_local" ? "关键词生成" : `${generation.batchCount} 批增强`}</span>
             <span>完成 {actualCommentCount || generation.completedCount}/{requestedCommentCount || generation.requestedCount}</span>
@@ -73,6 +77,13 @@ export function EngagementResultsPane({
             {generation.intentBuckets ? <span>观望 {generation.intentBuckets.skeptical}</span> : null}
             {generation.intentBuckets?.chatter ? <span>吹水 {generation.intentBuckets.chatter}</span> : null}
             {relatedResearch?.longCommentCount ? <span>长评样本 {relatedResearch.longCommentCount}</span> : null}
+            {relatedResearch?.relatedVideoCount ? <span>相关视频 {relatedResearch.relatedVideoCount}</span> : null}
+            {relatedResearch?.relatedCommentCount ? <span>跨平台样本 {relatedResearch.relatedCommentCount}</span> : null}
+            {relatedResearch?.forumSourceCount ? <span>论坛来源 {relatedResearch.forumSourceCount}</span> : null}
+            {relatedResearch?.replySampleCount ? <span>真实回复 {relatedResearch.replySampleCount}</span> : null}
+            {relatedResearch?.sourceStats?.some((source) => source.status !== "completed")
+              ? <span title={relatedResearch.sourceStats.filter((source) => source.error).map((source) => source.error).join("；")}>覆盖不完整</span>
+              : null}
             {generation.mode === "model_batch" ? <span>模型解析 {generation.parsedCount}</span> : null}
           </div>
         ) : null}

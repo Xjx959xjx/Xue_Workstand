@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFeedback } from "@/components/FeedbackProvider";
 import {
   bulkSaveGrossMarginMonitorRecords,
   getGrossMarginLibrary,
   resetGrossMarginReviewTemplate,
+  resolveGrossMarginVideoAccount,
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
   saveGrossMarginReviewTemplate
@@ -35,13 +36,19 @@ import {
   countTemplateLines,
   findGrossMarginAccount,
   formatPlatform,
+  getGrossMarginAccountPrice,
   getPlatformReviewTemplate,
   normalizeTemplateText,
+  type AccountPriceKind,
   type GrossMarginImportedTemplate,
   type PlatformKey
 } from "../_lib/gross-margin-workbench-model";
 
 type BusyState = "" | "refresh" | "prices" | "price-editor" | "export" | "template" | "bulk-monitor";
+type VideoAccountLookupState = {
+  status: "idle" | "loading" | "matched" | "unmatched" | "error";
+  message: string;
+};
 
 const pricePanelServiceConfigs = GROSS_MARGIN_SERVICE_CONFIGS.filter((config) => config.service !== "douPlus");
 
@@ -54,7 +61,8 @@ export function useGrossMarginWorkbench() {
   const [accountName, setAccountName] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
   const [originalPrice, setOriginalPrice] = useState("");
-  const [discountRate, setDiscountRate] = useState("");
+  const [accountPriceKind, setAccountPriceKind] = useState<AccountPriceKind>("custom");
+  const [rebateRate, setRebateRate] = useState("");
   const [discountPrice, setDiscountPrice] = useState("");
   const [quantityInputs, setQuantityInputs] = useState<Record<GrossMarginServiceKind, string>>(
     makeEmptyQuantityInputs
@@ -66,6 +74,13 @@ export function useGrossMarginWorkbench() {
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [priceEditorOpen, setPriceEditorOpen] = useState(false);
   const [splitDeliveryEnabled, setSplitDeliveryEnabled] = useState(false);
+  const [videoAccountLookup, setVideoAccountLookup] = useState<VideoAccountLookupState>({
+    status: "idle",
+    message: ""
+  });
+  const accountNameRef = useRef("");
+  const rebateRateRef = useRef("");
+  const videoAccountLookupRequestRef = useRef(0);
 
   const tables = useMemo(() => library?.tables || [], [library]);
   const table = useMemo(
@@ -154,6 +169,62 @@ export function useGrossMarginWorkbench() {
     };
   }, [notify]);
 
+  useEffect(() => {
+    const nextUrl = normalizeVideoUrlInput(videoUrl);
+    if (!library || !nextUrl || !detectVideoPlatform(nextUrl)) {
+      setVideoAccountLookup({ status: "idle", message: "" });
+      return;
+    }
+
+    const requestId = videoAccountLookupRequestRef.current + 1;
+    videoAccountLookupRequestRef.current = requestId;
+    const accountNameBeforeLookup = accountNameRef.current;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setVideoAccountLookup({ status: "loading", message: "正在从视频链接识别账号…" });
+      resolveGrossMarginVideoAccount(nextUrl, { signal: controller.signal })
+        .then((result) => {
+          if (videoAccountLookupRequestRef.current !== requestId) return;
+          if (accountNameRef.current !== accountNameBeforeLookup) {
+            setVideoAccountLookup({ status: "idle", message: "" });
+            return;
+          }
+
+          const accounts = (library.accounts || []).filter((account) => account.platform === result.platform);
+          const resolvedAccount = findGrossMarginAccount(accounts, result.accountName);
+          const resolvedName = resolvedAccount?.name || result.accountName;
+          accountNameRef.current = resolvedName;
+          setAccountName(resolvedName);
+          if (resolvedAccount) {
+            const price = getGrossMarginAccountPrice(resolvedAccount, "custom");
+            setAccountPriceKind(price.kind);
+            setOriginalPrice(String(price.value));
+            if (rebateRateRef.current.trim()) {
+              setDiscountPrice(formatAmountInput(price.value * (1 - toAmount(rebateRateRef.current) / 100)));
+            }
+          }
+          setVideoAccountLookup({
+            status: resolvedAccount ? "matched" : "unmatched",
+            message: resolvedAccount
+              ? `已识别账号：${resolvedName}`
+              : `已识别账号「${resolvedName}」，但报价表未匹配，请手动填写价格。`
+          });
+        })
+        .catch((error) => {
+          if (controller.signal.aborted || videoAccountLookupRequestRef.current !== requestId) return;
+          setVideoAccountLookup({
+            status: "error",
+            message: error instanceof Error ? error.message : "视频账号识别失败，请手动填写账号名。"
+          });
+        });
+    }, 500);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [library, videoUrl]);
+
   function applyLibraryTable(nextLibrary: GrossMarginLibrary, preferredPlatform: PlatformKey) {
     const nextTable = nextLibrary.tables.find((item) => item.platform === preferredPlatform) || nextLibrary.tables[0] || null;
     if (!nextTable) return;
@@ -172,13 +243,15 @@ export function useGrossMarginWorkbench() {
       (library?.accounts || []).filter((account) => account.platform === nextPlatform),
       accountName
     );
-    if (nextAccount) updateOriginalPrice(String(nextAccount.defaultPrice));
+    if (nextAccount) applyAccountPrice(nextAccount, "custom");
   }
 
   function handleAccountNameChange(value: string) {
+    accountNameRef.current = value;
     setAccountName(value);
+    setVideoAccountLookup({ status: "idle", message: "" });
     const nextAccount = findGrossMarginAccount(platformAccounts, value);
-    if (nextAccount) updateOriginalPrice(String(nextAccount.defaultPrice));
+    if (nextAccount) applyAccountPrice(nextAccount, "custom");
   }
 
   function handleVideoUrlChange(value: string) {
@@ -190,16 +263,28 @@ export function useGrossMarginWorkbench() {
 
   function updateOriginalPrice(value: string) {
     setOriginalPrice(value);
-    if (discountRate.trim()) {
-      setDiscountPrice(formatAmountInput(toAmount(value) * toAmount(discountRate) / 100));
+    if (rebateRate.trim()) {
+      setDiscountPrice(formatAmountInput(toAmount(value) * (1 - toAmount(rebateRate) / 100)));
     }
   }
 
-  function handleDiscountRateChange(value: string) {
-    setDiscountRate(value);
+  function handleRebateRateChange(value: string) {
+    rebateRateRef.current = value;
+    setRebateRate(value);
     if (value.trim()) {
-      setDiscountPrice(formatAmountInput(toAmount(originalPrice) * toAmount(value) / 100));
+      setDiscountPrice(formatAmountInput(toAmount(originalPrice) * (1 - toAmount(value) / 100)));
     }
+  }
+
+  function applyAccountPrice(account: NonNullable<typeof matchedAccount>, preferredKind: AccountPriceKind) {
+    const price = getGrossMarginAccountPrice(account, preferredKind);
+    setAccountPriceKind(price.kind);
+    updateOriginalPrice(String(price.value));
+  }
+
+  function handleAccountPriceKindChange(kind: AccountPriceKind) {
+    setAccountPriceKind(kind);
+    if (matchedAccount) applyAccountPrice(matchedAccount, kind);
   }
 
   async function handleRefresh() {
@@ -350,9 +435,10 @@ export function useGrossMarginWorkbench() {
     setPriceInputs(imported.priceInputs);
     setSelectedOptions(imported.selectedOptions);
     setQuantityInputs(imported.quantityInputs);
+    accountNameRef.current = imported.accountName;
     setAccountName(imported.accountName);
     setVideoUrl(imported.videoUrl);
-    if (imported.matchedAccount) updateOriginalPrice(String(imported.matchedAccount.defaultPrice));
+    if (imported.matchedAccount) applyAccountPrice(imported.matchedAccount, "custom");
     setImportModalOpen(false);
     notify({
       tone: "success",
@@ -362,6 +448,7 @@ export function useGrossMarginWorkbench() {
 
   return {
     accountName,
+    accountPriceKind,
     activePricePanelServiceConfigs,
     activeServiceConfigs,
     bulkMonitorModalOpen,
@@ -369,7 +456,7 @@ export function useGrossMarginWorkbench() {
     calculation,
     configuredPriceCount,
     discountPrice,
-    discountRate,
+    rebateRate,
     engagementTarget,
     importModalOpen,
     library,
@@ -389,13 +476,15 @@ export function useGrossMarginWorkbench() {
     table,
     templateModalOpen,
     videoUrl,
+    videoAccountLookup,
     closeBulkMonitorModal: () => setBulkMonitorModalOpen(false),
     closeImportModal: () => setImportModalOpen(false),
     closePriceEditor: () => setPriceEditorOpen(false),
     closeTemplateModal: () => setTemplateModalOpen(false),
     handleAccountNameChange,
     handleBulkMonitorSubmit,
-    handleDiscountRateChange,
+    handleAccountPriceKindChange,
+    handleRebateRateChange,
     handleExportReview,
     handleImportTemplate,
     handlePlatformChange,

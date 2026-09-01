@@ -27,6 +27,7 @@ import type {
 } from "@/lib/types";
 
 export type PlatformKey = GrossMarginPriceTable["platform"];
+export type AccountPriceKind = "custom" | "implant";
 
 export type GrossMarginImportedMetric = {
   service: GrossMarginServiceKind;
@@ -140,6 +141,24 @@ export function findGrossMarginAccount(accounts: GrossMarginAccountPrice[], rawN
     ) ||
     null
   );
+}
+
+export function getGrossMarginAccountPrice(
+  account: GrossMarginAccountPrice,
+  kind: AccountPriceKind
+) {
+  if (kind === "implant" && account.secondaryPrice !== undefined) {
+    return {
+      kind,
+      label: "植入报价",
+      value: account.secondaryPrice
+    };
+  }
+  return {
+    kind: "custom" as const,
+    label: "定制报价",
+    value: account.defaultPrice
+  };
 }
 
 export function buildGrossMarginTemplateValues({

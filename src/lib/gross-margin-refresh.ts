@@ -1,7 +1,9 @@
 import {
   getBilibiliVideoStatsByUrl,
+  getDouyinVideoAuthorNameByUrl,
   getDouyinVideoStatsBatchByUrl,
-  getDouyinVideoStatsByUrl
+  getDouyinVideoStatsByUrl,
+  resolveDouyinVideoUrl
 } from "./opencli";
 import type { OpenCliTimingSink } from "./opencli";
 import {
@@ -16,6 +18,7 @@ import type {
   GrossMarginServiceKind
 } from "./types";
 import {
+  detectVideoPlatform,
   extractDouyinAwemeId,
   getVideoComparableKey,
   normalizeVideoUrlInput
@@ -50,6 +53,38 @@ export type GrossMarginRefreshOptions = {
     record: GrossMarginMonitorRecord;
   }) => void | Promise<void>;
 };
+
+export async function resolveGrossMarginVideoAccount(
+  videoUrl: string,
+  options: { signal?: AbortSignal } = {}
+) {
+  const normalizedUrl = normalizeVideoUrlInput(videoUrl);
+  const platform = detectVideoPlatform(normalizedUrl);
+  if (!platform) {
+    throw new Error("没有识别到视频平台，请粘贴抖音或 B站单条视频链接。");
+  }
+
+  const resolvedUrl = platform === "douyin"
+    ? await resolveDouyinVideoUrl(normalizedUrl, { signal: options.signal })
+    : normalizedUrl;
+  const fetched = platform === "bilibili"
+    ? await getBilibiliVideoStatsByUrl(resolvedUrl, { signal: options.signal })
+    : await getCachedDouyinVideoStatsByUrl(resolvedUrl, { signal: options.signal });
+  const accountName = fetched.authorName?.trim() || (
+    platform === "douyin"
+      ? await getDouyinVideoAuthorNameByUrl(resolvedUrl, { signal: options.signal })
+      : ""
+  );
+  if (!accountName) {
+    throw new Error(`${platform === "bilibili" ? "B站" : "抖音"}视频已识别，但没有取得账号名，请手动填写。`);
+  }
+
+  return {
+    platform,
+    accountName,
+    videoUrl: fetched.url || normalizedUrl
+  };
+}
 
 export async function refreshGrossMarginMonitorRecord(recordId: string, options: GrossMarginRefreshOptions = {}) {
   const logger = createMonitorRefreshLogger("refresh-one", { recordId });

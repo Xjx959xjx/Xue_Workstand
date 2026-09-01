@@ -455,7 +455,12 @@
   }
 
   .engagement-mode-segmented {
-    width: max-content;
+    width: 100%;
+  }
+
+  .engagement-mode-segmented button {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .engagement-settings-footer {

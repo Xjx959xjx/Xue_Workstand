@@ -185,6 +185,13 @@ export const DOUYIN_VIDEO_COMMENT_EXTRACT_JS = `
     target.dispatchEvent(new Event("scroll", { bubbles: true }));
     await sleep(900);
   }
+  const replyButtons = Array.from(document.querySelectorAll('button, [role="button"], span'))
+    .filter((element) => /^展开\\d+条回复$/.test(clean(element.innerText || element.textContent || "")))
+    .slice(0, 5);
+  for (const button of replyButtons) {
+    button.click();
+    await sleep(350);
+  }
   return collect().slice(0, 80);
 })()
 `;

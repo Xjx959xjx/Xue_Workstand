@@ -43,6 +43,7 @@ import {
 } from "./types";
 import type { LinkTranscriptionResult } from "./transcription";
 import type { PublishCopyInput, PublishCopyResult } from "./publish-copy-types";
+import type { DouyinHotlistRefreshLogResponse } from "./douyin-hotlist-refresh-log";
 
 let draftsCache: { drafts: DraftSummary[] } | null = null;
 let draftsRequest: Promise<{ drafts: DraftSummary[] }> | null = null;
@@ -522,6 +523,18 @@ export function saveGrossMarginReviewTemplate(input: Pick<GrossMarginReviewTempl
   });
 }
 
+export function resolveGrossMarginVideoAccount(videoUrl: string, options: { signal?: AbortSignal } = {}) {
+  return requestJson<{
+    platform: GrossMarginPriceTable["platform"];
+    accountName: string;
+    videoUrl: string;
+  }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "resolveVideoAccount", videoUrl }),
+    signal: options.signal
+  });
+}
+
 export function resetGrossMarginReviewTemplate(platform: GrossMarginReviewTemplate["platform"]) {
   return requestJson<{ template: GrossMarginReviewTemplate; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
@@ -747,6 +760,12 @@ export function getDouyinHotlist(input: { force?: boolean; windowDays?: number; 
 
 export function getCachedDouyinHotlist(input: { windowDays?: number; window?: string } = {}) {
   return douyinHotlistCache.get(getDouyinHotlistWindowKey(input)) || null;
+}
+
+export function getDouyinHotlistRefreshLogs(options: { signal?: AbortSignal } = {}) {
+  return requestJson<DouyinHotlistRefreshLogResponse>("/api/douyin-hotlist/refresh-logs", {
+    signal: options.signal
+  });
 }
 
 export function addDouyinHotlistAccount(input: { platform: Platform; query: string; window?: string }) {

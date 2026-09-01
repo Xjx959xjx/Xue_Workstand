@@ -10,17 +10,19 @@ import {
   formatMoney,
   formatPlatform,
   formatTypeOptionName,
+  getGrossMarginAccountPrice,
   formatUnitPrice
 } from "../_lib/gross-margin-workbench-model";
 
 type GrossMarginMaintenancePaneProps = Pick<
   GrossMarginWorkbenchController,
   | "accountName"
+  | "accountPriceKind"
   | "activeServiceConfigs"
   | "discountPrice"
-  | "discountRate"
   | "handleAccountNameChange"
-  | "handleDiscountRateChange"
+  | "handleAccountPriceKindChange"
+  | "handleRebateRateChange"
   | "handleVideoUrlChange"
   | "matchedAccount"
   | "originalPrice"
@@ -28,6 +30,7 @@ type GrossMarginMaintenancePaneProps = Pick<
   | "platformAccounts"
   | "priceInputs"
   | "quantityInputs"
+  | "rebateRate"
   | "selectedOptions"
   | "setDiscountPrice"
   | "setQuantityInput"
@@ -35,15 +38,17 @@ type GrossMarginMaintenancePaneProps = Pick<
   | "table"
   | "updateOriginalPrice"
   | "videoUrl"
+  | "videoAccountLookup"
 >;
 
 export function GrossMarginMaintenancePane({
   accountName,
+  accountPriceKind,
   activeServiceConfigs,
   discountPrice,
-  discountRate,
   handleAccountNameChange,
-  handleDiscountRateChange,
+  handleAccountPriceKindChange,
+  handleRebateRateChange,
   handleVideoUrlChange,
   matchedAccount,
   originalPrice,
@@ -51,14 +56,24 @@ export function GrossMarginMaintenancePane({
   platformAccounts,
   priceInputs,
   quantityInputs,
+  rebateRate,
   selectedOptions,
   setDiscountPrice,
   setQuantityInput,
   setSelectedOption,
   table,
   updateOriginalPrice,
-  videoUrl
+  videoUrl,
+  videoAccountLookup
 }: GrossMarginMaintenancePaneProps) {
+  const selectedAccountPrice = matchedAccount
+    ? getGrossMarginAccountPrice(matchedAccount, accountPriceKind)
+    : null;
+  const accountPriceOptions = [
+    { kind: "custom" as const, label: "定制" },
+    { kind: "implant" as const, label: "植入" }
+  ];
+
   return (
     <section className="pane gross-maintenance-pane">
       <div className="pane-header">
@@ -73,6 +88,7 @@ export function GrossMarginMaintenancePane({
             <div className="field">
               <label htmlFor="gross-account-name">账号名</label>
               <input
+                aria-busy={videoAccountLookup.status === "loading"}
                 autoComplete="off"
                 id="gross-account-name"
                 list="gross-account-options"
@@ -89,7 +105,7 @@ export function GrossMarginMaintenancePane({
               </datalist>
               {matchedAccount ? (
                 <span className="field-hint">
-                  已匹配{matchedAccount.priceLabel}：{formatMoney(matchedAccount.defaultPrice)}
+                  已匹配{selectedAccountPrice?.label}：{formatMoney(selectedAccountPrice?.value || 0)}
                 </span>
               ) : accountName.trim() ? (
                 <span className="field-hint warning">未匹配账号，价格可手填</span>
@@ -107,35 +123,60 @@ export function GrossMarginMaintenancePane({
                 onChange={(event) => handleVideoUrlChange(event.target.value)}
                 placeholder="粘贴视频链接，导出时会带上…"
               />
+              {videoAccountLookup.message ? (
+                <span
+                  aria-live="polite"
+                  className={`field-hint${videoAccountLookup.status === "error" || videoAccountLookup.status === "unmatched" ? " warning" : ""}`}
+                >
+                  {videoAccountLookup.message}
+                </span>
+              ) : null}
             </div>
           </div>
           <div className="gross-price-summary-grid">
             <div className="field">
               <label htmlFor="gross-original-price">折前价格</label>
-              <input
-                autoComplete="off"
-                id="gross-original-price"
-                inputMode="decimal"
-                min={0}
-                name="originalPrice"
-                type="number"
-                value={originalPrice}
-                onChange={(event) => updateOriginalPrice(event.target.value)}
-                placeholder="原档位价格…"
-              />
+              <div className="gross-original-price-control">
+                <span aria-label="折前价格类型" className="gross-account-price-kinds" role="group">
+                  {accountPriceOptions.map((option) => (
+                    <button
+                      aria-pressed={accountPriceKind === option.kind}
+                      className={accountPriceKind === option.kind ? "active" : ""}
+                      disabled={option.kind === "implant" && matchedAccount?.secondaryPrice === undefined}
+                      key={option.kind}
+                      onClick={() => handleAccountPriceKindChange(option.kind)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </span>
+                <input
+                  autoComplete="off"
+                  id="gross-original-price"
+                  inputMode="decimal"
+                  min={0}
+                  name="originalPrice"
+                  type="number"
+                  value={originalPrice}
+                  onChange={(event) => updateOriginalPrice(event.target.value)}
+                  placeholder="原档位价格…"
+                />
+              </div>
             </div>
             <div className="field">
-              <label htmlFor="gross-discount-rate">折扣率</label>
+              <label htmlFor="gross-rebate-rate">返点</label>
               <span className="gross-rate-input">
                 <input
                   autoComplete="off"
-                  id="gross-discount-rate"
+                  id="gross-rebate-rate"
                   inputMode="decimal"
                   min={0}
-                  name="discountRate"
+                  max={100}
+                  name="rebateRate"
                   type="number"
-                  value={discountRate}
-                  onChange={(event) => handleDiscountRateChange(event.target.value)}
+                  value={rebateRate}
+                  onChange={(event) => handleRebateRateChange(event.target.value)}
                   placeholder="可不填…"
                 />
                 <small>%</small>

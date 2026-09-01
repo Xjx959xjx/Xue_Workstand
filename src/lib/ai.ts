@@ -286,6 +286,39 @@ export function getWebResearchCapability() {
   } as const;
 }
 
+export async function webSearchCompleteStrict(
+  messages: ChatMessage[],
+  reasoningEffort: ChatReasoningEffort = "medium",
+  options: { signal?: AbortSignal; maxOutputTokens?: number } = {}
+): Promise<ChatCompletionResult> {
+  throwIfAborted(options.signal);
+  const result = await withWebResearchTimeout(
+    (signal) =>
+      streamWebResearchResponseText({
+        messages,
+        reasoningEffort,
+        tools: [{ type: "web_search" }],
+        maxOutputTokens: options.maxOutputTokens || WEB_RESEARCH_MAX_OUTPUT_TOKENS,
+        signal,
+        onDelta() {
+          // Consume the Responses stream so long searches keep the connection active.
+        }
+      }),
+    options.signal
+  );
+  const text = result.text.trim();
+  if (result.fallback || !text) {
+    throw new Error(result.fallbackReason || "原生联网搜索未返回可用结果");
+  }
+  if (!result.usedTools?.includes("web_search")) {
+    throw new Error("模型没有实际调用 web_search 工具");
+  }
+  if (isWebResearchToolUnavailableText(text)) {
+    throw new Error("模型没有获得可用联网搜索工具");
+  }
+  return { ...result, text };
+}
+
 function configuredChatConfigs() {
   return getConfiguredChatConfigs();
 }

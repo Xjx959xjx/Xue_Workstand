@@ -21,6 +21,14 @@ import {
   type EngagementTransportGuard
 } from "./engagement-transport";
 import {
+  buildEngagementCommentResearch,
+  buildEngagementResearchLaneSequence,
+  formatEngagementCommentResearch,
+  formatEngagementResearchLane,
+  type EngagementCommentResearch,
+  type EngagementResearchLane
+} from "./engagement-research";
+import {
   getAccountSummary,
   getProjectSummary,
   readEngagementCache,
@@ -127,7 +135,7 @@ type CommentEntityGuard = {
   aliases: Map<string, string>;
 };
 
-const ENGAGEMENT_ENGINE_VERSION = "engagement-v3.7";
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v3.8";
 const ENGAGEMENT_DANMAKU_ENGINE_VERSION = "danmaku-v2";
 const ENGAGEMENT_SOURCE_CACHE_VERSION = "engagement-v3";
 const ENGAGEMENT_BRIEF_CACHE_VERSION = "engagement-v3.2";
@@ -271,7 +279,11 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
   }
   await emitEngagementProgress(runOptions, {
     stage: "brief",
-    message: options.generationMode === "reference" ? "正在整理素材并准备当前视频原评" : "正在提取评论锚点",
+    message: options.generationMode === "research"
+      ? "正在整理素材并准备跨平台调研"
+      : options.generationMode === "reference"
+        ? "正在整理素材并准备当前视频原评"
+        : "正在提取评论锚点",
     progress: 24
   });
   throwIfAborted(runOptions.signal);
@@ -770,7 +782,11 @@ function normalizeEngagementOptions(input: EngagementOptions): NormalizedEngagem
     commentCount: clampCount(input.commentCount ?? 50, 1, 200, 50),
     includeDanmaku: input.includeDanmaku ?? false,
     danmakuCount: clampCount(input.danmakuCount ?? 50, 1, 300, 50),
-    generationMode: input.generationMode === "reference" ? "reference" : "quick",
+    generationMode: input.generationMode === "research"
+      ? "research"
+      : input.generationMode === "reference"
+        ? "reference"
+        : "quick",
     targetPlatform: input.targetPlatform
   };
 }
@@ -907,7 +923,7 @@ async function collectCommentStyleSamples(input: {
   signal?: AbortSignal;
 }) {
   const contextSamples = uniqueText(input.contexts.flatMap((context) => context.comments));
-  if (input.generationMode !== "reference" || !input.sourceUrl) {
+  if (input.generationMode === "quick" || !input.sourceUrl) {
     return { samples: contextSamples, error: undefined as string | undefined };
   }
 
@@ -988,19 +1004,28 @@ async function generateComments(input: {
   const briefMs = Date.now() - briefStartedAt;
   const sourceBrief = sourceBriefResult.brief;
   await onProgress?.({
-    stage: generationMode === "reference" ? "research" : "generate",
-    message: generationMode === "reference" ? "正在读取当前视频原评与平台语料" : "正在加载平台风格语料",
-    progress: generationMode === "reference" ? 34 : 40
+    stage: generationMode === "quick" ? "generate" : "research",
+    message: generationMode === "research"
+      ? "正在并行调研当前原评、B站、抖音与公开论坛"
+      : generationMode === "reference"
+        ? "正在读取当前视频原评与平台语料"
+        : "正在加载平台风格语料",
+    progress: generationMode === "research" ? 30 : generationMode === "reference" ? 34 : 40
   });
 
   const researchStartedAt = Date.now();
-  const reference = await collectCommentStyleSamples({
-    platform,
-    sourceUrl,
-    contexts,
-    generationMode,
-    signal
-  });
+  const [reference, relatedResearch] = await Promise.all([
+    collectCommentStyleSamples({
+      platform,
+      sourceUrl,
+      contexts,
+      generationMode,
+      signal
+    }),
+    generationMode === "research"
+      ? buildEngagementCommentResearch(sourceBrief, { signal })
+      : Promise.resolve<EngagementCommentResearch | null>(null)
+  ]);
   const loadedStyleProfile = await loadEngagementStyleProfile(
     commentStyleChannel(platform),
     reference.samples,
@@ -1034,7 +1059,7 @@ async function generateComments(input: {
   const modelConcurrency = platform === "bilibili" ? 1 : COMMENT_MODEL_CONCURRENCY;
   const targetLengthBuckets = buildTargetCommentLengthBuckets(count, styleProfile);
   const targetLongCommentCount = targetLengthBuckets.long;
-  const targetIntentBuckets = buildTargetCommentIntentBuckets(count, styleProfile, sourceBrief);
+  const targetIntentBuckets = buildTargetCommentIntentBuckets(count, styleProfile, sourceBrief, relatedResearch);
   const targetNativeEmoteCount = Math.min(count, Math.round(count * styleProfile.nativeEmoteRate));
   let selected = rebalanceCommentSelection(
     selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
@@ -1065,7 +1090,8 @@ async function generateComments(input: {
       currentLengthBuckets: summarizeCommentLengthBuckets(selected.items),
       targetNativeEmoteCount,
       currentNativeEmoteCount: selected.items.filter(hasNativeEmote).length,
-      platform
+      platform,
+      relatedResearch
     });
     const batches = buildCommentGenerationBatches(slots, nextBatchIndex);
 
@@ -1091,6 +1117,7 @@ async function generateComments(input: {
                       sourceBrief,
                       entityGuard,
                       styleProfile,
+                      relatedResearch,
                       platform,
                       slots: batch.slots,
                       usedComments: uniqueText([...excludedComments, ...selected.items]).slice(-60)
@@ -1229,6 +1256,8 @@ async function generateComments(input: {
       targetNativeEmoteCount,
       referenceError: styleProfile.referenceError
     },
+    relatedResearch: relatedResearch ? toRelatedCommentResearchDiagnostics(relatedResearch) : undefined,
+    research: relatedResearch ? [toRelatedCommentResearchSummary(relatedResearch, reference.samples.length)] : undefined,
     generation: {
       mode: "model_batch" as const,
       requestedCount: count,
@@ -1256,13 +1285,14 @@ async function generateComments(input: {
   };
   return {
     usedModel,
-    fallback: false,
-    fallbackReason: undefined,
+    fallback: Boolean(relatedResearch?.summaryError),
+    fallbackReason: relatedResearch?.summaryError,
     briefMs,
     researchMs,
     generationMs,
     cacheHits: [
-      ...(sourceBriefResult.cacheHit ? ["brief" as const] : [])
+      ...(sourceBriefResult.cacheHit ? ["brief" as const] : []),
+      ...(relatedResearch?.cacheHit ? ["research" as const] : [])
     ],
     diagnostics,
     items: texts.slice(0, count).map((text, index) => makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index))
@@ -1288,6 +1318,7 @@ type CommentSlot = {
   intent: CommentIntent;
   length: CommentLength;
   lane: CommentCreativeLane;
+  researchLane?: EngagementResearchLane;
   anchor?: string;
   emote: "none" | "optional";
   allowedEmotes: string[];
@@ -1305,6 +1336,7 @@ function buildCommentSlots(input: {
   targetNativeEmoteCount: number;
   currentNativeEmoteCount: number;
   platform: Platform;
+  relatedResearch: EngagementCommentResearch | null;
 }) {
   const intentOrder: CommentIntent[] = ["reaction", "question", "skeptical", "experience", "comparison", "follow", "chatter", "price"];
   const intents = buildDeficitSequence(
@@ -1333,6 +1365,9 @@ function buildCommentSlots(input: {
     Math.min(input.count, Math.round(input.count * COMMENT_EXPLICIT_ANCHOR_RATE))
   ));
   const lanes = buildCommentCreativeLaneSequence(input.count, input.startIndex, input.platform);
+  const researchLanes = input.relatedResearch
+    ? buildEngagementResearchLaneSequence(input.count, input.startIndex)
+    : [];
 
   return Array.from({ length: input.count }, (_, offset): CommentSlot => {
     const intent = intents[offset] || "reaction";
@@ -1345,6 +1380,7 @@ function buildCommentSlots(input: {
       intent,
       length: lane === "micro" ? "short" : lengths[offset] || "medium",
       lane,
+      researchLane: researchLanes[offset],
       anchor,
       emote: emotePositions.has(offset) && input.styleProfile.nativeEmotes.length ? "optional" : "none",
       allowedEmotes: input.styleProfile.nativeEmotes
@@ -1403,7 +1439,10 @@ function formatCommentSlot(slot: CommentSlot) {
   const emote = slot.emote === "optional"
     ? `语气合适时可用一个平台表情，只能从 ${slot.allowedEmotes.join(" ")} 中选；不合适就不用`
     : "不用 emoji 或方括号表情";
-  return `${slot.index}. 意图：${formatCommentIntent(slot.intent)}｜创意方式：${formatCommentCreativeLane(slot.lane)}｜${length}｜${anchor}｜${emote}`;
+  const researchLane = slot.researchLane
+    ? `｜调研角色：${formatEngagementResearchLane(slot.researchLane)}`
+    : "";
+  return `${slot.index}. 意图：${formatCommentIntent(slot.intent)}｜创意方式：${formatCommentCreativeLane(slot.lane)}${researchLane}｜${length}｜${anchor}｜${emote}`;
 }
 
 function formatCommentIntent(intent: CommentIntent) {
@@ -1468,6 +1507,7 @@ function buildCommentBatchPrompt(input: {
   sourceBrief: CommentSourceBrief;
   entityGuard: CommentEntityGuard;
   styleProfile: EngagementStyleProfile;
+  relatedResearch: EngagementCommentResearch | null;
   platform: Platform;
   slots: CommentSlot[];
   usedComments: string[];
@@ -1484,6 +1524,11 @@ ${formatCommentEntityGuard(input.entityGuard)}
 
 平台真实风格画像：
 ${formatEngagementStyleProfile(input.styleProfile)}
+
+${input.relatedResearch ? `跨平台评论区调研（只学讨论方向和生态，不照抄样本，不把调研里的其他对象写进当前评论）：
+${formatEngagementCommentResearch(input.relatedResearch)}
+
+全网调研配比：约25%视频直评、20%近期版本话题、20%老玩家旧账、15%萌新问题、8%玩家生活、7%名人/平台梗、5%水评与回复链。每条槽位的“调研角色”优先级高于普通创意方式。` : ""}
 
 真实样本（学习它们如何省略、歪楼、接梗和突然联想；严禁照抄原句或带入样本里的事实）：
 ${formatStyleExamples(input.styleProfile.examples)}
@@ -2307,6 +2352,49 @@ function toCommentSourceBriefDiagnostics(brief: CommentSourceBrief) {
   };
 }
 
+function toRelatedCommentResearchDiagnostics(research: EngagementCommentResearch) {
+  return {
+    usedQueries: research.usedQueries,
+    failedQueries: research.failedQueries,
+    relatedVideoCount: research.relatedVideoCount,
+    relatedCommentCount: research.relatedCommentCount,
+    forumSourceCount: research.forumSourceCount,
+    forumCommentCount: research.forumCommentCount,
+    replySampleCount: research.replySampleCount,
+    sourceStats: research.sourceStats,
+    longCommentCount: research.longCommentCount,
+    lengthBuckets: research.lengthBuckets,
+    intentBuckets: research.intentBuckets,
+    themes: research.themes,
+    phrases: research.phrases,
+    questions: research.questions,
+    objections: research.objections,
+    recentTopics: research.recentTopics,
+    legacyTopics: research.legacyTopics,
+    playerLifeAngles: research.playerLifeAngles,
+    platformAngles: research.platformAngles,
+    replyAngles: research.replyAngles,
+    longCommentPatterns: research.longCommentPatterns,
+    chatterAngles: research.chatterAngles,
+    summaryError: research.summaryError
+  };
+}
+
+function toRelatedCommentResearchSummary(research: EngagementCommentResearch, originalCommentCount: number) {
+  return {
+    originalCommentCount,
+    originalCommentUsed: originalCommentCount,
+    relatedCommentCount: research.relatedCommentCount,
+    relatedCommentUsed: research.relatedCommentCount,
+    relatedVideoCount: research.relatedVideoCount,
+    relatedLongCommentCount: research.longCommentCount,
+    relatedIntentBuckets: research.intentBuckets,
+    usedQueries: research.usedQueries,
+    failedQueries: research.failedQueries,
+    skippedRelatedSearch: false
+  };
+}
+
 function formatCommentSourceBrief(brief: CommentSourceBrief) {
   return [
     `一句话：${brief.summary}`,
@@ -2376,7 +2464,8 @@ function hasCommentChatterCue(text: string) {
 function buildTargetCommentIntentBuckets(
   count: number,
   styleProfile: EngagementStyleProfile,
-  sourceBrief: CommentSourceBrief
+  sourceBrief: CommentSourceBrief,
+  relatedResearch: EngagementCommentResearch | null = null
 ): CommentIntentBuckets {
   const sourceText = [
     sourceBrief.summary,
@@ -2386,6 +2475,14 @@ function buildTargetCommentIntentBuckets(
     ...sourceBrief.anchorTerms
   ].join(" ");
   const base = { ...styleProfile.intentBuckets };
+  if (relatedResearch?.relatedCommentCount) {
+    const styleTotal = Object.values(base).reduce((sum, value) => sum + value, 0) || 1;
+    const researchTotal = Object.values(relatedResearch.intentBuckets).reduce((sum, value) => sum + value, 0) || 1;
+    for (const key of Object.keys(base) as CommentIntent[]) {
+      const blendedRate = (base[key] / styleTotal) * 0.45 + (relatedResearch.intentBuckets[key] / researchTotal) * 0.55;
+      base[key] = Math.max(0, Math.round(blendedRate * 100));
+    }
+  }
   if (!/价格|优惠|券|到手|预算|元|块|贵|便宜|折|618/.test(sourceText)) base.price = 0;
   if (!/对比|相比|区别|差异|还是|二选一|选择|同类|上一代|以前/.test(sourceText)) {
     base.comparison = Math.min(base.comparison, Math.max(1, Math.round(styleProfile.sampleCount * 0.03)));

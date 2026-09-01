@@ -249,27 +249,34 @@ export default function HotspotsPage() {
 
   return (
     <div className="page hotspots-page workbench-frame-page">
-      <header className="hotspots-header">
-        <div className="hotspots-title-block">
-          <span className="hotspots-title-icon" aria-hidden="true"><BarChart3 size={20} /></span>
-          <div>
-            <h1>游戏热点雷达</h1>
-            <p>左侧选游戏，右侧直接看事件摘要和来源延伸</p>
+      <header className="page-header hotspots-header">
+        <div className="page-title-group">
+          <span className="page-title-eyebrow">内容发现</span>
+          <div className="page-title-row">
+            <span className="page-title-mark" aria-hidden="true">
+              <BarChart3 size={20} strokeWidth={2.1} />
+            </span>
+            <div className="page-title-copy">
+              <h1>游戏热点雷达</h1>
+              <p className="subtle">左侧选游戏，右侧直接看事件摘要和来源延伸。</p>
+            </div>
           </div>
         </div>
 
-        <div className="hotspots-header-health" aria-label="来源健康">
-          <span className={failedSources ? "has-error" : hasSnapshot ? "is-healthy" : "is-idle"} aria-hidden="true" />
-          <div>
-            <strong>{sourceStatusLabel}</strong>
-            <em>{sourceStatusDetail}</em>
+        <div className="page-header-meta hotspots-header-meta">
+          <div className="hotspots-header-health" aria-label="来源健康">
+            <span className={failedSources ? "has-error" : hasSnapshot ? "is-healthy" : "is-idle"} aria-hidden="true" />
+            <div>
+              <strong>{sourceStatusLabel}</strong>
+              <em>{sourceStatusDetail}</em>
+            </div>
           </div>
-        </div>
 
-        <button className="btn primary hotspots-refresh" disabled={Boolean(busy)} onClick={handleRefresh} type="button">
-          {busy ? <Loader2 aria-hidden="true" className="spin" size={16} /> : <RefreshCw aria-hidden="true" size={16} />}
-          {busy === "refresh" ? "刷新中" : busy === "load" ? "读取中" : "刷新信号"}
-        </button>
+          <button className="btn primary hotspots-refresh" disabled={Boolean(busy)} onClick={handleRefresh} type="button">
+            {busy ? <Loader2 aria-hidden="true" className="spin" size={16} /> : <RefreshCw aria-hidden="true" size={16} />}
+            {busy === "refresh" ? "刷新中" : busy === "load" ? "读取中" : "刷新信号"}
+          </button>
+        </div>
       </header>
 
       {error ? <div className="error" role="alert">{error}</div> : null}

@@ -125,7 +125,7 @@ export type DraftDanmakuAsset = {
   text: string;
 };
 
-export const engagementGenerationModes = ["quick", "reference"] as const;
+export const engagementGenerationModes = ["quick", "reference", "research"] as const;
 
 export type EngagementGenerationMode = (typeof engagementGenerationModes)[number];
 
@@ -216,6 +216,16 @@ export type DraftAssets = {
         failedQueries: string[];
         relatedVideoCount: number;
         relatedCommentCount: number;
+        forumSourceCount?: number;
+        forumCommentCount?: number;
+        replySampleCount?: number;
+        sourceStats?: Array<{
+          source: "bilibili" | "douyin" | "forum";
+          status: "completed" | "partial" | "failed";
+          videoCount: number;
+          commentCount: number;
+          error?: string;
+        }>;
         longCommentCount?: number;
         lengthBuckets?: {
           short: number;
@@ -236,6 +246,11 @@ export type DraftAssets = {
         phrases: string[];
         questions: string[];
         objections: string[];
+        recentTopics?: string[];
+        legacyTopics?: string[];
+        playerLifeAngles?: string[];
+        platformAngles?: string[];
+        replyAngles?: string[];
         longCommentPatterns?: string[];
         chatterAngles?: string[];
         summaryError?: string;
@@ -813,7 +828,7 @@ export type GrossMarginCalculationResult = {
   maintenanceCost: number;
   grossProfit: number;
   grossMarginRate: number;
-  discountRate: number;
+  rebateRate: number;
   lines: GrossMarginCalculationLine[];
 };
 

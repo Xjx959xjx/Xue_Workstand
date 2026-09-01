@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { apiJson, formatApiError, parseJsonBody } from "@/lib/api-route";
 import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
-import { refreshGrossMarginMonitorRecord, refreshGrossMarginMonitorRecords } from "@/lib/gross-margin-refresh";
+import {
+  refreshGrossMarginMonitorRecord,
+  refreshGrossMarginMonitorRecords,
+  resolveGrossMarginVideoAccount
+} from "@/lib/gross-margin-refresh";
 import {
   appendGrossMarginPlaySample,
   deleteGrossMarginMonitorRecord,
@@ -60,6 +64,10 @@ const mutationSchema = z.discriminatedUnion("action", [
     platform: platformSchema
   }),
   z.object({
+    action: z.literal("resolveVideoAccount"),
+    videoUrl: z.string().trim().url("请粘贴完整的视频链接")
+  }),
+  z.object({
     action: z.literal("saveMonitorRecord"),
     platform: platformSchema,
     accountName: z.string().trim().optional(),
@@ -109,6 +117,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return apiJson(async () => {
     const input = await parseJsonBody(request, mutationSchema);
+    if (input.action === "resolveVideoAccount") {
+      return resolveGrossMarginVideoAccount(input.videoUrl, { signal: request.signal });
+    }
     if (input.action === "saveMonitorRecord") {
       const record = await saveMonitorRecordFromInput(input);
       return { record, library: await getGrossMarginLibrary() };

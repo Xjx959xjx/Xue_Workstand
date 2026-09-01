@@ -4,9 +4,9 @@ import {
   buildHotlistHref,
   getRefreshJobSettlement,
   getSurgeClass,
-  getVisibleHotlistItems,
-  parseStoredRefreshLogs
+  getVisibleHotlistItems
 } from "../src/app/douyin-hotlist/_lib/douyin-hotlist-model";
+import { buildRefreshLogEntries, buildRefreshLogEntry } from "../src/lib/douyin-hotlist-refresh-log";
 import type { DouyinHotlistItem, DouyinHotlistRefreshJobResult, JobRecord, Platform } from "../src/lib/types";
 
 test("热榜 URL 只更新自身筛选参数并保留其他查询参数", () => {
@@ -54,19 +54,35 @@ test("可见热榜按平台过滤后重新排序并生成连续展示名次", ()
   assert.deepEqual(items.map((item) => item.account.id), ["douyin-1", "bilibili-1", "douyin-2"]);
 });
 
-test("本地刷新日志会丢弃损坏记录并限制保留数量", () => {
-  const validLogs = Array.from({ length: 8 }, (_, index) => ({
-    id: `log-${index}`,
-    at: "2026-08-17T10:00:00.000Z",
-    automatic: index % 2 === 0,
-    status: "success",
-    text: `日志 ${index}`
-  }));
-  const parsed = parseStoredRefreshLogs(JSON.stringify([...validLogs, { id: "broken" }]));
+test("共享刷新日志使用持久化任务 ID 和服务端完成时间", () => {
+  const job = {
+    ...makeJob({ status: "failed" }),
+    id: "job-hotlist-refresh-shared",
+    completedAt: "2026-08-17T10:02:00.000Z",
+    error: "抓取超时"
+  };
+  const log = buildRefreshLogEntry(job);
 
-  assert.equal(parsed.length, 6);
-  assert.equal(parsed[0]?.id, "log-0");
-  assert.deepEqual(parseStoredRefreshLogs("not-json"), []);
+  assert.equal(log.id, job.id);
+  assert.equal(log.at, job.completedAt);
+  assert.equal(log.status, "failed");
+  assert.equal(log.text, "抓取超时");
+});
+
+test("共享刷新日志只保留最近六条已结束热榜任务", () => {
+  const jobs = Array.from({ length: 8 }, (_, index) => ({
+    ...makeJob({ status: "completed" }),
+    id: `job-${index}`,
+    updatedAt: `2026-08-17T10:0${index}:00.000Z`
+  }));
+  jobs.push({
+    ...makeJob({ status: "running" }),
+    id: "job-running",
+    updatedAt: "2026-08-17T10:09:00.000Z"
+  });
+
+  const logs = buildRefreshLogEntries(jobs);
+  assert.deepEqual(logs.map((log) => log.id), ["job-7", "job-6", "job-5", "job-4", "job-3", "job-2"]);
 });
 
 test("刷新任务结算把部分失败转成简短摘要和失败优先的分组明细", () => {

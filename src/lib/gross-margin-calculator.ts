@@ -65,7 +65,7 @@ export function calculateGrossMargin({
     maintenanceCost,
     grossProfit,
     grossMarginRate: originalPrice > 0 ? grossProfit / originalPrice : 0,
-    discountRate: originalPrice > 0 ? discountPrice / originalPrice : 0,
+    rebateRate: originalPrice > 0 ? (originalPrice - discountPrice) / originalPrice : 0,
     lines
   };
 }

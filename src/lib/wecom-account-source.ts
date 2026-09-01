@@ -198,7 +198,7 @@ function getTextContent(value: unknown) {
   return text && typeof (text as { text?: unknown }).text === "string" ? (text as { text: string }).text : "";
 }
 
-function parseWecomAccountSheet(markdown: string): GrossMarginAccountPrice[] {
+export function parseWecomAccountSheet(markdown: string): GrossMarginAccountPrice[] {
   const accounts: GrossMarginAccountPrice[] = [];
   let section = "";
   let headers: Record<string, number> | null = null;
@@ -231,16 +231,23 @@ function parseWecomAccountSheet(markdown: string): GrossMarginAccountPrice[] {
 
 function parseDouyinAccount(cells: string[], headers: Record<string, number>, name: string): GrossMarginAccountPrice | null {
   const douyinId = cell(cells, headers, "抖音ID");
-  const defaultPrice = parseMoney(cell(cells, headers, "21-60秒报价;（含税不含平台费）"));
-  const secondaryPrice = parseMoney(cell(cells, headers, "60秒+报价;（含税不含平台费）"));
-  if (!douyinId || defaultPrice === null || secondaryPrice === null) return null;
+  const implantPrice = parseMoney(cellByHeaderAliases(cells, headers, [
+    "植入价格;（含税不含平台费）",
+    "植入视频报价;（含税不含平台费）"
+  ]));
+  const customPrice = parseMoney(cellByHeaderAliases(cells, headers, [
+    "定制价格;（含税不含平台费）",
+    "定制视频报价;（含税不含平台费）"
+  ]));
+
+  if (!douyinId || implantPrice === null || customPrice === null) return null;
   return {
     platform: "douyin",
     name,
-    defaultPrice,
-    priceLabel: "20-60秒报价",
-    secondaryPrice,
-    secondaryPriceLabel: "60秒+报价",
+    defaultPrice: customPrice,
+    priceLabel: "定制报价",
+    secondaryPrice: implantPrice,
+    secondaryPriceLabel: "植入报价",
     douyinId,
     cooperationCode: cell(cells, headers, "抖音合作码;（先填现在的 有更新再喊）") || undefined,
     homepage: parseLink(cell(cells, headers, "主页链接")) || undefined
@@ -273,6 +280,14 @@ function splitMarkdownRow(line: string) {
 
 function cell(cells: string[], headers: Record<string, number>, header: string) {
   return cells[headers[header]]?.trim() || "";
+}
+
+function cellByHeaderAliases(cells: string[], headers: Record<string, number>, aliases: string[]) {
+  for (const header of aliases) {
+    const value = cell(cells, headers, header);
+    if (value) return value;
+  }
+  return "";
 }
 
 function parseMoney(value: string) {
