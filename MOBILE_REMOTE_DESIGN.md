@@ -100,14 +100,15 @@ https://<后台主机名>.<私人网络名>.ts.net
 当前 Mac 的实际私人地址：
 
 ```text
-https://xjxmacbook-air.tail6a8c13.ts.net/mobile
+https://xjxmacbook-air.tailfdc962.ts.net/mobile
 ```
 
-该地址仅在登录 `254683341-bit.github` 私人网络的设备上可访问；Funnel 保持关闭。
+该地址仅在登录 `xjx959xjx.github` 私人网络的设备上可访问。工作台的 443 端口仍只通过 Serve 私下开放；公网 Funnel 只在 8443 端口代理带强令牌鉴权的能力桥，不会暴露工作台页面。
 
 设计约束：
 
-- 使用 Tailscale Serve，不使用会公开到互联网的 Funnel；
+- 工作台页面使用 Tailscale Serve，不通过 Funnel 公开；
+- 8443 Funnel 仅代理 `127.0.0.1:3401` 的窄能力桥网关；
 - Next.js 保持只监听 loopback；
 - iPhone 离开应用后再次打开，应先检查后台在线状态；
 - 如果私人网络以后加入其他成员，再增加访问控制规则或应用内令牌。
