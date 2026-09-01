@@ -2,7 +2,12 @@ import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { extractLinksFromInput } from "./platform-links";
 import { resolveOpenCliCommand } from "./opencli";
-import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
+import {
+  callRemoteCapability,
+  hasRemoteCapabilityBridge,
+  probeRemoteCapabilityBridge,
+  type RemoteCapabilityProbe
+} from "./remote-capabilities";
 import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
@@ -41,18 +46,23 @@ export function getFeishuRuntimeConfig() {
   };
 }
 
-export async function checkFeishuRuntime() {
+export async function checkFeishuRuntime(options: { remoteProbe?: RemoteCapabilityProbe } = {}) {
   const config = feishuConfig();
   const runtimeConfig = getFeishuRuntimeConfig();
   if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
-    const available = hasRemoteCapabilityBridge();
+    const probe = options.remoteProbe || await probeRemoteCapabilityBridge({
+      requiredOperations: ["feishu-publish", "feishu-doc-read"]
+    });
+    const available = probe.ok &&
+      probe.operations.includes("feishu-publish") &&
+      probe.operations.includes("feishu-doc-read");
     return {
       ...runtimeConfig,
       configured: available,
       available,
       doctor: {
         ok: available,
-        message: available ? "远程飞书文档能力已配置" : "未配置远程飞书文档能力服务"
+        message: available ? "远程飞书文档能力可达" : probe.message
       }
     };
   }

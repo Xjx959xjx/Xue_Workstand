@@ -20,6 +20,8 @@
     "remote:dev": "node scripts/remote-server.mjs dev",
     "remote:deploy": "node scripts/remote-server.mjs deploy",
     "remote:rollback": "node scripts/remote-server.mjs rollback",
+    "capability:setup": "node scripts/capability-bridge-service.mjs setup",
+    "capability:status": "node scripts/capability-bridge-service.mjs status",
     "build": "next build",
     "build:sites": "vinext build && node scripts/prepare-sites-output.mjs",
     "start:sites": "wrangler dev --config dist/server/wrangler.json",

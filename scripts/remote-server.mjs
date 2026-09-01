@@ -4,6 +4,13 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import process from "process";
+import {
+  CAPABILITY_GATEWAY_PORT,
+  getCapabilityBridgePublicUrl,
+  inspectCapabilityFunnel,
+  isTailscaleConnected,
+  readCapabilityBridgeSecret
+} from "./capability-bridge-service.mjs";
 
 const root = process.cwd();
 const stateRoot = path.join(root, ".remote-server");
@@ -14,12 +21,15 @@ const errorLogFile = path.join(stateRoot, "server-error.log");
 const serviceLabel = "com.xjx.account-style-library.remote";
 const launchAgentPath = path.join(os.homedir(), "Library", "LaunchAgents", `${serviceLabel}.plist`);
 const devScript = path.join(root, "scripts", "dev-server.mjs");
+const capabilityGatewayScript = path.join(root, "scripts", "capability-bridge-gateway.mjs");
 const healthUrl = "http://127.0.0.1:3000/api/remote/status";
 const command = process.argv[2] || "status";
 const sourceEntries = [
   "src",
   "public",
   "middleware.ts",
+  "eslint.config.mjs",
+  "env.d.ts",
   "package.json",
   "package-lock.json",
   "next.config.mjs",
@@ -59,13 +69,14 @@ async function setup() {
     "未检测到 Tailscale。请先在 Mac 和 iPhone 安装 Tailscale，并登录同一个私人账号。"
   );
 
-  const tailscaleStatus = capture("tailscale", ["status"]);
-  if (!tailscaleStatus.ok) {
+  const tailscaleStatus = capture("tailscale", ["status", "--json"]);
+  if (!tailscaleStatus.ok || !isTailscaleConnected(tailscaleStatus.stdout)) {
     throw new Error(`Tailscale 尚未连接：${summarizeOutput(tailscaleStatus.stderr || tailscaleStatus.stdout)}`);
   }
   const funnelStatus = capture("tailscale", ["funnel", "status", "--json"]);
-  if (funnelStatus.ok && hasFunnelConfig(funnelStatus.stdout)) {
-    throw new Error("检测到 Tailscale Funnel 配置。请先执行 tailscale funnel reset，远程工作台只允许私人 Serve。");
+  const funnelInspection = inspectCapabilityFunnel(funnelStatus.stdout);
+  if (funnelStatus.ok && funnelInspection.unexpectedAuthorities.length) {
+    throw new Error("检测到能力桥以外的 Tailscale Funnel 公网入口，请先人工确认现有配置。");
   }
 
   await fs.promises.mkdir(releasesRoot, { recursive: true });
@@ -131,6 +142,15 @@ async function status() {
     ? capture("tailscale", ["funnel", "status", "--json"])
     : { ok: false, stdout: "", stderr: "未安装 Tailscale" };
   const health = await fetchJson(healthUrl, 5_000);
+  const capabilityToken = readCapabilityBridgeSecret();
+  const capabilityGateway = capabilityToken
+    ? await fetchJsonWithBearer(
+      `http://127.0.0.1:${CAPABILITY_GATEWAY_PORT}/api/capability-bridge`,
+      capabilityToken,
+      5_000
+    )
+    : { ok: false, error: "钥匙串令牌未配置" };
+  const capabilityFunnelInspection = inspectCapabilityFunnel(tailscaleFunnel.stdout);
 
   console.log(JSON.stringify({
     launchAgent: {
@@ -139,15 +159,25 @@ async function status() {
     },
     tailscale: {
       installed: commandExists("tailscale"),
-      connected: tailscale.ok,
+      connected: tailscale.ok && isTailscaleConnected(tailscale.stdout),
       serveConfigured: tailscaleServe.ok && hasNonEmptyJson(tailscaleServe.stdout),
-      funnelConfigured: tailscaleFunnel.ok && hasFunnelConfig(tailscaleFunnel.stdout)
+      funnelConfigured: tailscaleFunnel.ok && capabilityFunnelInspection.configured
     },
     server: {
       healthy: health.ok,
       url: healthUrl,
       response: health.ok ? health.data : undefined,
       error: health.ok ? undefined : health.error
+    },
+    capabilityBridge: {
+      keychainConfigured: capabilityToken.length >= 32,
+      gatewayHealthy: capabilityGateway.ok,
+      operations: capabilityGateway.ok && Array.isArray(capabilityGateway.data?.operations)
+        ? capabilityGateway.data.operations
+        : [],
+      error: capabilityGateway.ok ? undefined : capabilityGateway.error,
+      publicUrl: getCapabilityBridgePublicUrl(),
+      unexpectedFunnelAuthorities: capabilityFunnelInspection.unexpectedAuthorities
     },
     currentRelease: await currentReleaseName(),
     logFile,
@@ -215,6 +245,10 @@ async function serve() {
     throw new Error("远程服务找不到 current/server.js。");
   }
   const build = await readReleaseBuild(releaseRoot);
+  const capabilityToken = readCapabilityBridgeSecret();
+  const capabilityPublicUrl = capabilityToken
+    ? getCapabilityBridgePublicUrl({ required: true })
+    : "";
 
   const env = {
     ...process.env,
@@ -224,7 +258,11 @@ async function serve() {
     APP_START_PATH: "/douyin-hotlist",
     APP_BUILD_ID: build?.buildId || path.basename(releaseRoot),
     APP_STARTED_AT: build?.builtAt || new Date().toISOString(),
-    STYLE_LIBRARY_DIR: path.join(root, "style-library")
+    STYLE_LIBRARY_DIR: path.join(root, "style-library"),
+    ...(capabilityToken ? {
+      SITES_CAPABILITY_BRIDGE_TOKEN: capabilityToken,
+      SITES_CAPABILITY_BRIDGE_PUBLIC_URL: capabilityPublicUrl
+    } : {})
   };
   const args = ["-dimsu", process.execPath];
   const envFile = path.join(root, ".env");
@@ -236,17 +274,35 @@ async function serve() {
     env,
     stdio: "inherit"
   });
+  const gateway = capabilityToken
+    ? spawn(process.execPath, [capabilityGatewayScript], {
+      cwd: root,
+      env: {
+        ...process.env,
+        SITES_CAPABILITY_GATEWAY_PORT: String(CAPABILITY_GATEWAY_PORT),
+        SITES_CAPABILITY_UPSTREAM_PORT: "3000"
+      },
+      stdio: "inherit"
+    })
+    : null;
 
   const forward = (signal) => {
     if (!child.killed) child.kill(signal);
+    if (gateway && !gateway.killed) gateway.kill(signal);
   };
   process.on("SIGTERM", () => forward("SIGTERM"));
   process.on("SIGINT", () => forward("SIGINT"));
 
-  const exit = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
+  const processes = [{ name: "工作台", child }];
+  if (gateway) processes.push({ name: "能力桥窄网关", child: gateway });
+  const exit = await Promise.race(processes.map(({ name, child: processChild }) => new Promise((resolve, reject) => {
+    processChild.once("error", reject);
+    processChild.once("exit", (code, signal) => resolve({ name, code, signal }));
+  })));
+  forward("SIGTERM");
+  if (processes.length > 1 && exit.code !== 0) {
+    console.error(`${exit.name}意外退出：code=${exit.code ?? "null"} signal=${exit.signal ?? "null"}`);
+  }
   if (exit.code && exit.code !== 0) process.exitCode = exit.code;
 }
 
@@ -392,6 +448,26 @@ async function fetchJson(url, timeoutMs) {
   }
 }
 
+async function fetchJsonWithBearer(url, token, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => null);
+    return response.ok
+      ? { ok: true, data }
+      : { ok: false, error: data?.error || `HTTP ${response.status}` };
+  } catch (error) {
+    return { ok: false, error: describeError(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function currentReleasePath() {
   try {
     return await fs.promises.realpath(currentLink);
@@ -473,6 +549,11 @@ ${args.map((value) => `    <string>${xmlEscape(value)}</string>`).join("\n")}
   </array>
   <key>WorkingDirectory</key>
   <string>${xmlEscape(root)}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${xmlEscape(path.join(os.homedir(), ".local", "bin"))}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -564,33 +645,6 @@ function hasNonEmptyJson(value) {
   } catch {
     return Boolean(String(value || "").trim());
   }
-}
-
-function hasFunnelConfig(value) {
-  try {
-    const parsed = JSON.parse(value);
-    return hasEnabledFunnel(parsed);
-  } catch {
-    return /Funnel on/i.test(String(value || ""));
-  }
-}
-
-function hasEnabledFunnel(config) {
-  if (!config || typeof config !== "object") return false;
-  const allowFunnel = config.AllowFunnel;
-  if (
-    allowFunnel &&
-    typeof allowFunnel === "object" &&
-    Object.values(allowFunnel).some(Boolean)
-  ) {
-    return true;
-  }
-  const foreground = config.Foreground;
-  return Boolean(
-    foreground &&
-    typeof foreground === "object" &&
-    Object.values(foreground).some(hasEnabledFunnel)
-  );
 }
 
 function describeError(error) {

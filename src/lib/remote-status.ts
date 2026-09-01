@@ -6,7 +6,11 @@ import { getChatRuntimeConfig, getWebResearchCapability } from "./ai";
 import { getImageRuntimeConfig } from "./cover";
 import { getAppMode } from "./app-mode";
 import { resolveOpenCliCommand } from "./opencli-runtime";
-import { hasRemoteCapabilityBridge } from "./remote-capabilities";
+import {
+  probeRemoteCapabilityBridge,
+  type RemoteCapabilityOperation,
+  type RemoteCapabilityProbe
+} from "./remote-capabilities";
 import { libraryRoot } from "./storage";
 import { isCloudStorageMode, storageFs } from "./storage/fs";
 import type { RemoteServiceHealth, RemoteStatusResponse } from "./types";
@@ -38,15 +42,23 @@ async function buildRemoteStatus(): Promise<RemoteStatusResponse> {
   const chat = getChatRuntimeConfig();
   const webResearch = getWebResearchCapability();
   const image = getImageRuntimeConfig();
-  const [storage, opencli, ffmpeg] = await Promise.all([
+  const cloudStorage = isCloudStorageMode();
+  const [storage, bridgeProbe, localOpenCli, localFfmpeg] = await Promise.all([
     checkStorage(),
-    checkOpenCli(),
-    isCloudStorageMode()
-      ? Promise.resolve(hasRemoteCapabilityBridge()
-        ? service("ok", "远程媒体处理能力已配置")
-        : service("unavailable", "未配置远程媒体处理能力服务"))
-      : checkCommand(process.env.FFMPEG_BIN || "ffmpeg", ["-version"], "ffmpeg")
+    cloudStorage ? probeRemoteCapabilityBridge() : Promise.resolve(null),
+    cloudStorage ? Promise.resolve(null) : checkLocalOpenCli(),
+    cloudStorage ? Promise.resolve(null) : checkCommand(process.env.FFMPEG_BIN || "ffmpeg", ["-version"], "ffmpeg")
   ]);
+  const opencli = bridgeProbe
+    ? remoteOperationsHealth(bridgeProbe, ["opencli"], "远程 OpenCLI 能力可达")
+    : localOpenCli || service("unavailable", "OpenCLI 状态未知");
+  const ffmpeg = bridgeProbe
+    ? remoteOperationsHealth(
+      bridgeProbe,
+      ["material-analysis", "transcribe-video", "transcribe-link", "link-media", "link-download"],
+      "远程媒体处理能力可达"
+    )
+    : localFfmpeg || service("unavailable", "ffmpeg 状态未知");
   const browserBridge = await checkBrowserBridge(opencli.status === "ok");
   const services = {
     storage,
@@ -95,12 +107,7 @@ async function checkStorage(): Promise<RemoteServiceHealth> {
   }
 }
 
-async function checkOpenCli(): Promise<RemoteServiceHealth> {
-  if (isCloudStorageMode()) {
-    return hasRemoteCapabilityBridge()
-      ? service("ok", "远程 OpenCLI 能力已配置")
-      : service("unavailable", "未配置远程 OpenCLI 能力服务");
-  }
+async function checkLocalOpenCli(): Promise<RemoteServiceHealth> {
   const runtime = resolveOpenCliCommand();
   return checkCommand(runtime.command, [...runtime.argsPrefix, "--version"], "OpenCLI");
 }
@@ -145,4 +152,19 @@ async function checkCommand(command: string, args: string[], label: string): Pro
 
 function service(status: RemoteServiceHealth["status"], message: string): RemoteServiceHealth {
   return { status, message };
+}
+
+function remoteOperationsHealth(
+  probe: RemoteCapabilityProbe,
+  operations: readonly RemoteCapabilityOperation[],
+  successMessage: string
+): RemoteServiceHealth {
+  const missing = operations.filter((operation) => !probe.operations.includes(operation));
+  if (!missing.length) return service("ok", successMessage);
+  return service(
+    probe.configured ? "unavailable" : "unconfigured",
+    probe.operations.length
+      ? `远程能力服务缺少操作：${missing.join("、")}`
+      : probe.message
+  );
 }

@@ -60,6 +60,14 @@ Cloudflare Worker 不执行本机子进程。OpenCLI、FFmpeg、飞书 CLI 和�
 3. Sites 生产环境配置 `SITES_EXTERNAL_CAPABILITY_URL` 为同一地址，`SITES_EXTERNAL_CAPABILITY_TOKEN` 为同一令牌，然后重新部署已保存版本。
 4. 使用相同 Bearer 令牌 GET capability URL 可做只读健康检查；响应只报告启用状态与操作列表，不返回密钥。
 
+Sites 的 `/api/health` 与远程状态接口会执行这个真实探测，并区分未配置、URL 无效、鉴权失败、网络不可达、超时和操作缺失。探测结果有界超时，不会触发 OpenCLI、转写或发布等业务操作。
+
+当前 Mac 作为能力主机时，运行 `npm run capability:setup`。令牌由脚本生成并保存到
+macOS 钥匙串；常驻服务启动时只把它注入本机 Node 进程。Tailscale 私人 Serve 继续在
+`443` 提供完整工作台，独立 Funnel 在 `8443` 只转发到 `127.0.0.1:3401` 窄网关。
+窄网关仅放行 capability bridge 与一次性素材下载路径，其他页面和 API 返回 404。
+若 tailnet 未启用 Funnel，配置会停止并要求管理员在 Tailscale 管理页显式授权。
+
 该入口具有以下边界：
 
 - 只在本地/常驻 Node 主机启用；当 `SITES_STORAGE_MODE=cloud` 或 `SITES_RUNTIME=cloud` 时返回 503。

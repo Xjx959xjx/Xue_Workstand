@@ -3,6 +3,28 @@ type RemoteCapabilityOptions = {
   timeoutMs?: number;
 };
 
+export const REMOTE_CAPABILITY_OPERATIONS = [
+  "opencli",
+  "material-analysis",
+  "transcribe-video",
+  "transcribe-link",
+  "link-media",
+  "link-download",
+  "feishu-publish",
+  "feishu-doc-read",
+  "wecom-doc"
+] as const;
+
+export type RemoteCapabilityOperation = typeof REMOTE_CAPABILITY_OPERATIONS[number];
+
+export type RemoteCapabilityProbe = {
+  ok: boolean;
+  configured: boolean;
+  operations: string[];
+  missingOperations: string[];
+  message: string;
+};
+
 function capabilityUrl() {
   return process.env.SITES_EXTERNAL_CAPABILITY_URL?.trim() || "";
 }
@@ -13,6 +35,102 @@ function capabilityToken() {
 
 export function hasRemoteCapabilityBridge() {
   return Boolean(capabilityUrl() && capabilityToken());
+}
+
+export async function probeRemoteCapabilityBridge(options: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  requiredOperations?: readonly RemoteCapabilityOperation[];
+} = {}): Promise<RemoteCapabilityProbe> {
+  const url = capabilityUrl();
+  const token = capabilityToken();
+  const requiredOperations = [...(options.requiredOperations || REMOTE_CAPABILITY_OPERATIONS)];
+  if (!url || !token) {
+    return {
+      ok: false,
+      configured: false,
+      operations: [],
+      missingOperations: requiredOperations,
+      message: !url
+        ? "未配置 SITES_EXTERNAL_CAPABILITY_URL"
+        : "未配置 SITES_EXTERNAL_CAPABILITY_TOKEN"
+    };
+  }
+
+  try {
+    assertSecureCapabilityUrl(url);
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      operations: [],
+      missingOperations: requiredOperations,
+      message: error instanceof Error ? error.message : "远程能力服务地址无效"
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(1000, Math.min(options.timeoutMs || 5000, 30_000));
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const forwardAbort = () => controller.abort();
+  options.signal?.addEventListener("abort", forwardAbort, { once: true });
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${token}`
+      },
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let body: unknown;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return failedProbe(requiredOperations, `远程能力服务返回了无法解析的响应（HTTP ${response.status}）`);
+    }
+    if (!response.ok) {
+      const detail = readErrorMessage(body) || `HTTP ${response.status}`;
+      return failedProbe(requiredOperations, `远程能力服务探测失败：${detail}`);
+    }
+
+    const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+    const operations = Array.isArray(record.operations)
+      ? [...new Set(record.operations.filter((value): value is string => typeof value === "string"))]
+      : [];
+    if (record.ok !== true || !operations.length) {
+      return failedProbe(requiredOperations, "远程能力服务健康响应无效，缺少 ok 或 operations。");
+    }
+    const missingOperations = requiredOperations.filter((operation) => !operations.includes(operation));
+    return {
+      ok: missingOperations.length === 0,
+      configured: true,
+      operations,
+      missingOperations,
+      message: missingOperations.length
+        ? `远程能力服务缺少操作：${missingOperations.join("、")}`
+        : `远程能力服务可用（${operations.length} 项操作）`
+    };
+  } catch (error) {
+    if (options.signal?.aborted) {
+      return failedProbe(requiredOperations, "远程能力服务探测已取消。");
+    }
+    return failedProbe(
+      requiredOperations,
+      timedOut
+        ? `远程能力服务探测超时（${Math.round(timeoutMs / 1000)} 秒）`
+        : `远程能力服务不可达：${error instanceof Error ? error.message : "网络请求失败"}`
+    );
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 export async function callRemoteCapability<T>(
@@ -54,9 +172,7 @@ export async function callRemoteCapability<T>(
       throw new Error(`远程能力服务返回了无法解析的响应（${response.status}）。`);
     }
     if (!response.ok) {
-      const message = body && typeof body === "object" && "error" in body && typeof body.error === "string"
-        ? body.error
-        : `HTTP ${response.status}`;
+      const message = readErrorMessage(body) || `HTTP ${response.status}`;
       throw new Error(`远程能力「${operation}」调用失败：${message}`);
     }
     return body as T;
@@ -68,6 +184,22 @@ export async function callRemoteCapability<T>(
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", forwardAbort);
   }
+}
+
+function failedProbe(requiredOperations: readonly string[], message: string): RemoteCapabilityProbe {
+  return {
+    ok: false,
+    configured: true,
+    operations: [],
+    missingOperations: [...requiredOperations],
+    message
+  };
+}
+
+function readErrorMessage(value: unknown) {
+  return value && typeof value === "object" && "error" in value && typeof value.error === "string"
+    ? value.error
+    : "";
 }
 
 function assertSecureCapabilityUrl(value: string) {

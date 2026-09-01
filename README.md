@@ -39,7 +39,7 @@ npm run remote:status
 ```
 
 `remote:setup` 配置 Tailscale Serve 和 macOS LaunchAgent；Next.js 仍只监听
-`127.0.0.1:3000`，不会开放公网端口，也不要启用 Funnel。正式服务通过
+`127.0.0.1:3000`，完整工作台不会开放公网。正式服务通过
 `caffeinate` 在 Mac 插电、开盖时保持运行。然后在 iPhone 的 Tailscale 中找到该
 Mac 的私人 HTTPS 地址，用 Safari 打开并“添加到主屏幕”。
 
@@ -57,6 +57,20 @@ npm run remote:rollback   # 回退上一可用版本
 发布前若存在运行或排队任务会直接拒绝。正式产物保存在
 `.remote-server/releases/<buildId>`，保留最近两个版本；启动失败会自动恢复上一版。
 正式服务始终读取当前项目的真实 `style-library`，不会创建第二份可写数据。
+
+如果 Sites 云端需要调用当前 Mac 的 OpenCLI、FFmpeg、转写、飞书或企业微信能力，额外执行：
+
+```bash
+npm run capability:setup
+npm run remote:deploy
+npm run capability:status
+```
+
+`capability:setup` 会在 macOS 钥匙串生成独立强令牌，并用 Tailscale Funnel 的
+`8443` 端口只公开一个窄网关；它只接受 `/api/capability-bridge` 和带一次性下载凭证的
+素材路径，其他页面与 API 一律返回 404。完整工作台仍只通过私人 Serve 访问。
+如果当前 Tailscale 账号尚未允许 Funnel，命令会明确停止并要求在 Tailscale 管理页完成一次授权，
+不会自动扩大公网范围。令牌不会写入 `.env`、源码或日志。
 
 如果要把“数据维护”和“数据监控”单独交付给 Windows 用户，使用专用发行模式：
 
@@ -83,7 +97,9 @@ npm run dev
 - `SITES_STORAGE_MODE`：Sites 云端运行时由构建配置设为 `cloud`；本地文件模式留空。
 - `SITES_EXTERNAL_CAPABILITY_URL`、`SITES_EXTERNAL_CAPABILITY_TOKEN`：可选的受鉴权 HTTP 能力桥。云端 OpenCLI、FFmpeg 抽帧、ASR/链接转写、媒体下载、飞书和企业微信文档调用会以 `{ operation, payload }` POST 到该地址；令牌只放在部署环境变量中，不要提交到仓库。
 - `SITES_CAPABILITY_BRIDGE_TOKEN`、`SITES_CAPABILITY_BRIDGE_PUBLIC_URL`：能力提供方主机使用。将本地工作台通过受保护的 HTTPS 反向代理暴露到 `/api/capability-bridge`，令牌至少 32 个字符；Sites 端的 `SITES_EXTERNAL_CAPABILITY_*` 使用同一地址和令牌。该入口在 Sites Worker 内会强制关闭，媒体文件通过短期、一次性下载凭证传输，不会返回本机路径。
+- 当前 Mac 常驻模式会从 macOS 钥匙串读取能力桥令牌，并把 `SITES_CAPABILITY_BRIDGE_PUBLIC_URL` 指向独立的 Tailscale Funnel `8443` 窄网关；不要把令牌复制进仓库或聊天。
 - `SITES_CAPABILITY_BRIDGE_TIMEOUT_MS`、`SITES_CAPABILITY_BRIDGE_BODY_LIMIT_BYTES`、`SITES_CAPABILITY_BRIDGE_ASSET_TTL_MS`：能力提供方的单次执行超时、JSON 请求上限和临时媒体有效期；默认分别为 20 分钟、2MB 和 10 分钟。
+- 云端健康检查会使用 Bearer 令牌 GET capability URL，并核对服务实际声明的操作列表；仅填写地址和令牌但服务不可达、鉴权失败或缺少操作时，状态页会显示真实故障，不会标记为已配置。
 - `npm run prepare:sites:migration`：安全的 Sites 数据迁移预检，默认不读取素材库。只有明确授权后附加 `-- --include-library` 才会在本地 `dist/` 生成哈希清单；该命令本身永不上传素材。
 - `WECOM_ACCOUNT_SHEET_URL`：可选。配置企业微信在线表格链接后，数据维护里的抖音 / B站账号配对和报价以在线表为准，通过 `wecom-cli` 读取。普通打开会立即展示最后一次成功缓存并在后台刷新，不再等待远端；手动点击刷新才会等待最新结果。在线表暂时不可用时继续显示上次成功缓存或本地缓存，并给出可见警告。
 - `WECOM_CLI_BIN`、`WECOM_ACCOUNT_SHEET_CACHE_TTL_MS`、`WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL`：在线账号表读取命令、缓存时长和本地回退开关。

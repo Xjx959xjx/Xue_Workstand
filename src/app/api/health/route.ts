@@ -9,7 +9,7 @@ import { getImageRuntimeConfig } from "@/lib/cover";
 import { checkFeishuRuntime } from "@/lib/feishu";
 import { probeChatModel } from "@/lib/model-runtime";
 import { resolveOpenCliCommand } from "@/lib/opencli";
-import { hasRemoteCapabilityBridge } from "@/lib/remote-capabilities";
+import { probeRemoteCapabilityBridge } from "@/lib/remote-capabilities";
 import { isCloudStorageMode, storageFs } from "@/lib/storage/fs";
 
 export const runtime = "nodejs";
@@ -23,11 +23,14 @@ export async function GET(request: Request) {
   let opencliOk = false;
   let opencliVersion = "";
   let opencliError = "";
+  const capabilityProbe = isCloudStorageMode()
+    ? await probeRemoteCapabilityBridge({ signal: request.signal })
+    : undefined;
 
   if (isCloudStorageMode()) {
-    opencliOk = hasRemoteCapabilityBridge();
+    opencliOk = Boolean(capabilityProbe?.operations.includes("opencli"));
     opencliVersion = opencliOk ? "remote-capability" : "";
-    opencliError = opencliOk ? "" : "未配置远程 OpenCLI 能力服务";
+    opencliError = opencliOk ? "" : capabilityProbe?.message || "远程 OpenCLI 能力不可用";
   } else try {
     const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
@@ -60,7 +63,7 @@ export async function GET(request: Request) {
   const image = getImageRuntimeConfig();
   const [chatProbe, feishu] = await Promise.all([
     probeChatModel({ signal: request.signal }),
-    checkFeishuRuntime()
+    checkFeishuRuntime({ remoteProbe: capabilityProbe })
   ]);
 
   return NextResponse.json({
@@ -82,7 +85,8 @@ export async function GET(request: Request) {
     imageConfigured: image.configured,
     image,
     feishuConfigured: feishu.configured,
-    feishu
+    feishu,
+    remoteCapability: capabilityProbe
   });
 }
 

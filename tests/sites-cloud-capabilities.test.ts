@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { checkFeishuRuntime } from "../src/lib/feishu";
-import { callRemoteCapability } from "../src/lib/remote-capabilities";
+import {
+  callRemoteCapability,
+  probeRemoteCapabilityBridge,
+  REMOTE_CAPABILITY_OPERATIONS
+} from "../src/lib/remote-capabilities";
 import { prepareLinkSourceDownload, resolveLinkSourceMedia } from "../src/lib/transcription";
 import { resolveGrossMarginAccounts } from "../src/lib/wecom-account-source";
 
@@ -110,6 +114,32 @@ test("远程 capability 拒绝未鉴权或非 HTTPS 地址", async () => {
   }
 });
 
+test("远程 capability 健康探测识别缺失操作和鉴权失败", async () => {
+  await withCloudCapability(async () => {
+    const previousFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => Response.json({
+        ok: true,
+        operations: ["opencli", "link-media"]
+      });
+      const partial = await probeRemoteCapabilityBridge({
+        requiredOperations: ["opencli", "feishu-publish"]
+      });
+      assert.equal(partial.ok, false);
+      assert.deepEqual(partial.operations, ["opencli", "link-media"]);
+      assert.deepEqual(partial.missingOperations, ["feishu-publish"]);
+      assert.match(partial.message, /feishu-publish/);
+
+      globalThis.fetch = async () => Response.json({ error: "远程能力服务鉴权失败。" }, { status: 401 });
+      const rejected = await probeRemoteCapabilityBridge({ requiredOperations: ["opencli"] });
+      assert.equal(rejected.ok, false);
+      assert.match(rejected.message, /鉴权失败/);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
+
 type CapabilityRequest = { operation: string; payload: unknown };
 
 async function withCloudCapability(
@@ -132,6 +162,9 @@ async function withCloudCapability(
   process.env.WECOM_ACCOUNT_SHEET_URL = "https://doc.weixin.qq.com/sheet/cloud";
   globalThis.fetch = async (_input, init) => {
     assert.equal((init?.headers as Record<string, string>)?.authorization, "Bearer test-token");
+    if ((init?.method || "GET") === "GET") {
+      return Response.json({ ok: true, operations: [...REMOTE_CAPABILITY_OPERATIONS] });
+    }
     const request = JSON.parse(String(init?.body)) as CapabilityRequest;
     requests.push(request);
     return Response.json(respond(request));

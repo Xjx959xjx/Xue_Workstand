@@ -6,6 +6,7 @@ import { z } from "zod";
 import { publishFeishuDocument, fetchFeishuSupportDocuments } from "./feishu";
 import { analyzeCopySourceMaterial } from "./material-analysis";
 import { runOpenCli } from "./opencli-runtime";
+import { REMOTE_CAPABILITY_OPERATIONS } from "./remote-capabilities";
 import { callLocalWecomDocumentCommand } from "./support-documents";
 import {
   prepareLinkSourceDownload,
@@ -16,20 +17,8 @@ import {
 } from "./transcription";
 import { platforms } from "./types";
 
-const BRIDGE_OPERATIONS = [
-  "opencli",
-  "material-analysis",
-  "transcribe-video",
-  "transcribe-link",
-  "link-media",
-  "link-download",
-  "feishu-publish",
-  "feishu-doc-read",
-  "wecom-doc"
-] as const;
-
 const bridgeEnvelopeSchema = z.object({
-  operation: z.enum(BRIDGE_OPERATIONS),
+  operation: z.enum(REMOTE_CAPABILITY_OPERATIONS),
   payload: z.unknown()
 }).strict();
 
@@ -85,7 +74,7 @@ const wecomSchema = z.object({
   input: z.record(z.string(), z.unknown())
 }).strict();
 
-type BridgeOperation = typeof BRIDGE_OPERATIONS[number];
+type BridgeOperation = typeof REMOTE_CAPABILITY_OPERATIONS[number];
 type BridgeAsset = {
   assetId: string;
   downloadTokenHash: Buffer;
@@ -116,7 +105,7 @@ export function getCapabilityBridgeStatus() {
     cloudRuntime: isCloudRuntime(),
     tokenConfigured: Boolean(bridgeToken()),
     publicUrlConfigured: Boolean(process.env.SITES_CAPABILITY_BRIDGE_PUBLIC_URL?.trim()),
-    operations: [...BRIDGE_OPERATIONS]
+    operations: [...REMOTE_CAPABILITY_OPERATIONS]
   };
 }
 
