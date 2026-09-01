@@ -25,7 +25,7 @@
     "build": "next build",
     "build:sites": "vinext build && node scripts/prepare-sites-output.mjs",
     "start:sites": "wrangler dev --config dist/server/wrangler.json",
-    "check:sites": "vinext check",
+    "check:sites": "node scripts/check-sites-compatibility.mjs",
     "check:sites:release": "node scripts/check-sites-release.mjs",
     "prepare:sites:migration": "node scripts/prepare-sites-library-migration.mjs",
     "db:generate": "drizzle-kit generate",
