@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "child_process";
 import crypto from "crypto";
 import fs from "fs";
+import net from "net";
 import os from "os";
 import path from "path";
 import process from "process";
@@ -264,12 +265,17 @@ async function serve() {
       SITES_CAPABILITY_BRIDGE_PUBLIC_URL: capabilityPublicUrl
     } : {})
   };
-  const args = ["-dimsu", process.execPath];
+  const args = [];
   const envFile = path.join(root, ".env");
   if (await exists(envFile)) args.push(`--env-file=${envFile}`);
   args.push(path.join(releaseRoot, "server.js"));
 
-  const child = spawn("/usr/bin/caffeinate", args, {
+  const child = spawn(process.execPath, args, {
+    cwd: releaseRoot,
+    env,
+    stdio: "inherit"
+  });
+  const powerAssertion = spawn("/usr/bin/caffeinate", ["-dimsu", "-w", String(process.pid)], {
     cwd: releaseRoot,
     env,
     stdio: "inherit"
@@ -289,11 +295,12 @@ async function serve() {
   const forward = (signal) => {
     if (!child.killed) child.kill(signal);
     if (gateway && !gateway.killed) gateway.kill(signal);
+    if (!powerAssertion.killed) powerAssertion.kill(signal);
   };
   process.on("SIGTERM", () => forward("SIGTERM"));
   process.on("SIGINT", () => forward("SIGINT"));
 
-  const processes = [{ name: "工作台", child }];
+  const processes = [{ name: "工作台", child }, { name: "系统保活", child: powerAssertion }];
   if (gateway) processes.push({ name: "能力桥窄网关", child: gateway });
   const exit = await Promise.race(processes.map(({ name, child: processChild }) => new Promise((resolve, reject) => {
     processChild.once("error", reject);
@@ -394,10 +401,41 @@ async function activateRelease(releaseRoot) {
 }
 
 async function stopLaunchAgent() {
+  const wasLoaded = capture("launchctl", ["print", launchTarget()]).ok;
   const result = capture("launchctl", ["bootout", launchTarget()]);
   if (!result.ok && !/Could not find service|No such process|not found/i.test(`${result.stdout}\n${result.stderr}`)) {
     console.warn(`停止 LaunchAgent 时收到提示：${summarizeOutput(result.stderr || result.stdout)}`);
   }
+  if (wasLoaded) await waitForLaunchAgentStopped(10_000);
+}
+
+async function waitForLaunchAgentStopped(timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const loaded = capture("launchctl", ["print", launchTarget()]).ok;
+    const [appPortOpen, gatewayPortOpen] = await Promise.all([
+      isTcpPortOpen(3000),
+      isTcpPortOpen(CAPABILITY_GATEWAY_PORT)
+    ]);
+    if (!loaded && !appPortOpen && !gatewayPortOpen) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("旧版远程服务未在 10 秒内完全退出，已停止切换以避免端口冲突。");
+}
+
+function isTcpPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const finish = (open) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(300);
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.once("timeout", () => finish(false));
+  });
 }
 
 async function bootstrapLaunchAgent() {
