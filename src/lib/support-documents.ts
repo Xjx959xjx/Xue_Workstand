@@ -30,7 +30,7 @@ type FetchSupportDocumentOptions = {
   signal?: AbortSignal;
 };
 
-type WecomDocumentResponse = {
+export type WecomDocumentResponse = {
   errcode?: number;
   errmsg?: string;
   task_id?: string;
@@ -326,6 +326,14 @@ async function callWecomDocumentCommand(
     }
     return callRemoteCapability<WecomDocumentResponse>("wecom-doc", { method, input }, options);
   }
+  return callLocalWecomDocumentCommand(method, input, options);
+}
+
+export async function callLocalWecomDocumentCommand(
+  method: string,
+  input: Record<string, unknown>,
+  options: FetchSupportDocumentOptions = {}
+): Promise<WecomDocumentResponse> {
   const command = process.env.WECOM_CLI_BIN?.trim() || "wecom-cli";
   let stdout = "";
   try {

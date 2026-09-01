@@ -36,7 +36,7 @@ export async function analyzeCopySourceMaterial(input: {
         transcript: input.transcript,
         url: input.url
       },
-      { signal: input.signal }
+      { signal: input.signal, timeoutMs: 3 * 60_000 }
     );
   }
   if (!input.mediaUrls.length) {

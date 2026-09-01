@@ -82,6 +82,8 @@ npm run dev
 - `STYLE_LIBRARY_DIR`：本地风格库目录，默认 `./style-library`。
 - `SITES_STORAGE_MODE`：Sites 云端运行时由构建配置设为 `cloud`；本地文件模式留空。
 - `SITES_EXTERNAL_CAPABILITY_URL`、`SITES_EXTERNAL_CAPABILITY_TOKEN`：可选的受鉴权 HTTP 能力桥。云端 OpenCLI、FFmpeg 抽帧、ASR/链接转写、媒体下载、飞书和企业微信文档调用会以 `{ operation, payload }` POST 到该地址；令牌只放在部署环境变量中，不要提交到仓库。
+- `SITES_CAPABILITY_BRIDGE_TOKEN`、`SITES_CAPABILITY_BRIDGE_PUBLIC_URL`：能力提供方主机使用。将本地工作台通过受保护的 HTTPS 反向代理暴露到 `/api/capability-bridge`，令牌至少 32 个字符；Sites 端的 `SITES_EXTERNAL_CAPABILITY_*` 使用同一地址和令牌。该入口在 Sites Worker 内会强制关闭，媒体文件通过短期、一次性下载凭证传输，不会返回本机路径。
+- `SITES_CAPABILITY_BRIDGE_TIMEOUT_MS`、`SITES_CAPABILITY_BRIDGE_BODY_LIMIT_BYTES`、`SITES_CAPABILITY_BRIDGE_ASSET_TTL_MS`：能力提供方的单次执行超时、JSON 请求上限和临时媒体有效期；默认分别为 20 分钟、2MB 和 10 分钟。
 - `npm run prepare:sites:migration`：安全的 Sites 数据迁移预检，默认不读取素材库。只有明确授权后附加 `-- --include-library` 才会在本地 `dist/` 生成哈希清单；该命令本身永不上传素材。
 - `WECOM_ACCOUNT_SHEET_URL`：可选。配置企业微信在线表格链接后，数据维护里的抖音 / B站账号配对和报价以在线表为准，通过 `wecom-cli` 读取。普通打开会立即展示最后一次成功缓存并在后台刷新，不再等待远端；手动点击刷新才会等待最新结果。在线表暂时不可用时继续显示上次成功缓存或本地缓存，并给出可见警告。
 - `WECOM_CLI_BIN`、`WECOM_ACCOUNT_SHEET_CACHE_TTL_MS`、`WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL`：在线账号表读取命令、缓存时长和本地回退开关。

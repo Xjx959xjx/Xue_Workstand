@@ -153,7 +153,11 @@ export async function transcribeVideo(input: {
       douyinMediaUrl: input.douyinMediaUrl,
       allowRemoteDownload: input.allowRemoteDownload
     };
-    const remote = await callRemoteCapability<Partial<LinkTranscriptionResult> & { text?: string }>("transcribe-video", remotePayload, { signal: input.signal });
+    const remote = await callRemoteCapability<Partial<LinkTranscriptionResult> & { text?: string }>(
+      "transcribe-video",
+      remotePayload,
+      { signal: input.signal, timeoutMs: 20 * 60_000 }
+    );
     if (!remote || typeof remote.text !== "string" || !remote.text.trim()) {
       throw new Error("远程 ASR 服务返回了无效结果，缺少 text。");
     }
@@ -339,6 +343,77 @@ export async function transcribeVideo(input: {
   }
 }
 
+export async function transcribeStandaloneVideo(input: {
+  platform: Platform;
+  videoId: string;
+  mediaUrl?: string;
+  douyinMediaUrl?: string;
+  signal?: AbortSignal;
+}) {
+  throwIfAborted(input.signal);
+  const directMediaUrl = input.mediaUrl?.trim() || input.douyinMediaUrl?.trim() || "";
+
+  if (!directMediaUrl) {
+    const pageUrl = input.platform === "bilibili"
+      ? `https://www.bilibili.com/video/${encodeURIComponent(input.videoId)}`
+      : buildDouyinVideoUrl(input.videoId);
+    if (!pageUrl) throw new Error("远程转写缺少可用的视频链接。");
+    return transcribeLinkSource({
+      url: pageUrl,
+      titleHint: input.videoId,
+      analyzeVideo: false,
+      signal: input.signal
+    });
+  }
+
+  const cleanupTargets: string[] = [];
+  const timings: Timing[] = [];
+  const startedAt = Date.now();
+  try {
+    const downloaded = await downloadRemoteAudio(
+      directMediaUrl,
+      `${normalizeTemporaryFileName(input.videoId)}.mp3`,
+      { signal: input.signal }
+    );
+    cleanupTargets.push(downloaded.mediaPath);
+    timings.push({ stage: "download-media-url-audio", ms: downloaded.ms });
+
+    const prepared = await prepareAudioForVolcengine(downloaded.mediaPath, { signal: input.signal });
+    if (prepared.cleanupPath) cleanupTargets.push(prepared.cleanupPath);
+    timings.push(...prepared.timings);
+
+    const result = await transcribeWithVolcengine(prepared.mediaPath, { signal: input.signal });
+    timings.push(...result.timings);
+    const cleaned = await cleanTranscriptText({
+      platform: input.platform,
+      title: input.videoId,
+      text: result.text,
+      signal: input.signal
+    });
+    return {
+      url: directMediaUrl,
+      resolvedUrl: directMediaUrl,
+      platform: input.platform,
+      text: cleaned.text,
+      source: "volcengine" as const,
+      durationSec: result.durationSec,
+      segments: result.segments,
+      timings: [...timings, { stage: "total", ms: Date.now() - startedAt }],
+      transcriptCleaning: {
+        fallback: cleaned.fallback,
+        fallbackReason: cleaned.fallbackReason,
+        usedModel: cleaned.usedModel
+      }
+    };
+  } finally {
+    await Promise.all(
+      [...new Set(cleanupTargets)].map((target) =>
+        fs.rm(target, { recursive: true, force: true }).catch(() => undefined)
+      )
+    );
+  }
+}
+
 export async function transcribeLinkSource(input: {
   url: string;
   titleHint?: string;
@@ -353,7 +428,7 @@ export async function transcribeLinkSource(input: {
     const remote = await callRemoteCapability<LinkTranscriptionResult>(
       "transcribe-link",
       { url: input.url, titleHint: input.titleHint, analyzeVideo: input.analyzeVideo },
-      { signal: input.signal }
+      { signal: input.signal, timeoutMs: 20 * 60_000 }
     );
     if (!remote || typeof remote.text !== "string") {
       throw new Error("远程链接转写服务返回了无效结果，缺少 text。");
@@ -502,6 +577,10 @@ export async function transcribeLinkSource(input: {
   }
 }
 
+function normalizeTemporaryFileName(value: string) {
+  return value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "remote-video";
+}
+
 export async function resolveLinkSourceAccountName(url: string) {
   const inputUrl = url.trim();
   if (!inputUrl) return "";
@@ -598,7 +677,7 @@ export async function prepareLinkSourceDownload(input: {
     const remote = await callRemoteCapability<LinkSourceDownloadAsset>(
       "link-download",
       input,
-      { signal: options.signal }
+      { signal: options.signal, timeoutMs: 20 * 60_000 }
     );
     if (!remote || remote.kind !== input.kind || typeof remote.remoteUrl !== "string") {
       throw new Error("远程媒体下载服务返回了无效结果，缺少匹配的 kind 或 remoteUrl。");

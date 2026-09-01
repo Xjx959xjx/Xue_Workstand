@@ -56,7 +56,10 @@ export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}
     if (!hasRemoteCapabilityBridge()) {
       throw new Error("Sites 云端运行时不支持本机 OpenCLI；请配置受鉴权的远程采集服务后再执行此操作。");
     }
-    const remote = await callRemoteCapability<{ stdout?: string }>("opencli", { args }, options);
+    const remote = await callRemoteCapability<{ stdout?: string }>("opencli", { args }, {
+      signal: options.signal,
+      timeoutMs: options.timeout || 120_000
+    });
     if (!remote || typeof remote.stdout !== "string") {
       throw new Error("远程 OpenCLI 服务返回了无效结果，缺少 stdout。");
     }

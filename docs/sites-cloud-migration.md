@@ -36,15 +36,34 @@ Cloudflare Worker 不执行本机子进程。OpenCLI、FFmpeg、飞书 CLI 和�
 - [x] 生成并审查首个 D1 migration。
 - [x] 实现云对象存储适配器并迁移基础存储调用链。
 - [x] 实现云任务 D1 运行时：任务记录、状态、事件、结果摘要和 Worker `waitUntil()` 调度均可跨请求持久化。
-- [ ] 迁移外部能力到 HTTP 提供方（当前已对本机 OpenCLI、FFmpeg、链接采集和转写增加云端显式失败边界）。
-- [ ] 完成数据迁移工具、私有部署和线上验证。
+- [x] 实现受鉴权的 HTTP capability bridge，并接入 OpenCLI、FFmpeg 素材分析、ASR、链接媒体解析/下载、飞书和企业微信文档能力。
+- [x] 完成安全的数据迁移预检工具、私有部署和 D1/R2/云任务线上验证。
+- [ ] 在用户选定的常驻主机上配置 bridge HTTPS 地址和真实密钥。
+- [ ] 仅在用户明确授权后迁移现有 `style-library`。
 
 ## 本地 Worker 验证
 
-`npm run build:sites` 后使用 `wrangler dev --config dist/server/wrangler.json`，应用首个 D1 migration，已验证健康检查、素材库概览、任务列表和抖音热榜接口均返回 200；项目创建/删除接口验证了 D1 元数据与 R2 对象写入链路。真实 Sites 项目创建、密钥配置、数据导入和私有部署仍需用户授权后执行。
+`npm run build:sites` 后使用 `wrangler dev --config dist/server/wrangler.json`，应用首个 D1 migration，已验证健康检查、素材库概览、任务列表和抖音热榜接口均返回 200；项目创建/删除接口验证了 D1 元数据与 R2 对象写入链路。Sites 私有项目也已部署，生产环境验证了页面响应、D1 migration、云对象目录、R2 热点快照写入和 D1 云任务完成。当前部署保持 owner-only；没有上传 `.env`、`.env.local` 或现有 `style-library`。
 
 发布前可运行 `npm run check:sites:release`。该检查只扫描 `dist/` 构建产物，不读取 `.env` 或 `style-library`；若发现受保护数据路径、常见密钥格式、缺少 migration 或错误绑定会失败。它不会上传或修改任何远程资源。
 
 `npm run prepare:sites:migration` 默认只输出 dry-run 说明，并且不会读取 `style-library`。只有用户明确授权后才可运行 `npm run prepare:sites:migration -- --include-library`：该模式仅在 `dist/` 生成包含相对路径、大小和 SHA-256 的本地清单，拒绝符号链接和 `.env*`，仍不会复制或上传任何素材。实际上传必须另行确认具体 Sites 项目、目标环境和迁移窗口。
 
-远程能力桥约定：`POST SITES_EXTERNAL_CAPABILITY_URL`，请求体为 `{ "operation": string, "payload": unknown }`，必须使用 `Authorization: Bearer $SITES_EXTERNAL_CAPABILITY_TOKEN` 鉴权；远程地址必须是 HTTPS，只有 localhost 调试允许 HTTP。当前调用名包括 `opencli`、`material-analysis`、`transcribe-video`、`transcribe-link`、`link-media`、`link-download`、`feishu-publish`、`feishu-doc-read` 和 `wecom-doc`；返回 JSON 必须符合对应调用点的结果类型，错误使用 HTTP 非 2xx 和 `{ "error": string }`。`link-download` 必须返回可由 Worker 代理的 `http(s)` 临时地址、文件名和内容类型，不得返回能力服务本机路径。
+远程能力桥约定：`POST SITES_EXTERNAL_CAPABILITY_URL`，请求体为 `{ "operation": string, "payload": unknown }`，必须使用 `Authorization: Bearer $SITES_EXTERNAL_CAPABILITY_TOKEN` 鉴权；远程地址必须是 HTTPS，只有 localhost 调试允许 HTTP。当前调用名包括 `opencli`、`material-analysis`、`transcribe-video`、`transcribe-link`、`link-media`、`link-download`、`feishu-publish`、`feishu-doc-read` 和 `wecom-doc`；返回 JSON 必须符合对应调用点的结果类型，错误使用 HTTP 非 2xx 和 `{ "error": string }`。`link-download` 返回可由 Worker 代理的短期地址、文件名、内容类型和一次性下载令牌，不返回能力服务本机路径。
+
+## Capability bridge 提供方
+
+能力提供方复用本地工作台的 Node runtime 和现有 CLI 登录：
+
+1. 在常驻主机的环境文件配置 `SITES_CAPABILITY_BRIDGE_TOKEN`，值至少 32 个字符；不要把值提交到仓库。
+2. 通过受控的 HTTPS 反向代理把该主机的 `/api/capability-bridge` 暴露为公网地址，并将这个完整地址写入 `SITES_CAPABILITY_BRIDGE_PUBLIC_URL`。
+3. Sites 生产环境配置 `SITES_EXTERNAL_CAPABILITY_URL` 为同一地址，`SITES_EXTERNAL_CAPABILITY_TOKEN` 为同一令牌，然后重新部署已保存版本。
+4. 使用相同 Bearer 令牌 GET capability URL 可做只读健康检查；响应只报告启用状态与操作列表，不返回密钥。
+
+该入口具有以下边界：
+
+- 只在本地/常驻 Node 主机启用；当 `SITES_STORAGE_MODE=cloud` 或 `SITES_RUNTIME=cloud` 时返回 503。
+- Bearer 令牌使用定长哈希比较，请求正文和执行时间有上限。
+- 媒体 URL 拒绝 localhost、内网地址和非 HTTP(S) 协议。
+- 本地生成的视频/音频只通过一次性临时下载令牌读取，读取完成或过期后清理临时文件。
+- OpenCLI 使用参数数组执行，不接受 shell 命令字符串。
