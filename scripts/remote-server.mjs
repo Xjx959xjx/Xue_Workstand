@@ -241,6 +241,10 @@ async function rollback() {
 }
 
 async function serve() {
+  // 与 Next.js 生产环境保持相同优先级，并展开 .env.local 中的变量引用。
+  // 从工作区加载，避免 standalone 发布目录遗漏本机模型配置。
+  const { default: nextEnv } = await import("@next/env");
+  nextEnv.loadEnvConfig(root, false);
   const releaseRoot = await currentReleasePath();
   if (!releaseRoot || !(await exists(path.join(releaseRoot, "server.js")))) {
     throw new Error("远程服务找不到 current/server.js。");
@@ -265,10 +269,7 @@ async function serve() {
       SITES_CAPABILITY_BRIDGE_PUBLIC_URL: capabilityPublicUrl
     } : {})
   };
-  const args = [];
-  const envFile = path.join(root, ".env");
-  if (await exists(envFile)) args.push(`--env-file=${envFile}`);
-  args.push(path.join(releaseRoot, "server.js"));
+  const args = [path.join(releaseRoot, "server.js")];
 
   const child = spawn(process.execPath, args, {
     cwd: releaseRoot,

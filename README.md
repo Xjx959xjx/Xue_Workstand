@@ -43,6 +43,10 @@ npm run remote:status
 `caffeinate` 在 Mac 插电、开盖时保持运行。然后在 iPhone 的 Tailscale 中找到该
 Mac 的私人 HTTPS 地址，用 Safari 打开并“添加到主屏幕”。
 
+常驻服务按 Next.js 生产环境优先级读取项目根目录的 `.env.production.local`、
+`.env.local`、`.env.production`、`.env`（进程已有环境变量优先），支持 `$变量名` 引用。
+修改模型或联网检索配置后，执行 `npm run remote:start` 重启当前正式版本即可生效。
+
 日常命令：
 
 ```bash

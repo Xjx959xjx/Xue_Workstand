@@ -660,6 +660,7 @@
 
 .writer-variant-tabs {
   display: flex;
+  flex-shrink: 0;
   min-width: 0;
   gap: 6px;
   padding: 5px;
