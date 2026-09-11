@@ -220,6 +220,7 @@
   animation: toast-progress var(--toast-duration, 3000ms) linear both;
 }
 
-.workbench-toast:focus-within .workbench-toast-progress {
+.workbench-toast:focus-within .workbench-toast-progress,
+.workbench-toast[data-paused="true"] .workbench-toast-progress {
   animation-play-state: paused;
 }

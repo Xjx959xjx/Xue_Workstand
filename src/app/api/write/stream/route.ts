@@ -68,7 +68,7 @@ export async function POST(request: Request) {
         return;
       }
 
-      const batch = await prepareWriteCopyBatchContext(input, { signal });
+      const batch = await prepareWriteCopyBatchContext(input, { signal, onProgress(message) { emit({ type: "stage", stage: "prepare-style", message, progress: 32 }); } });
       if (input.useWebResearch) {
         const researchUnavailable = batch.research?.startsWith("联网资料：模型联网暂时不可用");
         emit({

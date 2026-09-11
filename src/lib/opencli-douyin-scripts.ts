@@ -418,6 +418,13 @@ function buildDouyinPostExtractRuntimeJs(options: {
   const toEpoch = ${toEpoch ?? "null"};
   const pageSize = ${DOUYIN_POST_PAGE_SIZE};
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let accessError = "";
+  const readUifid = () => {
+    const entry = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith("UIFID="));
+    return entry ? decodeURIComponent(entry.slice(6)) : "";
+  };
+  for (let attempt = 0; !readUifid() && attempt < 20; attempt++) await sleep(250);
+  if (!readUifid()) throw new Error("抖音网页会话尚未就绪（Uifid 缺失）");
   const toNumber = (value) => {
     const number = Number(value || 0);
     return Number.isFinite(number) ? number : 0;
@@ -445,7 +452,7 @@ function buildDouyinPostExtractRuntimeJs(options: {
       id: awemeId,
       title: String(item.desc || item.caption || item.title || "未命名视频"),
       desc: String(item.desc || item.caption || item.title || "未命名视频"),
-      duration: toNumber(item.duration) ? Math.round(toNumber(item.duration) / 1000) : "",
+      duration: toNumber(item.duration || item.video?.duration) ? Math.round(toNumber(item.duration || item.video?.duration) / 1000) : "",
       create_time: toNumber(item.create_time || item.createTime),
       digg_count: toNumber(stats.digg_count ?? item.digg_count),
       comment_count: toNumber(stats.comment_count ?? item.comment_count),
@@ -468,19 +475,33 @@ function buildDouyinPostExtractRuntimeJs(options: {
   const fetchPage = async (targetUrl) => {
     let lastError = "";
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(targetUrl, {
+      if (accessError) throw new Error(accessError);
+      const url = new URL(targetUrl);
+      url.searchParams.set("uifid", readUifid());
+      const response = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(15000),
         credentials: "include",
         headers: {
           accept: "application/json, text/plain, */*"
         }
       });
       const text = await response.text();
-      if (!response.ok) throw new Error("aweme/post " + response.status + (text ? ": " + text.slice(0, 120) : ""));
+      if (!response.ok) {
+        const message = "aweme/post " + response.status + (text ? ": " + text.slice(0, 120) : "");
+        if ([401, 403, 444, 429].includes(response.status)) accessError = message;
+        throw new Error(message);
+      }
       if (text.trim()) {
+        let data;
         try {
-          return JSON.parse(text);
+          data = JSON.parse(text);
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
+        }
+        if (data) {
+          if (data.status_code && Number(data.status_code) !== 0) throw new Error("抖音接口业务错误：" + data.status_code);
+          if (!Array.isArray(data.aweme_list)) throw new Error("抖音接口缺少作品列表，未覆盖旧数据");
+          return data;
         }
       } else {
         lastError = "empty response";
@@ -511,8 +532,9 @@ function buildDouyinPostExtractRuntimeJs(options: {
 
         for (const item of list) {
           const createTime = toNumber(item.create_time || item.createTime);
+          if ((fromEpoch || toEpoch) && !createTime) throw new Error("抖音作品缺少真实发布时间，无法安全筛选日期");
           if (fromEpoch && createTime && createTime < fromEpoch) {
-            reachedBeforeFrom = true;
+            if (!item.is_top && !item.is_pinned) reachedBeforeFrom = true;
             continue;
           }
           if (toEpoch && createTime && createTime > toEpoch) continue;
@@ -562,14 +584,20 @@ export function buildDouyinDetailExtractJs(options: { awemeId: string; commentLi
   const commentLimit = ${options.commentLimit};
   const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
   const normalizeComment = (comment) => {
-    if (!comment || typeof comment !== "object") return "";
-    return normalizeText(
+    if (!comment || typeof comment !== "object") return null;
+    const text = normalizeText(
       comment.text ||
       comment.content ||
       comment.reply_comment?.text ||
       comment.reply_comment?.content ||
       ""
     );
+    if (!text) return null;
+    return {
+      text,
+      likes: Number(comment.digg_count || comment.likes || 0),
+      replies: Number(comment.reply_comment_total || comment.replies || 0)
+    };
   };
   const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
   detailUrl.searchParams.set("aweme_id", awemeId);
@@ -608,6 +636,8 @@ export function buildDouyinDetailExtractJs(options: { awemeId: string; commentLi
   } catch {}
   return {
     commentCount: Number(statistics.comment_count || 0),
+    likeCount: Number(statistics.digg_count || 0),
+    publishedAt: awemeDetail.create_time || awemeDetail.createTime || "",
     topComments
   };
 })()

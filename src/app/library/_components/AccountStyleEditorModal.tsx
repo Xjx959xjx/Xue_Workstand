@@ -48,7 +48,7 @@ export const AccountStyleEditorModal = memo(function AccountStyleEditorModal({
             <span className="progress-button-fill" style={{ transform: `scaleX(${busy === "style" ? styleProgress / 100 : 0})` }} />
             <span className="progress-button-content">
               <Sparkles aria-hidden="true" size={16} />
-              {busy === "style" ? `自动总结中 ${styleProgress}%` : "自动总结"}
+              {busy === "style" ? `重新归纳中 ${styleProgress}%` : "重新归纳"}
             </span>
           </button>
           <button className="btn primary" disabled={busy === "save-style" || busy === "style"} onClick={onSaveStyle} type="button">
@@ -56,6 +56,7 @@ export const AccountStyleEditorModal = memo(function AccountStyleEditorModal({
             保存
           </button>
         </div>
+        <p className="subtle">按全部原文重新归纳适用写法，复用未变化的分析；成功后保留旧卡历史。</p>
         {busy === "style" ? <p className="subtle">{styleStage}</p> : null}
       </div>
     </LibraryEditorModal>

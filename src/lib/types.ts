@@ -196,21 +196,6 @@ export type DraftAssets = {
           stage: "brief" | "relatedResearch" | "comment";
         }[];
       };
-      styleProfile?: {
-        channel: "douyin_comment" | "bilibili_comment";
-        source: "preset" | "local" | "local+source";
-        sampleCount: number;
-        sourceSampleCount: number;
-        nativeEmoteRate: number;
-        nativeEmotes: string[];
-        benchmarkAccounts?: string[];
-        benchmarkSampleCount?: number;
-        matchedVideoCount?: number;
-        matchedTopics?: string[];
-        matchedContentTypes?: string[];
-        targetNativeEmoteCount: number;
-        referenceError?: string;
-      };
       relatedResearch?: {
         usedQueries: string[];
         failedQueries: string[];
@@ -256,8 +241,6 @@ export type DraftAssets = {
         summaryError?: string;
       };
       research?: {
-        originalCommentCount: number;
-        originalCommentUsed: number;
         relatedCommentCount: number;
         relatedCommentUsed: number;
         relatedVideoCount: number;
@@ -428,6 +411,7 @@ type DraftBase = {
   research?: string;
   sourceDigest?: WriteSourceDigest;
   styleRefs?: WriteStyleReference[];
+  writerContext?: import("./writer-context").WriterContextSnapshot;
   version?: DraftVersion;
   content: string;
   assets?: DraftAssets;
@@ -610,7 +594,6 @@ export type EngagementGenerationOptions = {
   commentCount: number;
   includeDanmaku: boolean;
   danmakuCount: number;
-  generationMode?: EngagementGenerationMode;
   targetPlatform?: Platform;
 };
 
@@ -1297,6 +1280,7 @@ export type JobStartInput =
         currentContent?: string;
         revisionInstruction?: string;
         revisionScope?: WriteRevisionScope;
+        revisionMode?: "edit" | "recalibrate";
         selectedText?: string;
       };
     }
@@ -1308,6 +1292,7 @@ export type JobStartInput =
       input: {
         platform: Platform;
         accountId: string;
+        force?: boolean;
       };
     }
   | {

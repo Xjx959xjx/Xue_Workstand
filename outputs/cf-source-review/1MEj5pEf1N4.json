@@ -1,0 +1,88 @@
+{
+  "url": "https://v.douyin.com/1MEj5pEf1N4/",
+  "resolvedUrl": "https://www.douyin.com/video/7682067967202529189?previous_page=web_code_link",
+  "platform": "douyin",
+  "title": "宝哥你真猛！不愧是穿越火线王王#旭旭宝宝 #大马猴 #旭旭宝宝名场面 #穿越火线",
+  "sourceAccountName": "AWM ⁹⁹⁹⁹⁹",
+  "coverUrl": "https://p9-pc-sign.douyinpic.com/tos-cn-i-0813c000-ce/oQJAiJeIAgXxUle8qIE47xA0AxEKLfBAG1Ac5u~tplv-dy-cropcenter:323:430.jpeg?biz_tag=pcweb_cover&from=327834062&lk3s=138a59ce&s=PackSourceEnum_FAVORITE&sc=cover&se=true&sh=323_430&x-expires=2104318800&x-signature=6ePb53TIPeX%2FQx09fbLF%2FUJg%2FIM%3D",
+  "mediaUrls": [
+    "https://v26-web.douyinvod.com/d972fab53b7a15767e3277d3cc34d46e/6aa2ad29/video/tos/cn/tos-cn-ve-15c000-ce/oIQfdAODVDQm2hLFEAAFmAIvBJfcfORgr7gVCj/media-audio-und-mp4a/?a=6383&ch=0&cr=8&dr=0&er=1&lr=default&cd=0%7C0%7C0%7C3&cv=1&br=50&bt=50&cs=4&mime_type=video_mp4&qs=0&rc=MzxoaTVoZDdnNzs6ZTgzNEBpM3B2d205cnI1ZDMzbGkzNUAwLzM2NV5fYDRhYWIxNC8yYSM1a2NfMmRzc2JhLS1kLTRzcw%3D%3D&btag=c0000e00028000&cquery=100o_100w&dy_q=1788959585&l=202609092113052726DBDF0207D48DAB22",
+    "https://v26-web.douyinvod.com/2f17c1f4b8937c3aa46eef9116d02b18/6aa2ad29/video/tos/cn/tos-cn-ve-15c000-ce/ooD3AQ2OVFCAvBFAIVEDmQfQgAXPgffrJOcjL7/media-video-hvc1/?a=6383&ch=0&cr=8&dr=0&er=1&lr=default&cd=0%7C0%7C0%7C3&cv=1&br=458&bt=458&cs=4&ds=3&mime_type=video_mp4&qs=0&rc=NmVoZGU6PGc0O2hpOzQ3M0BpM3B2d205cnI1ZDMzbGkzNUBiMy4uYy80Xi0xXy4vYWExYSM1a2NfMmRzc2JhLS1kLTRzcw%3D%3D&btag=c0000e00028000&cquery=100w_100o&dy_q=1788959585&l=202609092113052726DBDF0207D48DAB22",
+    "https://lf3-static.bytednsdoc.com/obj/eden-cn/ild_jw_upfbvk_lm/ljhwZthlaukjlkulzlp/download/douyin_pc_client.mp4"
+  ],
+  "text": "哎，嘿嘿嘿。\n现实生活有太多喂，你可以帮我你他妈哎，你这个狙用的有点厉害啊！\n哦！\n不再那么清澈，热血已宝哥看到我没有？\n我气啥？\n看到你我哎呦，那是我，我求求你了，房哥，我求求你了。\n宝哥玩的可以。\n这是哪里？",
+  "source": "volcengine",
+  "fallback": false,
+  "durationSec": 72.72,
+  "segments": [
+    {
+      "startSec": 2.59,
+      "endSec": 3.51,
+      "text": "哎，嘿嘿嘿。"
+    },
+    {
+      "startSec": 5.69,
+      "endSec": 24.01,
+      "text": "现实生活有太多喂，你可以帮我你他妈哎，你这个狙用的有点厉害啊！"
+    },
+    {
+      "startSec": 40.23,
+      "endSec": 40.35,
+      "text": "哦！"
+    },
+    {
+      "startSec": 42.85,
+      "endSec": 46.66,
+      "text": "不再那么清澈，热血已宝哥看到我没有？"
+    },
+    {
+      "startSec": 46.66,
+      "endSec": 47.3,
+      "text": "我气啥？"
+    },
+    {
+      "startSec": 49.77,
+      "endSec": 55.94,
+      "text": "看到你我哎呦，那是我，我求求你了，房哥，我求求你了。"
+    },
+    {
+      "startSec": 69.5,
+      "endSec": 72.72,
+      "text": "宝哥玩的可以。这是哪里？"
+    }
+  ],
+  "timings": [
+    {
+      "stage": "download-remote-audio",
+      "ms": 531
+    },
+    {
+      "stage": "read-audio-file",
+      "ms": 0
+    },
+    {
+      "stage": "encode-audio-base64",
+      "ms": 0
+    },
+    {
+      "stage": "volcengine-submit",
+      "ms": 533
+    },
+    {
+      "stage": "volcengine-query-requests",
+      "ms": 1113
+    },
+    {
+      "stage": "volcengine-poll-wait",
+      "ms": 5005
+    },
+    {
+      "stage": "volcengine-query",
+      "ms": 6119
+    },
+    {
+      "stage": "total",
+      "ms": 15806
+    }
+  ]
+}

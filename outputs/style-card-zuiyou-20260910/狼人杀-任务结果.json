@@ -1,0 +1,59 @@
+{
+  "id": "job-write-copy-1789031727677-524e26f501",
+  "kind": "write-copy",
+  "status": "failed",
+  "title": "最游话说新卡｜奶奶狼人杀",
+  "inputSummary": "新风格卡，用户提供狼人杀素材",
+  "scope": {
+    "targetType": "account",
+    "platform": "douyin",
+    "accountId": "douyin:最翁说游",
+    "sourceKey": "df0240a6-j7"
+  },
+  "stage": "failed",
+  "message": "任务失败",
+  "progress": 100,
+  "href": "/writer",
+  "events": [
+    {
+      "at": "2026-09-10T09:15:27.674Z",
+      "status": "queued",
+      "stage": "queued",
+      "message": "任务已加入队列",
+      "progress": 0
+    },
+    {
+      "at": "2026-09-10T09:15:27.678Z",
+      "status": "running",
+      "stage": "start",
+      "message": "任务正在运行",
+      "progress": 3
+    },
+    {
+      "at": "2026-09-10T09:15:27.679Z",
+      "status": "running",
+      "stage": "prepare",
+      "message": "正在读取风格卡、代表样本和共享资料",
+      "progress": 10
+    },
+    {
+      "at": "2026-09-10T09:15:27.687Z",
+      "status": "running",
+      "stage": "prepare-style",
+      "message": "正在读取完整原文的用途与表达证据，首次分析会缓存",
+      "progress": 32
+    },
+    {
+      "at": "2026-09-10T09:16:49.707Z",
+      "status": "failed",
+      "stage": "failed",
+      "message": "任务失败",
+      "progress": 100
+    }
+  ],
+  "createdAt": "2026-09-10T09:15:27.674Z",
+  "updatedAt": "2026-09-10T09:16:49.707Z",
+  "attempt": 1,
+  "error": "douyin:最翁说游：对话模型服务连接异常，此功能不会切到本地模板。请检查网络、中转站地址和 CHAT_PROXY_URL。",
+  "completedAt": "2026-09-10T09:16:49.707Z"
+}

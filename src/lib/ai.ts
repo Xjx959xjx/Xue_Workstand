@@ -1,5 +1,12 @@
 import { randomUUID } from "crypto";
-import type { Response as UndiciResponse } from "undici";
+import {
+  STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION, WRITER_REFERENCE_BUDGET,
+  batchCandidates, candidateIndex, parseModelJson, parseStyleEvidence,
+  styleAnalysisInstruction, referenceSelectionInstruction, styleEvidenceQuotes as collectStyleEvidenceQuotes,
+  validateWriterPlan, snapshotReferences, checkWriterConstraints, validateStyleCardCitations,
+  type StyleEvidence, type WriterCandidate, type WriterContextSnapshot
+} from "./writer-context";
+import type { ModelResponseBody } from "./model-runtime";
 import {
   AccountDraftInput,
   Draft,
@@ -128,6 +135,7 @@ export type WriteCopyInput = {
   currentContent?: string;
   revisionInstruction?: string;
   revisionScope?: "full" | "selection";
+  revisionMode?: "edit" | "recalibrate";
   selectedText?: string;
 };
 
@@ -137,6 +145,7 @@ export type PreparedWriteContext = {
   contextFingerprint: string;
   sourceDigest: WriteSourceDigest;
   draftBase?: Omit<AccountDraftInput, "content"> | Omit<ProjectDraftInput, "content">;
+  writerContext?: WriterContextSnapshot;
 };
 
 export type PreparedWriteVariantContext = {
@@ -147,6 +156,7 @@ export type PreparedWriteVariantContext = {
 };
 
 export type PreparedWriteBatchContext = {
+  preparationFailures?: WriteVariantFailure[];
   variants: PreparedWriteVariantContext[];
   research?: string;
   sourceDigest: WriteSourceDigest;
@@ -204,6 +214,8 @@ export type PreparedAccountStyleContext = {
   cachedStyle?: string;
   cachedFallback?: boolean;
   cachedFallbackReason?: string;
+  previousStyleHash?: string;
+  evidenceQuotes?: Array<{ sourceId: string; quote: string }>;
 };
 
 export type AccountStyleGenerationResult = {
@@ -228,18 +240,13 @@ export type AccountStyleGenerationResult = {
 };
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
-const STYLE_REASONING_EFFORT: ChatReasoningEffort = "high";
+const STYLE_REASONING_EFFORT: ChatReasoningEffort = "medium";
 const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 1, 1, 4);
-const STYLE_ONE_SHOT_MAX_INPUT_CHARS = boundedEnvInteger("STYLE_ONE_SHOT_MAX_INPUT_CHARS", 50_000, 10_000, 200_000);
-const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = 2;
-const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 1200;
-export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "high";
+const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = STYLE_ANALYSIS_VERSION;
+const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 4500;
+export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "medium";
 export const WRITE_COPY_MAX_OUTPUT_TOKENS = 2600;
-const WRITE_PROMPT_VERSION = "writer-v5";
-const WRITE_ACCOUNT_SAMPLE_LIMIT = 8;
-const WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT = 4;
-const WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS = 4200;
-const WRITE_PROJECT_MATERIAL_MAX_CHARS = 4200;
+const WRITE_PROMPT_VERSION = WRITER_PROMPT_VERSION;
 const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
 const WEB_RESEARCH_TIMEOUT_MS = 180_000;
 
@@ -288,7 +295,7 @@ export function getWebResearchCapability() {
 
 export async function webSearchCompleteStrict(
   messages: ChatMessage[],
-  reasoningEffort: ChatReasoningEffort = "medium",
+  reasoningEffort: ChatReasoningEffort = "low",
   options: { signal?: AbortSignal; maxOutputTokens?: number } = {}
 ): Promise<ChatCompletionResult> {
   throwIfAborted(options.signal);
@@ -841,6 +848,14 @@ function parseChatCompletionStreamEvent(rawEvent: string) {
       continue;
     }
 
+    if (parsed && typeof parsed === "object" && "error" in parsed && parsed.error) {
+      const detail = typeof parsed.error === "object" ? parsed.error as Record<string, unknown> : {};
+      const message = String(detail.message || "");
+      if (/overload|capacity|busy/i.test(message)) throw new Error("对话模型调用失败：上游服务过载，请稍后重试。");
+      if (/rate.?limit|429/i.test(message)) throw new Error("对话模型服务限流（429），请稍后重试。");
+      // Never expose an upstream body: it may contain request details or credentials.
+      throw new Error("对话模型调用失败：流式响应返回错误，请检查模型服务状态。");
+    }
     serviceTier = extractServiceTier(parsed) || serviceTier;
     delta += extractChatCompletionDelta(parsed);
   }
@@ -848,11 +863,11 @@ function parseChatCompletionStreamEvent(rawEvent: string) {
   return { delta, serviceTier };
 }
 
-async function parseChatCompletionResponseBody(response: UndiciResponse) {
+async function parseChatCompletionResponseBody(response: ModelResponseBody) {
   return (await parseChatCompletionResponseBodyWithMeta(response)).text;
 }
 
-async function parseChatCompletionResponseBodyWithMeta(response: UndiciResponse) {
+async function parseChatCompletionResponseBodyWithMeta(response: ModelResponseBody) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
@@ -1174,11 +1189,11 @@ function isAbortError(error: unknown) {
   return error.name === "AbortError" || /任务已停止|aborted/i.test(error.message);
 }
 
-async function parseResponseApiBody(response: UndiciResponse) {
+async function parseResponseApiBody(response: ModelResponseBody) {
   return (await parseResponseApiBodyWithMeta(response)).text;
 }
 
-async function parseResponseApiBodyWithMeta(response: UndiciResponse) {
+async function parseResponseApiBodyWithMeta(response: ModelResponseBody) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
@@ -1688,74 +1703,8 @@ function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
   return {
     sampleFingerprints,
     sampleVideoIds: sampleFingerprints.map((sample) => sample.videoId),
-    sampleHash: shortHash(JSON.stringify(sampleFingerprints))
+    sampleHash: shortHash(JSON.stringify({ sampleFingerprints, learning: styleLearningSignature() }))
   };
-}
-
-function accountStyleInputChars(samples: AccountStyleSample[]) {
-  return samples.reduce((total, sample) => total + sample.transcript.length, 0);
-}
-
-function shouldGenerateAccountStyleOneShot(samples: AccountStyleSample[]) {
-  return accountStyleInputChars(samples) <= STYLE_ONE_SHOT_MAX_INPUT_CHARS;
-}
-
-function buildAccountTranscriptCorpus(samples: AccountStyleSample[]) {
-  return samples
-    .map((sample, index) => [
-      `<<< 样本 ${index + 1} 开始 >>>`,
-      `视频 ID：${sample.video.id}`,
-      `标题：${sample.video.title}`,
-      `播放:${sample.video.stats.views} 点赞:${sample.video.stats.likes} 评论:${sample.video.stats.comments} 收藏:${sample.video.stats.favorites} 分享:${sample.video.stats.shares ?? 0}`,
-      `完整转写（${sample.transcript.length} 字）：`,
-      sample.transcript,
-      `<<< 样本 ${index + 1} 结束 >>>`
-    ].join("\n"))
-    .join("\n\n");
-}
-
-function buildAccountOneShotStyleMessages(input: {
-  accountName: string;
-  platform: Platform;
-  samples: AccountStyleSample[];
-  currentStyle: string;
-  generationMode: "full" | "incremental";
-  changedSampleCount: number;
-}): ChatMessage[] {
-  const transcriptCorpus = buildAccountTranscriptCorpus(input.samples);
-  const baseline = input.currentStyle
-    ? `已有风格卡（只作为修订基线，完整样本是最终依据）：\n${input.currentStyle}`
-    : "已有风格卡：无";
-
-  return [
-    {
-      role: "system",
-      content: [
-        "你是短视频账号中文文案风格分析师。你会一次收到该账号的全部完整转写，必须逐条完整阅读后直接输出最终 Markdown 风格卡。",
-        "不要先输出逐条分析，不要用摘要替代阅读；要区分跨样本稳定规律和只出现一次的偶发现象。",
-        "所有结论必须能由样本支撑，不得编造账号定位、事实或口头禅。",
-        "输出结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌、证据摘录、样本覆盖说明。"
-      ].join("\n")
-    },
-    {
-      role: "user",
-      content: [
-        `账号：${input.accountName}`,
-        `平台：${input.platform}`,
-        `处理方式：全量单次分析；样本数 ${input.samples.length}；完整转写总字数 ${accountStyleInputChars(input.samples)}`,
-        input.generationMode === "incremental" ? `本次新增或变化样本数：${input.changedSampleCount}` : "本次为全量生成。",
-        baseline,
-        `全部完整样本：\n${transcriptCorpus}`,
-        [
-          "输出要求：",
-          "1. 直接输出一份完整可复用的账号风格卡，不要输出分析过程或逐样本报告。",
-          "2. 关键结论用样本标题或短原话举证，避免泛泛模板。",
-          "3. 样本之间存在冲突时，说明主流倾向和例外，不要强行归纳。",
-          "4. 若有已有风格卡，只保留仍被全量样本支持的内容。"
-        ].join("\n")
-      ].join("\n\n")
-    }
-  ];
 }
 
 type StyleAnalysisStats = {
@@ -1795,15 +1744,35 @@ type StyleAnalysisTask = {
   groupLabel?: string;
   inputChars: number;
   cacheKey: string;
+  transcript: string;
   readCache: () => Promise<StyleSampleAnalysisCache | null>;
   saveCache: (cache: StyleSampleAnalysisCache) => Promise<StyleSampleAnalysisCache>;
   messages: () => ChatMessage[];
 };
 
 type StylePreparationOptions = {
+  force?: boolean;
   signal?: AbortSignal;
   onAnalysisProgress?: (progress: StyleAnalysisProgress) => void;
 };
+
+type WritePreparationOptions = {
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void;
+};
+
+function styleCardInstruction() {
+  return [
+    "根据全部已核验的逐篇分析生成 Markdown 风格卡，作为检索和写作指南。",
+    "结构：账号定位；跨文体稳定习惯；目的与讲法的组合；段落衔接；不适用情形；证据与覆盖限制。",
+    "稳定习惯须有多个独立样本依据，凑不够就明确说明，不固定规则数量。目的和讲法不是互斥分类：推广可以用吃瓜形式切入，不因周报或争议开头就忽略后面的介绍、推广段落。",
+    "结合narrative.beats和bridges归纳怎样从趣事、问题或评论转入游戏、卖点或参与规则，引用转接前后两处原句，写清需要什么真实素材。没有转接证据就说明缺口，不能给每篇强加推广或反转。",
+    "每条写法写清适用条件、具体表达动作、例外，附来源ID及提供的连续原文段落。保留能看懂开场、推进、反差和收尾的证据，不只抄口头禅。",
+    "引句只能逐字引用已提供的quote或衔接before/after，不能改写；单篇证据说明有限。摘要没记录不等于账号从未使用，不推测未提供的画面或付费合作关系。",
+    "证据统一写为 [[来源ID]]「完整quote原句」，每条规则附这种引用；至少保留一处，不改写quote。来源ID使用分析条目的来源字段。",
+    "写作时按任务选择适用规则，规则不适用时不要硬套；不用统一开头或固定段落公式。"
+  ].join("\n");
+}
 
 const emptyStyleAnalysisStats = (): StyleAnalysisStats => ({
   analysisCount: 0,
@@ -1813,14 +1782,20 @@ const emptyStyleAnalysisStats = (): StyleAnalysisStats => ({
   inputChars: 0
 });
 
+function styleLearningSignature() {
+  return { version: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION, models: configuredChatConfigs().map(c => ({
+    model: c.model, wireApi: c.wireApi, endpointHash: shortHash([c.baseUrl, c.responsesUrl, c.chatCompletionsUrl].join("|"))
+  })), reasoning: STYLE_REASONING_EFFORT };
+}
+
 function accountStyleAnalysisCacheKey(sample: AccountStyleSample) {
   return shortHash(JSON.stringify({
     version: 1,
     promptVersion: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION,
+    learning: styleLearningSignature(),
     kind: "account-video",
     videoId: sample.video.id,
     title: sample.video.title,
-    stats: sample.video.stats,
     transcript: sample.transcript
   }));
 }
@@ -1829,6 +1804,7 @@ function copySourceStyleAnalysisCacheKey(source: CopySource) {
   return shortHash(JSON.stringify({
     version: 1,
     promptVersion: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION,
+    learning: styleLearningSignature(),
     kind: "copy-source",
     sourceId: source.id,
     title: source.title,
@@ -1854,6 +1830,7 @@ function buildAccountStyleAnalysisTasks(
     groupLabel: group?.label,
     inputChars: sample.transcript.length,
     cacheKey: accountStyleAnalysisCacheKey(sample),
+    transcript: sample.transcript,
     readCache: () => readAccountStyleSampleAnalysis(platform, accountId, sample.video.id),
     saveCache: (cache) => saveAccountStyleSampleAnalysis(platform, accountId, sample.video.id, cache),
     messages: () => buildAccountSampleAnalysisMessages(platform, sample)
@@ -1869,6 +1846,7 @@ function buildCopySourceStyleAnalysisTasks(sources: CopySource[]): StyleAnalysis
     groupLabel: "项目素材",
     inputChars: source.transcript.length,
     cacheKey: copySourceStyleAnalysisCacheKey(source),
+    transcript: source.transcript,
     readCache: () => readCopySourceStyleAnalysis(source.id),
     saveCache: (cache) => saveCopySourceStyleAnalysis(source.id, cache),
     messages: () => buildCopySourceSampleAnalysisMessages(source)
@@ -1880,7 +1858,7 @@ function buildAccountSampleAnalysisMessages(platform: Platform, sample: AccountS
     {
       role: "system",
       content:
-        "你是短视频中文文案风格分析师。你必须完整阅读用户提供的单条完整转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌、证据摘录、样本覆盖说明。只基于这条样本，不要泛泛套模板。"
+        styleAnalysisInstruction()
     },
     {
       role: "user",
@@ -1912,7 +1890,7 @@ function buildCopySourceSampleAnalysisMessages(source: CopySource): ChatMessage[
     {
       role: "system",
       content:
-        "你是项目级短视频素材风格分析师。你必须完整阅读用户提供的单条完整素材转写，不要跳读、不要摘要替代阅读。输出紧凑 Markdown 结构化分析，总字数控制在 900-1400 个中文字符，不要逐句复述原文。必须包含：内容定位、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾方式、写作禁忌、证据摘录、样本覆盖说明。只基于这条素材，不要泛泛套模板。"
+        styleAnalysisInstruction()
     },
     {
       role: "user",
@@ -1954,12 +1932,13 @@ async function resolveStyleSampleAnalyses(
     throwIfAborted(options.signal);
     const cached = await task.readCache();
     if (isUsableStyleSampleAnalysisCache(cached, task.cacheKey)) {
+      parseStyleEvidence(cached.analysis, task.transcript, task.title);
       analysisCachedCount += 1;
       emitProgress(task);
       return styleAnalysisEntryFromCache(task, cached);
     }
 
-    const result = await chatCompleteWithEffort(task.messages(), STYLE_REASONING_EFFORT, undefined, {
+    const result = await chatCompleteStrict(task.messages(), STYLE_REASONING_EFFORT, {
       signal: options.signal,
       maxOutputTokens: STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS
     });
@@ -1970,6 +1949,8 @@ async function resolveStyleSampleAnalyses(
       );
     }
 
+    const evidence = parseStyleEvidence(analysis, task.transcript, task.title);
+    throwIfAborted(options.signal);
     const cache: StyleSampleAnalysisCache = {
       version: 1,
       cacheKey: task.cacheKey,
@@ -1978,6 +1959,7 @@ async function resolveStyleSampleAnalyses(
       title: task.title,
       inputChars: task.inputChars,
       analysis,
+      evidence,
       usedModel: result.model,
       reasoningEffort: STYLE_REASONING_EFFORT,
       requestedServiceTier: result.requestedServiceTier,
@@ -2012,7 +1994,7 @@ function isUsableStyleSampleAnalysisCache(
   cache: StyleSampleAnalysisCache | null,
   cacheKey: string
 ): cache is StyleSampleAnalysisCache {
-  return Boolean(cache?.version === 1 && cache.cacheKey === cacheKey && cache.analysis.trim());
+  return Boolean(cache?.version === 1 && cache.cacheKey === cacheKey && cache.evidence?.narrative && cache.analysis.trim());
 }
 
 function styleAnalysisEntryFromCache(task: StyleAnalysisTask, cache: StyleSampleAnalysisCache): StyleAnalysisEntry {
@@ -2055,6 +2037,13 @@ function formatStyleAnalysisCorpus(entries: StyleAnalysisEntry[], label = "样�
         `${label} ${index + 1}｜${entry.title}\n来源:${entry.sourceId} 原文完整字数:${entry.inputChars}\n${entry.analysis}`
     )
     .join("\n\n---\n\n");
+}
+
+function styleEvidenceQuotes(entries: StyleAnalysisEntry[]) {
+  return entries.flatMap(entry => {
+    const data = parseModelJson(entry.analysis, "样本分析") as StyleEvidence;
+    return collectStyleEvidenceQuotes(data).map(quote => ({ sourceId: entry.sourceId, quote }));
+  });
 }
 
 function styleGenerationMetrics(
@@ -2127,7 +2116,7 @@ export async function prepareAccountStyleContext(
     readStyle(platform, accountId)
   ]);
   const currentStyle = existingStyle.trim();
-  if (styleMeta?.sampleHash === sampleState.sampleHash && currentStyle && !styleMeta.fallback) {
+  if (!options.force && styleMeta?.sampleHash === sampleState.sampleHash && currentStyle && !styleMeta.fallback) {
     return {
       platform,
       accountId,
@@ -2147,75 +2136,16 @@ export async function prepareAccountStyleContext(
     ? selectIncrementalAccountStyleSamples(samples, sampleState.sampleFingerprints, styleMeta?.sampleFingerprints)
     : { samples, canIncremental: false };
   const generationMode = incremental.canIncremental ? "incremental" : "full";
-  if (shouldGenerateAccountStyleOneShot(samples)) {
-    const inputChars = accountStyleInputChars(samples);
-    return {
-      platform,
-      accountId,
-      accountName: account.name,
-      messages: buildAccountOneShotStyleMessages({
-        accountName: account.name,
-        platform,
-        samples,
-        currentStyle,
-        generationMode,
-        changedSampleCount: incremental.samples.length
-      }),
-      fallback: generationMode === "incremental"
-        ? currentStyle
-        : buildFallbackStyle(account.name, buildAccountTranscriptCorpus(samples)),
-      ...sampleState,
-      generationMode,
-      analysisStats: {
-        analysisCount: samples.length,
-        analysisGeneratedCount: samples.length,
-        analysisCachedCount: 0,
-        analysisConcurrency: 1,
-        inputChars
-      }
-    };
-  }
-
   const analysis = await resolveStyleSampleAnalyses(
     buildAccountStyleAnalysisTasks(platform, accountId, samples),
     options
   );
   const corpus = formatStyleAnalysisCorpus(analysis.entries, "样本分析");
   const fallback = generationMode === "incremental" ? currentStyle : buildFallbackStyle(account.name, corpus);
-  const messages: ChatMessage[] = generationMode === "incremental"
-    ? [
-        {
-          role: "system",
-          content:
-            "你是短视频账号风格分析师。请基于已有风格卡和全量样本分析做增量更新，输出一份完整 Markdown 风格卡。每条样本分析都来自完整转写阅读结果；保留仍然成立的洞察，只在样本提供充分证据时修订；结论要具体贴合样本，不要输出泛泛模板。"
-        },
-        {
-          role: "user",
-          content: [
-            `账号：${account.name}`,
-            `平台：${platform}`,
-            `已有风格卡：\n${currentStyle}`,
-            `全量样本分析（每条分析均已读取对应完整转写；本次新增/变化样本数：${incremental.samples.length}）：\n${corpus}`,
-            [
-              "输出要求：",
-              "1. 输出完整风格卡，不要只输出差异说明。",
-              "2. 结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌。",
-              "3. 不要编造样本没有体现的新定位或事实。"
-            ].join("\n")
-          ].join("\n\n")
-        }
-      ]
-    : [
-        {
-          role: "system",
-          content:
-            "你是短视频账号风格分析师。请根据全量样本分析提炼可复用的中文文案风格卡。每条样本分析都来自完整转写阅读结果；输出 Markdown，结构必须包含：内容定位、开头方式、句式与节奏、常用话术、叙事结构、结尾方式、写作禁忌。结论要具体贴合样本，不要输出泛泛模板。"
-        },
-        {
-          role: "user",
-          content: `账号：${account.name}\n平台：${platform}\n\n全量样本分析（每条分析均已读取对应完整转写）：\n${corpus}`
-        }
-      ];
+  const messages: ChatMessage[] = [
+    { role: "system", content: styleCardInstruction() },
+    { role: "user", content: `账号：${account.name}\n平台：${platform}\n已有卡仅作基线，不沿用无证据结论：\n${currentStyle}\n\n全部逐篇分析及核验原句：\n${corpus}` }
+  ];
 
   return {
     platform,
@@ -2225,7 +2155,9 @@ export async function prepareAccountStyleContext(
     fallback,
     ...sampleState,
     generationMode,
-    analysisStats: analysis.stats
+    analysisStats: analysis.stats,
+    previousStyleHash: shortHash(currentStyle),
+    evidenceQuotes: styleEvidenceQuotes(analysis.entries)
   };
 }
 
@@ -2235,13 +2167,15 @@ export async function completePreparedAccountStyle(
   timings: StyleCompletionTimings = {}
 ): Promise<AccountStyleGenerationResult> {
   const generatedStyle = result.text.trim();
+  if (!result.ok || result.fallback || !generatedStyle) throw new Error(result.userMessage || result.fallbackReason || "风格卡生成失败，原卡已保留，请重试。");
+  validateStyleCardCitations(generatedStyle, context.evidenceQuotes);
   const style = generatedStyle || context.fallback;
   const isFallbackResult = result.fallback || !generatedStyle;
   const shouldUpdateSampleCache = Boolean(generatedStyle) && !isFallbackResult;
   const shouldSaveStyle = Boolean(style.trim());
 
   if (shouldSaveStyle) {
-    await saveStyle(context.platform, context.accountId, style);
+    await saveStyle(context.platform, context.accountId, style, context.previousStyleHash);
   }
 
   if (shouldUpdateSampleCache) {
@@ -2295,7 +2229,7 @@ export function completeCachedAccountStyle(context: PreparedAccountStyleContext)
 export async function generateStyleProfile(
   platform: Platform,
   accountId: string,
-  options: { signal?: AbortSignal } = {}
+  options: StylePreparationOptions = {}
 ): Promise<AccountStyleGenerationResult> {
   const startedAt = Date.now();
   const context = await prepareAccountStyleContext(platform, accountId, options);
@@ -2401,6 +2335,7 @@ function buildProjectStyleSampleState(
     ].join("\n"))
   }));
   const sampleHash = shortHash(JSON.stringify({
+    learning: styleLearningSignature(),
     project: {
       name: project.name,
       description: project.description || "",
@@ -2433,6 +2368,8 @@ export type PreparedProjectStyleContext = {
   sampleState: ProjectStyleSampleState;
   analysisStats: StyleAnalysisStats;
   cachedStyle?: string;
+  previousStyleHash?: string;
+  evidenceQuotes?: Array<{ sourceId: string; quote: string }>;
 };
 
 export type PreparedSavedProjectStyleContext = {
@@ -2457,7 +2394,7 @@ export async function prepareProjectStyleContext(
   ]);
   const sampleState = buildProjectStyleSampleState(project, accountContexts, materialSources);
   const trimmedCurrentStyle = currentStyle.trim();
-  if (styleMeta?.sampleHash === sampleState.sampleHash && trimmedCurrentStyle && !styleMeta.fallback) {
+  if (!options.force && styleMeta?.sampleHash === sampleState.sampleHash && trimmedCurrentStyle && !styleMeta.fallback) {
     return {
       projectId: project.id,
       projectName: project.name,
@@ -2499,7 +2436,7 @@ export async function prepareProjectStyleContext(
       {
         role: "system",
         content:
-          "你是项目级中文短视频风格策略师。请把参考账号风格卡、全量样本分析、项目案例素材分析，以及素材里已经保存的画面描述融合成一个可执行的项目风格卡。输出 Markdown，结构必须包含：项目定位、适合选题、开头方式、句式与节奏、常用话术、素材与画面方向、叙事结构、结尾方式、写作禁忌。只使用参考素材里已经存在的信息，不要假装看到了未提供的视频画面。结论要具体贴合参考素材，不要输出泛泛模板。"
+          styleCardInstruction() + "\n这是项目风格，只在项目已指定来源范围内归纳。"
       },
       {
         role: "user",
@@ -2508,7 +2445,9 @@ export async function prepareProjectStyleContext(
     ],
     fallback,
     sampleState,
-    analysisStats: analysis.stats
+    analysisStats: analysis.stats,
+    previousStyleHash: shortHash(trimmedCurrentStyle),
+    evidenceQuotes: styleEvidenceQuotes(analysis.entries)
   };
 }
 
@@ -2531,9 +2470,11 @@ export async function completePreparedProjectStyle(
   timings: StyleCompletionTimings = {}
 ): Promise<ProjectStyleProfileResult> {
   const generatedStyle = result.text.trim();
+  if (!result.ok || result.fallback || !generatedStyle) throw new Error(result.userMessage || result.fallbackReason || "项目风格生成失败，原卡已保留，请重试。");
+  validateStyleCardCitations(generatedStyle, context.evidenceQuotes);
   const style = generatedStyle || context.fallback;
   const isFallbackResult = result.fallback || !generatedStyle;
-  await saveProjectStyle(context.projectId, style);
+  await saveProjectStyle(context.projectId, style, context.previousStyleHash);
 
   if (!isFallbackResult) {
     await saveProjectStyleMeta(context.projectId, {
@@ -2678,11 +2619,14 @@ export async function completePreparedWriteCopy(input: {
 }): Promise<WriteResult> {
   throwIfAborted(input.signal);
   const content = resolvePreparedWriteContent(input.result);
-  const draft = await savePreparedDraft({ save: input.save }, input.prepared, content);
+  const issues = input.prepared.draftBase?.version?.origin === "revision" ? [] : checkWriterConstraints(content, (input.prepared.writerContext || input.prepared.draftBase?.writerContext)?.plan?.task);
+  const research = [input.prepared.research, ...(issues.length ? [`成稿检查（需修改）：\n${issues.join("；")}`] : [])].filter(Boolean).join("\n\n");
+  const prepared = { ...input.prepared, research, draftBase: input.prepared.draftBase ? { ...input.prepared.draftBase, research } : undefined };
+  const draft = await savePreparedDraft({ save: input.save }, prepared, content);
 
   return {
     content,
-    research: input.prepared.research,
+    research,
     contextFingerprint: input.prepared.contextFingerprint,
     sourceDigest: input.prepared.sourceDigest,
     draft,
@@ -2729,7 +2673,7 @@ export function resolveWriteBatchOutcome(
   outcomes: Array<{ result?: WriteVariantResult; failure?: WriteVariantFailure }>
 ): WriteGenerationResult {
   const results = outcomes.flatMap((outcome) => outcome.result ? [outcome.result] : []);
-  const failures = outcomes.flatMap((outcome) => outcome.failure ? [outcome.failure] : []);
+  const failures = [...(batch.preparationFailures || []), ...outcomes.flatMap((outcome) => outcome.failure ? [outcome.failure] : [])];
   if (!results.length) {
     const reasons = failures.map((failure) => `${failure.styleTitle}：${failure.error}`).join("；");
     throw new Error(reasons || "所有风格的文案都生成失败，请检查模型配置后重试。");
@@ -2751,7 +2695,7 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
     return prepareWriteRevisionContext(input, options);
   }
   const batch = await prepareWriteCopyBatchContext(input, options);
-  if (batch.variants.length !== 1) {
+  if (batch.variants.length !== 1 || batch.preparationFailures?.length) {
     throw new Error("多选风格会分别生成多篇文案，请使用并发写作流程");
   }
   return batch.variants[0].prepared;
@@ -2759,7 +2703,7 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
 
 export async function prepareWriteCopyBatchContext(
   input: WriteCopyInput,
-  options: { signal?: AbortSignal } = {}
+  options: WritePreparationOptions = {}
 ): Promise<PreparedWriteBatchContext> {
   throwIfAborted(options.signal);
   if (input.action === "revise") throw new Error("续改只针对当前选中的单篇稿件");
@@ -2777,7 +2721,6 @@ export async function prepareWriteCopyBatchContext(
   throwIfAborted(options.signal);
   const styleInputs = normalizeWriteStyleReferenceInputs(normalizedInput);
   if (!styleInputs.length) throw new Error("请选择至少一个参考风格");
-  const styleContexts = await Promise.all(styleInputs.map((reference) => resolveWriteStyleContext(reference, true)));
 
   const userTask =
     normalizedInput.mode === "topic"
@@ -2787,6 +2730,20 @@ export async function prepareWriteCopyBatchContext(
   const webContext = normalizedInput.useWebResearch
     ? await buildWebResearchContext({ ...normalizedInput, supportDocContext }, options)
     : "未启用联网检索。";
+  const taskContext = `用户本次要求：\n${normalizedInput.prompt}\n\n原始资料：\n${normalizedInput.sourceText || ""}\n\n支持文档：\n${supportDocContext}\n\n检索资料：\n${webContext}`;
+  const preparation = await Promise.allSettled(styleInputs.map(reference => resolveWriteStyleContext(reference, true, taskContext, options)));
+  throwIfAborted(options.signal);
+  const styleContexts: WriteStyleContext[] = [];
+  const preparationFailures: WriteVariantFailure[] = [];
+  for (const [index, outcome] of preparation.entries()) {
+    if (outcome.status === "fulfilled") { styleContexts.push(outcome.value); continue; }
+    const reference = styleInputs[index];
+    const styleTitle = reference.targetType === "account" ? reference.accountId : reference.projectId;
+    preparationFailures.push({ styleKey: writeStyleReferenceKey(reference), styleTitle,
+      styleReference: reference.targetType === "account" ? { ...reference, accountName: styleTitle } : { ...reference, projectName: styleTitle },
+      error: outcome.reason instanceof Error ? outcome.reason.message : "准备风格参考失败" });
+  }
+  if (!styleContexts.length) throw new Error(preparationFailures.map(f => `${f.styleTitle}：${f.error}`).join("；"));
   const research = buildReferenceSummary({
     supportDocLinks: normalizedInput.supportDocLinks,
     supportDocContext,
@@ -2796,8 +2753,9 @@ export async function prepareWriteCopyBatchContext(
   const sourceDigest = buildWriteSourceDigest(normalizedInput);
 
   return {
-    variants: styleContexts.map((styleContext, index) => {
-      const styleInput = styleInputs[index];
+    preparationFailures,
+    variants: styleContexts.map((styleContext) => {
+      const styleInput = styleContext.reference;
       const variantInput: WriteCopyInput = {
         ...normalizedInput,
         targetType: styleInput.targetType,
@@ -2806,20 +2764,22 @@ export async function prepareWriteCopyBatchContext(
         projectId: styleInput.targetType === "project" ? styleInput.projectId : undefined,
         styleRefs: [styleInput]
       };
-      const contextFingerprint = buildWriteContextFingerprint(variantInput);
+      const contextFingerprint = shortHash(JSON.stringify({ input: buildWriteContextFingerprint(variantInput), snapshot: styleContext.snapshot }));
+      const variantResearch = [research, formatWriterPreparationNotes(styleContext.snapshot)].filter(Boolean).join("\n\n");
       return {
         styleKey: writeStyleReferenceKey(styleContext.reference),
         styleTitle: styleContext.title,
         styleReference: styleContext.reference,
         prepared: {
+          writerContext: styleContext.snapshot,
           messages: buildInitialWriteMessages({ styleContext, supportDocContext, webContext, userTask }),
-          research,
+          research: variantResearch,
           contextFingerprint,
           sourceDigest,
           draftBase: buildPreparedWriteDraftBase({
             input: variantInput,
             styleContexts: [styleContext],
-            research,
+            research: variantResearch,
             sourceDigest,
             contextFingerprint,
             includeStyleInTitle: styleContexts.length > 1
@@ -2851,13 +2811,15 @@ function buildInitialWriteMessages(input: {
         `支持文档资料：\n${input.supportDocContext}`,
         `联网检索资料：\n${input.webContext}`,
         `任务：\n${input.userTask}`,
+        `任务解析及本次适用写法（原始要求优先；仅明确锁定的框架必须保留）：\n${JSON.stringify(input.styleContext.snapshot?.plan || null)}`,
         [
           "写作边界：",
           "1. 只输出可直接使用的成稿，不解释创作思路。",
           "2. 开头方式、句长、节奏、具象程度和结尾方式只服从本篇风格卡与代表样本，不自行补统一模板。",
-          "3. 风格卡与样本有差异时，以代表样本反复出现的表达模式为准。",
-          "4. 事实、数据、产品信息只能来自用户输入、支持文档、样本或联网资料；不要编造。",
-          "5. 保留用户给出的具体梗、场景、原话和事实线索。"
+          "3. 推广目的与吃瓜、趣事等讲法可以组合，按本次资料选择有依据的切入，并自然承接到游戏、卖点或活动规则。参考段落只学承接方法，不搬用旧事件，不为制造悬念编造爆料、争议、玩家反应或亲身经历；资料不支持时换合适切入。不照搬整套栏目结构。",
+          "4. 事实仅来自本次用户资料、支持文档和检索资料；范文只学表达，其中旧产品、事件、数字和个人经历不能成为本次事实。事实冲突不可自行认定，宣传评价不得升级为实测结论。",
+          "5. 保留明确必留信息、指定原话及硬性品牌口径。普通素材顺序、创意示例与未锁定框架均可重组；要求不完整时依据目的选择合理切入，不发明客户要求。用户明确要求润色或保留框架时遵从。",
+          "6. 输出前核对明确字数和禁用词。字数按汉字、字母和数字计数，不计标点空白；未给字数时不自行增加硬性范围。"
         ].join("\n")
       ].join("\n\n")
     }
@@ -2886,11 +2848,31 @@ async function prepareWriteRevisionContext(
   const resolved = await resolveDraft(input.parentDraftId);
   const parent = resolved.draft;
   const isProject = parent.targetType === "project";
-  const styleContexts = await Promise.all(
-    draftWriteStyleReferenceInputs(parent).map((reference) => resolveWriteStyleContext(reference, false))
-  );
-  const targetName = styleContexts.map((context) => context.title).join("、");
-  const style = formatWriteStyleContexts(styleContexts, false);
+  const references = draftWriteStyleReferenceInputs(parent);
+  const snapshot = parent.writerContext;
+  if (snapshot && !references.some(reference => writeStyleReferenceKey(reference) === snapshot.referenceKey)) {
+    throw new Error("草稿风格快照与当前引用不一致，请从原始资料重新生成。");
+  }
+  if (snapshot && (shortHash(snapshot.styleText) !== snapshot.styleHash || snapshot.samples.some(sample => shortHash(sample.text) !== sample.hash))) {
+    throw new Error("草稿风格快照校验失败，请检查历史版本；不会改用最新风格覆盖。");
+  }
+  const styleContexts: WriteStyleContext[] = snapshot ? [{
+    reference: (parent.styleRefs?.[0] || (parent.targetType === "project"
+      ? { targetType: "project", projectId: parent.projectId, projectName: parent.projectName }
+      : { targetType: "account", platform: parent.platform, accountId: parent.accountId, accountName: parent.accountName })) as WriteStyleReference,
+    title: parent.targetType === "project" ? parent.projectName : parent.accountName,
+    subtitle: "本稿保存的风格与参考", style: snapshot.styleText, sampleContext: formatSnapshotSamples(snapshot), snapshot
+  }] : await Promise.all(references.map(reference => resolveWriteStyleContext(reference, false)));
+  const targetName = styleContexts.map(context => context.title).join("、");
+  const style = formatWriteStyleContexts(styleContexts, true);
+  const revisionSnapshot: WriterContextSnapshot = snapshot || {
+    schemaVersion: 1, promptVersion: WRITE_PROMPT_VERSION, referenceKey: writeStyleReferenceKey(styleContexts[0].reference),
+    styleText: styleContexts.map(c => c.style).join("\n\n"), styleHash: shortHash(styleContexts.map(c => c.style).join("\n\n")),
+    samples: [], plan: null, notes: ["旧稿未保存原始风格快照：本次使用当前关联风格卡并保存，未重新采集或选样。"],
+    preparedAt: nowIso(), compatibility: "legacy-current-style"
+  };
+  const recalibrate = input.revisionMode === "recalibrate";
+  const revisionResearch = [parent.research, ...(!snapshot ? revisionSnapshot.notes : [])].filter(Boolean).join("\n\n");
   const contextFingerprint = parent.version?.contextFingerprint || buildWriteContextFingerprint({
     action: "create",
     targetType: isProject ? "project" : "account",
@@ -2920,16 +2902,16 @@ async function prepareWriteRevisionContext(
   };
   const scopeInstruction = scope === "selection"
     ? `只重写下面选中的段落，并把修改后的段落放回原位置。除必要衔接外，其他段落保持不变。\n\n选中段落：\n${selectedText}`
-    : "按本轮要求修改全文；没有被要求调整的事实、结构和表达尽量保持不变。";
+    : recalibrate ? "根据本稿保存的风格规则与原文证据重新组织全文；保留已确认事实和硬约束，不将当前稿件的句法当作必须模仿的模板。" : "按本轮要求修改全文；没有被要求调整的事实、结构和表达尽量保持不变。";
   const messages: ChatMessage[] = [
     {
       role: "system",
       content: [
-        "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
+        recalibrate ? "你是中文短视频文案修订编辑。本轮重新校准风格，按已保存的表达证据重组允许修改的内容，保留事实和明确硬约束。" : "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
         "只输出修改后的完整成稿，不解释修改过程，不输出差异说明。",
-        "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
+        recalibrate ? "未锁定的结构、类比和衔接可以重写；选中段落模式下范围外仍不改。" : "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
         "表达方式以当前稿件和它保存的风格卡为准；不要在续改时引入其他账号或项目的风格。",
-        "不得添加原稿、原始素材、历史策划备注或已保存参考资料中没有依据的新事实。"
+        "不得添加原始素材及已保存事实资料没有依据的新事实；风格样本不是事实来源，旧稿的无依据说法也不能作为证据。"
       ].join("\n")
     },
     {
@@ -2937,19 +2919,22 @@ async function prepareWriteRevisionContext(
       content: [
         `参考对象：${targetName}`,
         `当前版本：V${parent.version?.revision || 1}`,
+        `原始要求：${parent.prompt}`,
+        `本稿任务约束与写法：${JSON.stringify(revisionSnapshot.plan)}`,
+        `兼容说明：${revisionSnapshot.notes.join("；")}`,
         `本轮修改要求：\n${instruction}`,
         `修改范围：\n${scopeInstruction}`,
         ...(parent.brief ? [`历史策划备注：\n${clampText(parent.brief, 12_000)}`] : []),
         `风格卡：\n${style}`,
-        parent.input ? `原始素材：\n${clampText(parent.input, 16_000)}` : "原始素材：未保存",
-        parent.research ? `已保存参考资料：\n${clampText(parent.research, 16_000)}` : "已保存参考资料：无",
+        parent.input ? `原始素材：\n${parent.input}` : "原始素材：未保存",
+        parent.research ? `已保存参考资料：\n${parent.research}` : "已保存参考资料：无",
         `当前完整稿件：\n${clampText(currentContent, 70_000)}`,
         [
           "输出检查：",
           "1. 输出必须是完整成稿，不能只返回局部段落。",
           "2. 本轮要求优先级最高，但不得突破已有事实边界。",
           "3. 修改范围外的内容不要无故换词、换结构或删减。",
-          "4. 保持当前稿件原有的句法、停顿、段落长度和收尾方式。"
+          recalibrate ? "4. 依据已保存参考的适用写法调整句法、节奏与收尾，不硬套不适用的栏目结构。" : "4. 保持当前稿件原有的句法、停顿、段落长度和收尾方式。"
         ].join("\n")
       ].join("\n\n")
     }
@@ -2962,8 +2947,9 @@ async function prepareWriteRevisionContext(
     input: parent.input,
     supportDocLinks: parent.supportDocLinks,
     brief: parent.brief,
-    research: parent.research,
+    research: revisionResearch,
     sourceDigest,
+    writerContext: revisionSnapshot,
     styleRefs: parent.styleRefs?.length ? parent.styleRefs : styleContexts.map((context) => context.reference),
     version
   };
@@ -2985,7 +2971,7 @@ async function prepareWriteRevisionContext(
 
   return {
     messages,
-    research: parent.research,
+    research: revisionResearch,
     contextFingerprint,
     sourceDigest,
     draftBase
@@ -2998,67 +2984,121 @@ type WriteStyleContext = {
   subtitle: string;
   style: string;
   sampleContext?: string;
+  snapshot?: WriterContextSnapshot;
 };
 
 async function resolveWriteStyleContext(
   reference: WriteStyleReferenceInput,
-  includeSamples: boolean
+  includeSamples: boolean,
+  taskContext = "",
+  options: WritePreparationOptions = {}
 ): Promise<WriteStyleContext> {
+  let context: WriteStyleContext;
+  const candidates: WriterCandidate[] = [];
+  const collectAccount = async (platform: Platform, accountId: string) => {
+    const samples = await getTopTranscriptSamples(platform, accountId, "all");
+    if (!samples.length) return;
+    options.onProgress?.("正在读取完整原文的用途与表达证据，首次分析会缓存");
+    const analyses = await resolveStyleSampleAnalyses(buildAccountStyleAnalysisTasks(platform, accountId, samples), {
+      signal: options.signal,
+      onAnalysisProgress: progress => options.onProgress?.(`正在准备表达依据 ${progress.completedCount}/${progress.analysisCount}`)
+    });
+    for (const sample of samples) {
+      const entry = analyses.entries.find(e => e.sourceId === sample.video.id)!;
+      candidates.push({ id: `${platform}:${accountId}:${sample.video.id}`, title: sample.video.title, transcript: sample.transcript,
+        analysis: parseStyleEvidence(entry.analysis, sample.transcript, sample.video.title) });
+    }
+  };
   if (reference.targetType === "account") {
     const account = await resolveAccount(reference.platform, reference.accountId);
-    const [style, samples] = await Promise.all([
-      readStyle(account.platform, account.id),
-      includeSamples
-        ? getTopTranscriptSamples(account.platform, account.id, WRITE_ACCOUNT_SAMPLE_LIMIT)
-        : Promise.resolve([])
-    ]);
-    return {
-      reference: {
-        targetType: "account",
-        platform: account.platform,
-        accountId: account.id,
-        accountName: account.name,
-        videoIds: includeSamples ? samples.map((sample) => sample.video.id) : undefined
-      },
-      title: account.name,
-      subtitle: `账号风格｜${account.platform}`,
-      style,
-      sampleContext: includeSamples ? formatWriteSampleContext(samples) : undefined
-    };
+    context = { reference: { targetType: "account", platform: account.platform, accountId: account.id, accountName: account.name },
+      title: account.name, subtitle: `账号风格｜${account.platform}`, style: await readStyle(account.platform, account.id) };
+    if (includeSamples) await collectAccount(account.platform, account.id);
+  } else {
+    const project = await resolveProject(reference.projectId);
+    context = { reference: { targetType: "project", projectId: project.id, projectName: project.name,
+      sourceAccountIds: project.sourceAccountIds, sourceMaterialIds: project.sourceMaterialIds },
+      title: project.name, subtitle: `项目风格｜${project.description || project.name}`, style: await readProjectStyle(project.id) };
+    if (includeSamples) {
+      for (const accountId of project.sourceAccountIds) {
+        await collectAccount(accountId.split(":")[0] as Platform, accountId);
+      }
+      const sources = await resolveProjectCopySourcesForStyle(project.sourceMaterialIds || []);
+      const analyses = await resolveStyleSampleAnalyses(buildCopySourceStyleAnalysisTasks(sources), { signal: options.signal });
+      for (const source of sources) {
+        const entry = analyses.entries.find(e => e.sourceId === source.id)!;
+        candidates.push({ id: `material:${source.id}`, title: source.title, transcript: source.transcript,
+          analysis: parseStyleEvidence(entry.analysis, source.transcript, source.title) });
+      }
+    }
   }
-
-  const project = await resolveProject(reference.projectId);
-  const style = await readProjectStyle(project.id);
-  let sampleContext: string | undefined;
-  if (includeSamples) {
-    const accountContexts = await Promise.all(
-      project.sourceAccountIds.map(async (sourceAccountId) => {
-        const [platform] = sourceAccountId.split(":") as [Platform, string];
-        const account = await resolveAccount(platform, sourceAccountId);
-        const samples = await getTopTranscriptSamples(platform, sourceAccountId, WRITE_PROJECT_SAMPLE_LIMIT_PER_ACCOUNT);
-        return { account, samples };
-      })
-    );
-    const accountSamples = accountContexts
-      .map(({ account, samples }) => `参考账号：${account.name}\n${formatWriteSampleContext(samples) || "暂无样本"}`)
-      .join("\n\n---\n\n");
-    const materialContext = await buildProjectCopySourceContext(project.sourceMaterialIds || []);
-    sampleContext = [accountSamples, materialContext].filter(Boolean).join("\n\n---\n\n");
-  }
-
-  return {
-    reference: {
-      targetType: "project",
-      projectId: project.id,
-      projectName: project.name,
-      sourceAccountIds: project.sourceAccountIds,
-      sourceMaterialIds: project.sourceMaterialIds
-    },
-    title: project.name,
-    subtitle: `项目风格${project.description ? `｜${project.description}` : ""}`,
-    style,
-    sampleContext
+  if (!includeSamples) return context;
+  const unique = [...new Map(candidates.map(c => [shortHash(c.transcript.replace(/\s/g, "")), c])).values()];
+  const snapshot: WriterContextSnapshot = {
+    schemaVersion: 1, promptVersion: WRITE_PROMPT_VERSION, referenceKey: writeStyleReferenceKey(context.reference),
+    styleText: context.style, styleHash: shortHash(context.style), samples: [], plan: null,
+    notes: [], preparedAt: nowIso()
   };
+  if (unique.length) {
+    options.onProgress?.(`正在按本次用途选择「${context.title}」的写法与参考`);
+    let pool = unique;
+    const batches = batchCandidates(pool);
+    if (batches.length > 1) {
+      const selectedIds = new Set<string>();
+      for (const batch of batches) {
+        throwIfAborted(options.signal);
+        const result = await chatCompleteStrict([
+          { role: "system", content: referenceSelectionInstruction() + "只返回JSON字符串数组，元素为适用候选ID。不适用可以全不选，不固定数量。候选只是风格证据，不是本次事实。" },
+          { role: "user", content: `本次任务：\n${taskContext}\n候选：\n${JSON.stringify(batch.map(candidateIndex))}` }
+        ], WRITE_COPY_REASONING_EFFORT, { signal: options.signal, maxOutputTokens: 2000 });
+        const ids = parseModelJson(result.text, "参考筛选");
+        if (!Array.isArray(ids) || ids.some(id => typeof id !== "string" || !batch.some(c => c.id === id))) throw new Error("参考筛选返回了无效样本，请重试。");
+        for (const id of ids) selectedIds.add(id);
+      }
+      pool = unique.filter(c => selectedIds.has(c.id));
+      // If many candidates survive, retain every candidate's purpose and structure while omitting quote bodies in the final selection index.
+    }
+    const selectionIndex = pool.map(c => batches.length > 1
+      ? { ...candidateIndex(c), moves: c.analysis.moves.map(m => ({ action: m.action, when: m.when, avoid: m.avoid })) }
+      : candidateIndex(c));
+    if (JSON.stringify(selectionIndex).length > 60_000) throw new Error("适用参考仍过多，请缩小本次写作用途或项目来源后重试；没有按热度截掉其余样本。");
+    const result = await chatCompleteStrict([
+      { role: "system", content: [
+        "你是写作任务解析与同风格参考选择器，只输出JSON，不生成成稿。",
+        "严格区分用户要求、资料事实与创意示例；不完整要求不强行补成硬约束。未明确锁定的框架顺序和示例梗可以重组。",
+        referenceSelectionInstruction(),
+        "只能选给定ID，也可不选并说明缺口。selected.reason写明借哪段、怎样衔接及素材限制，不能只写文体或题材相同。",
+        "结合风格卡与原文证据提取本次适用写法，写清如何引入、推进与收束，不用固定万能结构。单篇证据不可当作账号通则。",
+        `参考按优先顺序列出，完整原文总预算${WRITER_REFERENCE_BUDGET}字符，长篇可以只借用证据片段，不固定篇数。`,
+        '输出结构：{"task":{"purpose":"表达用途","facts":[{"text":"事实","quote":"本次资料连续原句"}],"mustKeep":[{"text":"明确必留要求","quote":"要求或资料连续原句"}],"creativeFreedom":"可改范围与合理叙事方向","timeContext":"发布场景，未指定则说明","uncertainties":["不可确认为事实的内容"],"forbiddenTerms":[{"text":"明确禁用的字面词语","quote":"规定禁用的原句"}],"length":{"min":400,"max":500,"quote":"用户字数要求原句"}},"selected":[{"id":"候选ID","reason":"借鉴哪种具体表达及限制"}],"applicableStyle":["本次适用规则与依据"],"notes":["样本不足或文体限制"]}。',
+        "没有明确字数范围时length为null；不要根据参考长度编造范围。facts最多12项，mustKeep最多12项；quote保留原标点逐字摘录，不改字不省略。范文事实不得进入task。"
+      ].join("\n") },
+      { role: "user", content: `本次任务与事实来源：\n${taskContext}\n\n风格卡（按适用条件使用）：\n${context.style}\n\n候选索引：\n${JSON.stringify(selectionIndex)}` }
+    ], WRITE_COPY_REASONING_EFFORT, { signal: options.signal, maxOutputTokens: 4500 });
+    snapshot.plan = validateWriterPlan(parseModelJson(result.text, "写作准备"), pool, taskContext);
+    snapshot.samples = snapshotReferences(pool, snapshot.plan);
+    snapshot.preparationModel = result.model;
+    snapshot.notes = [...snapshot.plan.notes];
+    if (snapshot.samples.length < snapshot.plan.selected.length) snapshot.notes.push("部分参考超出上下文预算，实际采用篇目以已保存参考为准。");
+  } else {
+    snapshot.notes.push("没有可用原文，当前仅参考已有风格卡；补充转写后可按用途自动选择原文。");
+  }
+  if (context.reference.targetType === "account") {
+    context.reference.videoIds = snapshot.samples.map(sample => sample.id.split(":").at(-1)!);
+  }
+  return { ...context, snapshot, sampleContext: formatSnapshotSamples(snapshot) };
+}
+
+function formatSnapshotSamples(snapshot: WriterContextSnapshot) {
+  return snapshot.samples.map(s => `原文ID：${s.id}｜${s.title}\n本次用途：${s.reason}\n${s.text}`).join("\n\n---\n\n");
+}
+
+function formatWriterPreparationNotes(snapshot?: WriterContextSnapshot) {
+  if (!snapshot) return "";
+  return ["本次风格参考：", ...snapshot.samples.map(s => `- ${s.title}：${s.reason}`),
+    ...snapshot.notes.map(note => `- ${note}`),
+    ...(snapshot.plan ? [`表达用途：${snapshot.plan.task.purpose}`, `可改范围：${snapshot.plan.task.creativeFreedom}`,
+      ...snapshot.plan.task.uncertainties.map(note => `待核实：${note}`)] : [])].join("\n");
 }
 
 function formatWriteStyleContexts(contexts: WriteStyleContext[], includeSamples: boolean) {
@@ -3092,6 +3132,7 @@ function buildPreparedWriteDraftBase(input: {
     supportDocLinks: input.input.supportDocLinks,
     research: input.research,
     sourceDigest: input.sourceDigest,
+    writerContext: input.styleContexts[0].snapshot,
     styleRefs: input.styleContexts.map((context) => context.reference),
     version: createInitialDraftVersion(input.contextFingerprint)
   };
@@ -3220,51 +3261,6 @@ function buildReferenceSummary(input: {
     sections.push(`联网检索资料：\n${input.webContext}`);
   }
   return sections.length ? sections.join("\n\n---\n\n") : undefined;
-}
-
-async function buildProjectCopySourceContext(sourceIds: string[]) {
-  return formatProjectCopySourceContext(await resolveProjectCopySources(sourceIds));
-}
-
-function formatProjectCopySourceContext(sources: CopySource[]) {
-  return sources
-    .map((source, index) => {
-      const materialAnalysis = source.materialAnalysis
-        ? [
-            `素材底稿：${source.materialAnalysis.mode === "multimodal" ? "转写 + 画面描述" : "标题/转写线索"}`,
-            `状态：${source.materialAnalysis.status}`,
-            source.materialAnalysis.visualNotes ? `画面描述：${source.materialAnalysis.visualNotes}` : "",
-            source.materialAnalysis.structureNotes ? `镜头顺序：${source.materialAnalysis.structureNotes}` : "",
-            source.materialAnalysis.titleNotes ? `标题/封面线索：${source.materialAnalysis.titleNotes}` : "",
-            source.materialAnalysis.fallbackReason ? `说明：${source.materialAnalysis.fallbackReason}` : ""
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : "素材底稿：只有转写，未做原视频画面描述";
-      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n转写节选：\n${clampText(source.transcript, WRITE_PROJECT_MATERIAL_MAX_CHARS)}`;
-    })
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function formatWriteSampleContext(samples: AccountStyleSample[]) {
-  return samples
-    .map(({ video, transcript }, index) => {
-      const stats = [
-        `播放:${video.stats.views}`,
-        `点赞:${video.stats.likes}`,
-        `评论:${video.stats.comments}`,
-        `收藏:${video.stats.favorites}`,
-        video.stats.shares === undefined ? "" : `分享:${video.stats.shares}`
-      ].filter(Boolean).join(" ");
-      return [
-        `样本 ${index + 1}｜《${video.title}》`,
-        stats,
-        `转写节选（原 ${transcript.length} 字）：`,
-        clampText(transcript, WRITE_SAMPLE_TRANSCRIPT_MAX_CHARS)
-      ].join("\n");
-    })
-    .join("\n\n---\n\n");
 }
 
 async function normalizeWriteCopyInput(input: WriteCopyInput, options: { signal?: AbortSignal } = {}): Promise<WriteCopyInput> {

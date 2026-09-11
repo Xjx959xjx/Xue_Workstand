@@ -98,7 +98,9 @@ function FeedbackToasts({
 }
 
 function FeedbackToastCard({ toast, onDismiss }: { toast: FeedbackToast; onDismiss: (id: string) => void }) {
-  const [paused, setPaused] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const paused = hovered || focused;
   const [closing, setClosing] = useState(false);
   const remainingMsRef = useRef(toast.durationMs);
   const startedAtRef = useRef(Date.now());
@@ -122,8 +124,13 @@ function FeedbackToastCard({ toast, onDismiss }: { toast: FeedbackToast; onDismi
   return (
     <section
       className={`workbench-toast ${toast.tone} ${closing ? "closing" : ""}`}
-      onFocus={() => setPaused(true)}
-      onBlur={() => setPaused(false)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+      }}
+      data-paused={paused || undefined}
       role={toast.tone === "error" ? "alert" : "status"}
       style={{ "--toast-duration": `${toast.durationMs}ms` } as CSSProperties}
     >

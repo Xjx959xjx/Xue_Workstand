@@ -53,7 +53,8 @@ export function useLibraryTaskActions({
         href: "/library",
         input: {
           platform: selectedAccount.platform,
-          accountId: selectedAccount.id
+          accountId: selectedAccount.id,
+          force: true
         }
       });
       setActiveStyleJobId(job.id);

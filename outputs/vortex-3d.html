@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VORTEX · 涡旋的秩序</title>
+<link rel="icon" href="data:,">
+<style>
+:root{color-scheme:dark;--bg:#060b10;--ink:#e7ecee;--dim:#94a7ae;--line:#20323b;--cyan:#8be6eb;--gold:#efbd82}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif}button,input{font:inherit}button,a,input{touch-action:manipulation}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible,canvas:focus-visible{outline:2px solid var(--cyan);outline-offset:5px}
+.lab{min-height:100svh;position:relative;overflow:hidden;background:radial-gradient(ellipse at 52% 48%,#10233066,transparent 60%)}header{position:relative;z-index:2;margin:0 40px;padding:24px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:18px}.brand{letter-spacing:.24em;font-weight:600;display:flex;gap:13px;align-items:center}.mark{width:26px;height:26px;border:1px solid var(--cyan);border-radius:50%;transform:rotate(-35deg) scaleX(.65);box-shadow:6px 0 0 -1px var(--bg),7px 0 0 0 #598f99}.edition{color:var(--dim);font-size:11px;letter-spacing:.15em}.live{font-size:11px;letter-spacing:.1em;display:flex;gap:8px;align-items:center;color:var(--cyan)}.live:before{content:"";width:5px;height:5px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
+main{position:relative;min-height:800px;height:calc(100svh - 159px);max-height:1100px}.scene{position:absolute;inset:0;overflow:hidden}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas:active{cursor:grabbing}.intro{position:absolute;left:40px;top:44px;width:280px;pointer-events:none}.eyebrow{font-size:10px;letter-spacing:.22em;color:var(--cyan);margin-bottom:15px}h1{font-size:clamp(40px,4.3vw,66px);line-height:1.13;letter-spacing:-.04em;font-weight:400;margin:0 0 20px}h1 em{font:italic 1.04em Georgia,serif;color:#c1dfe4}.subtitle{font-size:13px;letter-spacing:.25em;color:var(--dim)}.intro p{margin-top:23px;max-width:225px;color:var(--dim);font-size:12px;line-height:1.9}.equation{margin-top:29px;font:italic 15px/2 Georgia,serif;color:#bdd0d5}.eq-sub{font-size:12px;color:var(--dim)}
+.panel{position:absolute;right:32px;top:43px;width:232px;padding:23px;background:#0a1218e8;border:1px solid var(--line);border-radius:3px;backdrop-filter:blur(15px)}.section-label{font-size:10px;color:var(--dim);letter-spacing:.17em}.panel h2{font-size:16px;font-weight:400;margin:5px 0 24px}.field{margin:0 0 24px}.field label{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#c7d4d8}.field output{font:12px ui-monospace,monospace;color:var(--cyan)}input[type=range]{width:100%;accent-color:var(--cyan);margin:12px 0 0;cursor:pointer;height:18px}.field small{font-size:10px;color:var(--dim)}.actions{display:flex;gap:7px}.actions button,.camera button{color:var(--ink);border:1px solid #344852;background:#101e26;border-radius:3px;padding:8px 12px;font-size:12px}.actions button:first-child{flex:1;background:#bce9e8;color:#10272e;border-color:#bce9e8}.toggle{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:12px;margin-top:17px}.toggle input{accent-color:var(--cyan);width:15px;height:15px}.legend{border-top:1px solid var(--line);padding-top:18px;margin-top:21px;font-size:11px;color:var(--dim)}.gradient{height:3px;margin:12px 0 7px;background:linear-gradient(90deg,#3d889a,#8de5ef,#ffe0b0,#ed9b62)}.legend-row{display:flex;justify-content:space-between;font-size:10px}.model-note{position:absolute;left:40px;bottom:33px;max-width:310px;color:var(--dim);font-size:11px}.model-note strong{font-size:10px;color:var(--gold);font-weight:500;letter-spacing:.13em;display:block;margin-bottom:9px}.model-note a{color:#b9cdd1;text-underline-offset:3px}.camera{position:absolute;bottom:35px;left:50%;transform:translateX(-50%);display:flex;gap:6px;white-space:nowrap}.camera button{background:#0a141bbb;color:var(--dim)}.camera button[aria-pressed=true]{color:var(--cyan);border-color:#537b84}.hint{position:absolute;bottom:89px;left:50%;transform:translateX(-50%);font-size:10px;letter-spacing:.14em;color:#829ca7;white-space:nowrap;pointer-events:none}.axis{position:absolute;bottom:40px;right:44px;width:70px;height:70px;color:var(--dim);font:10px ui-monospace,monospace}.axis svg{width:100%;height:100%}.error{position:absolute;inset:35% 25%;color:var(--gold);background:var(--bg);padding:24px;z-index:5}.error[hidden]{display:none}footer{display:flex;justify-content:space-between;gap:15px;padding:21px 40px;border-top:1px solid var(--line);font:10px ui-monospace,monospace;letter-spacing:.1em;color:var(--dim)}.status{color:var(--cyan)}
+@media(min-width:1500px){.intro{left:60px}.panel{right:60px;width:250px}}
+@media(max-width:1050px){.intro{width:210px;left:25px}.intro p{max-width:180px}.panel{width:200px;right:20px;padding:18px}h1{font-size:42px}.model-note{left:25px;max-width:235px}.equation{font-size:12px}}
+@media(max-width:700px){header{margin:0 20px;padding:19px 0}.edition{display:none}main{height:auto;min-height:0;display:flex;flex-direction:column;padding-bottom:24px}.scene{position:relative;height:480px;order:1}.intro{top:25px;left:22px;width:auto;z-index:1}.eyebrow{font-size:9px;margin-bottom:10px}h1{font-size:34px;margin-bottom:10px}.intro p,.equation{display:none}.subtitle{font-size:11px}.panel{position:relative;top:auto;right:auto;width:auto;margin:0 20px;order:3;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:0 23px}.panel .heading,.legend{grid-column:1/-1}.panel h2{margin-bottom:18px}.field{margin-bottom:16px}.actions{grid-column:1/-1}.toggle{grid-column:1/-1;margin-top:12px}.legend{margin-top:14px;padding-top:12px}.model-note{position:relative;left:auto;bottom:auto;order:4;max-width:none;margin:22px 22px 0}.camera{top:426px;bottom:auto;z-index:2}.hint{top:397px;bottom:auto;z-index:2}.axis{display:none}footer{padding:19px 22px;flex-wrap:wrap;font-size:9px}.error{inset:30% 10%}.live{font-size:9px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="lab">
+<header><div class="brand"><span class="mark" aria-hidden="true"></span>VORTEX<span class="edition"> / FLUID STUDIES</span></div><div class="live">BURGERS VORTEX · 01</div></header>
+<main>
+<div class="scene"><canvas id="vortex" tabindex="0" aria-label="三维 Burgers 涡粒子轨迹。拖动旋转，滚轮缩放；键盘方向键旋转，加减键缩放。">浏览器需要支持 WebGL 才能显示三维涡旋。</canvas><div id="error" class="error" role="alert" hidden></div></div>
+<div class="intro"><div class="eyebrow">THE GEOMETRY OF FLUID MOTION</div><h1>涡旋的<br><em>秩序。</em></h1><div class="subtitle">在旋转中，窥见无穷。</div><p>流体向轴心汇聚，沿轴向伸展。<br>涡量被拉伸，黏性使其扩散。<br>细微的平衡，构成流动的形状。</p><div class="equation">∂<sub>t</sub>u + (u · ∇)u = −∇p + νΔu<br><span class="eq-sub">∇ · u = 0 &nbsp; / &nbsp; ρ = 1</span></div></div>
+<section class="panel" aria-label="涡旋控制"><div class="heading"><div class="section-label">FLOW PARAMETERS</div><h2>触碰流动的边界</h2></div>
+<div class="field"><label for="circulation">环量 Γ <output id="circulation-value">12.0</output></label><input id="circulation" type="range" min="2" max="24" step="0.5" value="12"><small>控制旋转强度</small></div>
+<div class="field"><label for="viscosity">运动黏度 ν <output id="viscosity-value">0.12</output></label><input id="viscosity" type="range" min="0.03" max="0.4" step="0.01" value="0.12"><small>控制涡核扩散尺度</small></div>
+<div class="field"><label for="strain">轴向应变率 a <output id="strain-value">0.70</output></label><input id="strain" type="range" min="0.3" max="1.2" step="0.05" value="0.7"><small>控制汇聚与轴向拉伸</small></div>
+<div class="field"><label for="speed">播放速度 <output id="speed-value">1.0×</output></label><input id="speed" type="range" min="0.2" max="2" step="0.1" value="1"><small>仅调整时间播放</small></div>
+<div class="actions"><button id="pause" type="button">暂停流动</button><button id="reset" type="button">重置</button></div>
+<label class="toggle"><input id="orbit" type="checkbox" checked>自动环绕视角</label>
+<div class="legend">局部涡量幅值 · 相对涡核峰值<div class="gradient"></div><div class="legend-row"><span>外层 · 低</span><span>涡核 · 高</span></div></div>
+</section>
+<div class="hint">拖动旋转 · 滚轮缩放</div><div class="camera" aria-label="相机视角"><button type="button" data-view="perspective" aria-pressed="true">透视</button><button type="button" data-view="top" aria-pressed="false">俯视</button><button type="button" data-view="side" aria-pressed="false">侧视</button></div>
+<div class="model-note"><strong>AN OPEN QUESTION</strong>三维 Navier–Stokes 存在性与平滑性仍是<a href="https://www.claymath.org/problem/unsolved/" target="_blank" rel="noopener noreferrer">未解问题 ↗</a>。这里展示 Burgers 涡的粒子轨迹，采用无量纲参数；该特解不满足全空间有限能量条件，不能证明一般解的全局平滑性。</div>
+</main>
+<footer><span>01 / INCOMPRESSIBLE FLOW</span><span id="status" class="status" role="status" aria-live="polite">正在初始化渲染…</span><span>WEBGL · 3D PARTICLE TRACES</span></footer>
+</div>
+<script>
+(()=>{'use strict';
+const canvas=document.getElementById('vortex'),error=document.getElementById('error'),status=document.getElementById('status');
+const gl=canvas.getContext('webgl',{alpha:true,antialias:true,powerPreference:'high-performance'});
+function fail(message){error.hidden=false;error.textContent=message;status.textContent='渲染已停止';}
+if(!gl){fail('无法启动 WebGL。请在浏览器设置中开启硬件加速，然后重新打开此文件。');return;}
+const vs=`
+precision highp float;
+attribute vec4 seed;
+attribute float tail;
+uniform float time, strain, viscosity, circulation, yaw, pitch, distance, aspect, pointSize, mode;
+varying vec3 color;
+varying float alpha;
+vec3 camera(vec3 p){
+ float x=cos(yaw)*p.x-sin(yaw)*p.z;
+ float z=sin(yaw)*p.x+cos(yaw)*p.z;
+ float y=cos(pitch)*p.y-sin(pitch)*z;
+ z=sin(pitch)*p.y+cos(pitch)*z;
+ return vec3(x,y,z);
+}
+void main(){
+ float life=log(3.65/abs(seed.z))/strain;
+ float age=mod(time+seed.w*life,life);
+ float t=max(0.,age-tail*0.95);
+ float r=seed.x*exp(-0.5*strain*t);
+ float h=seed.z*exp(strain*t);
+ float angle=seed.y;
+ for(int i=0;i<16;i++){
+  float q=(float(i)+0.5)*t/16.;
+  float rr=seed.x*seed.x*exp(-strain*q);
+  angle+=circulation/(6.2831853*rr)*(1.-exp(-strain*rr/(4.*viscosity)))*t/16.;
+ }
+ vec3 p=vec3(r*cos(angle),h,r*sin(angle));
+ float w=exp(-strain*r*r/(4.*viscosity));
+ vec3 cold=mix(vec3(.13,.40,.51),vec3(.40,.86,.93),smoothstep(0.,.18,w));
+ color=mix(cold,vec3(1.,.57,.25),smoothstep(.12,.82,w));
+ color=mix(color,vec3(1.,.88,.64),smoothstep(.6,1.,w)*.7);
+ vec3 v=camera(p);
+ float depth=distance-v.z;
+ gl_Position=vec4(v.x*1.95/aspect,v.y*1.95,depth*.98-.2,depth);
+ gl_PointSize=clamp(pointSize*9./depth,1.,40.);
+ alpha=pow(1.-tail,1.7)*smoothstep(0.,.22,age)*smoothstep(0.,.3,life-age);
+ alpha*=mix(.46,1.,w);
+}`;
+const fs=`precision mediump float; varying vec3 color; varying float alpha; uniform float mode;
+void main(){float a=alpha;if(mode>.5){float d=length(gl_PointCoord-.5)*2.;a*=exp(-d*d*4.)*(1.-smoothstep(.65,1.,d));if(mode>1.5)a*=.13;}else{a*=.30;}gl_FragColor=vec4(color*a,a);}`;
+function shader(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+let program;
+try{program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,vs));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fs));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));}catch(e){fail('图形着色器初始化失败，请尝试更新浏览器或显卡驱动。详情：'+e.message);return;}
+gl.useProgram(program);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE);gl.disable(gl.DEPTH_TEST);
+const names=['time','strain','viscosity','circulation','yaw','pitch','distance','aspect','pointSize','mode'];
+const uniforms=Object.fromEntries(names.map(n=>[n,gl.getUniformLocation(program,n)]));
+let randomState=91823;function rand(){randomState=(randomState*1664525+1013904223)>>>0;return randomState/4294967296;}
+const N=1800,segments=24,points=[],lines=[];
+for(let i=0;i<N;i++){const s=[1.25+rand()*2.3,rand()*Math.PI*2,(.022+rand()*.09)*(i%2?1:-1),rand()];points.push(...s,0);for(let j=0;j<segments;j++){lines.push(...s,j/segments,...s,(j+1)/segments);}}
+function buffer(data){const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),gl.STATIC_DRAW);return b;}
+const lineBuffer=buffer(lines),pointBuffer=buffer(points),seedLoc=gl.getAttribLocation(program,'seed'),tailLoc=gl.getAttribLocation(program,'tail');
+function bind(b){gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.enableVertexAttribArray(seedLoc);gl.vertexAttribPointer(seedLoc,4,gl.FLOAT,false,20,0);gl.enableVertexAttribArray(tailLoc);gl.vertexAttribPointer(tailLoc,1,gl.FLOAT,false,20,16);}
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let paused=reduced,simTime=3,yaw=.4,pitch=.27,zoom=10.3,last=0,drag=null,raf=0,lost=false;
+const controls={};for(const id of ['circulation','viscosity','strain','speed']){controls[id]=document.getElementById(id);controls[id].addEventListener('input',()=>{document.getElementById(id+'-value').textContent=Number(controls[id].value).toFixed(id==='viscosity'||id==='strain'?2:1)+(id==='speed'?'×':'');});}
+const pause=document.getElementById('pause'),orbit=document.getElementById('orbit');orbit.checked=!reduced;
+function updateStatus(){pause.textContent=paused?'继续流动':'暂停流动';status.textContent=paused?'已暂停 · 可旋转查看':'1,800 粒子 · 流动中';}
+pause.onclick=()=>{paused=!paused;updateStatus();};updateStatus();
+document.getElementById('reset').onclick=()=>{for(const [id,value]of Object.entries({circulation:12,viscosity:.12,strain:.7,speed:1})){controls[id].value=value;controls[id].dispatchEvent(new Event('input'));}simTime=3;zoom=10.3;setView('perspective');orbit.checked=!reduced;paused=reduced;updateStatus();};
+function setView(view){yaw=.4;pitch=view==='top'?Math.PI/2:view==='side'?0:.27;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===view)));}
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{setView(b.dataset.view);orbit.checked=false;});
+function manual(){orbit.checked=false;document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed','false'));}
+canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,id:e.pointerId};canvas.setPointerCapture(e.pointerId);manual();});
+canvas.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;yaw+=(e.clientX-drag.x)*.007;pitch=Math.max(-Math.PI/2,Math.min(Math.PI/2,pitch+(e.clientY-drag.y)*.006));drag.x=e.clientX;drag.y=e.clientY;});
+for(const event of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(event,()=>drag=null);
+canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(6,Math.min(18,zoom+e.deltaY*.008));},{passive:false});
+canvas.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();manual();if(e.key==='ArrowLeft')yaw-=.12;if(e.key==='ArrowRight')yaw+=.12;if(e.key==='ArrowUp')pitch=Math.min(Math.PI/2,pitch+.12);if(e.key==='ArrowDown')pitch=Math.max(-Math.PI/2,pitch-.12);if(e.key==='+'||e.key==='=')zoom=Math.max(6,zoom-.5);if(e.key==='-')zoom=Math.min(18,zoom+.5);});
+function resize(){const dpr=Math.min(devicePixelRatio||1,2),w=Math.round(canvas.clientWidth*dpr),h=Math.round(canvas.clientHeight*dpr);if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.viewport(0,0,w,h);}
+new ResizeObserver(resize).observe(canvas);resize();
+function frame(now){if(lost)return;const dt=last?Math.min((now-last)/1000,.05):0;last=now;if(!paused)simTime+=dt*Number(controls.speed.value);if(orbit.checked&&!paused)yaw+=dt*.055;
+ gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+ const values={time:simTime,strain:Number(controls.strain.value),viscosity:Number(controls.viscosity.value),circulation:Number(controls.circulation.value),yaw,pitch,distance:canvas.clientWidth<700?zoom+1.4:zoom,aspect:canvas.width/canvas.height,pointSize:2.6*Math.min(devicePixelRatio||1,2),mode:0};
+ for(const [k,v]of Object.entries(values))gl.uniform1f(uniforms[k],v);
+ bind(lineBuffer);gl.drawArrays(gl.LINES,0,lines.length/5);
+ bind(pointBuffer);gl.uniform1f(uniforms.mode,2);gl.uniform1f(uniforms.pointSize,14*Math.min(devicePixelRatio||1,2));gl.drawArrays(gl.POINTS,0,N);
+ gl.uniform1f(uniforms.mode,1);gl.uniform1f(uniforms.pointSize,2.7*Math.min(devicePixelRatio||1,2));gl.drawArrays(gl.POINTS,0,N);
+ raf=requestAnimationFrame(frame);
+}
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();lost=true;cancelAnimationFrame(raf);fail('图形上下文已中断。请刷新页面以重新启动渲染。');});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelAnimationFrame(raf);}else if(!lost){last=0;raf=requestAnimationFrame(frame);}});
+raf=requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -775,12 +775,12 @@
   padding: 18px;
   border: 1px solid color-mix(in oklch, var(--line-strong) 52%, var(--line));
   color: var(--text);
-  background: color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
+  background: var(--panel-raised);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--text-reading);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.72;
+  line-height: var(--line-height-reading);
   letter-spacing: 0;
   resize: vertical;
   transition:

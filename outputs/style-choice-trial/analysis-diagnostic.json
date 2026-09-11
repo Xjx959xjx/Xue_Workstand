@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "status": "failed",
+  "stage": "model",
+  "reason": "对话模型服务限流，此功能不会切到本地模板。可以稍后重试，或先把 ENGAGEMENT_MODEL_CONCURRENCY 调低。"
+}

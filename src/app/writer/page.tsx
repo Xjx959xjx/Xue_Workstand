@@ -97,6 +97,7 @@ function WriterPageContent() {
   const [useWebResearch, setUseWebResearch] = useState(false);
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionScope, setRevisionScope] = useState<WriteRevisionScope>("full");
+  const [revisionMode, setRevisionMode] = useState<"edit" | "recalibrate">("edit");
   const [selectedDraftText, setSelectedDraftText] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
@@ -135,6 +136,7 @@ function WriterPageContent() {
           supportDocLinks: string;
           useWebResearch: boolean;
           revisionInstruction: string;
+          revisionMode?: "edit" | "recalibrate";
         }>;
         if (Array.isArray(draft.styleRefs) && draft.styleRefs.length) {
           setStyleRefs(draft.styleRefs);
@@ -151,6 +153,7 @@ function WriterPageContent() {
           setSourceText(mergeWriterSourceInput(draft.sourceText, draft.supportDocLinks));
         }
         if (typeof draft.useWebResearch === "boolean") setUseWebResearch(draft.useWebResearch);
+        if (draft.revisionMode === "edit" || draft.revisionMode === "recalibrate") setRevisionMode(draft.revisionMode);
         if (typeof draft.revisionInstruction === "string") setRevisionInstruction(draft.revisionInstruction);
       }
     } catch {
@@ -167,11 +170,13 @@ function WriterPageContent() {
       prompt,
       sourceText,
       useWebResearch,
-      revisionInstruction
+      revisionInstruction,
+      revisionMode
     }));
   }, [
     prompt,
     revisionInstruction,
+    revisionMode,
     sessionDraftHydrated,
     sourceText,
     styleRefs,
@@ -279,6 +284,7 @@ function WriterPageContent() {
     recentJobs,
     revisionInstruction,
     revisionScope,
+    revisionMode,
     selectedText: selectedDraftText,
     onDraftSaved: handleDraftSaved,
     onRevisionCompleted: handleRevisionCompleted,
@@ -959,7 +965,7 @@ function WriterPageContent() {
                     </span>
                     <span className="style-reference-heading">
                       <span className="style-reference-title">参考资料</span>
-                      <small>本稿使用的研究摘要</small>
+                      <small>{displayResearch.includes("成稿检查（需修改）") ? "有未满足的要求，请展开检查" : "本稿选用的写法、原文与资料"}</small>
                     </span>
                     <ChevronDown className="style-reference-chevron" aria-hidden="true" size={16} />
                   </button>
@@ -1003,6 +1009,15 @@ function WriterPageContent() {
                       </button>
                     ) : null}
                   </div>
+                  <label className="writer-field">
+                    <span>修改方式</span>
+                    <select className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
+                      onChange={(event) => setRevisionMode(event.target.value as "edit" | "recalibrate")}>
+                      <option value="edit">按要求微调</option>
+                      <option value="recalibrate">重新校准风格</option>
+                    </select>
+                    <span id="writer-revision-mode-help">{revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达；选中段落时只调整选中范围。" : "处理本轮点名的问题，尽量保留其余表达。"}</span>
+                  </label>
                   <label className="writer-field">
                     <span>本轮修改要求</span>
                     <textarea

@@ -28,6 +28,27 @@ npm run dev:stop
 
 后台日志写入 `.dev-server/next-dev.log`，该目录不会提交到 git。
 
+## 运行指标与模型评测
+
+任务中心现在会通过 Pino 输出结构化运行日志。每次任务阶段切换会记录任务类型、阶段、平台、排队耗时、阶段耗时、模型、缓存、fallback 和失败信息，但不会记录原文、文案正文或密钥。日志级别可通过 `PINO_LOG_LEVEL` 调整，默认是 `info`。
+
+查看已持久化任务的汇总指标：
+
+```bash
+npm run metrics:pipeline
+npm run metrics:pipeline -- --json
+```
+
+评测写作链路需要先启动本地工作台，并指定一个已经有风格卡的账号目录名；评测使用 `save: false`，不会创建草稿：
+
+```bash
+PROMPTFOO_STYLE_PLATFORM=bilibili \
+PROMPTFOO_STYLE_ACCOUNT_ID='已有风格卡的账号目录名' \
+npm run eval:writer -- --max-concurrency 1 --no-write
+```
+
+评测样本位于 `evals/`，只应放脱敏、可复用的固定样本。Promptfoo 默认只在本地运行；不要把素材评测结果上传到 Promptfoo Cloud。修改提示词、模型或上下文组装后，先用同一批样本运行评测，再结合 `npm run metrics:pipeline` 观察真实任务的成功率和耗时。
+
 ## iPhone 私人远程访问
 
 Mac 和 iPhone 安装 Tailscale、登录同一个私人账号后，在项目目录执行：
@@ -98,6 +119,7 @@ npm run dev
 - `OPENCLI_WINDOW`：opencli 浏览器窗口模式，Windows 专用包默认 `background`，减少刷新时反复弹出浏览器窗口。
 - `FFMPEG_BIN`：默认使用 `ffmpeg`，抖音和无字幕 B站回退转写时会先抽取音频。
 - `STYLE_LIBRARY_DIR`：本地风格库目录，默认 `./style-library`。
+- `NEXT_PUBLIC_STIRLING_PDF_URL`：工具台里的 Stirling-PDF 地址，默认 `http://localhost:8080`。本地 Docker 可直接使用；地址只用于打开自托管 Web UI，PDF 文件不会经过本项目转发。
 - `SITES_STORAGE_MODE`：Sites 云端运行时由构建配置设为 `cloud`；本地文件模式留空。
 - `SITES_EXTERNAL_CAPABILITY_URL`、`SITES_EXTERNAL_CAPABILITY_TOKEN`：可选的受鉴权 HTTP 能力桥。云端 OpenCLI、FFmpeg 抽帧、ASR/链接转写、媒体下载、飞书和企业微信文档调用会以 `{ operation, payload }` POST 到该地址；令牌只放在部署环境变量中，不要提交到仓库。
 - `SITES_CAPABILITY_BRIDGE_TOKEN`、`SITES_CAPABILITY_BRIDGE_PUBLIC_URL`：能力提供方主机使用。将本地工作台通过受保护的 HTTPS 反向代理暴露到 `/api/capability-bridge`，令牌至少 32 个字符；Sites 端的 `SITES_EXTERNAL_CAPABILITY_*` 使用同一地址和令牌。该入口在 Sites Worker 内会强制关闭，媒体文件通过短期、一次性下载凭证传输，不会返回本机路径。
@@ -118,33 +140,37 @@ npm run dev
 - `VOLCENGINE_ASR_REQUEST_TIMEOUT_MS`：火山转写单次请求超时，默认 `30000` 毫秒。
 - `VOLCENGINE_ASR_RETRY_COUNT`：火山转写遇到瞬时网络错误时的重试次数，默认 `2`，建议保持在 `0-3`。
 - `DOUYIN_TRANSCRIBE_CONCURRENCY`：抖音批量转写并发数，默认 `3`，建议保持在 `1-4`。
-- `DOUYIN_HOTLIST_REFRESH_CONCURRENCY`：视频热榜账号刷新并发数，默认 `5`，允许 `1-5`；OpenCLI、抖音或 B站页面不稳定时可调回 `1-2`。变量名沿用旧版抖音热榜配置。
+- `DOUYIN_HOTLIST_REFRESH_CONCURRENCY`：视频热榜账号刷新并发数，默认 `2`，允许 `1-5`；抖音使用共享会话内的有界并发，每六个账号返回后保存结果并更新进度，分页间隔 `250ms`。变量名沿用旧版抖音热榜配置。
 - `CHAT_API_KEY`、`CHAT_BASE_URL`、`CHAT_RESPONSES_URL`、`CHAT_COMPLETIONS_URL`、`CHAT_MODEL`、`CHAT_WIRE_API`、`CHAT_REASONING_EFFORT`、`CHAT_SERVICE_TIER`：主对话模型配置，用于自动提炼风格和生成文案。新中转站如果只兼容 OpenAI Chat Completions，可设 `CHAT_WIRE_API=chat_completions`；不确定时可设 `CHAT_WIRE_API=auto`，系统会在 Responses 不兼容时自动切到 Chat Completions。`CHAT_SERVICE_TIER=priority` 可显式请求中转站 / Codex 的快速服务层，和 `xhigh` 推理档位是两件事。`CHAT_BASE_URL` 可以填中转站根地址，也可以用 `CHAT_RESPONSES_URL` / `CHAT_COMPLETIONS_URL` 指定完整接口地址。`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 也会作为主模型配置读取。
 - `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：第一备用对话模型配置。默认备用地址和模型是旧配置 `https://www.fhl.mom` / `gpt-5.5` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。还可按相同后缀配置 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`，系统会依次尝试。
 - `CHAT_PROXY_URL`：可选。若 Node/Next 直连模型服务失败，可设为本机代理，例如 `http://127.0.0.1:7890`。
 - `CHAT_HEALTH_PROBE_TIMEOUT_MS`：对话模型健康检查探针超时，默认 `8000` 毫秒，允许 `2000-30000`。
 - `WEB_RESEARCH_ENABLED`、`WEB_RESEARCH_API_KEY`、`WEB_RESEARCH_BASE_URL`、`WEB_RESEARCH_RESPONSES_URL`、`WEB_RESEARCH_MODEL`、`WEB_RESEARCH_REASONING_EFFORT`、`WEB_RESEARCH_SERVICE_TIER`、`WEB_RESEARCH_PROXY_URL`：写作台联网检索的独立 Responses API 配置，推理档位默认 `medium`。它只负责 `web_search`，不会改变现有 Chat Completions 写作链；未配置独立接口时，系统仍可使用对话模型链里明确支持 Responses 的节点。密钥不会自动跨服务复用，如确实是同一服务，可在本地环境文件写 `WEB_RESEARCH_API_KEY=$CHAT_API_KEY`。
-- `STYLE_ONE_SHOT_MAX_INPUT_CHARS`、`STYLE_SAMPLE_ANALYSIS_CONCURRENCY`：账号风格卡在完整转写总字数不超过默认 `50000` 时，使用一次 `high` 请求直接完成全量分析和风格卡生成；超过阈值后仍保持 `high`，按默认并发 `1` 串行分析样本，再做最终整合，避免中转站并发 429。
+- `STYLE_SAMPLE_ANALYSIS_CONCURRENCY`：完整原文逐篇分析并发数，默认 `1`，范围 `1-4`。账号与项目学习统一先缓存用途、具体表达动作及已核验原句，再归纳风格卡；缓存键包含原文、提示词版本与模型配置。旧的 `STYLE_ONE_SHOT_MAX_INPUT_CHARS` 不再生效。首次写稿需要补齐缺失分析，后续复用未变化的分析。
 - `ENGAGEMENT_MODEL_CONCURRENCY`：评论生成并发批次数，默认 `4`，建议保持在 `1-4` 之间；中转站限流或超时时可先调回 `1`。
 - `ENGAGEMENT_COMMENT_CANDIDATE_RATIO`：评论首轮超采样倍率，默认 `1.4`，允许 `1.05-1.5`；模型会多写一批候选，再按长度、重复结构和事实约束筛到目标数量。
 - `IMAGE_API_KEY`、`IMAGE_BASE_URL`、`IMAGE_MODEL`、`IMAGE_SIZE`、`IMAGE_QUALITY`、`IMAGE_FORMAT`、`IMAGE_PROXY_URL`：可选。用于后续独立封面生成能力，默认按 OpenAI Images API / `gpt-image-2` / `2048x1152` 生成。
 - `FEISHU_OPENCLI_AS`、`FEISHU_FOLDER_TOKEN`：可选。飞书文档发布固定使用 `opencli lark-cli docs +create`，默认使用当前 lark-cli 用户身份。
 
-如果没有配置对话模型，风格卡仍可使用本地兜底模板生成可编辑结果。写作、评论和弹幕生成依赖可用的对话模型；鉴权、限流、超时或模型未配置会直接失败，不会静默切到与资料无关的本地模板。
+风格学习、写作、评论和弹幕生成依赖可用的对话模型；鉴权、限流、超时或模型未配置会直接失败，不会静默切到与资料无关的本地模板。风格分析或引用校验失败时保留原卡；更新卡片前将旧版归档到对应账号／项目的 `.style-history/`。账号风格编辑器的“重新归纳”会跳过最终卡缓存，仍复用未变化的逐篇分析。
 
 账号库位于 `/library`，支持按平台、转写和风格状态筛选账号，并按标题、转写状态及数据指标筛选排序视频；筛选条件和当前选择会写入 URL，刷新后可恢复。批量模式可对当前筛选结果选择、转写或导出。手动保存、重新转写和历史恢复都使用 revision 冲突保护；覆盖前的旧稿归档到账号目录的 `transcripts/.history/<video-id>/`，可在转写稿编辑器中查看并恢复。
 
-对话写作页位于 `/writer`。参考风格支持同时选择多个账号或项目；多选后会按每张风格卡并发生成一篇互不混合的独立文案，并分别保存为草稿，可在结果区直接切换。单篇草稿只保存自身使用的风格引用，后续模型续改和手动编辑都会沿用该稿风格并保存为同一写作会话下的新版本，不会覆盖上一版；历史列表只加载标题、版本和时间，点开后才读取草稿全文。旧草稿继续兼容读取。素材、原文、抖音 / B站视频链接和支持文档共用一个输入框：视频链接自动转写，飞书、网易灵犀、企业微信、腾讯文档及普通公开网页链接自动读取正文；同一支持文档成功读取后会缓存 24 小时，并发生成时只读取一次共享资料，读取失败不会缓存；链接未公开或当前工具身份无权限时会明确报错，不会把裸链接交给模型猜。首稿不再额外生成写作 Brief，而是把用户要求、原始素材、当前单张风格卡、代表样本和已读取资料直接交给各自的成稿模型；开头方式、句长、节奏、具象程度和结尾方式只服从该篇对应的风格卡与代表样本，不附加跨账号通用模板。续改只读取当前稿件、已保存资料摘要、该稿风格卡，以及旧草稿已有的历史策划备注，不会重复转写链接、抓支持文档或联网。联网检索开关位于生成按钮旁，使用独立 `WEB_RESEARCH_*` Responses API，和现有 Chat Completions 写作接口互不影响；没有独立配置且对话模型链里也没有 Responses 节点时，入口才会置灰。选中稿件段落后可以只改局部，但模型仍会返回并保存完整新稿。
+对话写作页位于 `/writer`。参考风格支持同时选择多个账号或项目；多选后会按每张风格卡并发生成一篇互不混合的独立文案，并分别保存为草稿，可在结果区直接切换。单篇草稿只保存自身使用的风格引用，后续模型续改和手动编辑都会沿用该稿风格并保存为同一写作会话下的新版本，不会覆盖上一版；历史列表只加载标题、版本和时间，点开后才读取草稿全文。旧草稿继续兼容读取。素材、原文、抖音 / B站视频链接和支持文档共用一个输入框：视频链接自动转写，飞书、网易灵犀、企业微信、腾讯文档及普通公开网页链接自动读取正文；同一支持文档成功读取后会缓存 24 小时，并发生成时只读取一次共享资料，读取失败不会缓存；链接未公开或当前工具身份无权限时会明确报错，不会把裸链接交给模型猜。首稿先区分本次事实、明确必留要求、创意示例与可改框架，再根据完整原文的用途和表达证据选择参考；优先文体与目的，不再取热度前8篇，也不固定2—3篇。参考全文总预算14000字符，长篇改用标明“非全文”的已核验证据段落。只有明确锁定的顺序／原话必须保留，普通素材顺序与示例可以重组；范文不能作为本次产品或事件事实。随后一次生成全文，明确字数和禁用词未通过时保留稿件，并在“参考资料”中显示检查提醒。新稿保存当时的风格正文、实际原文片段、选择理由、任务约束与内容指纹；续改沿用这份快照，不重新转写、抓文档、联网或选样。续改支持“按要求微调”与“重新校准风格”，选中段落时两种方式均只调整选中范围。旧稿缺少快照会明确说明使用当前关联卡，并从该版开始保存快照。续改以本轮指令为准，不机械套用首稿的字数检查。联网检索开关位于生成按钮旁，使用独立 `WEB_RESEARCH_*` Responses API，和现有 Chat Completions 写作接口互不影响；没有独立配置且对话模型链里也没有 Responses 节点时，入口才会置灰。选中稿件段落后可以只改局部，但模型仍会返回并保存完整新稿。
 
 写作素材支持点选或拖入 TXT、Markdown、CSV、JSON、HTML、字幕和 DOCX 文件；本地文件正文中的链接会保留为正文，不会误触发视频转写或支持文档抓取。
 
-评论生成页位于 `/assets`，可基于已保存草稿、粘贴文案或 B站 / 抖音视频链接生成观众评论；历史区只读取标题、来源和数量，点开记录后才加载评论、弹幕和来源全文。粘贴文案必须选择目标平台，视频链接会自动识别。评论和弹幕使用对话模型；输入中只要包含支持的视频链接（包括带标题、口令的整段分享文案），就必须先沿用现有视频转写链路取得文稿，不能把分享文案直接当正文生成。链接、域名、短链码、视频 ID 和平台分享指令只用于采集与追踪，进入 Brief、素材锚点和模型提示词前会被剥离，模型输出中再次出现也会被过滤。评论默认生成 `50` 条，可选“平台自然”或“原评增强”：平台自然只用当前视频文稿理解内容，平台语气来自本地冷启动标杆库；标杆库按平台、题材和视频形态检索，并排除当前视频 ID。原评增强才额外读取当前视频原评。真实样本为零时生成会显式停止，不再静默使用万能预设。生成前会为每条评论分配意图、长度、可选素材锚点和表情额度，以 `8` 条小批次并发超采样，再按事实、长度、平台表情、重复结构和近似重复本地筛选；单批失败时先保存其余可用结果，同一任务随后会自动原位补齐评论和弹幕，不再要求手动点击。结果可下载为标准 Word `.docx`，文件名为“账号名+XX条评论+XX条弹幕.docx”。运行 `npm run engagement:refresh-style` 会以固定预算重建标杆库：先复用本地账号库 / 热榜真实评论，再为 B站和抖音各题材补取少量参考视频；B站默认约三分之二预算给手机、PC、影像、耳机、穿戴、AI 硬件等数码垂类，按热度优先可信评测账号、限制单账号占比，并剔除抽奖和店铺导流评论。若 B站临时风控导致评论区覆盖不足，刷新会明确失败并保留上一份可用缓存。生成时不会联网或无限滚动。`npm run engagement:refresh-style -- --local-only` 可只用本地数据重建，采样预算、数码占比、偏好账号和题材查询可通过 `ENGAGEMENT_BENCHMARK_*` 调整。弹幕仅支持 B站，刷新时保存真实弹幕时间点；生成时由程序结合真实密度和当前文稿爆点创建成簇时间槽，以 `16` 条小批次、最多 `2` 并发生成并对瞬时限流自动重试，只有程序标记的复读槽可以重复，模型只填写槽位文本，不得自行编时间。火山转写取得语音分段时使用真实时间，否则结果区会明确显示“文案节奏估时”。如果模型中转站限流，可把 `ENGAGEMENT_MODEL_CONCURRENCY` 调低。链接文稿、评论锚点和标杆语料会缓存在 `style-library/engagement/.cache/`，这些内容是可重新生成的派生缓存，不属于评论历史资产。
+评论生成页位于 `/assets`，可基于已保存草稿、粘贴文案或 B站 / 抖音视频链接生成观众评论；历史区只读取标题、来源和数量，点开记录后才加载评论、弹幕和来源全文。粘贴文案必须选择目标平台，视频链接会自动识别。评论和弹幕使用对话模型；输入中只要包含支持的视频链接（包括带标题、口令的整段分享文案），就必须先沿用现有视频转写链路取得文稿，不能把分享文案直接当正文生成。链接、域名、短链码、视频 ID 和平台分享指令只用于采集与追踪，进入 Brief、素材锚点和模型提示词前会被剥离，模型输出中再次出现也会被过滤。评论默认生成 `50` 条，并统一执行全网调研：通过 OpenCLI 抓取 B站、抖音相关视频的真实讨论，并补充公开论坛讨论；调研缓存 6 小时，部分结果缓存 30 分钟。评论生成不再读取当前视频原评、不再加载本地评论标杆库，也不会把原始评论示例注入最终提示词；真实平台讨论证据为零时会显式停止，取得部分证据时保留可用结果并显示覆盖提醒。生成前会为每条评论分配意图、长度、可选素材锚点和表情额度，以 `8` 条小批次并发超采样，再按事实、长度、平台表情、重复结构和近似重复本地筛选；单批失败时先保存其余可用结果，同一任务随后会自动原位补齐评论和弹幕，不再要求手动点击。结果可下载为标准 Word `.docx`，文件名为“账号名+XX条评论+XX条弹幕.docx”。弹幕仍保留独立的真实节奏参考，仅支持 B站；运行 `npm run engagement:refresh-style` 可刷新弹幕标杆数据，生成时由程序结合真实密度和当前文稿爆点创建成簇时间槽，以 `16` 条小批次、最多 `2` 并发生成并对瞬时限流自动重试，只有程序标记的复读槽可以重复，模型只填写槽位文本，不得自行编时间。火山转写取得语音分段时使用真实时间，否则结果区会明确显示“文案节奏估时”。如果模型中转站限流，可把 `ENGAGEMENT_MODEL_CONCURRENCY` 调低。链接文稿、评论锚点和调研结果会缓存在 `style-library/engagement/.cache/`，这些内容是可重新生成的派生缓存，不属于评论历史资产。
+
+工具台位于 `/tools`，新增的 Stirling-PDF 工作区会打开本机或局域网中的自托管 Stirling-PDF 实例，用于合并、拆分、压缩、转换、OCR、签名等 PDF 操作。Docker 默认启动地址为 `http://localhost:8080`；首次登录使用实例提示的初始账号后，应立即修改初始密码。
 
 账号采集、工具台的单条提文案 / 标题文案、热点雷达刷新、视频热榜刷新和毛利批量刷新都通过任务中心后台运行，可查看进度并停止。任务输入与状态会持久化，前端使用游标只拉取增量变化；服务重启后，批量转写、热榜刷新、热点刷新和毛利刷新等幂等任务会自动回到队列，其他失败或中断任务可在任务中心直接重试。账号、视频、项目、素材、草稿和监控记录的删除会进入 `style-library/.trash/`，跨文件引用清理失败时自动回滚，也可通过 `/api/library/trash` 查询和恢复；浏览器文件下载仍采用直接流式下载。
 
 抖音账号名采集会调用 `opencli douyin search <账号名> -f json` 解析 `sec_uid`；如果本机 opencli 暂未提供该适配器，可以先填写抖音主页链接或 `sec_uid` 采集。
 
 视频热榜页位于 `/douyin-hotlist`（历史路径保留）。它维护一个独立的本地对标账号池，可添加抖音或 B站账号；关注列表保存在 `style-library/douyin-hotlist/watchlist.json`，账号和抓取结果保存在 `style-library/douyin-hotlist/accounts/<account>/`；这里添加账号不会写入主账号库 `style-library/douyin/` 或 `style-library/bilibili/`。抓取通过任务中心在后台运行，可查看账号级进度或停止任务；页面打开且可见时每 3 小时自动刷新一次，关闭页面不会抓取。自动刷新按最近一次全量检查计时，单账号手动抓取不会推迟全量刷新。
+
+抖音热榜通过 OpenCLI 后台共享会话批量读取作品接口：每轮只初始化一次抖音会话，不逐账号打开主页。发布时间和互动统计使用接口真实字段，不从作品 ID 推测日期；普通媒体地址查询仍使用 `opencli douyin user-videos`。遇到 HTTP `401` / `403` / `444` / `429` 时暂停尚未发出的抖音请求，保留已成功结果与已有数据，并在刷新日志中提示处理方式；完成浏览器验证或等待限流恢复后可再次刷新。
 
 抖音转写会优先复用已采集的媒体地址，必要时再调用 `opencli douyin user-videos` 刷新地址，然后由本机 `ffmpeg` 抽取 16kHz 单声道低码率 mp3，并通过火山引擎录音文件识别 2.0 的 `audio.data` 提交转写，避免火山服务端直接拉取带防盗链的抖音 URL。批量转写抖音视频时会先按账号预取一次媒体地址，再使用小并发转写，以减少重复 opencli 查询和火山任务排队带来的等待；如果本机网络、opencli、ffmpeg 或火山接口限流不稳定，可把 `DOUYIN_TRANSCRIBE_CONCURRENCY` 调回 `1`。B站视频仍优先使用公开字幕，没有字幕时会尝试下载后抽音频转写。
 

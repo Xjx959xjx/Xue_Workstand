@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { engagementSourceKey } from "@/lib/job-scope";
 import { extractFirstLinkFromInput } from "@/lib/platform-links";
-import type { EngagementGenerationMode, EngagementRecord, JobRecord, JobStartInput, Platform } from "@/lib/types";
+import type { EngagementRecord, JobRecord, JobStartInput, Platform } from "@/lib/types";
 import type { BusyState } from "../_components/asset-view-utils";
 
 type EngagementJobInput = Extract<JobStartInput, { kind: "engagement" }>["input"];
@@ -14,7 +14,6 @@ type UseEngagementGenerationInput = {
   danmakuCount: number;
   includeComments: boolean;
   includeDanmaku: boolean;
-  generationMode: EngagementGenerationMode;
   onRecordCompleted: (record: EngagementRecord) => void;
   targetPlatform: Platform;
   recentJobs: JobRecord[];
@@ -32,7 +31,6 @@ export function useEngagementGeneration({
   danmakuCount,
   includeComments,
   includeDanmaku,
-  generationMode,
   onRecordCompleted,
   targetPlatform,
   recentJobs,
@@ -54,11 +52,10 @@ export function useEngagementGeneration({
             commentCount,
             includeDanmaku,
             danmakuCount,
-            generationMode,
             targetPlatform
           })
       : null,
-    [commentCount, danmakuCount, generationMode, includeComments, includeDanmaku, targetPlatform, trimmedSource]
+    [commentCount, danmakuCount, includeComments, includeDanmaku, targetPlatform, trimmedSource]
   );
   const engagementJobCandidates = useMemo(
     () => [...activeJobs, ...recentJobs].filter((job) => job.kind === "engagement"),
@@ -135,7 +132,6 @@ export function useEngagementGeneration({
       commentCount,
       includeDanmaku,
       danmakuCount,
-      generationMode,
       targetPlatform
     });
 
@@ -160,7 +156,6 @@ export function useEngagementGeneration({
     danmakuCount,
     includeComments,
     includeDanmaku,
-    generationMode,
     setBusy,
     setNotice,
     setResultRecord,
@@ -198,7 +193,7 @@ function buildSuccessMessage(record: EngagementRecord) {
 
 function buildEngagementJobInput(
   rawSource: string,
-  options: Pick<Extract<EngagementJobInput, { sourceType: "text" }>, "includeComments" | "commentCount" | "includeDanmaku" | "danmakuCount" | "generationMode" | "targetPlatform">
+  options: Pick<Extract<EngagementJobInput, { sourceType: "text" }>, "includeComments" | "commentCount" | "includeDanmaku" | "danmakuCount" | "targetPlatform">
 ): EngagementJobInput {
   const extractedUrl = extractFirstLinkFromInput(rawSource, { kind: "video" });
 
@@ -209,8 +204,7 @@ function buildEngagementJobInput(
       includeComments: options.includeComments,
       commentCount: options.commentCount,
       includeDanmaku: options.includeDanmaku,
-      danmakuCount: options.danmakuCount,
-      generationMode: options.generationMode
+      danmakuCount: options.danmakuCount
     };
   }
 

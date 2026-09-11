@@ -8,13 +8,14 @@ export const runtime = "nodejs";
 
 const baseSchema = z.object({
   platform: z.enum(platforms),
-  accountId: z.string().min(1)
+  accountId: z.string().min(1),
+  force: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
   return apiJson(async () => {
     const input = await parseJsonBody(request, baseSchema);
-    return generateStyleProfile(input.platform, input.accountId, { signal: request.signal });
+    return generateStyleProfile(input.platform, input.accountId, { signal: request.signal, force: input.force });
   }, {
     fallbackMessage: "自动总结风格失败"
   });

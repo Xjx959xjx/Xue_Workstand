@@ -1,0 +1,70 @@
+{
+  "purpose": "明确标注的内部模拟 / 离线诊断",
+  "method": "真实函数 + 内存桩；不是模型质量或网络性能测试",
+  "checks": [
+    {
+      "name": "三种题材的短句事实进入 Brief",
+      "status": "pass",
+      "observations": [
+        {
+          "topic": "数码",
+          "retained": "续航测试未说明是否开启降噪"
+        },
+        {
+          "topic": "游戏",
+          "retained": "公告未说明能否自动匹配队友"
+        },
+        {
+          "topic": "剧情",
+          "retained": "信封没有署名，寄件人尚未揭晓"
+        }
+      ],
+      "limitation": "只验证事实保留，不代表正确识别所有讨论点"
+    },
+    {
+      "name": "长句中的关键限制是否丢失",
+      "status": "issue",
+      "sentenceChars": 202,
+      "retained": false,
+      "reason": "本地 Brief 排除超过120字的句子，关键限制未进入事实及讨论点",
+      "boundary": "原始正文仍可能作为节选进入后续提示词，不能据此断言模型一定看不到该信息"
+    },
+    {
+      "name": "文末关键信息是否进入讨论依据",
+      "status": "issue",
+      "retained": false,
+      "reason": "前面的带数字句子先占满事实与讨论点的固定名额，结尾限制未进入两者",
+      "boundary": "不等于原始正文被删除"
+    },
+    {
+      "name": "从记录补齐是否恢复真实时间轴",
+      "status": "issue",
+      "restoredSegments": false,
+      "restoredDuration": false,
+      "reason": "即使桩记录提供时间轴，记录恢复分支也未传给生成内容；当前实际记录类型本身同样缺少素材时间轴"
+    },
+    {
+      "name": "补齐合并是否保留任务累计耗时",
+      "status": "issue",
+      "firstPassMs": 1200,
+      "supplementMs": 50,
+      "savedMs": 50,
+      "expectedCumulativeMs": 1250,
+      "reason": "执行真实合并函数后，新 timings 覆盖上一轮；数字为可控虚拟时间，非实际模型耗时"
+    },
+    {
+      "name": "外层自动补齐是否有界",
+      "status": "pass",
+      "passCalls": 3,
+      "reason": "初次执行加两次外层补齐后停止；不代表每一轮内部只有一次模型调用"
+    },
+    {
+      "name": "评论与弹幕冷启动是否共享一次语料扫描",
+      "status": "issue",
+      "concurrentRootScans": 6,
+      "expectedSharedRootScans": 3,
+      "warmAdditionalScans": 0,
+      "reason": "三处目录的两次冷加载重复执行；完成后的热缓存有效。目录扫描使用内存桩，未测磁盘耗时"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit, type Response as UndiciResponse } from "undici";
+import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
 
 export type ChatWireApi = "responses" | "chat_completions" | "auto";
 export type ChatReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
@@ -84,6 +84,8 @@ export type ChatProbeResult = {
   primaryRawError?: string;
 };
 
+export type ModelResponseBody = { headers: { get(name: string): string | null }; text(): Promise<string> };
+
 type FetchInitWithDispatcher = UndiciRequestInit & {
   dispatcher?: ProxyAgent;
 };
@@ -96,7 +98,7 @@ type ChatMessage = {
 const DEFAULT_FALLBACK_CHAT_BASE_URL = "https://www.fhl.mom";
 const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-5.5";
 const DEFAULT_WEB_RESEARCH_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_WEB_RESEARCH_MODEL = "gpt-5.6";
+const DEFAULT_WEB_RESEARCH_MODEL = "gpt-6";
 const MAX_ADDITIONAL_CHAT_FALLBACKS = 4;
 
 class ModelRuntimeError extends Error {
@@ -214,7 +216,7 @@ export function getWebResearchConfig() {
     chatCompletionsUrl: "",
     model: process.env.WEB_RESEARCH_MODEL || DEFAULT_WEB_RESEARCH_MODEL,
     wireApi: "responses" as const,
-    reasoningEffort: normalizeReasoningEffort(process.env.WEB_RESEARCH_REASONING_EFFORT || "medium"),
+    reasoningEffort: normalizeReasoningEffort(process.env.WEB_RESEARCH_REASONING_EFFORT || "low"),
     chatCompletionReasoningEffort: "none" as const,
     serviceTier: normalizeServiceTier(process.env.WEB_RESEARCH_SERVICE_TIER),
     proxyUrl: process.env.WEB_RESEARCH_PROXY_URL || process.env.CHAT_PROXY_URL || ""
@@ -296,6 +298,10 @@ export async function postModelRequest(
   payload: unknown,
   signal?: AbortSignal
 ) {
+  const cloudRuntime = process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud";
+  if (cloudRuntime && config.proxyUrl) {
+    throw new Error("Sites 云端不能使用本机模型代理，请清除云端 CHAT_PROXY_URL 等代理配置并使用可直连的模型地址。");
+  }
   const init: FetchInitWithDispatcher = {
     method: "POST",
     headers: {
@@ -306,7 +312,13 @@ export async function postModelRequest(
     dispatcher: chatDispatcher(config.proxyUrl),
     signal
   };
-  const response = await undiciFetch(modelEndpoint(config, pathName), init);
+  // Workers 使用原生 fetch；本机保留 Undici 的代理与连接管理。
+  const response = cloudRuntime
+    ? await globalThis.fetch(modelEndpoint(config, pathName), {
+        method: "POST", headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload), signal
+      })
+    : await undiciFetch(modelEndpoint(config, pathName), init);
   if (!response.ok) {
     throw new ModelHttpError(response.status, await response.text(), response.headers.get("content-type"));
   }
@@ -376,7 +388,7 @@ export function chatCompletionPayload(input: {
   return {
     model: input.config.model,
     messages: input.messages,
-    temperature: 0.75,
+    ...(/^gpt-6(?:-|$)/i.test(input.config.model) ? {} : { temperature: 0.75 }),
     stream: input.stream,
     max_tokens: input.maxOutputTokens,
     ...(input.webSearch ? { web_search_options: {} } : {}),
@@ -540,6 +552,9 @@ export function classifyModelFailure(error: unknown): {
   if (/empty|没有返回|未返回|空/i.test(message)) {
     return { kind: "empty", userMessage: "对话模型没有返回可用内容", rawMessage: compactErrorMessage(message) };
   }
+  if (/上游服务过载|servers are currently overloaded/i.test(message)) {
+    return { kind: "server", userMessage: "对话模型上游服务过载，请稍后重试", rawMessage: compactErrorMessage(message) };
+  }
   if (/5\d\d\b|对话模型调用失败：/i.test(message)) {
     return { kind: "server", userMessage: "对话模型服务暂时异常", rawMessage: compactErrorMessage(message) };
   }
@@ -612,9 +627,9 @@ async function probeResponses(config: ChatRuntimeConfig, signal: AbortSignal): P
     model: config.model,
     instructions: "你是健康检查探针。只回复 ok。",
     input: [{ role: "user", content: "请只回复 ok" }],
-    stream: false,
-    max_output_tokens: 16,
-    reasoning: responseReasoning("none"),
+    stream: /^gpt-6(?:-|$)/i.test(config.model),
+    max_output_tokens: /^gpt-6(?:-|$)/i.test(config.model) ? 256 : 16,
+    reasoning: responseReasoning(/^gpt-6(?:-|$)/i.test(config.model) ? "low" : "none"),
     store: false
   }, signal);
   const text = await parseResponseApiBody(response);
@@ -640,9 +655,9 @@ async function probeChatCompletions(config: ChatRuntimeConfig, signal: AbortSign
       { role: "system", content: "你是健康检查探针。只回复 ok。" },
       { role: "user", content: "请只回复 ok" }
     ],
-    reasoningEffort: "none",
-    maxOutputTokens: 16,
-    stream: false
+    reasoningEffort: /^gpt-6(?:-|$)/i.test(config.model) ? "low" : "none",
+    maxOutputTokens: /^gpt-6(?:-|$)/i.test(config.model) ? 256 : 16,
+    stream: /^gpt-6(?:-|$)/i.test(config.model)
   }), signal);
   const text = await parseChatCompletionResponseBody(response);
   if (!text.trim()) {
@@ -694,7 +709,7 @@ function throwIfAborted(signal?: AbortSignal) {
   throw error;
 }
 
-async function parseResponseApiBody(response: UndiciResponse) {
+async function parseResponseApiBody(response: ModelResponseBody) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 
@@ -705,7 +720,7 @@ async function parseResponseApiBody(response: UndiciResponse) {
   return extractResponseText(parseModelJsonBody(body, contentType));
 }
 
-async function parseChatCompletionResponseBody(response: UndiciResponse) {
+async function parseChatCompletionResponseBody(response: ModelResponseBody) {
   const contentType = response.headers.get("content-type");
   const body = await response.text();
 

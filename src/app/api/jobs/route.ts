@@ -28,7 +28,8 @@ const accountStyleSchema = z.object({
   href: z.string().optional(),
   input: z.object({
     platform: z.enum(platforms),
-    accountId: z.string().min(1)
+    accountId: z.string().min(1),
+    force: z.boolean().optional()
   })
 });
 
@@ -79,7 +80,6 @@ const engagementOptionsSchema = {
   commentCount: z.number().int().min(1).max(200).optional().default(50),
   includeDanmaku: z.boolean().optional().default(false),
   danmakuCount: z.number().int().min(1).max(300).optional().default(50),
-  generationMode: z.enum(["quick", "reference", "research"]).optional().default("quick"),
   targetPlatform: z.enum(platforms).optional()
 };
 

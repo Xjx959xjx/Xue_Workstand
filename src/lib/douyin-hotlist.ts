@@ -53,7 +53,7 @@ const DEFAULT_WINDOW_DAYS = 3;
 const DEFAULT_REFRESH_LIMIT = 60;
 const MAX_REFRESH_LIMIT = 120;
 const MAX_WINDOW_DAYS = 14;
-const DEFAULT_REFRESH_CONCURRENCY = 5;
+const DEFAULT_REFRESH_CONCURRENCY = 2;
 const MAX_REFRESH_CONCURRENCY = 5;
 const EXPLOSIVE_MAX_AGE_HOURS = 3;
 const EXPLOSIVE_MIN_LIKES = 1000;
@@ -374,19 +374,16 @@ async function refreshDouyinHotlistAccounts(
   }
 
   throwIfAborted(signal);
-  const batchResults = await collectDouyinPostVideosBatch({
+  await collectDouyinPostVideosBatch({
     accounts: douyinEntries.map((entry) => entry.account),
     concurrency,
     fromDate: window.fromDate,
     limit,
     signal,
-    toDate: window.toDate
-  });
-
-  await Promise.all(
-    batchResults.map(async (batchResult, index) => {
+    toDate: window.toDate,
+    onResult: async (batchResult) => {
       throwIfAborted(signal);
-      const resultIndex = douyinEntries[index].index;
+      const resultIndex = douyinEntries.find((entry) => entry.account.id === batchResult.account.id)!.index;
       if (batchResult.status === "failed") {
         results[resultIndex] = {
           accountId: batchResult.account.id,
@@ -405,8 +402,8 @@ async function refreshDouyinHotlistAccounts(
         raw: batchResult.raw
       });
       await onResult?.(results[resultIndex]);
-    })
-  );
+    }
+  });
 
   return results.map((result, index) => result || {
     accountId: accounts[index].id,

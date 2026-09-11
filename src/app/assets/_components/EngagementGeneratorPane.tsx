@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Globe2, MessageSquareText, Send, Zap } from "lucide-react";
+import { Send } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
-import type { EngagementGenerationMode, Platform } from "@/lib/types";
+import type { Platform } from "@/lib/types";
 
 const COMMENT_COUNT_PRESETS = [30, 50, 100];
 
@@ -15,7 +15,6 @@ type EngagementGeneratorPaneProps = {
   danmakuCount: number;
   includeComments: boolean;
   includeDanmaku: boolean;
-  generationMode: EngagementGenerationMode;
   targetPlatform: Platform;
   supportsDanmaku: boolean;
   generationProgress: {
@@ -27,7 +26,6 @@ type EngagementGeneratorPaneProps = {
   onCommentCountChange: (count: number) => void;
   onDanmakuCountChange: (count: number) => void;
   onGenerate: () => void;
-  onGenerationModeChange: (mode: EngagementGenerationMode) => void;
   onTargetPlatformChange: (platform: Platform) => void;
   onIncludeCommentsChange: (enabled: boolean) => void;
   onIncludeDanmakuChange: (enabled: boolean) => void;
@@ -41,7 +39,6 @@ export function EngagementGeneratorPane({
   danmakuCount,
   includeComments,
   includeDanmaku,
-  generationMode,
   targetPlatform,
   supportsDanmaku,
   generationProgress,
@@ -49,7 +46,6 @@ export function EngagementGeneratorPane({
   onCommentCountChange,
   onDanmakuCountChange,
   onGenerate,
-  onGenerationModeChange,
   onTargetPlatformChange,
   onIncludeCommentsChange,
   onIncludeDanmakuChange,
@@ -63,44 +59,6 @@ export function EngagementGeneratorPane({
         <section className="engagement-form-section engagement-options-panel">
           <div className="engagement-form-heading">
             <h3>生成设置</h3>
-          </div>
-          <div className="engagement-mode-row">
-            <span className="field-label">生成模式</span>
-            <div aria-label="选择评论生成模式" className="segmented engagement-mode-segmented" role="group">
-              <button
-                aria-pressed={generationMode === "quick"}
-                className={generationMode === "quick" ? "active" : ""}
-                disabled={busy === "generate"}
-                onClick={() => onGenerationModeChange("quick")}
-                title="读取本地真实平台语料画像，不联网抓评论"
-                type="button"
-              >
-                <Zap aria-hidden="true" size={14} />
-                平台自然
-              </button>
-              <button
-                aria-pressed={generationMode === "reference"}
-                className={generationMode === "reference" ? "active" : ""}
-                disabled={busy === "generate"}
-                onClick={() => onGenerationModeChange("reference")}
-                title="额外读取当前视频原评，不搜索其他视频"
-                type="button"
-              >
-                <MessageSquareText aria-hidden="true" size={14} />
-                原评增强
-              </button>
-              <button
-                aria-pressed={generationMode === "research"}
-                className={generationMode === "research" ? "active" : ""}
-                disabled={busy === "generate"}
-                onClick={() => onGenerationModeChange("research")}
-                title="调研当前原评、B站与抖音相关视频评论及公开论坛讨论"
-                type="button"
-              >
-                <Globe2 aria-hidden="true" size={14} />
-                全网调研
-              </button>
-            </div>
           </div>
           <div className="engagement-mode-row">
             <span className="field-label">目标平台</span>

@@ -3,6 +3,7 @@ import type {
   DouyinHotlistRefreshJobResult,
   JobRecord
 } from "./types";
+import { getDouyinAccessError, pausedDouyinRefreshError } from "./douyin-access-errors";
 
 export const MAX_DOUYIN_HOTLIST_REFRESH_LOGS = 6;
 
@@ -138,6 +139,8 @@ function buildRefreshLogGroups(accounts: DouyinHotlistRefreshAccountResult[]): D
 
 function compactRefreshError(message: string) {
   const normalized = message.replace(/\s+/g, " ").trim();
+  const accessError = getDouyinAccessError(normalized);
+  if (accessError) return normalized.includes("本轮剩余抖音请求已暂停") ? pausedDouyinRefreshError(accessError) : accessError;
   const platform = /opencli bilibili|B站/i.test(normalized) ? "B站" : /opencli douyin|抖音/i.test(normalized) ? "抖音" : "平台";
   if (/Unexpected token.*<|<!DOCTYPE|not valid JSON/i.test(normalized)) {
     return `${platform}返回异常页面，数据解析失败`;

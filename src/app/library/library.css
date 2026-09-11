@@ -708,14 +708,33 @@
 }
 
 @media (min-width: 1181px) {
-  .workbench-frame-page:has(> .library-quick-start.advanced-open) {
-    grid-template-rows: auto auto minmax(0, 1fr);
-    height: auto;
-    min-height: var(--workspace-page-height);
+  .library-workspace.three-pane {
+    grid-template-columns: clamp(200px, 14vw, 252px) minmax(0, 1fr) clamp(260px, 18vw, 344px);
+    grid-template-rows: minmax(0, 1fr);
   }
 
-  .library-page .library-quick-start.advanced-open + .library-workspace {
-    min-height: var(--workspace-default-height);
+  .library-workspace > .library-detail-pane {
+    grid-column: auto;
+    border-top: 0;
+  }
+
+  .workbench-frame-page:has(> .library-quick-start.advanced-open) {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: var(--workspace-page-height);
+    min-height: 0;
+  }
+
+  .library-page .library-workspace {
+    min-height: 0;
+  }
+
+  .library-workspace .pane-body {
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .library-page .video-table {
+    min-width: 720px;
   }
 }
 
@@ -926,7 +945,7 @@
   }
 
   .library-page:has(> .library-quick-start):has(> .library-error-stack) {
-    grid-template-rows: auto var(--workbench-leading-panel-height) auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
   }
 
   .library-page:has(> .library-quick-start):has(> .library-error-stack) > .library-workspace {

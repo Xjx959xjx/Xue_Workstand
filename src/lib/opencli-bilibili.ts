@@ -43,14 +43,24 @@ export type BilibiliRelatedCommentVideo = {
   title: string;
   author: string;
   score: number;
+  views: number;
+  likes: number;
+  publishedAt?: string;
   url: string;
+};
+
+export type BilibiliRelatedCommentSample = BilibiliCommentSample & {
+  videoId: string;
+  videoTitle: string;
 };
 
 export type BilibiliRelatedCommentResult = {
   query: string;
   videos: BilibiliRelatedCommentVideo[];
   comments: string[];
+  commentSamples: BilibiliRelatedCommentSample[];
   replyCommentCount: number;
+  appliedMinViews: number;
 };
 
 export type BilibiliVideoStatsResult = {
@@ -157,11 +167,11 @@ export async function collectBilibiliVideos(input: {
 
 export async function getBilibiliRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number; replyLimit?: number; signal?: AbortSignal } = {}
+  options: { videoLimit?: number; commentLimit?: number; replyLimit?: number; minViews?: number; signal?: AbortSignal } = {}
 ): Promise<BilibiliRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
-    return { query: "", videos: [], comments: [], replyCommentCount: 0 };
+    return { query: "", videos: [], comments: [], commentSamples: [], replyCommentCount: 0, appliedMinViews: 0 };
   }
 
   const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
@@ -174,18 +184,24 @@ export async function getBilibiliRelatedTopicComments(
     "--type",
     "video",
     "--limit",
-    String(Math.max(videoLimit * 2, videoLimit)),
+    String(Math.max(videoLimit * 8, 24)),
     "-f",
     "json"
   ], { timeout: 30_000, signal: options.signal });
-  const videos = asArray(parseJsonish(stdout))
+  const candidates = asArray(parseJsonish(stdout))
     .map(normalizeBilibiliRelatedVideo)
     .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
-    .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery))
-    .sort((a, b) => b.score - a.score)
+    .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery));
+  const requestedMinViews = Math.max(0, options.minViews ?? 150_000);
+  const thresholdTiers = uniqueNumbers([requestedMinViews, 80_000, 30_000, 0]).filter((value) => value <= requestedMinViews);
+  const appliedMinViews = thresholdTiers.find((threshold) => candidates.some((video) => video.views >= threshold)) ?? 0;
+  const videos = candidates
+    .filter((video) => video.views >= appliedMinViews)
+    .sort(compareBilibiliRelatedVideos)
     .slice(0, videoLimit);
 
   const comments: string[] = [];
+  const commentSamples: BilibiliRelatedCommentSample[] = [];
   let replyCommentCount = 0;
   for (const video of videos) {
     const rows = await getBilibiliComments(
@@ -197,6 +213,7 @@ export async function getBilibiliRelatedTopicComments(
       return [];
     });
     comments.push(...rows.map((comment) => comment.text).filter(Boolean));
+    commentSamples.push(...rows.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title })));
     const replyRoot = rows
       .filter((comment) => comment.rpid && comment.replies > 0)
       .sort((left, right) => right.replies - left.replies || right.likes - left.likes)[0];
@@ -207,6 +224,7 @@ export async function getBilibiliRelatedTopicComments(
       });
       replyCommentCount += replies.length;
       comments.push(...replies.map((comment) => comment.text).filter(Boolean));
+      commentSamples.push(...replies.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title })));
     }
   }
 
@@ -214,7 +232,9 @@ export async function getBilibiliRelatedTopicComments(
     query: cleanQuery,
     videos,
     comments: uniqueStrings(comments),
-    replyCommentCount
+    commentSamples: dedupeBilibiliCommentSamples(commentSamples),
+    replyCommentCount,
+    appliedMinViews
   };
 }
 
@@ -475,8 +495,31 @@ function normalizeBilibiliRelatedVideo(row: unknown): BilibiliRelatedCommentVide
     title,
     author: String(object.author || object.owner || object.uname || ""),
     score: toNumber(object.views || object.play || object.view) + toNumber(object.likes || object.like) * 2,
+    views: toNumber(object.views || object.play || object.view),
+    likes: toNumber(object.likes || object.like),
+    publishedAt: normalizeTimestamp(object.date || object.pubdate || object.created_at || object.publish_time),
     url: url || `https://www.bilibili.com/video/${id}`
   };
+}
+
+function compareBilibiliRelatedVideos(left: BilibiliRelatedCommentVideo, right: BilibiliRelatedCommentVideo) {
+  const leftTime = left.publishedAt ? Date.parse(left.publishedAt) : 0;
+  const rightTime = right.publishedAt ? Date.parse(right.publishedAt) : 0;
+  return right.score - left.score || rightTime - leftTime;
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values.map((value) => Math.max(0, Math.round(value))))];
+}
+
+function dedupeBilibiliCommentSamples(values: BilibiliRelatedCommentSample[]) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.videoId}\n${value.text.toLowerCase()}`;
+    if (!value.text || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function getBilibiliOpenCliOrder(order: CollectOrder | undefined) {

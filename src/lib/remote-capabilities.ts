@@ -93,7 +93,7 @@ export async function probeRemoteCapabilityBridge(options: {
     try {
       body = text ? JSON.parse(text) : {};
     } catch {
-      return failedProbe(requiredOperations, `远程能力服务返回了无法解析的响应（HTTP ${response.status}）`);
+      return failedProbe(requiredOperations, describeNonJsonCapabilityResponse(response.status, text));
     }
     if (!response.ok) {
       const detail = readErrorMessage(body) || `HTTP ${response.status}`;
@@ -169,7 +169,7 @@ export async function callRemoteCapability<T>(
     try {
       body = text ? JSON.parse(text) : {};
     } catch {
-      throw new Error(`远程能力服务返回了无法解析的响应（${response.status}）。`);
+      throw new Error(describeNonJsonCapabilityResponse(response.status, text));
     }
     if (!response.ok) {
       const message = readErrorMessage(body) || `HTTP ${response.status}`;
@@ -213,4 +213,12 @@ function assertSecureCapabilityUrl(value: string) {
   if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && localHost)) {
     throw new Error("SITES_EXTERNAL_CAPABILITY_URL 必须使用 HTTPS；只有 localhost 调试允许 HTTP。");
   }
+}
+
+function describeNonJsonCapabilityResponse(status: number, text: string) {
+  // 仅提取基础设施错误编号，避免把上游 HTML、令牌或请求详情带回客户端。
+  const code = text.match(/(?:error\s*(?:code)?|code)\s*[:=]?\s*(1\d{3})\b/i)?.[1];
+  const suffix = code ? `，上游错误 ${code}` : "";
+  const hint = status === 530 ? "。请检查云端到能力服务的 DNS 解析、公网入口和端口连通性。" : "。";
+  return `远程能力服务返回非 JSON 响应（HTTP ${status}${suffix}）${hint}`;
 }

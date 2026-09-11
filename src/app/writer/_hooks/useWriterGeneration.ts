@@ -52,6 +52,7 @@ type UseWriterGenerationInput = {
   recentJobs: JobRecord[];
   revisionInstruction: string;
   revisionScope: WriteRevisionScope;
+  revisionMode: "edit" | "recalibrate";
   selectedText: string;
   onDraftSaved?: (draft: Draft) => void;
   onRevisionCompleted?: () => void;
@@ -82,6 +83,7 @@ export function useWriterGeneration({
   recentJobs,
   revisionInstruction,
   revisionScope,
+  revisionMode,
   selectedText,
   onDraftSaved,
   onRevisionCompleted,
@@ -415,6 +417,7 @@ export function useWriterGeneration({
           currentContent: lastContent,
           revisionInstruction: revisionInstruction.trim(),
           revisionScope,
+          revisionMode,
           selectedText: revisionScope === "selection" ? selectedText : undefined
         }
       });
@@ -438,6 +441,7 @@ export function useWriterGeneration({
     lastDraftId,
     revisionInstruction,
     revisionScope,
+    revisionMode,
     selectedText,
     setBusy,
     setNotice,
@@ -636,6 +640,7 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
     brief: draft.brief,
     research: draft.research,
     sourceDigest: draft.sourceDigest,
+    writerContext: draft.writerContext,
     styleRefs: draft.styleRefs,
     version: draft.version
   };

@@ -169,6 +169,28 @@ export async function loadEngagementStyleProfile(
   };
 }
 
+export function buildPresetEngagementStyleProfile(channel: EngagementStyleChannel): EngagementStyleProfile {
+  return {
+    channel,
+    source: "preset",
+    sampleCount: 0,
+    sourceSampleCount: 0,
+    lengthBuckets: presetLengthBuckets(channel),
+    lengthQuantiles: PRESET_LENGTHS[channel],
+    intentBuckets: presetIntentBuckets(channel),
+    nativeEmoteRate: PRESET_EMOTE_RATES[channel],
+    nativeEmotes: PRESET_EMOTES[channel],
+    questionRate: channel === "bilibili_danmaku" ? 0.08 : 0.14,
+    exclamationRate: channel === "douyin_comment" ? 0.12 : 0.08,
+    examples: [],
+    benchmarkAccounts: [],
+    benchmarkSampleCount: 0,
+    matchedVideoCount: 0,
+    matchedTopics: [],
+    matchedContentTypes: []
+  };
+}
+
 export function extractNativeEmotes(value: string) {
   return [
     ...(value.match(NATIVE_EMOTE_PATTERN) || []),

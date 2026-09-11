@@ -180,14 +180,17 @@ export const VideoTable = memo(function VideoTable({
                 const primaryValue = video.platform === "douyin" ? video.hotScore : video.stats.views;
                 const metricWidth = maxPrimaryMetric > 0 ? Math.max(4, Math.round((primaryMetric.sortValue / maxPrimaryMetric) * 100)) : 4;
                 return (
-                  <tr className={videoManageMode ? (checked ? "checked" : "") : selectedVideoId === video.id ? "active" : ""} key={video.id}>
+                  <tr
+                    className={videoManageMode ? (checked ? "checked" : "") : selectedVideoId === video.id ? "active" : ""}
+                    key={video.id}
+                    onClick={() => onSelectVideo(video.id)}
+                  >
                     {videoManageMode ? <td className="video-select-cell" aria-hidden="true"><span className={`check-dot ${checked ? "checked" : ""}`} /></td> : null}
                     <td className="video-title-column">
                       <button
                         aria-current={!videoManageMode && selectedVideoId === video.id ? "true" : undefined}
                         aria-pressed={videoManageMode ? checked : undefined}
                         className={`video-row-button ${videoManageMode ? "manage" : ""}`}
-                        onClick={() => onSelectVideo(video.id)}
                         title={video.title}
                         type="button"
                       >

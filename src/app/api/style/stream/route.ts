@@ -13,7 +13,8 @@ export const runtime = "nodejs";
 
 const schema = z.object({
   platform: z.enum(platforms),
-  accountId: z.string().min(1)
+  accountId: z.string().min(1),
+  force: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
       emit({ type: "stage", stage: "prepare", message: "正在读取账号转写样本", progress: 12 });
       const context = await prepareAccountStyleContext(input.platform, input.accountId, {
         signal,
+        force: input.force,
         onAnalysisProgress(progress) {
           const percent = progress.analysisCount
             ? Math.floor((progress.completedCount / progress.analysisCount) * 25)

@@ -267,13 +267,15 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
     const id = safeSegment(video.id, shortHash(`${video.title}-${video.url}`));
     const existing = await readJsonFile<Video>(hotlistVideoJsonPath(account.slug, id));
     const mergedStats = mergeVideoStats(existing, video);
+    const publishedAt = video.publishedAt || existing?.publishedAt;
+    const normalizedVideo = publishedAt === video.publishedAt ? video : { ...video, publishedAt };
     const hotScore = calculateHotlistBaseScore({ ...video, stats: mergedStats });
-    if (hasMeaningfulVideoChange(existing, video, mergedStats)) changedCount += 1;
+    if (hasMeaningfulVideoChange(existing, normalizedVideo, mergedStats)) changedCount += 1;
     const updatedAt = nowIso();
     const hotlistTrend = buildHotlistTrend(existing, hotScore, updatedAt);
     const nextBase: Video = {
       ...existing,
-      ...video,
+      ...normalizedVideo,
       id,
       accountId: account.id,
       platform: account.platform,

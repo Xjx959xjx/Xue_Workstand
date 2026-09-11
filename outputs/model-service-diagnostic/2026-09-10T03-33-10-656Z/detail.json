@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "results": [
+    {
+      "model": "gpt-5.6-sol",
+      "proxy": true,
+      "api": "/chat/completions",
+      "stream": true,
+      "headersMs": 2932,
+      "status": 200,
+      "contentType": "text/event-stream",
+      "requestId": "d05b2085-58e7-4c7f-8e4d-eba4ac408054",
+      "returnedModel": "gpt-5.6-sol",
+      "errors": [
+        {
+          "code": "",
+          "type": "upstream_error",
+          "message": "Our servers are currently overloaded. Please try again later."
+        }
+      ],
+      "text": "",
+      "ok": false,
+      "ms": 3229
+    },
+    {
+      "model": "gpt-6",
+      "proxy": false,
+      "api": "/chat/completions",
+      "stream": true,
+      "headersMs": 4993,
+      "status": 200,
+      "contentType": "text/event-stream",
+      "requestId": "70d67bd3-aa97-4be7-b64e-bbc58c3d8138",
+      "returnedModel": "gpt-6",
+      "errors": [
+        {
+          "code": "",
+          "type": "upstream_error",
+          "message": "Our servers are currently overloaded. Please try again later."
+        }
+      ],
+      "text": "",
+      "ok": false,
+      "ms": 5198
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "proxy": false,
+      "api": "/chat/completions",
+      "stream": true,
+      "headersMs": 1524,
+      "status": 200,
+      "contentType": "text/event-stream",
+      "requestId": "1c5ab666-ae96-40eb-8c3f-97f8d23d842f",
+      "returnedModel": "gpt-5.6-sol",
+      "errors": [
+        {
+          "code": "",
+          "type": "upstream_error",
+          "message": "Our servers are currently overloaded. Please try again later."
+        }
+      ],
+      "text": "",
+      "ok": false,
+      "ms": 12828
+    },
+    {
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "/responses",
+      "stream": true,
+      "errorName": "TimeoutError",
+      "message": "The operation was aborted due to timeout",
+      "cause": "",
+      "ms": 60005
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "proxy": true,
+      "api": "/responses",
+      "stream": true,
+      "errorName": "TimeoutError",
+      "message": "The operation was aborted due to timeout",
+      "cause": "",
+      "ms": 60003
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "proxy": false,
+      "api": "/chat/completions",
+      "stream": false,
+      "errorName": "TimeoutError",
+      "message": "The operation was aborted due to timeout",
+      "cause": "",
+      "ms": 60006
+    }
+  ]
+}

@@ -6,14 +6,14 @@
 
 .field label {
   color: var(--muted-strong);
-  font-size: var(--text-caption);
+  font-size: var(--text-meta);
   font-weight: var(--font-weight-label);
   line-height: var(--line-height-caption);
 }
 
 .field > span {
   color: var(--muted-strong);
-  font-size: var(--text-caption);
+  font-size: var(--text-meta);
   font-weight: var(--font-weight-label);
   line-height: var(--line-height-caption);
 }
@@ -36,8 +36,8 @@
   border: 1px solid color-mix(in oklch, var(--line-strong) 46%, var(--line));
   border-radius: var(--control-radius);
   color: var(--text);
-  background: color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
-  box-shadow: inset 0 1px 2px color-mix(in oklch, var(--text-strong) 3.5%, transparent), var(--surface-inset-highlight);
+  background: var(--control-bg);
+  box-shadow: var(--surface-inset-highlight);
   outline: 2px solid transparent;
   outline-offset: 2px;
   transition:
@@ -113,14 +113,14 @@
   appearance: none;
   -webkit-appearance: none;
   padding-right: 36px;
-  background: var(--select-background), var(--select-arrow);
+  background: var(--select-arrow), var(--select-background);
   background-repeat: no-repeat, no-repeat;
   background-position:
-    0 0,
-    right 11px center;
+    right 11px center,
+    0 0;
   background-size:
-    100% 100%,
-    16px 16px;
+    16px 16px,
+    100% 100%;
 }
 
 .field select:hover,

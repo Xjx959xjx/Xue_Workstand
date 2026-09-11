@@ -121,7 +121,7 @@ type StartJobRequest = {
 | `project-style` | `name`；`projectId`、`description`、`sourceAccountIds`、`sourceMaterialIds` 可选。 |
 | `transcribe-video` | `platform`、`accountId`、`videoId`；`mediaUrl`（完整 `http(s)` URL）、`allowRemoteDownload` 可选。 |
 | `batch-transcribe` | `platform`、`accountId`、`limit`（正整数或 `all`，默认 `5`）；`videoIds`（非空数组）、`updateStyle` 可选。 |
-| `engagement` | `sourceType` 为 `draft`、`text`、`url` 或 `record`。分别需要 `draftId`、`text`、`url` 或 `recordId`。公共选项：`includeComments` 默认 `true`、`commentCount` 1-200 默认 `50`、`includeDanmaku` 默认 `false`、`danmakuCount` 1-300 默认 `50`、`generationMode`（`quick` / `reference`，默认 `quick`）、`targetPlatform` 可选。 |
+| `engagement` | `sourceType` 为 `draft`、`text`、`url` 或 `record`。分别需要 `draftId`、`text`、`url` 或 `recordId`。公共选项：`includeComments` 默认 `true`、`commentCount` 1-200 默认 `50`、`includeDanmaku` 默认 `false`、`danmakuCount` 1-300 默认 `50`、`targetPlatform` 可选。评论统一先执行全网调研，不再提供生成模式切换。 |
 | `hotlist-refresh` | 必填 `window`；`accountIds`（非空数组）、`limit` 1-120、`automatic` 可选。 |
 | `collect-account` | `platform`、`name`、`limit` 1-50、`order`（`views` / `likes` / `favorites` / `comments` / `pubdate`）；`uidOrUrl`、`fromDate`、`toDate` 可选。 |
 | `single-video-transcribe` | `url`（完整 `http(s)` URL）；`titleHint` 可选。 |

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "purpose": "模型连通性诊断",
+  "results": [
+    {
+      "name": "chat_completions-with-v1",
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "chat_completions",
+      "withV1": true,
+      "headersMs": 36343,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [],
+      "text": "",
+      "httpStatus": 200,
+      "contentType": "text/event-stream",
+      "finalPath": "/v1/chat/completions",
+      "failure": {
+        "kind": "timeout",
+        "message": "对话模型服务超时"
+      },
+      "totalMs": 45003
+    },
+    {
+      "name": "chat_completions-without-v1",
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "chat_completions",
+      "withV1": false,
+      "headersMs": 591,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [
+        "html-not-model-api"
+      ],
+      "text": "",
+      "httpStatus": 200,
+      "contentType": "text/html; charset=utf-8",
+      "finalPath": "/chat/completions",
+      "totalMs": 1020
+    },
+    {
+      "name": "responses-with-v1",
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "responses",
+      "withV1": true,
+      "headersMs": null,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [],
+      "text": "",
+      "failure": {
+        "kind": "timeout",
+        "message": "对话模型服务超时"
+      },
+      "totalMs": 45012
+    },
+    {
+      "name": "responses-without-v1",
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "responses",
+      "withV1": false,
+      "headersMs": null,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [],
+      "text": "",
+      "failure": {
+        "kind": "server",
+        "message": "对话模型服务暂时异常"
+      },
+      "httpStatus": 500,
+      "totalMs": 851
+    }
+  ]
+}

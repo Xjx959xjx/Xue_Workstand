@@ -34,7 +34,7 @@
   color: var(--text-strong);
   background: color-mix(in oklch, var(--accent-tint) 34%, var(--panel-raised));
   box-shadow: var(--control-hover-shadow);
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .btn.primary {
@@ -53,8 +53,7 @@
   border-color: var(--control-primary-hover-border);
   color: var(--control-primary-text);
   background: var(--control-primary-hover-bg);
-  box-shadow: 0 2px 4px color-mix(in oklch, var(--accent-strong) 18%, transparent),
-    0 10px 24px color-mix(in oklch, var(--accent-strong) 24%, transparent);
+  box-shadow: var(--control-primary-shadow);
 }
 
 .btn.primary:hover::after {
@@ -140,7 +139,7 @@
 
 .btn:active:not(:disabled):not(.disabled):not([aria-disabled="true"]) {
   box-shadow: none;
-  transform: translateY(0) scale(0.985);
+  transform: translateY(0) scale(0.99);
 }
 
 .text-link {

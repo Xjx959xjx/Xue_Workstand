@@ -59,6 +59,7 @@ import {
   jobKinds
 } from "./types";
 import { nowIso, safeSegment, shortHash } from "./utils";
+import { logJobTransition } from "./observability";
 
 type JobRuntime = {
   initialized: boolean;
@@ -207,6 +208,9 @@ async function patchJob(jobId: string, patch: Partial<JobRecord>, options: Patch
       });
     }
     await writeJob(next, options);
+    if (shouldRecordJobEvent(current, next, patch)) {
+      logJobTransition(current, next);
+    }
     return next;
   });
 }
@@ -691,7 +695,10 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     return;
   }
 
-  const batch = await prepareWriteCopyBatchContext(start.input, { signal: getJobAbortSignal(jobId) });
+  const batch = await prepareWriteCopyBatchContext(start.input, {
+    signal: getJobAbortSignal(jobId),
+    onProgress(message) { void patchJob(jobId, { stage: "prepare-style", message, progress: 32 }); }
+  });
   throwIfCancelled(jobId);
 
   if (start.input.useWebResearch) {
@@ -842,6 +849,7 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
     progress: 12
   });
   const context = await prepareAccountStyleContext(start.input.platform, start.input.accountId, {
+    force: start.input.force,
     signal: getJobAbortSignal(jobId),
     onAnalysisProgress(progress) {
       const percent = progress.analysisCount

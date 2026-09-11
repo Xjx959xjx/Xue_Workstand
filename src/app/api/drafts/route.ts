@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteDrafts, getDraftSummaries, resolveDraft, saveDraft, updateDraftTitle } from "@/lib/storage";
 import { platforms } from "@/lib/types";
+import { writerContextSchema } from "@/lib/writer-context";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,7 @@ const draftStyleReferenceSchema = z.discriminatedUnion("targetType", [
 ]);
 
 const draftContextFields = {
+  writerContext: writerContextSchema.optional(),
   brief: z.string().optional(),
   research: z.string().max(120_000).optional(),
   styleRefs: z.array(draftStyleReferenceSchema).min(1).optional(),

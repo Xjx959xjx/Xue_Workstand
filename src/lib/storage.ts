@@ -77,6 +77,7 @@ const DEFAULT_STYLE = `# 风格卡
 
 const draftAssetQueues = new Map<string, Promise<unknown>>();
 const engagementRecordQueues = new Map<string, Promise<unknown>>();
+const engagementCacheQueues = new Map<string, Promise<unknown>>();
 const identityMutationQueues = new Map<string, Promise<unknown>>();
 const videoMutationQueues = new Map<string, Promise<unknown>>();
 
@@ -84,7 +85,7 @@ type DetailReadOptions = {
   includeStyle?: boolean;
 };
 
-export type EngagementCacheKind = "source" | "brief" | "research";
+export type EngagementCacheKind = "source" | "brief" | "research" | "samples";
 
 export type AccountStyleMeta = {
   sampleHash: string;
@@ -133,6 +134,7 @@ export type StyleSampleAnalysisCache = {
   title: string;
   inputChars: number;
   analysis: string;
+  evidence?: import("./writer-context").StyleEvidence;
   usedModel: string;
   reasoningEffort: string;
   requestedServiceTier?: string;
@@ -846,6 +848,28 @@ export async function writeEngagementCache(kind: EngagementCacheKind, cacheKey: 
   await writeJson(engagementCacheJsonPath(kind, cacheKey), value);
 }
 
+export async function updateEngagementCache<T>(
+  kind: EngagementCacheKind,
+  cacheKey: string,
+  update: (current: T | null) => T | Promise<T>
+) {
+  await ensureLibrary();
+  const queueKey = `${kind}:${normalizeStorageSegment(cacheKey, "评论缓存键")}`;
+  const previous = engagementCacheQueues.get(queueKey) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    const current = await readJson<T>(engagementCacheJsonPath(kind, cacheKey));
+    const value = await update(current);
+    await writeJson(engagementCacheJsonPath(kind, cacheKey), value);
+    return value;
+  });
+  engagementCacheQueues.set(queueKey, next);
+  try {
+    return await next;
+  } finally {
+    if (engagementCacheQueues.get(queueKey) === next) engagementCacheQueues.delete(queueKey);
+  }
+}
+
 export async function getEngagementRecords() {
   await ensureLibrary();
   const files = await readDirNamesIfExists(engagementPath());
@@ -1327,9 +1351,19 @@ async function withVideoMutationLocks<T>(keys: string[], run: () => Promise<T>):
   return withVideoMutationLock(key, () => withVideoMutationLocks(remaining, run));
 }
 
-export async function saveStyle(platform: Platform, accountId: string, content: string) {
+export async function saveStyle(platform: Platform, accountId: string, content: string, expectedStyleHash?: string) {
   const account = await resolveAccount(platform, accountId);
-  await writeTextFileAtomic(stylePath(account.platform, account.slug), content.trimEnd() + "\n");
+  await withIdentityMutationLock(`style:${account.id}`, async () => {
+    const target = stylePath(account.platform, account.slug);
+    const previous = await readTextOrDefaultIfMissing(target, "");
+    if (expectedStyleHash && shortHash((previous || DEFAULT_STYLE).trim()) !== expectedStyleHash) {
+      throw Object.assign(new Error("风格卡在生成期间已被修改，已保留当前版本，请重新归纳。"), { statusCode: 409 });
+    }
+    if (previous.trim() && previous.trimEnd() !== content.trimEnd()) {
+      await writeTextFileAtomic(path.join(accountPath(account.platform, account.slug), ".style-history", `${shortHash(previous)}.md`), previous);
+    }
+    await writeTextFileAtomic(target, content.trimEnd() + "\n");
+  });
   return content.trimEnd();
 }
 
@@ -1374,10 +1408,20 @@ export async function saveAccountStyleSampleAnalysis(
   return cache;
 }
 
-export async function saveProjectStyle(projectId: string, content: string) {
+export async function saveProjectStyle(projectId: string, content: string, expectedStyleHash?: string) {
   const project = await resolveProject(projectId);
   await ensureProjectDirs(project.slug);
-  await writeTextFileAtomic(projectStylePath(project.slug), content.trimEnd() + "\n");
+  await withIdentityMutationLock(`style:${project.id}`, async () => {
+    const target = projectStylePath(project.slug);
+    const previous = await readTextOrDefaultIfMissing(target, "");
+    if (expectedStyleHash && shortHash((previous || DEFAULT_STYLE).trim()) !== expectedStyleHash) {
+      throw Object.assign(new Error("项目风格卡在生成期间已被修改，已保留当前版本，请重试。"), { statusCode: 409 });
+    }
+    if (previous.trim() && previous.trimEnd() !== content.trimEnd()) {
+      await writeTextFileAtomic(path.join(projectPath(project.slug), ".style-history", `${shortHash(previous)}.md`), previous);
+    }
+    await writeTextFileAtomic(target, content.trimEnd() + "\n");
+  });
   return content.trimEnd();
 }
 

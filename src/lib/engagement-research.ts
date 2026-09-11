@@ -4,7 +4,8 @@ import {
   getBilibiliRelatedTopicComments,
   getDouyinRelatedTopicComments
 } from "./opencli";
-import { readEngagementCache, writeEngagementCache } from "./storage";
+import { readEngagementCache, updateEngagementCache, writeEngagementCache } from "./storage";
+import type { Platform } from "./types";
 import { clampText, nowIso, shortHash } from "./utils";
 
 export type EngagementResearchBrief = {
@@ -17,19 +18,10 @@ export type EngagementResearchBrief = {
   anchorTerms: string[];
 };
 
-export type EngagementResearchLane =
-  | "direct"
-  | "recent"
-  | "legacy"
-  | "newcomer"
-  | "life"
-  | "platform"
-  | "reply";
-
 type CommentIntentBuckets = Record<EngagementCommentIntent, number>;
 
 export type EngagementResearchSourceStat = {
-  source: "bilibili" | "douyin" | "forum";
+  source: "bilibili" | "douyin";
   status: "completed" | "partial" | "failed";
   videoCount: number;
   commentCount: number;
@@ -52,6 +44,9 @@ export type EngagementCommentResearch = {
   };
   intentBuckets: CommentIntentBuckets;
   sourceStats: EngagementResearchSourceStat[];
+  hotComments: string[];
+  reusableComments: string[];
+  sampleLibraryCount: number;
   themes: string[];
   phrases: string[];
   questions: string[];
@@ -67,35 +62,47 @@ export type EngagementCommentResearch = {
   cacheHit: boolean;
 };
 
-const ENGAGEMENT_RESEARCH_VERSION = "engagement-research-v4";
+const ENGAGEMENT_RESEARCH_VERSION = "engagement-research-v5";
 const RESEARCH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PARTIAL_RESEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_RESEARCH_QUERIES = 3;
 const PLATFORM_RESEARCH_CONCURRENCY = 3;
+const HOT_COMMENT_LIBRARY_KEY = "hot-comments";
+const HOT_COMMENT_LIBRARY_LIMIT = 12_000;
+
+type HotCommentSample = {
+  platform: Platform;
+  query: string;
+  videoId: string;
+  videoTitle: string;
+  videoMetric: number;
+  videoPublishedAt?: string;
+  text: string;
+  likes: number;
+  replies: number;
+  collectedAt: string;
+};
+
+type HotCommentLibrary = {
+  schemaVersion: 1;
+  updatedAt: string;
+  samples: HotCommentSample[];
+};
 
 type PlatformResearchRow = {
   source: "bilibili" | "douyin";
   query: string;
-  videos: Array<{ id: string }>;
-  comments: string[];
+  videos: Array<{ id: string; title: string; metric: number; publishedAt?: string }>;
+  comments: HotCommentSample[];
   replyCommentCount: number;
-  error?: string;
-};
-
-type ForumResearch = {
-  sourceCount: number;
-  discussionCount: number;
-  samples: string[];
-  themes: string[];
-  questions: string[];
-  objections: string[];
-  chatterAngles: string[];
+  thresholdLabel: string;
+  fallbackReason?: string;
   error?: string;
 };
 
 export async function buildEngagementCommentResearch(
   brief: EngagementResearchBrief,
-  options: { signal?: AbortSignal } = {}
+  options: { platform?: Platform; signal?: AbortSignal } = {}
 ): Promise<EngagementCommentResearch> {
   throwIfAborted(options.signal);
   const cacheKey = shortHash(`${ENGAGEMENT_RESEARCH_VERSION}:${JSON.stringify({
@@ -114,19 +121,16 @@ export async function buildEngagementCommentResearch(
   }
 
   const localQueries = buildLocalEngagementResearchQueries(brief);
-  const queryPlan = await planEngagementResearchQueries(brief, localQueries, options.signal);
-  const queries = queryPlan.queries;
+  const queries = localQueries;
   if (!queries.length) {
     throw new Error("全网调研没有提取到可用搜索词，请补充具体作品、产品、人物或版本名称后重试。");
   }
 
-  const [platformRows, forum] = await Promise.all([
-    collectPlatformResearch(queries, options.signal),
-    collectForumResearch(brief, queries, options.signal)
-  ]);
+  const platformRows = await collectPlatformResearch(queries, options.signal);
   throwIfAborted(options.signal);
 
-  const platformComments = uniqueText(platformRows.flatMap((row) => row.comments)).slice(0, 180);
+  const freshSamples = dedupeHotCommentSamples(platformRows.flatMap((row) => row.comments));
+  const platformComments = uniqueText(freshSamples.map((sample) => sample.text)).slice(0, 240);
   const successfulPlatformRows = platformRows.filter((row) => !row.error);
   if (!platformComments.length) {
     const detail = uniqueText(platformRows.map((row) => row.error || "")).join("；");
@@ -135,14 +139,20 @@ export async function buildEngagementCommentResearch(
     );
   }
 
-  const researchSamples = uniqueText([...platformComments, ...forum.samples]).slice(0, 200);
-  const summarized = await summarizeResearchSamples(brief, queries, researchSamples, forum, options.signal);
-  const sourceStats = buildSourceStats(platformRows, forum);
+  const sampleLibrary = await appendHotCommentLibrary(freshSamples);
+  const relevantLibrarySamples = rankHotComments(sampleLibrary.samples, brief, options.platform).slice(0, 240);
+  const rankedFreshSamples = rankHotComments(freshSamples, brief, options.platform);
+  const rankedSamples = dedupeHotCommentSamples([...rankedFreshSamples, ...relevantLibrarySamples]).slice(0, 240);
+  const researchSamples = uniqueText(rankedSamples.map((sample) => sample.text));
+  const reusableComments = rankedSamples
+    .filter((sample) => hotCommentRelevanceScore(sample, brief, options.platform) >= 28)
+    .map((sample) => sample.text)
+    .slice(0, 80);
+  const sourceStats = buildSourceStats(platformRows);
   const failedQueries = platformRows
     .filter((row) => row.error)
     .map((row) => `${formatSource(row.source)}｜${row.query}：${row.error}`);
   const partialReasons = [
-    queryPlan.error,
     ...sourceStats.filter((source) => source.status !== "completed").map((source) => `${formatSource(source.source)}：${source.error || "覆盖不完整"}`)
   ].filter(Boolean) as string[];
   const lengthBuckets = summarizeLengthBuckets(researchSamples);
@@ -155,24 +165,27 @@ export async function buildEngagementCommentResearch(
     failedQueries,
     relatedVideoCount: videoKeys.size,
     relatedCommentCount: researchSamples.length,
-    forumSourceCount: forum.sourceCount,
-    forumCommentCount: forum.discussionCount || forum.samples.length,
+    forumSourceCount: 0,
+    forumCommentCount: 0,
     replySampleCount: platformRows.reduce((sum, row) => sum + row.replyCommentCount, 0),
     longCommentCount: lengthBuckets.long,
     lengthBuckets,
     intentBuckets,
     sourceStats,
-    themes: uniqueText([...summarized.themes, ...forum.themes]).slice(0, 16),
-    phrases: summarized.phrases,
-    questions: uniqueText([...summarized.questions, ...forum.questions]).slice(0, 14),
-    objections: uniqueText([...summarized.objections, ...forum.objections]).slice(0, 14),
-    recentTopics: summarized.recentTopics,
-    legacyTopics: summarized.legacyTopics,
-    playerLifeAngles: summarized.playerLifeAngles,
-    platformAngles: summarized.platformAngles,
-    replyAngles: summarized.replyAngles,
-    longCommentPatterns: summarized.longCommentPatterns,
-    chatterAngles: uniqueText([...summarized.chatterAngles, ...forum.chatterAngles]).slice(0, 12),
+    hotComments: researchSamples.slice(0, 80),
+    reusableComments,
+    sampleLibraryCount: sampleLibrary.samples.length,
+    themes: queries,
+    phrases: [],
+    questions: researchSamples.filter((text) => /[?？]|吗|么|如何|怎么|多少|能不能|会不会/.test(text)).slice(0, 14),
+    objections: researchSamples.filter((text) => /但是|不过|问题|担心|贵|不值|别|难|坑|算了/.test(text)).slice(0, 14),
+    recentTopics: [],
+    legacyTopics: [],
+    playerLifeAngles: [],
+    platformAngles: [],
+    replyAngles: [],
+    longCommentPatterns: researchSamples.filter((text) => Array.from(text).length >= 36).slice(0, 10),
+    chatterAngles: [],
     summaryError: partialReasons.length ? uniqueText(partialReasons).join("；") : undefined,
     cacheHit: false
   };
@@ -206,73 +219,13 @@ export function buildLocalEngagementResearchQueries(brief: EngagementResearchBri
   ]).slice(0, MAX_RESEARCH_QUERIES);
 }
 
-export function buildEngagementResearchLaneSequence(count: number, startIndex = 0): EngagementResearchLane[] {
-  if (count <= 0) return [];
-  const order: EngagementResearchLane[] = ["direct", "recent", "legacy", "newcomer", "life", "platform", "reply"];
-  const targets: Record<EngagementResearchLane, number> = {
-    direct: Math.round(count * 0.25),
-    recent: Math.round(count * 0.2),
-    legacy: Math.round(count * 0.2),
-    newcomer: Math.round(count * 0.15),
-    life: Math.round(count * 0.08),
-    platform: Math.round(count * 0.07),
-    reply: 0
-  };
-  targets.reply = Math.max(0, count - order.reduce((sum, lane) => sum + targets[lane], 0));
-  while (order.reduce((sum, lane) => sum + targets[lane], 0) > count) {
-    const lane = order.find((candidate) => candidate !== "reply" && targets[candidate] > 0);
-    if (!lane) break;
-    targets[lane] -= 1;
-  }
-
-  const emitted = Object.fromEntries(order.map((lane) => [lane, 0])) as Record<EngagementResearchLane, number>;
-  const sequence: EngagementResearchLane[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const lane = order
-      .filter((candidate) => emitted[candidate] < targets[candidate])
-      .sort((left, right) => {
-        const leftDeficit = (targets[left] * (index + 1)) / count - emitted[left];
-        const rightDeficit = (targets[right] * (index + 1)) / count - emitted[right];
-        return rightDeficit - leftDeficit || order.indexOf(left) - order.indexOf(right);
-      })[0] || "direct";
-    emitted[lane] += 1;
-    sequence.push(lane);
-  }
-  if (!startIndex || sequence.length < 2) return sequence;
-  const offset = startIndex % sequence.length;
-  return [...sequence.slice(offset), ...sequence.slice(0, offset)];
-}
-
 export function formatEngagementCommentResearch(research: EngagementCommentResearch) {
   return [
-    `采样覆盖：相关视频 ${research.relatedVideoCount} 个 / 评论与讨论点 ${research.relatedCommentCount} 条 / 论坛来源 ${research.forumSourceCount} 个`,
+    `热评覆盖：相关视频 ${research.relatedVideoCount} 个 / 热评 ${research.relatedCommentCount} 条 / 可直接复用 ${research.reusableComments.length} 条 / 样本库 ${research.sampleLibraryCount} 条`,
     formatList("检索词", research.usedQueries),
-    formatList("真实评论区母题", research.themes),
-    formatList("近期版本与事件", research.recentTopics),
-    formatList("老玩家旧账与生态", research.legacyTopics),
-    formatList("萌新自然问题", research.questions),
-    formatList("玩家生活与时间成本", research.playerLifeAngles),
-    formatList("名人、平台梗与圈层闲聊", research.platformAngles),
-    formatList("互怼、追问与回复链角度", research.replyAngles),
-    formatList("观望与反对点", research.objections),
-    formatList("可借鉴的短口语词", research.phrases),
-    formatList("长评结构", research.longCommentPatterns),
-    formatList("轻度跑题角度", research.chatterAngles),
+    formatList("按正文相关度排序的热评", research.hotComments.slice(0, 36)),
     research.summaryError ? `覆盖提醒：${research.summaryError}` : ""
   ].filter(Boolean).join("\n");
-}
-
-export function formatEngagementResearchLane(lane: EngagementResearchLane) {
-  const labels: Record<EngagementResearchLane, string> = {
-    direct: "视频直评：只抓当前视频一个细节，不做完整总结",
-    recent: "近期话题：接同游戏/同品类最近版本、活动、玩法或热点，不编新闻",
-    legacy: "老玩家旧账：聊长期槽点、生态、收益、平衡或历史包袱，只用调研里出现的母题",
-    newcomer: "萌新问题：像第一次刷到的人，只问一个下载、资格、玩法、配置或成本问题",
-    life: "玩家生活：从上班、时间、学习成本、练号或消费压力轻度跑题，不冒充亲历",
-    platform: "平台与圈层梗：名人、主播、配音、艾特朋友或平台语感，不造谣、不生成真实用户名",
-    reply: "回复链：像直接接某条热评的追问、反驳或互怼；单独看也能懂，不虚构用户名"
-  };
-  return labels[lane];
 }
 
 function isUsableResearchCache(cached: {
@@ -351,18 +304,62 @@ async function collectPlatformResearch(queries: string[], signal?: AbortSignal) 
     throwIfAborted(signal);
     try {
       const result = task.source === "bilibili"
-        ? await getBilibiliRelatedTopicComments(task.query, { videoLimit: 2, commentLimit: 18, replyLimit: 8, signal })
-        : await getDouyinRelatedTopicComments(task.query, { videoLimit: 2, commentLimit: 18, signal });
+        ? await getBilibiliRelatedTopicComments(task.query, {
+            videoLimit: 3,
+            commentLimit: 30,
+            replyLimit: 8,
+            minViews: 150_000,
+            signal
+          })
+        : await getDouyinRelatedTopicComments(task.query, {
+            videoLimit: 3,
+            commentLimit: 30,
+            minLikes: 50_000,
+            signal
+          });
+      const collectedAt = nowIso();
+      const videos = result.videos.map((video) => ({
+        id: video.id,
+        title: video.title,
+        metric: task.source === "bilibili" ? video.views : video.likes,
+        publishedAt: video.publishedAt
+      }));
+      const videoMap = new Map(videos.map((video) => [video.id, video]));
+      const comments = result.commentSamples.map((comment) => {
+        const video = videoMap.get(comment.videoId);
+        return {
+          platform: task.source,
+          query: task.query,
+          videoId: comment.videoId,
+          videoTitle: comment.videoTitle,
+          videoMetric: video?.metric || 0,
+          videoPublishedAt: video?.publishedAt,
+          text: comment.text,
+          likes: comment.likes,
+          replies: comment.replies,
+          collectedAt
+        } satisfies HotCommentSample;
+      });
+      const thresholdLabel = task.source === "bilibili"
+        ? `播放≥${formatMetric(result.appliedMinViews)}`
+        : `点赞≥${formatMetric(result.appliedMinLikes)}`;
+      const fallbackReason = task.source === "bilibili" && result.appliedMinViews < 150_000
+        ? `未找到播放量达到 15 万的相关视频，已降至${thresholdLabel}`
+        : task.source === "douyin" && result.appliedMinLikes < 50_000
+          ? `未找到点赞达到 5 万的相关视频，已降至${thresholdLabel}`
+          : undefined;
       return {
         ...task,
-        videos: result.videos.map((video) => ({ id: video.id })),
-        comments: uniqueText(result.comments).slice(0, 36),
+        videos,
+        comments: dedupeHotCommentSamples(comments).slice(0, 90),
         replyCommentCount: "replyCommentCount" in result ? result.replyCommentCount : 0,
-        error: result.comments.length ? undefined : "没有返回可用评论"
+        thresholdLabel,
+        fallbackReason,
+        error: comments.length ? undefined : "没有返回可用热评"
       };
     } catch (error) {
       throwIfAborted(signal);
-      return { ...task, videos: [], comments: [], replyCommentCount: 0, error: formatError(error) };
+      return { ...task, videos: [], comments: [], replyCommentCount: 0, thresholdLabel: "未命中", error: formatError(error) };
     }
   });
 }
@@ -381,7 +378,7 @@ async function collectForumResearch(
         },
         {
           role: "user",
-          content: `请搜索与下面主题近期相关的论坛帖子和真实回复，并把观点改写成简短研究样本。
+          content: `请搜索与下面主题近期相关的论坛帖子和真实回复，并把观点整理成简短讨论证据。
 
 主题：${brief.summary}
 主体：${brief.subjects.join("、")}
@@ -392,17 +389,89 @@ async function collectForumResearch(
 {
   "sourceCount": 论坛来源数量,
   "discussionCount": 实际采用的讨论点数量,
-  "samples": ["对论坛回复的短改写，15—30条"],
+  "samples": ["对论坛回复的短改写，15—30条，仅供归纳讨论结构"],
   "themes": ["论坛集中讨论母题，5—10条"],
   "questions": ["真实追问，4—8条"],
   "objections": ["反对、担心或旧账，4—8条"],
   "chatterAngles": ["可轻度跑题的圈内话题，3—6条"]
 }
 
+async function appendHotCommentLibrary(freshSamples: HotCommentSample[]) {
+  return updateEngagementCache<HotCommentLibrary>("samples", HOT_COMMENT_LIBRARY_KEY, (current) => {
+    if (current && current.schemaVersion !== 1) {
+      throw new Error("评论热评样本库版本不兼容，请先备份后再处理。");
+    }
+    const existing = current?.samples || [];
+    return {
+      schemaVersion: 1,
+      updatedAt: nowIso(),
+      samples: dedupeHotCommentSamples([...freshSamples, ...existing]).slice(0, HOT_COMMENT_LIBRARY_LIMIT)
+    };
+  });
+}
+
+function rankHotComments(samples: HotCommentSample[], brief: EngagementResearchBrief, platform?: Platform) {
+  return samples
+    .map((sample) => ({ sample, score: hotCommentRelevanceScore(sample, brief, platform) }))
+    .filter(({ score }) => score >= 12)
+    .sort((left, right) => right.score - left.score || right.sample.likes - left.sample.likes)
+    .map(({ sample }) => sample);
+}
+
+function hotCommentRelevanceScore(sample: HotCommentSample, brief: EngagementResearchBrief, platform?: Platform) {
+  const commentKey = searchKey(sample.text);
+  const contextKey = searchKey(`${sample.query} ${sample.videoTitle}`);
+  const terms = buildResearchMatchTerms(brief);
+  let score = platform && sample.platform === platform ? 5 : 0;
+  for (const term of terms) {
+    const key = searchKey(term);
+    if (!key) continue;
+    if (commentKey.includes(key)) score += key.length >= 6 ? 14 : 9;
+    else if (contextKey.includes(key)) score += key.length >= 6 ? 7 : 4;
+  }
+  score += Math.min(10, Math.log10(Math.max(sample.likes, 0) + 1) * 2.2);
+  score += Math.min(6, Math.log10(Math.max(sample.videoMetric, 0) + 1));
+  const publishedAt = sample.videoPublishedAt ? Date.parse(sample.videoPublishedAt) : 0;
+  if (publishedAt) {
+    const ageDays = Math.max(0, (Date.now() - publishedAt) / 86_400_000);
+    if (ageDays <= 30) score += 6;
+    else if (ageDays <= 180) score += 3;
+    else if (ageDays <= 365) score += 1;
+  }
+  return score;
+}
+
+function buildResearchMatchTerms(brief: EngagementResearchBrief) {
+  return uniqueText([
+    ...brief.subjects,
+    ...brief.anchorTerms,
+    brief.topic,
+    ...brief.keyFacts.flatMap((value) => value.split(/[，、：:（）()\s]/))
+  ])
+    .map((value) => value.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").trim())
+    .filter((value) => value.length >= 2 && value.length <= 24 && !/^(?:产品|视频|内容|用户|玩家|评论|这个|一种|可以)$/.test(value))
+    .slice(0, 48);
+}
+
+function dedupeHotCommentSamples(samples: HotCommentSample[]) {
+  const seen = new Set<string>();
+  return samples.filter((sample) => {
+    const key = `${sample.platform}\n${sample.videoId}\n${searchKey(sample.text)}`;
+    if (!sample.text || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatMetric(value: number) {
+  if (value >= 10_000) return `${Number((value / 10_000).toFixed(1))}万`;
+  return String(value);
+}
+
 没有找到实际帖子回复时 sourceCount 必须为 0，不要用常识伪造。`
         }
       ],
-      "medium",
+      "low",
       { signal, maxOutputTokens: 1800 }
     );
     const object = parseJsonObject(result.text);
@@ -447,14 +516,14 @@ async function summarizeResearchSamples(
     [
       {
         role: "system",
-        content: "你是评论区研究员。只从真实样本中提炼讨论结构，不生成最终评论，不照抄样本，不添加新闻或事实。只输出 JSON。"
+        content: "你是评论区研究员。只从真实讨论证据中提炼讨论结构，不生成最终评论，不照抄原句，不添加新闻或事实。只输出 JSON。"
       },
       {
         role: "user",
         content: `当前视频：${brief.summary}
 检索词：${queries.join("、")}
 
-B站/抖音真实评论与论坛讨论改写样本：
+B站/抖音真实评论与论坛讨论证据：
 ${samples.slice(0, 140).map((sample) => `- ${clampText(sample, 180)}`).join("\n")}
 
 论坛已取得 ${forum.sourceCount} 个来源、${forum.discussionCount} 个讨论点。
@@ -495,12 +564,12 @@ ${samples.slice(0, 140).map((sample) => `- ${clampText(sample, 180)}`).join("\n"
   };
 }
 
-function buildSourceStats(platformRows: PlatformResearchRow[], forum: ForumResearch): EngagementResearchSourceStat[] {
+function buildSourceStats(platformRows: PlatformResearchRow[]): EngagementResearchSourceStat[] {
   const platformStats = (["bilibili", "douyin"] as const).map((source): EngagementResearchSourceStat => {
     const rows = platformRows.filter((row) => row.source === source);
     const videoCount = new Set(rows.flatMap((row) => row.videos.map((video) => video.id))).size;
-    const commentCount = uniqueText(rows.flatMap((row) => row.comments)).length;
-    const errors = uniqueText(rows.map((row) => row.error || ""));
+    const commentCount = dedupeHotCommentSamples(rows.flatMap((row) => row.comments)).length;
+    const errors = uniqueText(rows.flatMap((row) => [row.error || "", row.fallbackReason || ""]));
     return {
       source,
       status: commentCount ? (errors.length ? "partial" : "completed") : "failed",
@@ -509,16 +578,7 @@ function buildSourceStats(platformRows: PlatformResearchRow[], forum: ForumResea
       error: errors.length ? errors.join("；") : undefined
     };
   });
-  return [
-    ...platformStats,
-    {
-      source: "forum",
-      status: forum.error ? "failed" : "completed",
-      videoCount: 0,
-      commentCount: forum.discussionCount || forum.samples.length,
-      error: forum.error
-    }
-  ];
+  return platformStats;
 }
 
 function summarizeLengthBuckets(samples: string[]) {
@@ -565,7 +625,7 @@ function cleanSearchQuery(value: string) {
 
 function isUsefulSearchQuery(value: string) {
   if (value.length < 2) return false;
-  if (/^(?:粘贴文案|视频链接|评论素材|生成评论|评论区|平台自然|原评增强)$/.test(value)) return false;
+  if (/^(?:粘贴文案|视频链接|评论素材|生成评论|评论区)$/.test(value)) return false;
   return /[\u4e00-\u9fa5A-Za-z0-9]/.test(value);
 }
 

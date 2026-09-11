@@ -24,7 +24,7 @@ import {
   refreshEngagementRecords
 } from "@/lib/client";
 import { detectPlatformFromLink, extractFirstLinkFromInput } from "@/lib/platform-links";
-import type { EngagementGenerationMode, EngagementRecord, EngagementRecordSummary, Platform } from "@/lib/types";
+import type { EngagementRecord, EngagementRecordSummary, Platform } from "@/lib/types";
 
 export default function AssetsPage() {
   return (
@@ -44,7 +44,6 @@ function AssetsPageContent() {
   const [includeDanmaku, setIncludeDanmaku] = useState(false);
   const [commentCount, setCommentCount] = useState(50);
   const [danmakuCount, setDanmakuCount] = useState(50);
-  const [generationMode, setGenerationMode] = useState<EngagementGenerationMode>("quick");
   const [targetPlatform, setTargetPlatform] = useState<Platform>("douyin");
   const [busy, setBusy] = useState<BusyState>("");
   const [notice, setNotice] = useState("");
@@ -78,7 +77,6 @@ function AssetsPageContent() {
     danmakuCount,
     includeComments,
     includeDanmaku,
-    generationMode,
     onRecordCompleted: handleRecordCompleted,
     targetPlatform,
     recentJobs,
@@ -130,11 +128,6 @@ function AssetsPageContent() {
     setSourceInput(detail.sourceType === "url"
       ? detail.sourceUrl || detail.resolvedUrl || detail.sourceText
       : detail.sourceText);
-    setGenerationMode(detail.options.generationMode === "research"
-      ? "research"
-      : detail.options.generationMode === "reference"
-        ? "reference"
-        : "quick");
     setTargetPlatform(restoredPlatform);
     setIncludeComments(detail.options.includeComments);
     setCommentCount(clampCount(detail.options.commentCount, 1, 200, 50));
@@ -313,7 +306,6 @@ function AssetsPageContent() {
               danmakuCount={danmakuCount}
               includeComments={includeComments}
               includeDanmaku={includeDanmaku}
-              generationMode={generationMode}
               targetPlatform={targetPlatform}
               supportsDanmaku={supportsDanmaku}
               generationProgress={generationProgress}
@@ -321,7 +313,6 @@ function AssetsPageContent() {
               onCommentCountChange={setCommentCount}
               onDanmakuCountChange={setDanmakuCount}
               onGenerate={handleGenerate}
-              onGenerationModeChange={setGenerationMode}
               onTargetPlatformChange={setTargetPlatform}
               onIncludeCommentsChange={setIncludeComments}
               onIncludeDanmakuChange={setIncludeDanmaku}

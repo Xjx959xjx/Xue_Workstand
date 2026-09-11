@@ -88,6 +88,7 @@ type WriteCopyRequest = {
   currentContent?: string;
   revisionInstruction?: string;
   revisionScope?: WriteRevisionScope;
+  revisionMode?: "edit" | "recalibrate";
   selectedText?: string;
 };
 
@@ -1160,10 +1161,10 @@ export type StyleGenerationResponse = {
   actualServiceTier?: string;
 };
 
-export function generateStyle(platform: Platform, accountId: string) {
+export function generateStyle(platform: Platform, accountId: string, force = false) {
   return requestJson<StyleGenerationResponse>("/api/style", {
     method: "POST",
-    body: JSON.stringify({ platform, accountId })
+    body: JSON.stringify({ platform, accountId, force })
   });
 }
 
@@ -1171,6 +1172,7 @@ export async function streamGenerateStyle(
   input: {
     platform: Platform;
     accountId: string;
+    force?: boolean;
   },
   handlers: {
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "purpose": "模型连通性诊断",
+  "results": [
+    {
+      "name": "configured-model-proxy-chat",
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "chat_completions",
+      "headersMs": null,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [],
+      "text": "",
+      "failure": {
+        "kind": "server",
+        "message": "对话模型服务暂时异常"
+      },
+      "totalMs": 32037
+    },
+    {
+      "name": "astra-proxy-chat",
+      "model": "gpt-6-astra",
+      "proxy": true,
+      "api": "chat_completions",
+      "headersMs": 34540,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [
+        "upstream-overloaded"
+      ],
+      "text": "",
+      "httpStatus": 200,
+      "contentType": "text/event-stream",
+      "totalMs": 34917
+    },
+    {
+      "name": "configured-model-direct-chat",
+      "model": "gpt-6",
+      "proxy": false,
+      "api": "chat_completions",
+      "headersMs": 2528,
+      "firstTextMs": null,
+      "status": "failed",
+      "events": [
+        "upstream-overloaded"
+      ],
+      "text": "",
+      "httpStatus": 200,
+      "contentType": "text/event-stream",
+      "totalMs": 3304
+    },
+    {
+      "name": "configured-model-proxy-responses",
+      "model": "gpt-6",
+      "proxy": true,
+      "api": "responses",
+      "headersMs": 9170,
+      "firstTextMs": 9190,
+      "status": "completed",
+      "events": [],
+      "text": "OK",
+      "httpStatus": 200,
+      "contentType": "text/event-stream",
+      "totalMs": 9924
+    }
+  ]
+}

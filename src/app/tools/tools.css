@@ -202,6 +202,10 @@
   box-shadow: var(--focus-ring-shadow);
 }
 
+.tools-input-shell.invalid {
+  border-color: var(--danger);
+}
+
 .tools-input-shell input {
   min-width: 0;
   min-height: 40px;
@@ -671,6 +675,83 @@
   line-height: var(--line-height-meta);
 }
 
+.tools-pdf-overview {
+  display: grid;
+  align-content: start;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+}
+
+.tools-pdf-overview-mark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid var(--selected-border);
+  border-radius: var(--radius-md);
+  color: var(--control-active-text);
+  background: var(--surface-selected);
+}
+
+.tools-pdf-overview h3,
+.tools-pdf-overview p {
+  margin: 0;
+}
+
+.tools-pdf-overview h3 {
+  color: var(--text-strong);
+  font-size: var(--text-section-title);
+  line-height: var(--line-height-section-title);
+}
+
+.tools-pdf-overview p {
+  max-width: 66ch;
+  margin-top: 6px;
+  color: var(--muted-strong);
+  font-size: var(--text-body);
+  line-height: var(--line-height-body);
+}
+
+.tools-pdf-feature-grid {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.tools-pdf-feature-grid > div,
+.tools-pdf-security-note {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-raised);
+}
+
+.tools-pdf-feature-grid strong,
+.tools-pdf-security-note strong {
+  color: var(--text-strong);
+  font-size: var(--text-body);
+  line-height: var(--line-height-card-title);
+}
+
+.tools-pdf-feature-grid span,
+.tools-pdf-security-note span {
+  color: var(--muted);
+  font-size: var(--text-caption);
+  line-height: var(--line-height-caption);
+}
+
+.tools-pdf-security-note {
+  margin-top: var(--space-2);
+}
+
 .tools-spin {
   animation: tools-spin 900ms linear infinite;
 }
@@ -756,6 +837,10 @@
 
   .field .tools-source-textarea {
     min-height: 190px;
+  }
+
+  .tools-pdf-feature-grid {
+    grid-template-columns: 1fr;
   }
 
   .tools-source-summary {

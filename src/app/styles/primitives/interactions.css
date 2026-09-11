@@ -56,7 +56,7 @@
   .project-style-textarea,
   .writer-textarea,
   .modal-editor textarea {
-    line-height: 1.72;
+    line-height: var(--line-height-reading);
   }
 
   .draft-document {
@@ -85,7 +85,7 @@
 .copy-project-row:active,
 .project-workbench-source:active,
 .tools-candidate-card:active {
-  transform: scale(0.975);
+  transform: none;
   transition-duration: var(--motion-fast);
   transition-timing-function: var(--ease-press);
 }
@@ -110,7 +110,7 @@
 @keyframes task-toast-enter {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.975);
+    transform: translateY(8px) scale(0.99);
   }
 }
 
@@ -140,14 +140,14 @@
 @keyframes modal-rise {
   from {
     opacity: 0;
-    transform: translateY(18px) scale(0.965);
+    transform: translateY(10px) scale(0.99);
   }
 }
 
 @keyframes page-content-enter {
   from {
     opacity: 0;
-    transform: translateY(7px);
+
   }
 }
 

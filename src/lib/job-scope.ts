@@ -51,7 +51,6 @@ export function engagementSourceKey(input: {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
-  generationMode?: "quick" | "reference" | "research";
   targetPlatform?: Platform;
 } | {
   sourceType: "url";
@@ -60,7 +59,6 @@ export function engagementSourceKey(input: {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
-  generationMode?: "quick" | "reference" | "research";
   targetPlatform?: Platform;
 } | {
   sourceType: "record";
@@ -69,7 +67,6 @@ export function engagementSourceKey(input: {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
-  generationMode?: "quick" | "reference" | "research";
   targetPlatform?: Platform;
 }) {
   return stableScopeHash(JSON.stringify({
@@ -83,7 +80,6 @@ export function engagementSourceKey(input: {
     commentCount: input.commentCount ?? 50,
     includeDanmaku: input.includeDanmaku ?? false,
     danmakuCount: input.danmakuCount ?? 50,
-    generationMode: input.generationMode || "quick",
     targetPlatform: input.targetPlatform || ""
   }));
 }

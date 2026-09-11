@@ -31,6 +31,7 @@ export const writeCopyInputSchema = z.object({
   parentDraftId: z.string().min(1).optional(),
   currentContent: z.string().max(120_000).optional(),
   revisionInstruction: z.string().trim().max(4_000).optional(),
+  revisionMode: z.enum(["edit", "recalibrate"]).optional().default("edit"),
   revisionScope: z.enum(["full", "selection"]).optional().default("full"),
   selectedText: z.string().max(30_000).optional()
 }).superRefine((input, ctx) => {

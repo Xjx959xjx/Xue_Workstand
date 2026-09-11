@@ -28,24 +28,20 @@ import {
 import { nowIso, safeSegment, shortHash, toNumber } from "./utils";
 import { firstNumber, isRelatedVideoRelevant, normalizeCommentText, normalizeTimestamp, uniqueStrings } from "./opencli-normalizers";
 import { collectBilibiliVideos, searchBilibiliUserUid } from "./opencli-bilibili";
+import { getDouyinAccessError, pausedDouyinRefreshError } from "./douyin-access-errors";
 import {
   DOUYIN_AWEME_ID_EXTRACT_JS,
   DOUYIN_MEDIA_EXTRACT_JS,
-  DOUYIN_PROFILE_VIDEO_LINKS_EXTRACT_JS,
   DOUYIN_RELATED_VIDEO_EXTRACT_JS,
   DOUYIN_SEARCH_EXTRACT_JS,
   DOUYIN_VIDEO_COMMENT_EXTRACT_JS,
   buildDouyinBatchStatsExtractJs,
   buildDouyinBatchPostExtractJs,
   buildDouyinDetailExtractJs,
-  buildDouyinPostExtractJs,
-  buildDouyinVideoPageDomExtractJs,
   buildDouyinStatsExtractJs
 } from "./opencli-douyin-scripts";
 
-const DOUYIN_BROWSER_VIDEO_SCAN_LIMIT = 500;
-const DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS = 300_000;
-const DOUYIN_BATCH_ACCOUNT_CHUNK_SIZE = 8;
+const DOUYIN_USER_VIDEOS_LIMIT = 20;
 const DOUYIN_RELATED_COMMENT_VIDEO_LIMIT = 6;
 const DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT = 20;
 
@@ -93,13 +89,24 @@ export type DouyinRelatedCommentVideo = {
   id: string;
   title: string;
   likes: number;
+  publishedAt?: string;
   url: string;
+};
+
+export type DouyinRelatedCommentSample = {
+  text: string;
+  likes: number;
+  replies: number;
+  videoId: string;
+  videoTitle: string;
 };
 
 export type DouyinRelatedCommentResult = {
   query: string;
   videos: DouyinRelatedCommentVideo[];
   comments: string[];
+  commentSamples: DouyinRelatedCommentSample[];
+  appliedMinLikes: number;
 };
 
 type DouyinVideoStatsSnapshot = {
@@ -185,11 +192,11 @@ async function searchDouyinUserSecUidWithBrowser(name: string, options: { signal
 
 export async function getDouyinRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number; signal?: AbortSignal } = {}
+  options: { videoLimit?: number; commentLimit?: number; minLikes?: number; signal?: AbortSignal } = {}
 ): Promise<DouyinRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
-    return { query: "", videos: [], comments: [] };
+    return { query: "", videos: [], comments: [], commentSamples: [], appliedMinLikes: 0 };
   }
 
   const workspace = `douyin-topic-comments-${process.pid}-${Date.now()}-${shortHash(cleanQuery)}`;
@@ -207,17 +214,23 @@ export async function getDouyinRelatedTopicComments(
       signal: options.signal
     }).catch(() => undefined);
 
-    const videos = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), {
+    const candidates = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), {
       timeout: 20_000,
       signal: options.signal
     })))
       .map(normalizeDouyinRelatedVideo)
       .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
-      .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery))
-      .sort((a, b) => b.likes - a.likes)
+      .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery));
+    const requestedMinLikes = Math.max(0, options.minLikes ?? 50_000);
+    const thresholdTiers = uniqueNumbers([requestedMinLikes, 20_000, 5_000, 0]).filter((value) => value <= requestedMinLikes);
+    const appliedMinLikes = thresholdTiers.find((threshold) => candidates.some((video) => video.likes >= threshold)) ?? 0;
+    const videos = candidates
+      .filter((video) => video.likes >= appliedMinLikes)
+      .sort(compareDouyinRelatedVideos)
       .slice(0, videoLimit);
 
     const comments: string[] = [];
+    const commentSamples: DouyinRelatedCommentSample[] = [];
     for (const video of videos) {
       const openResult = parseJsonish(
         await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [video.url]), {
@@ -241,18 +254,25 @@ export async function getDouyinRelatedTopicComments(
           .then((value) => asArray(parseJsonish(value)))
           .catch(() => [])
       ]);
-      comments.push(
-        ...uniqueStrings([
-          ...(detail?.topComments || []),
-          ...rows.map(normalizeCommentText).filter(Boolean)
-        ]).slice(0, commentLimit)
-      );
+      const detailedComments = detail?.topComments || [];
+      const fallbackComments = rows.map(normalizeCommentText).filter(Boolean).map((text) => ({ text, likes: 0, replies: 0 }));
+      const selectedComments = dedupeDouyinCommentSamples([...detailedComments, ...fallbackComments]).slice(0, commentLimit);
+      comments.push(...selectedComments.map((comment) => comment.text));
+      commentSamples.push(...selectedComments.map((comment) => ({
+        ...comment,
+        videoId: video.id,
+        videoTitle: video.title
+      })));
+      if (detail?.publishedAt) video.publishedAt = detail.publishedAt;
+      if (detail?.likeCount && detail.likeCount > video.likes) video.likes = detail.likeCount;
     }
 
     return {
       query: cleanQuery,
       videos,
-      comments: uniqueStrings(comments)
+      comments: uniqueStrings(comments),
+      commentSamples: dedupeDouyinCommentSamples(commentSamples),
+      appliedMinLikes
     };
   } finally {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
@@ -267,9 +287,30 @@ function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | 
   return {
     id,
     title,
-    likes: toNumber(object.likes),
+    likes: toNumber(object.likes || object.digg_count),
+    publishedAt: normalizeTimestamp(object.publishedAt || object.createTime || object.create_time || object.date),
     url: `https://www.douyin.com/video/${encodeURIComponent(id)}`
   };
+}
+
+function compareDouyinRelatedVideos(left: DouyinRelatedCommentVideo, right: DouyinRelatedCommentVideo) {
+  const leftTime = left.publishedAt ? Date.parse(left.publishedAt) : 0;
+  const rightTime = right.publishedAt ? Date.parse(right.publishedAt) : 0;
+  return right.likes - left.likes || rightTime - leftTime;
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values.map((value) => Math.max(0, Math.round(value))))];
+}
+
+function dedupeDouyinCommentSamples<T extends { text: string }>(values: T[]) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = value.text.toLowerCase();
+    if (!value.text || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function selectDouyinSecUidFromRows(rows: unknown[], name: string) {
@@ -380,26 +421,20 @@ export async function collectVideos(input: {
     });
   }
 
-  const args = [
-    "browser",
-    "aweme-post",
-    `https://www.douyin.com/user/${input.account.uid}`,
-    "--limit",
-    String(input.limit),
-    ...(input.fromDate ? ["--from", input.fromDate] : []),
-    ...(input.toDate ? ["--to", input.toDate] : [])
-  ];
-  let rows: unknown[];
+  if (input.fromDate || input.toDate) {
+    const [result] = await collectDouyinPostVideosBatch({ ...input, accounts: [input.account], concurrency: 1 });
+    if (result.status === "failed") throw new Error(result.error);
+    return { command: `${opencliBin()} browser shared-post eval`, raw: result.raw, rawCount: result.rawCount, videos: result.videos };
+  }
+  const args = buildDouyinUserVideosArgs(input.account.uid, input.limit);
+  let rows: Array<Record<string, unknown>>;
   try {
-    rows = await scanDouyinPostVideoRows(input.account, {
-      limit: input.limit,
-      fromDate: input.fromDate,
-      toDate: input.toDate,
-      signal: input.signal
-    });
-  } catch {
-    if (input.signal?.aborted) throw createAbortError();
     rows = await getDouyinVideoRows(input.account, { limit: input.limit, signal: input.signal });
+  } catch (error) {
+    if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
+    const accessError = getDouyinAccessError(formatErrorMessage(error));
+    if (accessError) throw new Error(accessError);
+    throw error;
   }
 
   return {
@@ -417,56 +452,70 @@ export async function collectDouyinPostVideosBatch(input: {
   fromDate?: string;
   toDate?: string;
   signal?: AbortSignal;
+  onResult?: (result: DouyinBatchVideoCollectResult) => void | Promise<void>;
 }): Promise<DouyinBatchVideoCollectResult[]> {
   if (!input.accounts.length) return [];
 
-  const workspace = `douyin-post-batch-${process.pid}-${Date.now()}-${shortHash(input.accounts.map((account) => account.uid).join("|"))}`;
-  const scanLimit = Math.min(Math.max(input.limit, 1), DOUYIN_BROWSER_VIDEO_SCAN_LIMIT);
   const concurrency = Math.min(Math.max(input.concurrency, 1), input.accounts.length);
 
+  const results: DouyinBatchVideoCollectResult[] = [];
+  let accessError: string | null = null;
+  const workspace = `douyin-post-${process.pid}-${Date.now()}-${shortHash(input.accounts[0].uid)}`;
+  const emit = async (result: DouyinBatchVideoCollectResult) => {
+    await input.onResult?.(result);
+    results.push(result);
+  };
   try {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
-      timeout: 30_000,
-      signal: input.signal
-    });
-    const results: DouyinBatchVideoCollectResult[] = [];
-    for (const accounts of chunkItems(input.accounts, DOUYIN_BATCH_ACCOUNT_CHUNK_SIZE)) {
-      if (input.signal?.aborted) throw createAbortError();
+    try {
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", ["https://www.douyin.com/"], { window: "background" }), { timeout: 30_000, signal: input.signal });
+    } catch (error) {
+      if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
+      for (const account of input.accounts) await emit(makeFailedDouyinBatchCollectResult(account, `抖音共享会话初始化失败：${formatErrorMessage(error)}`));
+      return results;
+    }
+  for (const accounts of chunkItems(input.accounts, Math.max(6, concurrency))) {
+    if (input.signal?.aborted) throw createAbortError();
+    if (accessError) {
+      const reason = pausedDouyinRefreshError(accessError);
+      for (const account of accounts) await emit(makeFailedDouyinBatchCollectResult(account, reason));
+      continue;
+    }
+
+    let chunkResults: DouyinBatchVideoCollectResult[];
       try {
-        const stdout = await runOpenCli(
-          buildOpenCliBrowserArgs(workspace, "eval", [
-            buildDouyinBatchPostExtractJs({
-              accounts: accounts.map((account) => ({
-                id: account.id,
-                name: account.name,
-                uid: account.uid
-              })),
-              concurrency: Math.min(concurrency, accounts.length),
-              fromDate: input.fromDate,
-              limit: scanLimit,
-              toDate: input.toDate
-            })
-          ]),
-          {
-            timeout: DOUYIN_BATCH_POST_SCAN_TIMEOUT_MS,
-            signal: input.signal
-          }
-        );
-        results.push(...normalizeDouyinBatchCollectResults(accounts, asArray(parseJsonish(stdout))));
+        const stdout = await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
+          accounts, concurrency, limit: Math.min(input.limit, 500), fromDate: input.fromDate, toDate: input.toDate
+        })]), { timeout: 180_000, signal: input.signal });
+        const parsed = parseJsonish(stdout);
+        if (!Array.isArray(parsed)) throw new Error("抖音批量接口返回无效结果");
+        chunkResults = accounts.map((account) => {
+          const raw = parsed.find((row) => row?.accountId === account.id);
+          if (raw?.status !== "completed" || !Array.isArray(raw.rows)) return makeFailedDouyinBatchCollectResult(account, raw?.error || "抖音批量接口缺少账号结果");
+          const rows = raw.rows as unknown[];
+          return {
+          account,
+          status: "completed" as const,
+          raw: rows,
+          rawCount: rows.length,
+          videos: rows.map((row) => normalizeDouyinVideo(row, account))
+          };
+        });
       } catch (error) {
         if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
-        const message = error instanceof Error ? error.message : "抖音批量抓取失败";
-        results.push(...accounts.map((account) =>
-          makeFailedDouyinBatchCollectResult(account, `抖音分批抓取失败：${message}`)
+        const message = formatErrorMessage(error);
+        const normalizedAccessError = getDouyinAccessError(message);
+        chunkResults = accounts.map((account) => makeFailedDouyinBatchCollectResult(
+          account,
+          normalizedAccessError || `抖音账号「${account.name}」采集失败：${message}`
         ));
       }
-    }
-    return results;
-  } catch (error) {
-    if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
-    const message = error instanceof Error ? error.message : "抖音批量抓取失败";
-    return input.accounts.map((account) => makeFailedDouyinBatchCollectResult(account, `抖音批量抓取失败：${message}`));
+    for (const result of chunkResults) await emit(result);
+    accessError = chunkResults.map((result) => getDouyinAccessError(result.error || "")).find(Boolean) || null;
+  }
+
+  return results;
   } finally {
+    // 清理本轮 CLI 会话失败不覆盖已取得的结果。
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
   }
 }
@@ -477,193 +526,6 @@ function chunkItems<T>(items: T[], size: number): T[][] {
     chunks.push(items.slice(index, index + size));
   }
   return chunks;
-}
-
-async function scanDouyinPostVideoRows(
-  account: Account,
-  options: {
-    limit: number;
-    fromDate?: string;
-    toDate?: string;
-    signal?: AbortSignal;
-  }
-) {
-  const workspace = `douyin-post-${process.pid}-${Date.now()}-${shortHash(account.uid)}`;
-  const scanLimit = Math.min(Math.max(options.limit, 1), DOUYIN_BROWSER_VIDEO_SCAN_LIMIT);
-  let apiError: unknown;
-
-  try {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
-      timeout: 30_000,
-      signal: options.signal
-    });
-    const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [
-      buildDouyinPostExtractJs({
-        secUid: account.uid,
-        limit: scanLimit,
-        fromDate: options.fromDate,
-        toDate: options.toDate
-      })
-    ]);
-    const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 90_000, signal: options.signal })));
-    if (rows.length) return rows;
-    apiError = new Error("aweme/post 没有返回可用视频");
-    return await scanDouyinProfileDomVideoRows(workspace, account, {
-      ...options,
-      limit: scanLimit,
-      retryReason: formatErrorMessage(apiError)
-    });
-  } catch (error) {
-    if (isAbortError(error)) throw error;
-    apiError = error;
-    return await scanDouyinProfileDomVideoRows(workspace, account, {
-      ...options,
-      limit: scanLimit,
-      retryReason: formatErrorMessage(apiError)
-    });
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
-}
-
-async function scanDouyinProfileDomVideoRows(
-  workspace: string,
-  account: Account,
-  options: {
-    limit: number;
-    fromDate?: string;
-    toDate?: string;
-    retryReason?: string;
-    signal?: AbortSignal;
-  }
-) {
-  const profileUrl = account.sourceUrl || `https://www.douyin.com/user/${encodeURIComponent(account.uid)}`;
-  await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
-    timeout: 30_000,
-    signal: options.signal
-  });
-  await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]), {
-    timeout: 10_000,
-    signal: options.signal
-  }).catch((error) => {
-    if (isAbortError(error)) throw error;
-    return undefined;
-  });
-
-  const rawCandidates = asArray(parseJsonish(await runOpenCli(
-    buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_PROFILE_VIDEO_LINKS_EXTRACT_JS]),
-    { timeout: 45_000, signal: options.signal }
-  )));
-  const candidates = rawCandidates
-    .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
-    .filter((row): row is Record<string, unknown> => Boolean(row?.aweme_id))
-    .slice(0, Math.min(Math.max(options.limit * 3, options.limit), 36));
-
-  if (!candidates.length) {
-    throw new Error(`抖音主页兜底抓取也没有找到作品链接${options.retryReason ? `；接口失败原因为：${options.retryReason}` : ""}`);
-  }
-
-  const rows: Record<string, unknown>[] = [];
-  const fromTime = options.fromDate ? new Date(`${options.fromDate}T00:00:00+08:00`).getTime() : null;
-  const toTime = options.toDate ? new Date(`${options.toDate}T23:59:59+08:00`).getTime() : null;
-
-  for (const candidate of candidates) {
-    if (rows.length >= options.limit) break;
-    const awemeId = stringField(candidate.aweme_id) || stringField(candidate.id);
-    const url = stringField(candidate.url) || stringField(candidate.web_url) || buildDouyinVideoUrl(awemeId);
-    if (!awemeId || !url) continue;
-
-    throwIfAbortedSignal(options.signal);
-    const detail = await readDouyinVideoDomDetail(workspace, {
-      awemeId,
-      likes: toNumber(candidate.digg_count),
-      title: stringField(candidate.title),
-      url
-    }, options.signal).catch((error) => {
-      if (isAbortError(error)) throw error;
-      return candidate;
-    });
-    const createTime = toNumber((detail as Record<string, unknown>).create_time);
-    if (fromTime !== null || toTime !== null) {
-      if (!createTime) continue;
-      const publishedTime = createTime * 1000;
-      if (fromTime !== null && publishedTime < fromTime) continue;
-      if (toTime !== null && publishedTime > toTime) continue;
-    }
-    rows.push({
-      ...candidate,
-      ...(detail && typeof detail === "object" ? detail as Record<string, unknown> : {}),
-      source: "douyin_profile_dom_fallback"
-    });
-  }
-
-  if (!rows.length) {
-    throw new Error(`抖音主页兜底找到 ${candidates.length} 条作品，但没有符合当前日期窗口的可用内容。`);
-  }
-
-  return rows;
-}
-
-async function readDouyinVideoDomDetail(
-  workspace: string,
-  input: {
-    awemeId: string;
-    likes: number;
-    title: string;
-    url: string;
-  },
-  signal?: AbortSignal
-) {
-  await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [input.url], { window: "background" }), {
-    timeout: 30_000,
-    signal
-  });
-  await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
-    timeout: 8_000,
-    signal
-  }).catch((error) => {
-    if (isAbortError(error)) throw error;
-    return undefined;
-  });
-  return parseJsonish(await runOpenCli(
-    buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinVideoPageDomExtractJs(input)]),
-    { timeout: 20_000, signal }
-  ));
-}
-
-function normalizeDouyinBatchCollectResults(
-  accounts: Account[],
-  rawResults: unknown[]
-): DouyinBatchVideoCollectResult[] {
-  const resultsByAccount = new Map<string, Record<string, unknown>>();
-  for (const raw of rawResults) {
-    if (!raw || typeof raw !== "object") continue;
-    const result = raw as Record<string, unknown>;
-    const accountId = stringField(result.accountId);
-    const uid = stringField(result.uid);
-    if (accountId) resultsByAccount.set(accountId, result);
-    if (uid) resultsByAccount.set(uid, result);
-  }
-
-  return accounts.map((account) => {
-    const result = resultsByAccount.get(account.id) || resultsByAccount.get(account.uid);
-    if (!result) {
-      return makeFailedDouyinBatchCollectResult(account, "抖音批量抓取没有返回这个账号的结果。");
-    }
-
-    if (result.status !== "completed") {
-      return makeFailedDouyinBatchCollectResult(account, stringField(result.error) || "抖音批量抓取账号失败。");
-    }
-
-    const rows = Array.isArray(result.rows) ? result.rows : [];
-    return {
-      account,
-      status: "completed",
-      raw: rows,
-      rawCount: rows.length,
-      videos: rows.map((row) => normalizeDouyinVideo(row, account))
-    };
-  });
 }
 
 function makeFailedDouyinBatchCollectResult(account: Account, error: string): DouyinBatchVideoCollectResult {
@@ -767,23 +629,32 @@ async function getDouyinVideoDownloadUrlsWithUserVideos(account: Account, option
 }
 
 async function getDouyinVideoRows(account: Account, options: DouyinMediaLookupOptions = {}) {
-  const stdout = await runOpenCli([
-    "douyin",
-    "user-videos",
-    account.uid,
-    "--limit",
-    String(Math.max(1, Math.min(options.limit || 20, 50))),
-    "--with_comments",
-    "false",
-    "-f",
-    "json"
-  ], {
+  const stdout = await runOpenCli(buildDouyinUserVideosArgs(account.uid, options.limit, false), {
     timeout: 90_000,
     signal: options.signal
   });
   return asArray(parseJsonish(stdout))
     .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
     .filter(Boolean) as Array<Record<string, unknown>>;
+}
+
+export function buildDouyinUserVideosArgs(secUid: string, limit?: number, withComments = false) {
+  const normalizedLimit = Math.max(1, Math.min(Math.trunc(Number(limit) || DOUYIN_USER_VIDEOS_LIMIT), DOUYIN_USER_VIDEOS_LIMIT));
+  return [
+    "douyin",
+    "user-videos",
+    secUid,
+    "--limit",
+    String(normalizedLimit),
+    "--with_comments",
+    String(withComments),
+    "--window",
+    "background",
+    "--site-session",
+    "persistent",
+    "-f",
+    "json"
+  ];
 }
 
 export async function getDouyinVideoDetailMap(
@@ -1224,10 +1095,6 @@ function isAbortError(error: unknown) {
   return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
 }
 
-function throwIfAbortedSignal(signal?: AbortSignal) {
-  if (signal?.aborted) throw createAbortError();
-}
-
 function createAbortError() {
   const error = new Error("任务已停止");
   error.name = "AbortError";
@@ -1457,13 +1324,27 @@ async function getDouyinVideoDetailWithBrowser(
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
   const topComments = Array.isArray(object.topComments)
-    ? object.topComments.map((comment) => normalizeCommentText(comment)).filter(Boolean)
+    ? object.topComments.map(normalizeDouyinHotComment).filter((comment): comment is { text: string; likes: number; replies: number } => Boolean(comment?.text))
     : [];
   const commentCount = toNumber(object.commentCount);
   if (!topComments.length && commentCount <= 0) return null;
   return {
     commentCount: commentCount > 0 ? commentCount : undefined,
-    topComments
+    topComments,
+    likeCount: toNumber(object.likeCount),
+    publishedAt: normalizeTimestamp(object.publishedAt || object.createTime || object.create_time)
+  };
+}
+
+function normalizeDouyinHotComment(value: unknown) {
+  if (typeof value === "string") return { text: normalizeCommentText(value), likes: 0, replies: 0 };
+  const object = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const text = normalizeCommentText(object.text || object.content);
+  if (!text) return null;
+  return {
+    text,
+    likes: toNumber(object.likes || object.digg_count),
+    replies: toNumber(object.replies || object.reply_comment_total)
   };
 }
 
@@ -1533,19 +1414,12 @@ async function getDouyinVideoDetailSnapshots(
 }
 
 export async function getDouyinTopComments(account: Account, options: { limit?: number; commentLimit?: number } = {}) {
-  const stdout = await runOpenCli([
-    "douyin",
-    "user-videos",
-    account.uid,
-    "--limit",
-    String(Math.max(1, Math.min(options.limit || 20, 50))),
-    "--with_comments",
-    "true",
+  const args = buildDouyinUserVideosArgs(account.uid, options.limit, true);
+  args.splice(args.indexOf("-f"), 0,
     "--comment_limit",
-    String(Math.max(1, Math.min(options.commentLimit || 10, 30))),
-    "-f",
-    "json"
-  ]);
+    String(Math.max(1, Math.min(options.commentLimit || 10, 30)))
+  );
+  const stdout = await runOpenCli(args);
   return asArray(parseJsonish(stdout))
     .flatMap((row) => {
       const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
@@ -1668,6 +1542,10 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   const title = String(object.title || object.desc || object.caption || "未命名视频");
   const awemeId = getDouyinRowAwemeId(object);
+  const publishedAt =
+    normalizeTimestamp(
+      object.publishedAt || object.published_at || object.publish_time || object.date || object.create_time || object.created_at
+    );
   const sourceUrls = [
     object.play_url,
     object.download_url,
@@ -1701,7 +1579,7 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
     title,
     url: pageUrl,
     duration: String(object.duration || ""),
-    publishedAt: normalizeTimestamp(object.date || object.create_time || object.created_at),
+    publishedAt,
     stats: {
       views: firstNumber(
         object.play_count,

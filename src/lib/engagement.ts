@@ -1,9 +1,6 @@
 import { chatCompleteStrict, getChatRuntimeConfig } from "./ai";
 import {
-  getBilibiliComments,
-  getDouyinVideoCommentsByUrl
-} from "./opencli";
-import {
+  buildPresetEngagementStyleProfile,
   classifyEngagementCommentIntent,
   commentStyleChannel,
   extractNativeEmotes,
@@ -74,7 +71,6 @@ type EngagementOptions = {
   commentCount?: number;
   includeDanmaku?: boolean;
   danmakuCount?: number;
-  generationMode?: EngagementGenerationMode;
   targetPlatform?: Platform;
 };
 
@@ -203,7 +199,6 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
           commentCount: Math.max(gaps.commentCount, 1),
           includeDanmaku: gaps.danmakuCount > 0,
           danmakuCount: Math.max(gaps.danmakuCount, 1),
-          generationMode: currentRecord.options.generationMode || "quick",
           targetPlatform: currentRecord.platform === "unknown"
             ? currentRecord.options.targetPlatform
             : currentRecord.platform
@@ -279,11 +274,7 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
   }
   await emitEngagementProgress(runOptions, {
     stage: "brief",
-    message: options.generationMode === "research"
-      ? "正在整理素材并准备跨平台调研"
-      : options.generationMode === "reference"
-        ? "正在整理素材并准备当前视频原评"
-        : "正在提取评论锚点",
+    message: "正在整理素材并准备跨平台调研",
     progress: 24
   });
   throwIfAborted(runOptions.signal);
@@ -293,8 +284,6 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
         contexts: prepared.contexts,
         count: options.commentCount,
         platform: prepared.platform,
-        sourceUrl: prepared.resolvedUrl || prepared.sourceUrl,
-        generationMode: options.generationMode,
         excludedComments: prepared.existingRecord?.comments?.items.map((item) => item.text) || [],
         signal: runOptions.signal,
         onProgress: runOptions.onProgress
@@ -623,8 +612,7 @@ export async function generateDraftEngagement(input: {
     includeComments: true,
     commentCount: input.commentCount,
     includeDanmaku: supportsDanmaku,
-    danmakuCount: input.danmakuCount,
-    generationMode: "quick"
+    danmakuCount: input.danmakuCount
   });
   const next = result.draft ?? resolved.draft;
   return {
@@ -782,11 +770,7 @@ function normalizeEngagementOptions(input: EngagementOptions): NormalizedEngagem
     commentCount: clampCount(input.commentCount ?? 50, 1, 200, 50),
     includeDanmaku: input.includeDanmaku ?? false,
     danmakuCount: clampCount(input.danmakuCount ?? 50, 1, 300, 50),
-    generationMode: input.generationMode === "research"
-      ? "research"
-      : input.generationMode === "reference"
-        ? "reference"
-        : "quick",
+    generationMode: "research",
     targetPlatform: input.targetPlatform
   };
 }
@@ -803,7 +787,6 @@ function normalizeEngagementSourceInput(input: GenerateEngagementInput): Generat
     commentCount: input.commentCount,
     includeDanmaku: input.includeDanmaku,
     danmakuCount: input.danmakuCount,
-    generationMode: input.generationMode,
     targetPlatform: input.targetPlatform
   };
 }
@@ -915,51 +898,15 @@ async function buildAccountSourceContext(
   };
 }
 
-async function collectCommentStyleSamples(input: {
-  platform: Platform;
-  sourceUrl?: string;
-  contexts: SourceContext[];
-  generationMode: EngagementGenerationMode;
-  signal?: AbortSignal;
-}) {
-  const contextSamples = uniqueText(input.contexts.flatMap((context) => context.comments));
-  if (input.generationMode === "quick" || !input.sourceUrl) {
-    return { samples: contextSamples, error: undefined as string | undefined };
-  }
-
-  try {
-    const directSamples = input.platform === "douyin"
-      ? (await getDouyinVideoCommentsByUrl(input.sourceUrl, { commentLimit: 40, signal: input.signal })).comments
-      : (await getBilibiliComments(
-          { id: input.sourceUrl, url: input.sourceUrl, raw: input.sourceUrl },
-          40,
-          { signal: input.signal }
-        )).map((comment) => comment.text);
-    if (!directSamples.length) {
-      return {
-        samples: contextSamples,
-        error: "当前视频没有取得可用原评，已改用本地平台语料。"
-      };
-    }
-    return { samples: uniqueText([...directSamples, ...contextSamples]), error: undefined };
-  } catch (error) {
-    throwIfAborted(input.signal);
-    return {
-      samples: contextSamples,
-      error: `当前视频原评读取失败，已改用本地平台语料：${error instanceof Error ? error.message : "未知错误"}`
-    };
-  }
-}
-
 function buildCommentSystemPrompt(platform: Platform) {
   if (platform === "bilibili") {
     return `你在模拟真实的 B站视频评论区，不是弹幕，也不是给视频写摘要。每条评论来自不同用户。多数人只抓一个细节随手反应、接梗、与 UP 互动或说一句自己的判断；少数人才会认真补充、纠错、追问或反驳。允许长短评论并存，但不要把普通网友都写成产品经理、评测编辑或课代表。
 
-评论必须对素材有反应，可以使用稳定常识做一步推理；技术质疑必须有明确事实关系，不能把两个同时出现的参数硬凑成因果问题。不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄真实样本，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
+评论必须对素材有反应，可以使用稳定常识做一步推理；技术质疑必须有明确事实关系，不能把两个同时出现的参数硬凑成因果问题。不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄调研原句，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
   }
   return `你在模拟真实的抖音评论区，不是在写产品评测或给文案做摘要。每条评论来自不同网友：有人玩梗，有人顺着一个词跳到熟悉场景，有人接话，有人只丢半句，也有人认真追问或泼冷水。评论必须对素材有反应，但不能只是把素材卖点换成口语再说一次。
 
-可以使用稳定、常见的文化常识、平台语感、游戏或日常场景做“一步联想”，也可以用明显夸张和假设制造笑点；不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄真实样本，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
+可以使用稳定、常见的文化常识、平台语感、游戏或日常场景做“一步联想”，也可以用明显夸张和假设制造笑点；不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄调研原句，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
 }
 
 function assertNativeStyleProfile(profile: EngagementStyleProfile, label: string) {
@@ -982,8 +929,6 @@ async function generateComments(input: {
   contexts: SourceContext[];
   count: number;
   platform: Platform | "unknown";
-  sourceUrl?: string;
-  generationMode: EngagementGenerationMode;
   excludedComments: string[];
   signal?: AbortSignal;
   onProgress?: GenerateEngagementOptions["onProgress"];
@@ -991,7 +936,7 @@ async function generateComments(input: {
   if (!ENABLE_MODEL_COMMENT_GENERATION) {
     throw new Error("当前未启用评论模型，已关闭本地兜底。请先配置对话模型后再生成评论。");
   }
-  const { source, contexts, count, platform, sourceUrl, generationMode, excludedComments, signal, onProgress } = input;
+  const { source, contexts, count, platform, excludedComments, signal, onProgress } = input;
   if (platform === "unknown") {
     throw new Error("没有识别到评论目标平台。粘贴文案时请选择抖音或 B站。");
   }
@@ -1004,43 +949,15 @@ async function generateComments(input: {
   const briefMs = Date.now() - briefStartedAt;
   const sourceBrief = sourceBriefResult.brief;
   await onProgress?.({
-    stage: generationMode === "quick" ? "generate" : "research",
-    message: generationMode === "research"
-      ? "正在并行调研当前原评、B站、抖音与公开论坛"
-      : generationMode === "reference"
-        ? "正在读取当前视频原评与平台语料"
-        : "正在加载平台风格语料",
-    progress: generationMode === "research" ? 30 : generationMode === "reference" ? 34 : 40
+    stage: "research",
+    message: "正在并行调研 B站、抖音与公开论坛",
+    progress: 30
   });
 
   const researchStartedAt = Date.now();
-  const [reference, relatedResearch] = await Promise.all([
-    collectCommentStyleSamples({
-      platform,
-      sourceUrl,
-      contexts,
-      generationMode,
-      signal
-    }),
-    generationMode === "research"
-      ? buildEngagementCommentResearch(sourceBrief, { signal })
-      : Promise.resolve<EngagementCommentResearch | null>(null)
-  ]);
-  const loadedStyleProfile = await loadEngagementStyleProfile(
-    commentStyleChannel(platform),
-    reference.samples,
-    reference.error,
-    buildCommentStyleContext(generationSource, sourceBrief),
-    extractEngagementVideoIds(sourceUrl || source.input || "")
-  );
-  const styleProfile: EngagementStyleProfile = {
-    ...loadedStyleProfile,
-    examples: uniqueText(
-      loadedStyleProfile.examples.map((example) => sanitizeEngagementGenerationText(example))
-    ).filter((example) => !containsEngagementTransportLeak(example, transportGuard))
-  };
-  assertNativeStyleProfile(styleProfile, platform === "bilibili" ? "B站评论" : "抖音评论");
-  const blockedComments = uniqueText([...excludedComments, ...reference.samples, ...styleProfile.examples]);
+  const relatedResearch = await buildEngagementCommentResearch(sourceBrief, { signal });
+  const styleProfile = buildPresetEngagementStyleProfile(commentStyleChannel(platform));
+  const blockedComments = uniqueText(excludedComments);
   const researchMs = Date.now() - researchStartedAt;
   const batchResults: {
     index: number;
@@ -1241,23 +1158,8 @@ async function generateComments(input: {
       ...sourceBriefResult.entityCorrections,
       ...selection.entityCorrections
     ]),
-    styleProfile: {
-      channel: styleProfile.channel as "douyin_comment" | "bilibili_comment",
-      source: styleProfile.source,
-      sampleCount: styleProfile.sampleCount,
-      sourceSampleCount: styleProfile.sourceSampleCount,
-      nativeEmoteRate: styleProfile.nativeEmoteRate,
-      nativeEmotes: styleProfile.nativeEmotes,
-      benchmarkAccounts: styleProfile.benchmarkAccounts,
-      benchmarkSampleCount: styleProfile.benchmarkSampleCount,
-      matchedVideoCount: styleProfile.matchedVideoCount,
-      matchedTopics: styleProfile.matchedTopics,
-      matchedContentTypes: styleProfile.matchedContentTypes,
-      targetNativeEmoteCount,
-      referenceError: styleProfile.referenceError
-    },
-    relatedResearch: relatedResearch ? toRelatedCommentResearchDiagnostics(relatedResearch) : undefined,
-    research: relatedResearch ? [toRelatedCommentResearchSummary(relatedResearch, reference.samples.length)] : undefined,
+    relatedResearch: toRelatedCommentResearchDiagnostics(relatedResearch),
+    research: [toRelatedCommentResearchSummary(relatedResearch)],
     generation: {
       mode: "model_batch" as const,
       requestedCount: count,
@@ -1522,16 +1424,10 @@ ${formatCommentSourceBrief(input.sourceBrief)}
 型号一致性约束：
 ${formatCommentEntityGuard(input.entityGuard)}
 
-平台真实风格画像：
-${formatEngagementStyleProfile(input.styleProfile)}
-
-${input.relatedResearch ? `跨平台评论区调研（只学讨论方向和生态，不照抄样本，不把调研里的其他对象写进当前评论）：
+${input.relatedResearch ? `全网讨论调研（只使用讨论方向和生态，不照抄调研原句，不把其他对象写进当前评论）：
 ${formatEngagementCommentResearch(input.relatedResearch)}
 
 全网调研配比：约25%视频直评、20%近期版本话题、20%老玩家旧账、15%萌新问题、8%玩家生活、7%名人/平台梗、5%水评与回复链。每条槽位的“调研角色”优先级高于普通创意方式。` : ""}
-
-真实样本（学习它们如何省略、歪楼、接梗和突然联想；严禁照抄原句或带入样本里的事实）：
-${formatStyleExamples(input.styleProfile.examples)}
 
 本次已经生成/历史已有的评论（这些观点、梗、问法和句式都已经用过，不能改几个字再写一遍）：
 ${input.usedComments.length ? input.usedComments.map((comment) => `- ${comment}`).join("\n") : "暂无"}
@@ -2380,10 +2276,8 @@ function toRelatedCommentResearchDiagnostics(research: EngagementCommentResearch
   };
 }
 
-function toRelatedCommentResearchSummary(research: EngagementCommentResearch, originalCommentCount: number) {
+function toRelatedCommentResearchSummary(research: EngagementCommentResearch) {
   return {
-    originalCommentCount,
-    originalCommentUsed: originalCommentCount,
     relatedCommentCount: research.relatedCommentCount,
     relatedCommentUsed: research.relatedCommentCount,
     relatedVideoCount: research.relatedVideoCount,
@@ -2406,16 +2300,6 @@ function formatCommentSourceBrief(brief: CommentSourceBrief) {
     formatBriefLines("评论锚点词", brief.anchorTerms),
     formatBriefLines("不要写", brief.mustAvoid)
   ].filter(Boolean).join("\n");
-}
-
-function buildCommentStyleContext(source: EngagementContent, brief: CommentSourceBrief) {
-  return uniqueText([
-    source.title,
-    brief.summary,
-    brief.topic,
-    ...brief.subjects,
-    ...brief.keyFacts.slice(0, 6)
-  ]).join("\n");
 }
 
 function formatBriefLines(label: string, values: string[]) {

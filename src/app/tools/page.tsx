@@ -29,9 +29,11 @@ import {
 import type { PublishCopyCandidate, PublishCopyResult, PublishCopyTargetPlatform } from "@/lib/publish-copy-types";
 import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
 
-type WorkspaceMode = "video" | "publish-copy";
+type WorkspaceMode = "video" | "publish-copy" | "stirling-pdf";
 type BusyState = "" | "transcribe" | "download" | "publish-copy";
 type NoticeTone = "success" | "info" | "error";
+
+const defaultStirlingPdfUrl = process.env.NEXT_PUBLIC_STIRLING_PDF_URL || "http://localhost:8080";
 
 const workspaceModes: Array<{
   id: WorkspaceMode;
@@ -40,7 +42,8 @@ const workspaceModes: Array<{
   icon: LucideIcon;
 }> = [
   { id: "video", label: "视频处理", meta: "文案 + 素材", icon: Video },
-  { id: "publish-copy", label: "标题与发布", meta: "检索 + 生成", icon: Sparkles }
+  { id: "publish-copy", label: "标题与发布", meta: "检索 + 生成", icon: Sparkles },
+  { id: "stirling-pdf", label: "Stirling-PDF", meta: "PDF 工具箱", icon: FileText }
 ];
 
 const downloadOptions: Array<{
@@ -76,6 +79,7 @@ export default function ToolsPage() {
   const [publishTopicHint, setPublishTopicHint] = useState("");
   const [publishPlatform, setPublishPlatform] = useState<PublishCopyTargetPlatform>("both");
   const [publishResult, setPublishResult] = useState<PublishCopyResult | null>(null);
+  const [stirlingPdfUrl, setStirlingPdfUrl] = useState(defaultStirlingPdfUrl);
   const [publishSourceDragActive, setPublishSourceDragActive] = useState(false);
   const [publishSourceImporting, setPublishSourceImporting] = useState(false);
   const [busy, setBusy] = useState<BusyState>("");
@@ -87,6 +91,8 @@ export default function ToolsPage() {
 
   const cleanUrl = url.trim();
   const cleanPublishSourceText = publishSourceText.trim();
+  const cleanStirlingPdfUrl = stirlingPdfUrl.trim();
+  const stirlingPdfUrlValid = isHttpUrl(cleanStirlingPdfUrl);
   const noticeIsError = noticeTone === "error";
 
   async function handleTranscribe() {
@@ -259,6 +265,28 @@ export default function ToolsPage() {
     notify({ tone: "success", message: "标题和发布文案已复制。" });
   }
 
+  function handleOpenStirlingPdf() {
+    if (!stirlingPdfUrlValid) {
+      const message = "请输入有效的 HTTP(S) Stirling-PDF 地址。";
+      setNotice(message);
+      setNoticeTone("error");
+      notify({ tone: "error", message });
+      return;
+    }
+
+    const opened = window.open(cleanStirlingPdfUrl, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      const message = "浏览器阻止了新窗口，请允许打开 Stirling-PDF。";
+      setNotice(message);
+      setNoticeTone("error");
+      notify({ tone: "error", message });
+      return;
+    }
+
+    setNotice("已打开 Stirling-PDF。PDF 文件会在你的 Stirling-PDF 实例中处理。");
+    setNoticeTone("info");
+  }
+
   return (
     <div className="page tools-page">
       <header className="page-header">
@@ -275,7 +303,7 @@ export default function ToolsPage() {
           </div>
         </div>
         <div className="page-header-meta">
-          <span className="stat-pill">B站 / 抖音</span>
+          <span className="stat-pill">B站 / 抖音 / PDF</span>
         </div>
       </header>
 
@@ -310,7 +338,11 @@ export default function ToolsPage() {
         </div>
 
         <div className="tools-workspace-body">
-          {activeWorkspace === "video" ? renderVideoWorkspace() : renderPublishWorkspace()}
+          {activeWorkspace === "video"
+            ? renderVideoWorkspace()
+            : activeWorkspace === "publish-copy"
+              ? renderPublishWorkspace()
+              : renderStirlingPdfWorkspace()}
         </div>
       </section>
 
@@ -589,6 +621,81 @@ export default function ToolsPage() {
       </div>
     );
   }
+
+  function renderStirlingPdfWorkspace() {
+    return (
+      <div className="tools-split tools-pdf-workspace">
+        <div className="tools-control-pane">
+          <PaneHeading eyebrow="PDF 工作区" title="Stirling-PDF" />
+
+          <label className="field">
+            <span>Stirling-PDF 地址</span>
+            <div className={`tools-input-shell ${stirlingPdfUrlValid ? "" : "invalid"}`}>
+              <LinkIcon size={16} aria-hidden="true" />
+              <input
+                autoComplete="url"
+                name="stirlingPdfUrl"
+                type="url"
+                value={stirlingPdfUrl}
+                onChange={(event) => setStirlingPdfUrl(event.target.value)}
+                placeholder="http://localhost:8080"
+                aria-invalid={Boolean(cleanStirlingPdfUrl) && !stirlingPdfUrlValid}
+              />
+            </div>
+            <small className="subtle">默认是本机 Docker 的 8080 端口，也可以填写局域网地址。</small>
+          </label>
+
+          <button
+            className="btn primary tools-primary-action"
+            disabled={!stirlingPdfUrlValid}
+            type="button"
+            onClick={handleOpenStirlingPdf}
+          >
+            <ExternalLink size={16} aria-hidden="true" />
+            打开 Stirling-PDF
+          </button>
+
+          <div className="tools-pdf-security-note">
+            <strong>本地处理</strong>
+            <span>文件直接交给 Stirling-PDF 实例，不经过内容运营工作台。</span>
+          </div>
+        </div>
+
+        <div className="tools-result-pane" aria-live="polite">
+          <div className="tools-result-heading">
+            <div>
+              <h2>PDF 工具箱</h2>
+              <p className="pane-subtitle">合并、拆分、压缩、转换、OCR、签名和更多 PDF 操作</p>
+            </div>
+            <MetaPills items={[stirlingPdfUrlValid ? "服务地址就绪" : "需要配置地址", "Docker"]} />
+          </div>
+
+          <div className="tools-pdf-overview">
+            <div className="tools-pdf-overview-mark" aria-hidden="true">
+              <FileText size={26} />
+            </div>
+            <div>
+              <h3>在 Stirling-PDF 中处理 PDF</h3>
+              <p>点击左侧按钮打开完整工作区。首次登录默认账号通常是 <code>admin</code>，请立即修改初始密码。</p>
+            </div>
+            <div className="tools-pdf-feature-grid">
+              {[
+                ["文件整理", "合并 / 拆分 / 旋转"],
+                ["格式处理", "压缩 / 转换 / 修复"],
+                ["内容识别", "OCR / 加水印 / 脱敏"],
+                ["安全操作", "签名 / 加密 / 元数据"]
+              ].map(([title, detail]) => (
+                <div key={title}>
+                  <strong>{title}</strong>
+                  <span>{detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
 
 function PaneHeading(input: { eyebrow: string; title: string }) {
@@ -754,6 +861,16 @@ function formatReferenceMeta(reference: PublishCopyResult["research"]["reference
     stats.comments ? `评 ${stats.comments}` : ""
   ].filter(Boolean);
   return items.length ? items.join(" / ") : reference.query;
+}
+
+function isHttpUrl(value: string) {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function transcriptionSourceLabel(source: SingleVideoTranscribeResult["source"]) {

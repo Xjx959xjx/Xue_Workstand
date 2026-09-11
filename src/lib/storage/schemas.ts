@@ -1,5 +1,6 @@
 import path from "path";
 import { z } from "zod";
+import { styleEvidenceSchema, writerContextSchema } from "../writer-context";
 
 export const STORAGE_SCHEMA_VERSION = 1;
 
@@ -74,6 +75,7 @@ const draftBaseSchema = versionedObject.extend({
   content: z.string(),
   styleRef: z.record(z.unknown()),
   styleRefs: z.array(draftStyleReferenceSchema).min(1).optional(),
+  writerContext: writerContextSchema.optional(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema
 });
@@ -130,7 +132,24 @@ const supportDocumentCacheSchema = versionedObject.extend({
   fetchedAt: timestampSchema
 }).passthrough();
 
+const styleAnalysisSchema = versionedObject.extend({
+  version: z.literal(1), cacheKey: z.string().min(1),
+  kind: z.enum(["account-video", "copy-source"]), sourceId: z.string().min(1),
+  title: z.string(), inputChars: z.number().nonnegative(), analysis: z.string(),
+  evidence: styleEvidenceSchema.optional(), usedModel: z.string(),
+  reasoningEffort: z.string(), generatedAt: timestampSchema
+}).passthrough();
+
+const styleMetaSchema = versionedObject.extend({
+  sampleHash: z.string().min(1), sampleCount: z.number().int().nonnegative(),
+  usedModel: z.string(), updatedAt: timestampSchema,
+  sampleFingerprints: z.array(z.object({ videoId: z.string(), hash: z.string() })).optional(),
+  sampleVideoIds: z.array(z.string()).optional()
+}).passthrough();
+
 export type StoredRecordKind =
+  | "style-analysis"
+  | "style-meta"
   | "account"
   | "video"
   | "project"
@@ -140,6 +159,8 @@ export type StoredRecordKind =
   | "support-document-cache";
 
 const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
+  "style-analysis": styleAnalysisSchema,
+  "style-meta": styleMetaSchema,
   account: accountSchema,
   video: videoSchema,
   project: projectSchema,
@@ -154,6 +175,11 @@ export function storedRecordKind(target: string, root: string): StoredRecordKind
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
   const segments = relative.split(path.sep);
   const file = segments.at(-1) || "";
+
+  if (["bilibili", "douyin", "projects"].includes(segments[0]) && segments.length === 3 && file === "style.meta.json") return "style-meta";
+
+  if (((segments[0] === "bilibili" || segments[0] === "douyin") && segments.length === 4 && segments[2] === "style-samples" && file.endsWith(".json")) ||
+    (segments[0] === "copy-tools" && segments[1] === "sources" && file.endsWith(".style-analysis.json"))) return "style-analysis";
 
   if ((segments[0] === "bilibili" || segments[0] === "douyin") && segments.length === 3 && file === "account.json") {
     return "account";

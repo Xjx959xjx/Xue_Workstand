@@ -7,7 +7,32 @@ import {
   getVisibleHotlistItems
 } from "../src/app/douyin-hotlist/_lib/douyin-hotlist-model";
 import { buildRefreshLogEntries, buildRefreshLogEntry } from "../src/lib/douyin-hotlist-refresh-log";
+import { getDouyinAccessError } from "../src/lib/douyin-access-errors";
+import { buildDouyinUserVideosArgs } from "../src/lib/opencli";
 import type { DouyinHotlistItem, DouyinHotlistRefreshJobResult, JobRecord, Platform } from "../src/lib/types";
+
+test("抖音媒体地址查询使用后台持久 CLI 会话", () => {
+  assert.deepEqual(buildDouyinUserVideosArgs("sec_uid", 60), [
+    "douyin",
+    "user-videos",
+    "sec_uid",
+    "--limit",
+    "20",
+    "--with_comments",
+    "false",
+    "--window",
+    "background",
+    "--site-session",
+    "persistent",
+    "-f",
+    "json"
+  ]);
+});
+
+test("归一化抖音访问错误", () => {
+  assert.equal(getDouyinAccessError("Command failed: ArgusSecurityPlugin Uifid Not Found"), "抖音网页会话尚未就绪（Uifid 缺失），请在 Chrome 打开抖音并完成页面验证后重试。");
+  assert.equal(getDouyinAccessError("Douyin API error 4 at GET https://www.douyin.com/aweme/v1/web/aweme/post/"), "抖音拒绝访问（403/444），请在 Chrome 打开抖音检查登录或验证状态，稍后再刷新。");
+});
 
 test("热榜 URL 只更新自身筛选参数并保留其他查询参数", () => {
   assert.equal(

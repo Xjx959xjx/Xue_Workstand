@@ -32,7 +32,6 @@ export function EngagementResultsPane({
   const sourceBrief = diagnostics?.sourceBrief;
   const entityGuard = diagnostics?.entityGuard;
   const relatedResearch = diagnostics?.relatedResearch;
-  const styleProfile = diagnostics?.styleProfile;
   const requestedCommentCount = resultRecord?.comments?.requestedCount || resultRecord?.options.commentCount || 0;
   const actualCommentCount = resultRecord?.comments?.items.length || 0;
   const missingCommentCount = Math.max(requestedCommentCount - actualCommentCount, 0);
@@ -46,13 +45,6 @@ export function EngagementResultsPane({
       <div className="pane-body engagement-results-pane">
         {generation && !isGenerating ? (
           <div className="engagement-diagnostics">
-            {resultRecord?.comments?.generationMode ? (
-              <span>{resultRecord.comments.generationMode === "research"
-                ? "全网调研"
-                : resultRecord.comments.generationMode === "reference"
-                  ? (styleProfile ? "原评增强" : "参考热评")
-                  : (styleProfile ? "平台自然" : "快速自然")}</span>
-            ) : null}
             <span>{generation.mode === "keyword_local" ? "关键词生成" : `${generation.batchCount} 批增强`}</span>
             <span>完成 {actualCommentCount || generation.completedCount}/{requestedCommentCount || generation.requestedCount}</span>
             {resultRecord?.comments?.timings ? <span>耗时 {formatDuration(resultRecord.comments.timings.totalMs)}</span> : null}
@@ -65,22 +57,17 @@ export function EngagementResultsPane({
             {generation.unsupportedEntityRejectedCount ? <span>型号过滤 {generation.unsupportedEntityRejectedCount}</span> : null}
             {generation.transportRejectedCount ? <span>链接污染过滤 {generation.transportRejectedCount}</span> : null}
             {entityGuard?.allowedModels?.length ? <span>型号 {entityGuard.allowedModels.length}</span> : null}
-            {styleProfile ? <span>{styleProfile.channel === "douyin_comment" ? "抖音风格" : "B站风格"}</span> : null}
-            {styleProfile ? <span>真实样本 {styleProfile.sampleCount}</span> : null}
-            {styleProfile?.matchedVideoCount ? <span>标杆视频 {styleProfile.matchedVideoCount}</span> : null}
-            {styleProfile?.matchedTopics?.length ? <span>题材 {styleProfile.matchedTopics.slice(0, 2).join("/")}</span> : null}
-            {styleProfile?.referenceError ? <span title={styleProfile.referenceError}>原评回退</span> : null}
             {typeof generation.nativeEmoteCount === "number" ? <span>表情 {generation.nativeEmoteCount}/{generation.targetNativeEmoteCount || 0}</span> : null}
             {generation.lengthBuckets?.long ? <span>长评 {generation.lengthBuckets.long}/{generation.targetLongCommentCount || generation.lengthBuckets.long}</span> : null}
             {generation.intentBuckets ? <span>追问 {generation.intentBuckets.question}</span> : null}
             {generation.intentBuckets ? <span>价格 {generation.intentBuckets.price}</span> : null}
             {generation.intentBuckets ? <span>观望 {generation.intentBuckets.skeptical}</span> : null}
             {generation.intentBuckets?.chatter ? <span>吹水 {generation.intentBuckets.chatter}</span> : null}
-            {relatedResearch?.longCommentCount ? <span>长评样本 {relatedResearch.longCommentCount}</span> : null}
+            {relatedResearch?.longCommentCount ? <span>长篇讨论 {relatedResearch.longCommentCount}</span> : null}
             {relatedResearch?.relatedVideoCount ? <span>相关视频 {relatedResearch.relatedVideoCount}</span> : null}
-            {relatedResearch?.relatedCommentCount ? <span>跨平台样本 {relatedResearch.relatedCommentCount}</span> : null}
+            {relatedResearch?.relatedCommentCount ? <span>讨论证据 {relatedResearch.relatedCommentCount}</span> : null}
             {relatedResearch?.forumSourceCount ? <span>论坛来源 {relatedResearch.forumSourceCount}</span> : null}
-            {relatedResearch?.replySampleCount ? <span>真实回复 {relatedResearch.replySampleCount}</span> : null}
+            {relatedResearch?.replySampleCount ? <span>回复讨论 {relatedResearch.replySampleCount}</span> : null}
             {relatedResearch?.sourceStats?.some((source) => source.status !== "completed")
               ? <span title={relatedResearch.sourceStats.filter((source) => source.error).map((source) => source.error).join("；")}>覆盖不完整</span>
               : null}
