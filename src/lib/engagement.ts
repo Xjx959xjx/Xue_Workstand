@@ -1,9 +1,6 @@
 import { chatCompleteStrict, getChatRuntimeConfig } from "./ai";
 import {
-  buildPresetEngagementStyleProfile,
   classifyEngagementCommentIntent,
-  commentStyleChannel,
-  extractNativeEmotes,
   findUnsupportedNativeEmotes,
   formatEngagementStyleProfile,
   hasNativeEmote,
@@ -19,12 +16,10 @@ import {
 } from "./engagement-transport";
 import {
   buildEngagementCommentResearch,
-  buildEngagementResearchLaneSequence,
   formatEngagementCommentResearch,
-  formatEngagementResearchLane,
-  type EngagementCommentResearch,
-  type EngagementResearchLane
+  type EngagementCommentResearch
 } from "./engagement-research";
+import { containsPlatformUserMention } from "./opencli-normalizers";
 import {
   getAccountSummary,
   getProjectSummary,
@@ -58,6 +53,7 @@ type EngagementContent = {
   content: string;
   prompt?: string;
   input?: string;
+  excludedVideoIds?: string[];
   durationSec?: number;
   segments?: Array<{
     startSec: number;
@@ -131,7 +127,7 @@ type CommentEntityGuard = {
   aliases: Map<string, string>;
 };
 
-const ENGAGEMENT_ENGINE_VERSION = "engagement-v3.8";
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v4.0";
 const ENGAGEMENT_DANMAKU_ENGINE_VERSION = "danmaku-v2";
 const ENGAGEMENT_SOURCE_CACHE_VERSION = "engagement-v3";
 const ENGAGEMENT_BRIEF_CACHE_VERSION = "engagement-v3.2";
@@ -140,7 +136,6 @@ const COMMENT_MODEL_CONCURRENCY = clampCount(Number.parseInt(process.env.ENGAGEM
 const DANMAKU_GENERATION_BATCH_SIZE = 16;
 const DANMAKU_MODEL_CONCURRENCY = Math.min(COMMENT_MODEL_CONCURRENCY, 2);
 const COMMENT_CANDIDATE_RATIO = clampRate(Number.parseFloat(process.env.ENGAGEMENT_COMMENT_CANDIDATE_RATIO || ""), 1.05, 1.5, 1.4);
-const COMMENT_EXPLICIT_ANCHOR_RATE = 0.24;
 const COMMENT_GENERATION_MAX_ROUNDS = 2;
 const ENGAGEMENT_AUTO_SUPPLEMENT_MAX_PASSES = 2;
 const ENABLE_MODEL_COMMENT_GENERATION =
@@ -247,6 +242,10 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
       progress: 99,
       previewComments: result.record.comments?.items
     });
+
+    if (remaining.commentCount || remaining.danmakuCount) {
+      throw new Error(`互动素材未生成完整，仍缺：${formatEngagementGapSummary(remaining)}。已保存本次抓到的热评和可用结果，请检查模型配置后重试。`);
+    }
   }
 
   return result;
@@ -588,8 +587,6 @@ function mergeSupplementDiagnostics(
       unsupportedEntityRejectedCount: (existingGeneration?.unsupportedEntityRejectedCount || 0) + (incomingGeneration.unsupportedEntityRejectedCount || 0),
       transportRejectedCount: (existingGeneration?.transportRejectedCount || 0) + (incomingGeneration.transportRejectedCount || 0),
       nativeEmoteCount: mergedTexts.filter(hasNativeEmote).length,
-      targetNativeEmoteCount: existingGeneration?.targetNativeEmoteCount ?? incomingGeneration.targetNativeEmoteCount,
-      unsupportedEmoteRejectedCount: (existingGeneration?.unsupportedEmoteRejectedCount || 0) + (incomingGeneration.unsupportedEmoteRejectedCount || 0),
       batches: [...existingBatches, ...incomingGeneration.batches].map((batch, index) => ({ ...batch, index }))
     }
   };
@@ -658,7 +655,10 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
         id: existingRecord.id,
         title: normalizeKnownEngagementTerms(existingRecord.title),
         content: normalizeKnownEngagementTerms(existingRecord.sourceText),
-        input: existingRecord.sourceUrl || existingRecord.sourceText
+        input: existingRecord.sourceUrl || existingRecord.sourceText,
+        excludedVideoIds: extractEngagementVideoIds(
+          `${existingRecord.sourceUrl || ""} ${existingRecord.resolvedUrl || ""}`
+        )
       },
       contexts: [],
       platform: existingRecord.platform === "unknown" ? options.targetPlatform || "unknown" : existingRecord.platform,
@@ -740,6 +740,7 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
       content: normalizeKnownEngagementTerms(result.text),
       prompt: "",
       input: url,
+      excludedVideoIds: extractEngagementVideoIds(`${url} ${result.url || ""} ${result.resolvedUrl || ""}`),
       durationSec: result.durationSec,
       segments: result.segments
     };
@@ -797,7 +798,8 @@ function draftToEngagementContent(draft: Draft): EngagementContent {
     title: normalizeKnownEngagementTerms(draft.title),
     content: normalizeKnownEngagementTerms(draft.content),
     prompt: draft.prompt ? normalizeKnownEngagementTerms(draft.prompt) : draft.prompt,
-    input: draft.input ? normalizeKnownEngagementTerms(draft.input) : draft.input
+    input: draft.input ? normalizeKnownEngagementTerms(draft.input) : draft.input,
+    excludedVideoIds: extractEngagementVideoIds(draft.input || "")
   };
 }
 
@@ -902,11 +904,11 @@ function buildCommentSystemPrompt(platform: Platform) {
   if (platform === "bilibili") {
     return `你在模拟真实的 B站视频评论区，不是弹幕，也不是给视频写摘要。每条评论来自不同用户。多数人只抓一个细节随手反应、接梗、与 UP 互动或说一句自己的判断；少数人才会认真补充、纠错、追问或反驳。允许长短评论并存，但不要把普通网友都写成产品经理、评测编辑或课代表。
 
-评论必须对素材有反应，可以使用稳定常识做一步推理；技术质疑必须有明确事实关系，不能把两个同时出现的参数硬凑成因果问题。不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄调研原句，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
+评论必须对素材有反应，可以使用稳定常识做一步推理；技术质疑必须有明确事实关系，不能把两个同时出现的参数硬凑成因果问题。不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。真实热评已经由程序优先加入结果，你只负责补足缺口，不能复制、改写或近义复述已有热评。不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 字符串数组。`;
   }
   return `你在模拟真实的抖音评论区，不是在写产品评测或给文案做摘要。每条评论来自不同网友：有人玩梗，有人顺着一个词跳到熟悉场景，有人接话，有人只丢半句，也有人认真追问或泼冷水。评论必须对素材有反应，但不能只是把素材卖点换成口语再说一次。
 
-可以使用稳定、常见的文化常识、平台语感、游戏或日常场景做“一步联想”，也可以用明显夸张和假设制造笑点；不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。不要照抄调研原句，不要攻击、造谣、色情、歧视或引导刷量。严格按槽位顺序，只输出 JSON 字符串数组。`;
+可以使用稳定、常见的文化常识、平台语感、游戏或日常场景做“一步联想”，也可以用明显夸张和假设制造笑点；不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。真实热评已经由程序优先加入结果，你只负责补足缺口，不能复制、改写或近义复述已有热评。不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 字符串数组。`;
 }
 
 function assertNativeStyleProfile(profile: EngagementStyleProfile, label: string) {
@@ -933,9 +935,6 @@ async function generateComments(input: {
   signal?: AbortSignal;
   onProgress?: GenerateEngagementOptions["onProgress"];
 }) {
-  if (!ENABLE_MODEL_COMMENT_GENERATION) {
-    throw new Error("当前未启用评论模型，已关闭本地兜底。请先配置对话模型后再生成评论。");
-  }
   const { source, contexts, count, platform, excludedComments, signal, onProgress } = input;
   if (platform === "unknown") {
     throw new Error("没有识别到评论目标平台。粘贴文案时请选择抖音或 B站。");
@@ -950,14 +949,19 @@ async function generateComments(input: {
   const sourceBrief = sourceBriefResult.brief;
   await onProgress?.({
     stage: "research",
-    message: "正在并行调研 B站、抖音与公开论坛",
+    message: "正在让 AI 提炼主体关键词并抓取相关视频热评",
     progress: 30
   });
 
   const researchStartedAt = Date.now();
-  const relatedResearch = await buildEngagementCommentResearch(sourceBrief, { signal });
-  const styleProfile = buildPresetEngagementStyleProfile(commentStyleChannel(platform));
+  const relatedResearch = await buildEngagementCommentResearch(sourceBrief, {
+    platform,
+    excludedVideoIds: generationSource.excludedVideoIds,
+    signal
+  });
+  const reusableFingerprints = new Set(relatedResearch.reusableComments.map(commentFingerprint));
   const blockedComments = uniqueText(excludedComments);
+  parsed.push(...relatedResearch.reusableComments);
   const researchMs = Date.now() - researchStartedAt;
   const batchResults: {
     index: number;
@@ -969,48 +973,37 @@ async function generateComments(input: {
     status: "completed" | "failed";
     attempts: number;
   }[] = [];
-  let usedModel = "model";
+  let usedModel = "original-comments";
   let lastBatchError: unknown;
   let nextBatchIndex = 0;
   let round = 0;
   const modelConcurrency = platform === "bilibili" ? 1 : COMMENT_MODEL_CONCURRENCY;
-  const targetLengthBuckets = buildTargetCommentLengthBuckets(count, styleProfile);
-  const targetLongCommentCount = targetLengthBuckets.long;
-  const targetIntentBuckets = buildTargetCommentIntentBuckets(count, styleProfile, sourceBrief, relatedResearch);
-  const targetNativeEmoteCount = Math.min(count, Math.round(count * styleProfile.nativeEmoteRate));
-  let selected = rebalanceCommentSelection(
-    selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
+  let selected = selectCommentSamples(
+    parsed,
+    sourceBrief,
+    entityGuard,
+    transportGuard,
     count,
-    targetIntentBuckets,
-    targetLengthBuckets,
-    targetNativeEmoteCount
+    blockedComments,
+    reusableFingerprints
   );
+  if (selected.items.length < count && !ENABLE_MODEL_COMMENT_GENERATION) {
+    throw new Error(
+      `已抓到并保留 ${selected.items.length} 条可复用原评，还缺 ${count - selected.items.length} 条；AI 兜底未启用，请配置对话模型后重试。`
+    );
+  }
   const generationStartedAt = Date.now();
 
   while (
-    (selected.items.length < count || hasSevereCommentLengthGap(selected.items, targetLengthBuckets))
+    selected.items.length < count
     && round < COMMENT_GENERATION_MAX_ROUNDS
   ) {
     throwIfAborted(signal);
     const missingCount = Math.max(count - selected.items.length, 0);
     const requestCount = round === 0
-      ? Math.max(missingCount, Math.ceil(count * COMMENT_CANDIDATE_RATIO))
-      : Math.max(missingCount + Math.ceil(count * 0.12), Math.ceil(count * 0.28));
-    const slots = buildCommentSlots({
-      count: requestCount,
-      startIndex: nextBatchIndex * COMMENT_GENERATION_BATCH_SIZE,
-      sourceBrief,
-      styleProfile,
-      targetIntentBuckets,
-      currentIntentBuckets: summarizeCommentIntentBuckets(selected.items),
-      targetLengthBuckets,
-      currentLengthBuckets: summarizeCommentLengthBuckets(selected.items),
-      targetNativeEmoteCount,
-      currentNativeEmoteCount: selected.items.filter(hasNativeEmote).length,
-      platform,
-      relatedResearch
-    });
-    const batches = buildCommentGenerationBatches(slots, nextBatchIndex);
+      ? Math.max(missingCount, Math.ceil(missingCount * COMMENT_CANDIDATE_RATIO))
+      : missingCount + Math.max(2, Math.ceil(missingCount * 0.2));
+    const batches = buildCommentGenerationBatches(requestCount, nextBatchIndex);
 
     for (let start = 0; start < batches.length; start += modelConcurrency) {
       throwIfAborted(signal);
@@ -1033,18 +1026,17 @@ async function generateComments(input: {
                       source: generationSource,
                       sourceBrief,
                       entityGuard,
-                      styleProfile,
                       relatedResearch,
                       platform,
-                      slots: batch.slots,
-                      usedComments: uniqueText([...excludedComments, ...selected.items]).slice(-60)
+                      requestedCount: batch.requestedCount,
+                      usedComments: uniqueText([...excludedComments, ...selected.items]).slice(-200)
                     })
                   }
                 ],
                 "medium",
                 {
                   signal,
-                  maxOutputTokens: clampCount(batch.slots.length * 72, 1800, 9000, 3600)
+                  maxOutputTokens: clampCount(batch.requestedCount * 72, 1800, 9000, 3600)
                 }
               );
               throwIfAborted(signal);
@@ -1052,7 +1044,7 @@ async function generateComments(input: {
                 throw new Error(result.fallbackReason || "模型没有返回可用评论，请重试或更换模型。");
               }
               const batchParsed = parseStringArray(result.text)
-                .slice(0, batch.slots.length);
+                .slice(0, batch.requestedCount);
               if (!batchParsed.length) {
                 throw new Error("模型返回了内容，但没有解析到可用评论，请重试或更换模型。");
               }
@@ -1076,7 +1068,7 @@ async function generateComments(input: {
           usedModel = result.model || usedModel;
           batchResults.push({
             index: batch.index,
-            requestedCount: batch.slots.length,
+            requestedCount: batch.requestedCount,
             parsedCount: settled.value.batchParsed.length,
             model: result.model,
             fallback: false,
@@ -1088,7 +1080,7 @@ async function generateComments(input: {
         lastBatchError = settled.reason;
         batchResults.push({
           index: batch.index,
-          requestedCount: batch.slots.length,
+          requestedCount: batch.requestedCount,
           parsedCount: 0,
           model: "",
           fallback: false,
@@ -1098,19 +1090,26 @@ async function generateComments(input: {
         });
       });
 
-      selected = rebalanceCommentSelection(
-        selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
+      selected = selectCommentSamples(
+        parsed,
+        sourceBrief,
+        entityGuard,
+        transportGuard,
         count,
-        targetIntentBuckets,
-        targetLengthBuckets,
-        targetNativeEmoteCount
+        blockedComments,
+        reusableFingerprints
       );
       const preview = selected.items.slice(0, count).map((text, index) =>
-        makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index)
+        makeCommentItem(
+          text,
+          contexts[index % Math.max(contexts.length, 1)]?.platform || platform,
+          index,
+          reusableFingerprints.has(commentFingerprint(text)) ? "reused_hot_comment" : "ai_generated"
+        )
       );
       await onProgress?.({
         stage: "generate",
-        message: `首批结果已出，当前保留 ${preview.length}/${count} 条`,
+        message: `当前原评 ${preview.filter((item) => item.origin === "reused_hot_comment").length} 条，AI 补写后共 ${preview.length}/${count} 条`,
         progress: Math.min(88, 42 + Math.round((preview.length / count) * 44)),
         previewComments: preview
       });
@@ -1121,21 +1120,25 @@ async function generateComments(input: {
 
     nextBatchIndex += batches.length;
     round += 1;
-    selected = rebalanceCommentSelection(
-      selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
+    selected = selectCommentSamples(
+      parsed,
+      sourceBrief,
+      entityGuard,
+      transportGuard,
       count,
-      targetIntentBuckets,
-      targetLengthBuckets,
-      targetNativeEmoteCount
+      blockedComments,
+      reusableFingerprints
     );
   }
 
-  const selection = rebalanceCommentSelection(
-    selectCommentSamples(parsed, sourceBrief, entityGuard, transportGuard, styleProfile, count, blockedComments, excludedComments),
+  const selection = selectCommentSamples(
+    parsed,
+    sourceBrief,
+    entityGuard,
+    transportGuard,
     count,
-    targetIntentBuckets,
-    targetLengthBuckets,
-    targetNativeEmoteCount
+    blockedComments,
+    reusableFingerprints
   );
   const texts = selection.items.slice(0, count);
   if (!texts.length) {
@@ -1144,12 +1147,18 @@ async function generateComments(input: {
   const generationMs = Date.now() - generationStartedAt;
   const outputLengthBuckets = summarizeCommentLengthBuckets(texts.slice(0, count));
   const outputIntentBuckets = summarizeCommentIntentBuckets(texts.slice(0, count));
+  const reusedHotCommentCount = texts.filter((text) => reusableFingerprints.has(commentFingerprint(text))).length;
   await onProgress?.({
     stage: "filter",
     message: texts.length < count ? `已保留 ${texts.length}/${count} 条，系统将继续自动补齐` : `已完成 ${texts.length} 条评论`,
     progress: 94,
     previewComments: texts.map((text, index) =>
-      makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index)
+      makeCommentItem(
+        text,
+        contexts[index % Math.max(contexts.length, 1)]?.platform || platform,
+        index,
+        reusableFingerprints.has(commentFingerprint(text)) ? "reused_hot_comment" : "ai_generated"
+      )
     )
   });
   const diagnostics = {
@@ -1167,10 +1176,9 @@ async function generateComments(input: {
       batchCount: batchResults.length,
       parsedCount: parsed.length,
       completedCount: texts.length,
-      supplementedCount: 0,
-      targetLongCommentCount,
+      supplementedCount: Math.max(0, texts.length - reusedHotCommentCount),
+      reusedHotCommentCount,
       lengthBuckets: outputLengthBuckets,
-      targetIntentBuckets,
       intentBuckets: outputIntentBuckets,
       lowSignalRejectedCount: selection.lowSignalRejectedCount,
       syntheticRejectedCount: selection.syntheticRejectedCount,
@@ -1180,8 +1188,6 @@ async function generateComments(input: {
       unsupportedEntityRejectedCount: selection.unsupportedEntityRejectedCount,
       transportRejectedCount: selection.transportRejectedCount,
       nativeEmoteCount: texts.filter(hasNativeEmote).length,
-      targetNativeEmoteCount,
-      unsupportedEmoteRejectedCount: selection.unsupportedEmoteRejectedCount,
       batches: batchResults
     }
   };
@@ -1197,129 +1203,24 @@ async function generateComments(input: {
       ...(relatedResearch?.cacheHit ? ["research" as const] : [])
     ],
     diagnostics,
-    items: texts.slice(0, count).map((text, index) => makeCommentItem(text, contexts[index % Math.max(contexts.length, 1)]?.platform || platform, index))
+    items: texts.slice(0, count).map((text, index) => makeCommentItem(
+      text,
+      contexts[index % Math.max(contexts.length, 1)]?.platform || platform,
+      index,
+      reusableFingerprints.has(commentFingerprint(text)) ? "reused_hot_comment" : "ai_generated"
+    ))
   };
 }
 
-function buildCommentGenerationBatches(slots: CommentSlot[], startIndex = 0) {
-  const batches: { index: number; slots: CommentSlot[] }[] = [];
-  for (let index = 0; index < slots.length; index += COMMENT_GENERATION_BATCH_SIZE) {
+function buildCommentGenerationBatches(count: number, startIndex = 0) {
+  const batches: { index: number; requestedCount: number }[] = [];
+  for (let index = 0; index < count; index += COMMENT_GENERATION_BATCH_SIZE) {
     batches.push({
       index: startIndex + batches.length,
-      slots: slots.slice(index, index + COMMENT_GENERATION_BATCH_SIZE)
+      requestedCount: Math.min(COMMENT_GENERATION_BATCH_SIZE, count - index)
     });
   }
   return batches;
-}
-
-type CommentLength = "short" | "medium" | "long";
-type CommentLengthBuckets = Record<CommentLength, number>;
-type CommentCreativeLane = "meme" | "association" | "inside" | "supplement" | "reply" | "micro" | "counterpoint" | "question" | "reaction";
-type CommentSlot = {
-  index: number;
-  intent: CommentIntent;
-  length: CommentLength;
-  lane: CommentCreativeLane;
-  researchLane?: EngagementResearchLane;
-  anchor?: string;
-  emote: "none" | "optional";
-  allowedEmotes: string[];
-};
-
-function buildCommentSlots(input: {
-  count: number;
-  startIndex: number;
-  sourceBrief: CommentSourceBrief;
-  styleProfile: EngagementStyleProfile;
-  targetIntentBuckets: CommentIntentBuckets;
-  currentIntentBuckets: CommentIntentBuckets;
-  targetLengthBuckets: CommentLengthBuckets;
-  currentLengthBuckets: CommentLengthBuckets;
-  targetNativeEmoteCount: number;
-  currentNativeEmoteCount: number;
-  platform: Platform;
-  relatedResearch: EngagementCommentResearch | null;
-}) {
-  const intentOrder: CommentIntent[] = ["reaction", "question", "skeptical", "experience", "comparison", "follow", "chatter", "price"];
-  const intents = buildDeficitSequence(
-    input.count,
-    intentOrder,
-    input.targetIntentBuckets,
-    input.currentIntentBuckets,
-    ["reaction", "question", "skeptical", "experience", "chatter"]
-  );
-  const lengthOrder: CommentLength[] = ["short", "medium", "short", "long", "medium"];
-  const lengths = buildDeficitSequence(
-    input.count,
-    lengthOrder,
-    input.targetLengthBuckets,
-    input.currentLengthBuckets,
-    ["short", "medium", "short", "long"]
-  );
-  const neededEmotes = Math.min(
-    input.count,
-    Math.max(input.targetNativeEmoteCount - input.currentNativeEmoteCount, 0)
-  );
-  const emotePositions = new Set(spreadPositions(input.count, neededEmotes));
-  const anchors = buildCommentAnchorTerms(input.sourceBrief);
-  const anchorPositions = new Set(spreadPositions(
-    input.count,
-    Math.min(input.count, Math.round(input.count * COMMENT_EXPLICIT_ANCHOR_RATE))
-  ));
-  const lanes = buildCommentCreativeLaneSequence(input.count, input.startIndex, input.platform);
-  const researchLanes = input.relatedResearch
-    ? buildEngagementResearchLaneSequence(input.count, input.startIndex)
-    : [];
-
-  return Array.from({ length: input.count }, (_, offset): CommentSlot => {
-    const intent = intents[offset] || "reaction";
-    const lane = lanes[offset] || "reaction";
-    const anchor = lane !== "micro" && anchorPositions.has(offset) && anchors.length
-      ? anchors[(input.startIndex + offset * 5) % anchors.length]
-      : undefined;
-    return {
-      index: input.startIndex + offset + 1,
-      intent,
-      length: lane === "micro" ? "short" : lengths[offset] || "medium",
-      lane,
-      researchLane: researchLanes[offset],
-      anchor,
-      emote: emotePositions.has(offset) && input.styleProfile.nativeEmotes.length ? "optional" : "none",
-      allowedEmotes: input.styleProfile.nativeEmotes
-    };
-  });
-}
-
-function buildCommentCreativeLaneSequence(count: number, startIndex: number, platform: Platform) {
-  const cycle: CommentCreativeLane[] = platform === "bilibili"
-    ? ["reaction", "inside", "micro", "supplement", "reply", "meme", "question", "reaction", "counterpoint", "inside", "micro", "association"]
-    : ["meme", "association", "micro", "inside", "reply", "meme", "association", "micro", "counterpoint", "question"];
-  return Array.from({ length: count }, (_, index) => cycle[(startIndex + index) % cycle.length]);
-}
-
-function buildDeficitSequence<K extends string>(
-  count: number,
-  order: K[],
-  target: Record<K, number>,
-  current: Record<K, number>,
-  fallback: K[]
-) {
-  const remaining = Object.fromEntries(
-    [...new Set(order)].map((key) => [key, Math.max((target[key] || 0) - (current[key] || 0), 0)])
-  ) as Record<K, number>;
-  const output: K[] = [];
-  while (output.length < count && Object.values(remaining).some((value) => Number(value) > 0)) {
-    for (const key of order) {
-      if (output.length >= count) break;
-      if ((remaining[key] || 0) <= 0) continue;
-      output.push(key);
-      remaining[key] -= 1;
-    }
-  }
-  while (output.length < count) {
-    output.push(fallback[output.length % fallback.length]);
-  }
-  return output;
 }
 
 function spreadPositions(count: number, selectedCount: number) {
@@ -1329,89 +1230,19 @@ function spreadPositions(count: number, selectedCount: number) {
   );
 }
 
-function formatCommentSlot(slot: CommentSlot) {
-  const length = slot.length === "short"
-    ? "2—12 个字的短句/半句"
-    : slot.length === "medium"
-      ? "13—35 个字"
-      : "36—70 个字，可以有两个口语分句，但不要写成小作文";
-  const anchor = slot.anchor
-    ? `素材锚点：${slot.anchor}（取其中 1—2 个具体名词造梗，不要把长句整段抄进评论；型号保持原写法）`
-    : "隐式接话：不要复述标题、产品名或日期，像已经看过视频后直接开口";
-  const emote = slot.emote === "optional"
-    ? `语气合适时可用一个平台表情，只能从 ${slot.allowedEmotes.join(" ")} 中选；不合适就不用`
-    : "不用 emoji 或方括号表情";
-  const researchLane = slot.researchLane
-    ? `｜调研角色：${formatEngagementResearchLane(slot.researchLane)}`
-    : "";
-  return `${slot.index}. 意图：${formatCommentIntent(slot.intent)}｜创意方式：${formatCommentCreativeLane(slot.lane)}${researchLane}｜${length}｜${anchor}｜${emote}`;
-}
-
-function formatCommentIntent(intent: CommentIntent) {
-  const labels: Record<CommentIntent, string> = {
-    reaction: "普通反应，不强行总结",
-    question: "只追问一个具体问题",
-    price: "只聊价格、优惠或值不值",
-    comparison: "轻对比、纠结怎么选或只点一个差异",
-    skeptical: "保留意见、泼冷水或指出一个门槛",
-    experience: "只说个人偏好或使用门槛，不编亲历",
-    follow: "插眼、蹲后续或求实测",
-    chatter: "圈内闲聊或轻度跑题，但仍能接上素材"
-  };
-  return labels[intent];
-}
-
-function formatCommentCreativeLane(lane: CommentCreativeLane) {
-  const labels: Record<CommentCreativeLane, string> = {
-    meme: "玩梗：抓反差、身份错位、夸张后果或一句可传播的包袱",
-    association: "联想：从素材跳一步联想到熟悉场景、圈层文化或另一种身份，但别编新闻",
-    inside: "素材内梗：拿两个素材名词重新组合、接话或反转，不复述卖点",
-    supplement: "补充讨论：补一个条件、边界、因果、常识或核验点；只展开一个中心，不冒充亲历",
-    reply: "接话：像回复评论区某人，单独看也能懂，不用‘你这么一说’",
-    micro: "短碎片：2—10 个字，一个槽点、称呼、半句话或冷幽默",
-    counterpoint: "反向吐槽：泼一点冷水、拆一句话或指出荒诞处，不写评测总结",
-    question: "真问题：只问一个观众确实会追问的点，不先总结",
-    reaction: "自然反应：脱口而出，允许不完整，不写工整结论"
-  };
-  return labels[lane];
-}
-
 function formatStyleExamples(examples: string[]) {
   return examples.length
     ? examples.slice(0, 18).map((example) => `- ${example}`).join("\n")
     : "暂无本地真实样本，只按平台预设分布生成。";
 }
 
-function formatCommentCreativePalette(firstSlotIndex: number, platform: Platform) {
-  const batchIndex = Math.floor(Math.max(firstSlotIndex - 1, 0) / COMMENT_GENERATION_BATCH_SIZE);
-  const palettes = platform === "bilibili" ? [
-    "优先写第一层自然反应、UP互动和具体小梗；认真分析最多两条，别一上来就集体做风险评审。",
-    "优先用具体名词做短梗、圈内接话和一步联想；不要照搬抖音热评，也不要解释包袱。",
-    "放少量真问题、对比或反向观点；问题必须来自素材尚未回答的空白，不能把两个无关参数硬连起来。",
-    "优先写轻纠错、个人判断和短反应；补充只讲一个有依据的边界，不要写成百科或产品分析。"
-  ] : [
-    "优先挖身份和职业错位、人物关系、谁比谁更认真；少用‘副本、任务、攻略、现实版’作落点。",
-    "优先做具体名词碰撞、词义双关、尺寸/位置/动作变化；少写‘像把 X 搬到 Y’和泛泛的‘开始研究’。",
-    "优先联想明显是假设的后续场面、旁观者反应和荒诞后果；不要靠‘抽卡、皮肤、坐骑’三个万能词撑满本批。",
-    "优先写回怼、泼冷水、真问题、尴尬点和短碎片；问题不能只是把参数名后面加‘吗’。"
-  ];
-  return palettes[batchIndex % palettes.length];
-}
-
-function formatCommentMixRule(platform: Platform) {
-  return platform === "bilibili"
-    ? "整批至少四成是自然反应、短梗、UP互动或圈内接话，约两成是 2—12 字的短评论；补充/考据/条件边界与具体追问/反向观点合计不超过三成。评论不是弹幕，稍长评论也只讲一个中心。"
-    : "整批至少四成是玩梗或一步联想，约两成是 2—12 字的短反应/碎片，约一成半把素材里的两个细节重新组合；其余再放真实追问、反向吐槽、补充和围观。";
-}
-
 function buildCommentBatchPrompt(input: {
   source: EngagementContent;
   sourceBrief: CommentSourceBrief;
   entityGuard: CommentEntityGuard;
-  styleProfile: EngagementStyleProfile;
   relatedResearch: EngagementCommentResearch | null;
   platform: Platform;
-  slots: CommentSlot[];
+  requestedCount: number;
   usedComments: string[];
 }) {
   return `文案标题：${input.source.title}
@@ -1424,10 +1255,9 @@ ${formatCommentSourceBrief(input.sourceBrief)}
 型号一致性约束：
 ${formatCommentEntityGuard(input.entityGuard)}
 
-${input.relatedResearch ? `全网讨论调研（只使用讨论方向和生态，不照抄调研原句，不把其他对象写进当前评论）：
+${input.relatedResearch ? `已经抓取并优先采用的真实热评概况（这些原评已经进入候选，不要复述或改写，只参考自然语气和讨论方向）：
 ${formatEngagementCommentResearch(input.relatedResearch)}
-
-全网调研配比：约25%视频直评、20%近期版本话题、20%老玩家旧账、15%萌新问题、8%玩家生活、7%名人/平台梗、5%水评与回复链。每条槽位的“调研角色”优先级高于普通创意方式。` : ""}
+` : ""}
 
 本次已经生成/历史已有的评论（这些观点、梗、问法和句式都已经用过，不能改几个字再写一遍）：
 ${input.usedComments.length ? input.usedComments.map((comment) => `- ${comment}`).join("\n") : "暂无"}
@@ -1435,32 +1265,15 @@ ${input.usedComments.length ? input.usedComments.map((comment) => `- ${comment}`
 原始文案节选（只用于核对，不要逐句复读）：
 ${clampText(input.source.content, 2600)}
 
-本批创意侧重点：
-${formatCommentCreativePalette(input.slots[0]?.index || 1, input.platform)}
-
-先在心里从素材找 8—15 个“可玩钩子”，不要输出这一步：反差、身份错位、名词碰撞、谐音/句式、夸张后果、人物关系、观众下一步动作。再把钩子改造成网友会发的评论。
-
-“改造成评论”指的是：
-- 事实是“售货员要学角色设定”，不要写“培训很认真”，可以写成“销售岗笔试加考角色理解”。
-- 事实是“玩家开始研究续航”，不要写“跨度很大”，可以写成“配队表旁边新增电量表”。
-这两句只说明转换方法，不能当成本批答案照搬；如果当前素材没有对应事实，更不能硬套。
-
-请严格按下面每个槽位各写一条，并按槽位顺序输出 ${input.slots.length} 个 JSON 字符串：
-${input.slots.map(formatCommentSlot).join("\n")}
+真实原评数量不足，请只补写缺少的 ${input.requestedCount} 条。长短、语气和评论类型自然变化，不需要凑任何比例或结构。
 
 要求：
-1. ${formatCommentMixRule(input.platform)}不要写出分类标签，也不要机械轮流报数。
-2. 每条像不同网友看完后随手发的。允许突然、没头没尾、轻微歪楼、口语不完整和冷幽默；笑点优先来自具体细节，不靠“哈哈哈”“笑死”硬撑。
-3. 只有标了“显式锚点”的槽位才要自然落到该细节；“隐式接话”不要复读标题、产品名、活动日期或完整卖点。联想可以跳一步，但不要连续解释为什么好笑。
-4. 不要全夸，也不要每条都先夸再转折；禁用流水线开场“第一反应、你这么一说、本来以为、热闹归热闹、我先观望、好家伙、这下真”；少用“确实、感觉、适合、定位、配置、我这种、对我来说”。
-5. 禁止把卖点换个口语说法、写工整总结或概括“信息量/画面感/产品力/需求场景/适合人群”；一句能删掉前半句仍成立时，优先删掉。
-6. 允许明显是假设、夸张或梗的生活场景联想；但不能声称自己或朋友已经购买、长期使用、回购、每天在用，不能把虚构经历写成证词。
-7. 英文数字型号只能使用“型号一致性约束”里的写法，不自行添加 Pro、Max、V2 等后缀。
-8. 槽位要求“无表情”时不能加 emoji 或方括号表情；“可用一个表情”时最多用一个，而且不必强行使用。
-9. 回复感要直接接内容，不要统一用“你这么一说”；不要让本批评论互相依赖，也不要生成真实用户名或虚构 @ 对象。
-10. 输入链接、域名、短链码、视频 ID 和“复制链接打开平台”等分享信息只是运输元数据，绝不能出现在评论里。
-11. 同一个事实、同一种包袱、同一个担忧或同一联想落点在本批最多使用一次；换几个字仍算重复，围绕同一风险的近义担忧也只能占一个槽位。
-12. 技术问题必须是素材没有回答、普通观众确实会问的问题。禁止因为两个参数同时出现就臆造“参数 A 是否影响功能 B”之类的关系；也不要重新质疑素材已经明确解释的基本功能。`;
+1. 每条像不同网友随手发的，允许短句、半句、玩梗、追问和轻微歪楼；不要写成摘要或整齐的产品分析。
+2. 不要复制、改写或近义复述“已经生成/历史已有的评论”。
+3. 只能围绕当前正文，不能带入其他视频的对象、型号、事实或经历。
+4. 型号只能使用“一致性约束”里的写法；不能编新闻、销量、购买经历或长期使用证词，也不能输出链接、短链码和视频 ID。
+5. 同一个事实、梗、担忧和句式最多用一次；表情按语气自然使用。
+6. 技术问题必须有明确事实关系。只输出 ${input.requestedCount} 个 JSON 字符串。`;
 }
 
 async function generateDanmaku(
@@ -2251,13 +2064,19 @@ function toCommentSourceBriefDiagnostics(brief: CommentSourceBrief) {
 function toRelatedCommentResearchDiagnostics(research: EngagementCommentResearch) {
   return {
     usedQueries: research.usedQueries,
+    searchAnchors: research.searchAnchors,
+    searchEventTerms: research.searchEventTerms,
     failedQueries: research.failedQueries,
     relatedVideoCount: research.relatedVideoCount,
     relatedCommentCount: research.relatedCommentCount,
-    forumSourceCount: research.forumSourceCount,
-    forumCommentCount: research.forumCommentCount,
+    freshCommentCount: research.freshCommentCount,
+    targetPlatformCommentCount: research.targetPlatformCommentCount,
+    matchedLibraryCommentCount: research.matchedLibraryCommentCount,
     replySampleCount: research.replySampleCount,
     sourceStats: research.sourceStats,
+    hotComments: research.hotComments,
+    reusableComments: research.reusableComments,
+    sampleLibraryCount: research.sampleLibraryCount,
     longCommentCount: research.longCommentCount,
     lengthBuckets: research.lengthBuckets,
     intentBuckets: research.intentBuckets,
@@ -2345,169 +2164,6 @@ function hasCommentChatterCue(text: string) {
     || /(键盘|外设|数码|磁轴|轴体|铝坨坨|客制化|量产).{0,18}(最近|这两年|今年|现在).{0,18}(卷|火|热|多|价格|低价|离谱)/.test(text);
 }
 
-function buildTargetCommentIntentBuckets(
-  count: number,
-  styleProfile: EngagementStyleProfile,
-  sourceBrief: CommentSourceBrief,
-  relatedResearch: EngagementCommentResearch | null = null
-): CommentIntentBuckets {
-  const sourceText = [
-    sourceBrief.summary,
-    sourceBrief.topic,
-    ...sourceBrief.keyFacts,
-    ...sourceBrief.discussionAngles,
-    ...sourceBrief.anchorTerms
-  ].join(" ");
-  const base = { ...styleProfile.intentBuckets };
-  if (relatedResearch?.relatedCommentCount) {
-    const styleTotal = Object.values(base).reduce((sum, value) => sum + value, 0) || 1;
-    const researchTotal = Object.values(relatedResearch.intentBuckets).reduce((sum, value) => sum + value, 0) || 1;
-    for (const key of Object.keys(base) as CommentIntent[]) {
-      const blendedRate = (base[key] / styleTotal) * 0.45 + (relatedResearch.intentBuckets[key] / researchTotal) * 0.55;
-      base[key] = Math.max(0, Math.round(blendedRate * 100));
-    }
-  }
-  if (!/价格|优惠|券|到手|预算|元|块|贵|便宜|折|618/.test(sourceText)) base.price = 0;
-  if (!/对比|相比|区别|差异|还是|二选一|选择|同类|上一代|以前/.test(sourceText)) {
-    base.comparison = Math.min(base.comparison, Math.max(1, Math.round(styleProfile.sampleCount * 0.03)));
-  }
-  const total = Object.values(base).reduce((sum, value) => sum + value, 0) || 1;
-  const targets = makeEmptyCommentIntentBuckets();
-  for (const key of Object.keys(targets) as CommentIntent[]) {
-    targets[key] = Math.round((base[key] / total) * count);
-  }
-  targets.question = Math.max(targets.question, Math.round(count * 0.08));
-  targets.skeptical = Math.max(targets.skeptical, Math.round(count * 0.06));
-  targets.experience = Math.max(targets.experience, Math.round(count * 0.06));
-  targets.follow = Math.max(targets.follow, count >= 20 ? 1 : 0);
-  targets.chatter = Math.max(targets.chatter, count >= 20 ? 1 : 0);
-  if (!base.price) targets.price = 0;
-  balanceCommentIntentTargets(targets, count);
-  return targets;
-}
-
-function buildTargetCommentLengthBuckets(count: number, styleProfile: EngagementStyleProfile): CommentLengthBuckets {
-  const base = styleProfile.lengthBuckets;
-  const total = base.short + base.medium + base.long || 1;
-  const targets: CommentLengthBuckets = {
-    short: Math.round((base.short / total) * count),
-    medium: Math.round((base.medium / total) * count),
-    long: Math.round((base.long / total) * count)
-  };
-  while (targets.short + targets.medium + targets.long > count) {
-    const key = (Object.keys(targets) as CommentLength[]).sort((left, right) => targets[right] - targets[left])[0];
-    targets[key] = Math.max(0, targets[key] - 1);
-  }
-  while (targets.short + targets.medium + targets.long < count) targets.medium += 1;
-  if (styleProfile.channel === "bilibili_comment") {
-    const maxLong = Math.ceil(count * 0.25);
-    const minShort = count >= 5 ? Math.max(1, Math.floor(count * 0.2)) : 0;
-    if (targets.long > maxLong) {
-      targets.medium += targets.long - maxLong;
-      targets.long = maxLong;
-    }
-    while (targets.short < minShort && targets.medium > 0) {
-      targets.short += 1;
-      targets.medium -= 1;
-    }
-  }
-  return targets;
-}
-
-function balanceCommentIntentTargets(targets: CommentIntentBuckets, count: number) {
-  const order: CommentIntent[] = ["reaction", "question", "price", "skeptical", "experience", "comparison", "follow", "chatter"];
-  let total = order.reduce((sum, key) => sum + targets[key], 0);
-  while (total > count) {
-    const key = order.find((intent) => targets[intent] > 1);
-    if (!key) break;
-    targets[key] -= 1;
-    total -= 1;
-  }
-  while (total < count) {
-    targets.reaction += 1;
-    total += 1;
-  }
-}
-
-function rebalanceCommentSelection(
-  selection: CommentSelectionResult,
-  targetCount: number,
-  targetIntentBuckets: CommentIntentBuckets,
-  targetLengthBuckets: CommentLengthBuckets,
-  targetNativeEmoteCount: number
-): CommentSelectionResult {
-  const pool = selection.items.map((text, index) => ({
-    text,
-    index,
-    intent: classifyEngagementCommentIntent(text),
-    length: commentLengthBucket(text),
-    hasEmote: hasNativeEmote(text)
-  }));
-  const output: string[] = [];
-  const intentCounts = makeEmptyCommentIntentBuckets();
-  const lengthCounts: CommentLengthBuckets = { short: 0, medium: 0, long: 0 };
-  let nativeEmoteCount = 0;
-
-  while (output.length < targetCount && pool.length) {
-    let bestIndex = 0;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (let index = 0; index < pool.length; index += 1) {
-      const item = pool[index];
-      const intentDeficit = targetIntentBuckets[item.intent] - intentCounts[item.intent];
-      const lengthDeficit = targetLengthBuckets[item.length] - lengthCounts[item.length];
-      const emoteDeficit = targetNativeEmoteCount - nativeEmoteCount;
-      const score =
-        (intentDeficit > 0 ? 120 + intentDeficit : intentDeficit * 12)
-        + (lengthDeficit > 0 ? 36 + lengthDeficit : lengthDeficit * 4)
-        + (item.hasEmote ? (emoteDeficit > 0 ? 70 : -20) : emoteDeficit > 0 ? 0 : 8)
-        - item.index * 0.001;
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = index;
-      }
-    }
-    const [selected] = pool.splice(bestIndex, 1);
-    output.push(selected.text);
-    intentCounts[selected.intent] += 1;
-    lengthCounts[selected.length] += 1;
-    if (selected.hasEmote) nativeEmoteCount += 1;
-  }
-
-  const arranged = arrangeCommentOrder(output);
-
-  return {
-    ...selection,
-    items: arranged,
-    lengthBuckets: summarizeCommentLengthBuckets(arranged)
-  };
-}
-
-function arrangeCommentOrder(values: string[]) {
-  return values
-    .map((text, index) => ({
-      text,
-      index,
-      order: Number.parseInt(shortHash(`comment-order:${text}`).slice(0, 8), 16)
-    }))
-    .sort((left, right) => left.order - right.order || left.index - right.index)
-    .map((item) => item.text);
-}
-
-function commentLengthBucket(value: string): CommentLength {
-  const length = Array.from(value).length;
-  if (length >= 36) return "long";
-  if (length >= 13) return "medium";
-  return "short";
-}
-
-function hasSevereCommentLengthGap(values: string[], target: CommentLengthBuckets) {
-  if (!values.length) return true;
-  const actual = summarizeCommentLengthBuckets(values);
-  const longFloor = target.long >= 4 ? Math.max(2, Math.ceil(target.long * 0.6)) : 0;
-  const mediumFloor = target.medium >= 10 ? Math.max(5, Math.ceil(target.medium * 0.5)) : 0;
-  return actual.long < longFloor || actual.medium < mediumFloor;
-}
-
 type CommentSelectionResult = {
   items: string[];
   lengthBuckets: {
@@ -2522,7 +2178,6 @@ type CommentSelectionResult = {
   entityCorrectedCount: number;
   unsupportedEntityRejectedCount: number;
   transportRejectedCount: number;
-  unsupportedEmoteRejectedCount: number;
   entityCorrections: CommentEntityCorrection[];
 };
 
@@ -2531,63 +2186,40 @@ function selectCommentSamples(
   sourceBrief: CommentSourceBrief | undefined,
   entityGuard: CommentEntityGuard,
   transportGuard: EngagementTransportGuard,
-  styleProfile: EngagementStyleProfile,
   targetCount: number,
   excludedValues: string[] = [],
-  diversityBaseline: string[] = []
+  reusableFingerprints: Set<string> = new Set()
 ): CommentSelectionResult {
   const anchorTerms = sourceBrief ? buildCommentAnchorTerms(sourceBrief) : [];
-  const primaryAnchorTerms = sourceBrief ? buildPrimaryCommentAnchorTerms(sourceBrief) : [];
   const excluded = excludedValues.map((value) => value.trim()).filter(Boolean);
   const seen = new Set(excluded.map(commentFingerprint));
-  const styleCounts = new Map<string, number>();
-  const prefixCounts = new Map<string, number>();
-  const anchorCounts = new Map<string, number>();
-  const anchorPairCounts = new Map<string, number>();
-  const repeatedStyleLimit = clampCount(Math.ceil(targetCount * 0.04), 2, 6, 2);
-  const repeatedPrefixLimit = clampCount(Math.ceil(targetCount * 0.025), 2, 4, 2);
-  const perAnchorLimit = clampCount(Math.ceil(targetCount * 0.08), 2, 12, 2);
-  const explicitAnchorLimit = Math.max(1, Math.round(targetCount * 0.42));
-  const leadingAnchorLimit = Math.max(1, Math.round(targetCount * 0.16));
-  for (const value of diversityBaseline) {
-    const styleKey = commentStyleFingerprint(value, primaryAnchorTerms);
-    if (styleKey) styleCounts.set(styleKey, (styleCounts.get(styleKey) || 0) + 1);
-    const prefixKey = commentPrefixFingerprint(value);
-    if (prefixKey) prefixCounts.set(prefixKey, (prefixCounts.get(prefixKey) || 0) + 1);
-    primaryAnchorTerms.filter((term) => commentIncludesAnchorTerm(value, term)).forEach((term) => {
-      anchorCounts.set(term, (anchorCounts.get(term) || 0) + 1);
-    });
-    commentAnchorPairKeys(value, primaryAnchorTerms).forEach((key) => {
-      anchorPairCounts.set(key, (anchorPairCounts.get(key) || 0) + 1);
-    });
-  }
   const output: string[] = [];
   let lowSignalRejectedCount = 0;
   let syntheticRejectedCount = 0;
   let nearDuplicateRejectedCount = 0;
-  let repeatedStyleRejectedCount = 0;
+  const repeatedStyleRejectedCount = 0;
   let entityCorrectedCount = 0;
   let unsupportedEntityRejectedCount = 0;
   let transportRejectedCount = 0;
-  let unsupportedEmoteRejectedCount = 0;
-  let acceptedNativeEmoteCount = 0;
-  let acceptedExplicitAnchorCount = 0;
-  let acceptedLeadingAnchorCount = 0;
-  const maxNativeEmoteCount = Math.min(
-    targetCount,
-    Math.round(targetCount * styleProfile.nativeEmoteRate) + Math.max(1, Math.round(targetCount * 0.04))
-  );
   const entityCorrections: CommentEntityCorrection[] = [];
   for (const raw of values) {
-    const normalized = normalizeGeneratedCommentText(raw, entityGuard);
+    const rawText = String(raw || "").replace(/\s+/g, " ").trim();
+    const isReusableHotComment = reusableFingerprints.has(commentFingerprint(rawText));
+    const normalized = isReusableHotComment
+      ? { text: rawText, corrections: [] as CommentEntityCorrection[] }
+      : normalizeGeneratedCommentText(raw, entityGuard);
     const value = normalized.text;
     entityCorrectedCount += normalized.corrections.length;
     entityCorrections.push(...normalized.corrections);
-    if (value.length < 2 || value.length > 140 || /^\{.*\}$/.test(value) || /^\[.*\]$/.test(value)) {
+    if (containsPlatformUserMention(value)) {
       lowSignalRejectedCount += 1;
       continue;
     }
-    if (findUnsupportedModelTerms(value, entityGuard).length) {
+    if (!value || (!isReusableHotComment && (value.length < 2 || value.length > 140 || /^\{.*\}$/.test(value) || /^\[.*\]$/.test(value)))) {
+      lowSignalRejectedCount += 1;
+      continue;
+    }
+    if (!isReusableHotComment && findUnsupportedModelTerms(value, entityGuard).length) {
       unsupportedEntityRejectedCount += 1;
       continue;
     }
@@ -2595,34 +2227,16 @@ function selectCommentSamples(
       transportRejectedCount += 1;
       continue;
     }
-    const nativeEmoteCount = extractNativeEmotes(value).length;
-    if (findUnsupportedNativeEmotes(value, styleProfile).length || (nativeEmoteCount && acceptedNativeEmoteCount >= maxNativeEmoteCount)) {
-      unsupportedEmoteRejectedCount += 1;
-      continue;
-    }
-    if (isLowSignalComment(value)) {
+    if (!isReusableHotComment && isLowSignalComment(value)) {
       lowSignalRejectedCount += 1;
       continue;
     }
-    if (isSyntheticComment(value, anchorTerms)) {
+    if (!isReusableHotComment && isSyntheticComment(value, anchorTerms)) {
       syntheticRejectedCount += 1;
       continue;
     }
-    if (sourceBrief && containsUnsupportedPersonalScene(value, sourceBrief)) {
+    if (!isReusableHotComment && sourceBrief && containsUnsupportedPersonalScene(value, sourceBrief)) {
       syntheticRejectedCount += 1;
-      continue;
-    }
-    const matchedPrimaryAnchors = primaryAnchorTerms.filter((term) => commentIncludesAnchorTerm(value, term));
-    const matchedAnchorPairs = commentAnchorPairKeys(value, primaryAnchorTerms);
-    const hasExplicitAnchor = matchedPrimaryAnchors.length > 0;
-    const hasLeadingAnchor = matchedPrimaryAnchors.some((term) => commentStartsWithAnchorTerm(value, term));
-    if (
-      (hasExplicitAnchor && acceptedExplicitAnchorCount >= explicitAnchorLimit)
-      || (hasLeadingAnchor && acceptedLeadingAnchorCount >= leadingAnchorLimit)
-      || matchedPrimaryAnchors.some((term) => (anchorCounts.get(term) || 0) >= perAnchorLimit)
-      || matchedAnchorPairs.some((key) => (anchorPairCounts.get(key) || 0) >= 1)
-    ) {
-      repeatedStyleRejectedCount += 1;
       continue;
     }
     const key = commentFingerprint(value);
@@ -2630,27 +2244,9 @@ function selectCommentSamples(
       nearDuplicateRejectedCount += 1;
       continue;
     }
-    const styleKey = commentStyleFingerprint(value, primaryAnchorTerms);
-    const styleCount = styleKey ? styleCounts.get(styleKey) || 0 : 0;
-    if (styleKey && styleCount >= repeatedStyleLimit) {
-      repeatedStyleRejectedCount += 1;
-      continue;
-    }
-    const prefixKey = commentPrefixFingerprint(value);
-    const prefixCount = prefixKey ? prefixCounts.get(prefixKey) || 0 : 0;
-    if (prefixKey && prefixCount >= repeatedPrefixLimit) {
-      repeatedStyleRejectedCount += 1;
-      continue;
-    }
     seen.add(key);
-    if (styleKey) styleCounts.set(styleKey, styleCount + 1);
-    if (prefixKey) prefixCounts.set(prefixKey, prefixCount + 1);
-    if (nativeEmoteCount) acceptedNativeEmoteCount += 1;
-    if (hasExplicitAnchor) acceptedExplicitAnchorCount += 1;
-    if (hasLeadingAnchor) acceptedLeadingAnchorCount += 1;
-    matchedPrimaryAnchors.forEach((term) => anchorCounts.set(term, (anchorCounts.get(term) || 0) + 1));
-    matchedAnchorPairs.forEach((key) => anchorPairCounts.set(key, (anchorPairCounts.get(key) || 0) + 1));
     output.push(value);
+    if (output.length >= targetCount) break;
   }
   return {
     items: output,
@@ -2662,7 +2258,6 @@ function selectCommentSamples(
     entityCorrectedCount,
     unsupportedEntityRejectedCount,
     transportRejectedCount,
-    unsupportedEmoteRejectedCount,
     entityCorrections: uniqueEntityCorrections(entityCorrections)
   };
 }
@@ -2673,44 +2268,6 @@ function normalizeGeneratedCommentText(raw: unknown, entityGuard: CommentEntityG
     entityGuard,
     "comment"
   );
-}
-
-function commentStyleFingerprint(value: string, anchorTerms: string[] = []) {
-  const template = [...anchorTerms]
-    .sort((left, right) => right.length - left.length)
-    .reduce((current, term) => current.split(term).join("{锚点}"), value)
-    .replace(/\[[^\]\n]{1,12}\]/g, "")
-    .replace(/\d+(?:\.\d+)?/g, "{数字}");
-  if (/^第一反应/.test(template)) return "canned-first-reaction";
-  if (/^你这么一说/.test(template)) return "canned-you-say";
-  if (/^本来(?:以为|只是|只想)/.test(template)) return "canned-originally";
-  if (/^热闹归热闹/.test(template)) return "canned-busy-but";
-  if (/^(?:好家伙|这下真|这波真)/.test(template)) return "canned-exclamation";
-  if (/^我先(?:声明|去|蹲|看|问|观望|等等|插个眼|记下)/.test(template)) return "canned-i-first";
-  if (/会不会|会不会有|会不会太|会不会更/.test(template)) return "question-will";
-  if (/是不是|算不算|能不能|可不可以/.test(template)) return "question-is";
-  if (/真能|真的能|用得出来|感知/.test(template)) return "question-feel";
-  if (/有点|有点儿|挺狠|太狠|压手|沉默/.test(template)) return "soft-judgment";
-  if (/听着|看着|看起来|看上去/.test(template)) return "sensory-judgment";
-  if (/别买错|买错|看清|盯紧|版本/.test(template)) return "version-warning";
-  if (/差很多|差别大|差在哪|咋分|怎么选/.test(template)) return "comparison-question";
-  if (/再蹲|蹲蹲|先蹲|蹲个|先看看|先看|先观望|先记下/.test(template)) return "wait-and-see";
-  if (/下班|午休|宿舍|办公室|周末|晚上|通勤|饭点/.test(template)) return "invented-daily-scene";
-  if (/(喊|叫|拉).{0,8}(朋友|队友|室友|同事)|固定队|三个人.{0,8}(一起|组队)/.test(template)) return "social-plan";
-  if (/^(?:{锚点})?[，,：:]?(?:这个|这波|这回).{0,8}(可以|能|值得|先)/.test(template)) return "tidy-anchor-judgment";
-  if (/^(?:[A-Za-z0-9.+-]+|[\u4e00-\u9fa5A-Za-z0-9.+-]{2,12})(?:那|那个|这|这个)?/.test(template) && /[吗？?]$/.test(template)) {
-    return "tidy-subject-question";
-  }
-  return "";
-}
-
-function commentPrefixFingerprint(value: string) {
-  const normalized = value
-    .replace(/\[[^\]\n]{1,12}\]/g, "")
-    .replace(/^[\s@#《》“”"'，,。.!！?？:：、-]+/, "")
-    .replace(/\s+/g, "")
-    .toLowerCase();
-  return Array.from(normalized).slice(0, 6).join("");
 }
 
 function buildCommentAnchorTerms(brief: CommentSourceBrief) {
@@ -2724,48 +2281,6 @@ function buildCommentAnchorTerms(brief: CommentSourceBrief) {
     .map((term) => term.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").trim())
     .filter((term) => term.length >= 2 && !isGenericAnchorTerm(term))
     .slice(0, 80);
-}
-
-function buildPrimaryCommentAnchorTerms(brief: CommentSourceBrief) {
-  const subjects = uniqueText(brief.subjects)
-    .map((term) => term.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").trim())
-    .filter((term) => term.length >= 3 && !isGenericAnchorTerm(term))
-    .slice(0, 12);
-  const subjectKeys = new Set(subjects.map(commentAnchorMatchKey));
-  const supplemental = uniqueText(brief.anchorTerms)
-    .map((term) => term.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").trim())
-    .filter((term) => term.length >= 3 && !isGenericAnchorTerm(term) && !subjectKeys.has(commentAnchorMatchKey(term)))
-    .sort((left, right) => right.length - left.length)
-    .slice(0, Math.max(24 - subjects.length, 0));
-  return [...subjects, ...supplemental];
-}
-
-function commentAnchorPairKeys(value: string, anchorTerms: string[]) {
-  const matched = anchorTerms
-    .filter((term) => commentIncludesAnchorTerm(value, term))
-    .filter((term, _index, values) => !values.some((other) => other !== term && other.includes(term)))
-    .sort();
-  const pairs: string[] = [];
-  for (let left = 0; left < matched.length; left += 1) {
-    for (let right = left + 1; right < matched.length; right += 1) {
-      pairs.push(`${matched[left]}\u0000${matched[right]}`);
-    }
-  }
-  return pairs;
-}
-
-function commentIncludesAnchorTerm(value: string, term: string) {
-  const termKey = commentAnchorMatchKey(term);
-  return Boolean(termKey) && commentAnchorMatchKey(value).includes(termKey);
-}
-
-function commentStartsWithAnchorTerm(value: string, term: string) {
-  const termKey = commentAnchorMatchKey(term);
-  return Boolean(termKey) && commentAnchorMatchKey(value).startsWith(termKey);
-}
-
-function commentAnchorMatchKey(value: string) {
-  return value.replace(/[^\u4e00-\u9fa5A-Za-z0-9.+%-]/g, "").toLowerCase();
 }
 
 function containsUnsupportedPersonalScene(value: string, brief: CommentSourceBrief) {
@@ -2860,11 +2375,17 @@ function normalizeCommentKey(value: string) {
     .toLowerCase();
 }
 
-function makeCommentItem(text: string, platform: Platform | "unknown", index: number): DraftCommentAsset {
+function makeCommentItem(
+  text: string,
+  platform: Platform | "unknown",
+  index: number,
+  origin: DraftCommentAsset["origin"] = "ai_generated"
+): DraftCommentAsset {
   return {
     id: `comment-${index + 1}-${shortHash(text)}`,
     platform,
-    text: text.trim()
+    text: text.trim(),
+    origin
   };
 }
 

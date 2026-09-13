@@ -608,37 +608,71 @@ export function buildDouyinDetailExtractJs(options: { awemeId: string; commentLi
       accept: "application/json, text/plain, */*"
     }
   });
+  if (!detailResponse.ok) {
+    throw new Error("作品详情接口 HTTP " + detailResponse.status);
+  }
   const detailPayload = await detailResponse.json().catch(() => ({}));
+  if (Number(detailPayload?.status_code || 0) !== 0) {
+    throw new Error("作品详情接口状态 " + detailPayload.status_code + (detailPayload.status_msg ? "：" + detailPayload.status_msg : ""));
+  }
   const awemeDetail = detailPayload && typeof detailPayload === "object" ? detailPayload.aweme_detail || {} : {};
   const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
   let topComments = [];
+  let commentCursor = 0;
+  let commentHasMore = true;
+  let commentPages = 0;
+  let commentStatus = 0;
+  let commentError = "";
   try {
-    const commentUrl = new URL("https://www.douyin.com/aweme/v1/web/comment/list/");
-    commentUrl.searchParams.set("aweme_id", awemeId);
-    commentUrl.searchParams.set("cursor", "0");
-    commentUrl.searchParams.set("count", String(commentLimit));
-    commentUrl.searchParams.set("item_type", "0");
-    commentUrl.searchParams.set("insert_ids", "");
-    commentUrl.searchParams.set("whale_cut_token", "");
-    commentUrl.searchParams.set("cut_version", "1");
-    commentUrl.searchParams.set("rcFT", "");
-    commentUrl.searchParams.set("device_platform", "webapp");
-    commentUrl.searchParams.set("aid", "6383");
-    const commentResponse = await fetch(commentUrl.toString(), {
-      credentials: "include",
-      headers: {
-        accept: "application/json, text/plain, */*"
+    while (topComments.length < commentLimit && commentHasMore && commentPages < 6) {
+      const pageSize = Math.min(50, commentLimit - topComments.length);
+      const commentUrl = new URL("https://www.douyin.com/aweme/v1/web/comment/list/");
+      commentUrl.searchParams.set("aweme_id", awemeId);
+      commentUrl.searchParams.set("cursor", String(commentCursor));
+      commentUrl.searchParams.set("count", String(pageSize));
+      commentUrl.searchParams.set("item_type", "0");
+      commentUrl.searchParams.set("insert_ids", "");
+      commentUrl.searchParams.set("whale_cut_token", "");
+      commentUrl.searchParams.set("cut_version", "1");
+      commentUrl.searchParams.set("rcFT", "");
+      commentUrl.searchParams.set("device_platform", "webapp");
+      commentUrl.searchParams.set("aid", "6383");
+      const commentResponse = await fetch(commentUrl.toString(), {
+        credentials: "include",
+        headers: {
+          accept: "application/json, text/plain, */*"
+        }
+      });
+      commentStatus = commentResponse.status;
+      if (!commentResponse.ok) {
+        throw new Error("评论接口 HTTP " + commentResponse.status);
       }
-    });
-    const commentPayload = await commentResponse.json().catch(() => ({}));
-    const comments = Array.isArray(commentPayload.comments) ? commentPayload.comments : [];
-    topComments = comments.map(normalizeComment).filter(Boolean);
-  } catch {}
+      const commentPayload = await commentResponse.json().catch(() => ({}));
+      if (Number(commentPayload?.status_code || 0) !== 0) {
+        throw new Error("评论接口状态 " + commentPayload.status_code + (commentPayload.status_msg ? "：" + commentPayload.status_msg : ""));
+      }
+      const comments = Array.isArray(commentPayload.comments) ? commentPayload.comments : [];
+      topComments.push(...comments.map(normalizeComment).filter(Boolean));
+      commentPages += 1;
+      const nextCursor = Number(commentPayload.cursor || 0);
+      commentHasMore = Boolean(commentPayload.has_more) && nextCursor !== commentCursor && comments.length > 0;
+      commentCursor = nextCursor;
+    }
+  } catch (error) {
+    commentError = String(error?.message || error || "评论接口请求失败");
+  }
   return {
+    title: normalizeText(awemeDetail.desc || awemeDetail.title || ""),
     commentCount: Number(statistics.comment_count || 0),
     likeCount: Number(statistics.digg_count || 0),
     publishedAt: awemeDetail.create_time || awemeDetail.createTime || "",
-    topComments
+    topComments: topComments.slice(0, commentLimit),
+    commentFetch: {
+      status: commentStatus,
+      pages: commentPages,
+      hasMore: commentHasMore,
+      error: commentError
+    }
   };
 })()
 `;

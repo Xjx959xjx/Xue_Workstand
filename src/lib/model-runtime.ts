@@ -657,7 +657,9 @@ async function probeChatCompletions(config: ChatRuntimeConfig, signal: AbortSign
     ],
     reasoningEffort: /^gpt-6(?:-|$)/i.test(config.model) ? "low" : "none",
     maxOutputTokens: /^gpt-6(?:-|$)/i.test(config.model) ? 256 : 16,
-    stream: /^gpt-6(?:-|$)/i.test(config.model)
+    // 健康探针只需要验证可生成文本。部分 OpenAI 兼容网关会把流式探针路由到网页入口，
+    // 与实际评论生成使用的非流式调用不一致，因而固定使用非流式请求。
+    stream: false
   }), signal);
   const text = await parseChatCompletionResponseBody(response);
   if (!text.trim()) {

@@ -408,7 +408,12 @@ function handleJobNotifications(
       const watchedTerminalJob = isTerminalJob(job) && watched.has(job.id) && !notified.has(job.id);
       if (watchedTerminalJob) {
         notifyJob(job, notify);
-      } else if (job.status === "failed" && isRecentJob(job) && !initialFailureShown.current) {
+      } else if (
+        job.status === "failed" &&
+        isRecentJob(job) &&
+        !notified.has(job.id) &&
+        !initialFailureShown.current
+      ) {
         initialFailureShown.current = true;
         notifyJob(job, notify);
       }

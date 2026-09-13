@@ -9,8 +9,11 @@ import {
   parseOpenCliJsonish,
   resolveOpenCliCommand,
   runOpenCli,
+  runPersistentOpenCliBrowserAdapter,
+  sharedOpenCliBrowserSession,
   stringField,
   timeOpenCliOperation,
+  withSharedOpenCliBrowserSession,
   withTimingMeta,
   type OpenCliTimingEntry,
   type OpenCliTimingMeta,
@@ -26,15 +29,21 @@ import {
   isLikelyDirectMediaUrl
 } from "./platform-links";
 import { nowIso, safeSegment, shortHash, toNumber } from "./utils";
-import { firstNumber, isRelatedVideoRelevant, normalizeCommentText, normalizeTimestamp, uniqueStrings } from "./opencli-normalizers";
+import {
+  containsPlatformUserMention,
+  firstNumber,
+  isExcludedRelatedVideo,
+  isRelatedVideoRelevant,
+  normalizeCommentText,
+  normalizeTimestamp,
+  uniqueStrings
+} from "./opencli-normalizers";
 import { collectBilibiliVideos, searchBilibiliUserUid } from "./opencli-bilibili";
 import { getDouyinAccessError, pausedDouyinRefreshError } from "./douyin-access-errors";
 import {
   DOUYIN_AWEME_ID_EXTRACT_JS,
   DOUYIN_MEDIA_EXTRACT_JS,
-  DOUYIN_RELATED_VIDEO_EXTRACT_JS,
   DOUYIN_SEARCH_EXTRACT_JS,
-  DOUYIN_VIDEO_COMMENT_EXTRACT_JS,
   buildDouyinBatchStatsExtractJs,
   buildDouyinBatchPostExtractJs,
   buildDouyinDetailExtractJs,
@@ -136,10 +145,7 @@ type DouyinVideoStatsResult = {
   };
 };
 
-const DOUYIN_STATS_BROWSER_WORKSPACE = `douyin-video-stats-${process.pid}`;
 const DOUYIN_STATS_HOME_URL = "https://www.douyin.com/robots.txt";
-let douyinStatsBrowserReady = false;
-let douyinStatsBrowserQueue: Promise<unknown> = Promise.resolve();
 
 export function normalizeAccountInput(platform: Platform, uidOrUrl: string) {
   return platform === "bilibili" ? extractBilibiliUid(uidOrUrl) : extractDouyinSecUid(uidOrUrl);
@@ -166,97 +172,104 @@ async function searchDouyinUserSecUid(name: string, options: { signal?: AbortSig
 }
 
 async function searchDouyinUserSecUidWithBrowser(name: string, options: { signal?: AbortSignal } = {}) {
-  const workspace = `douyin-search-${process.pid}-${Date.now()}-${shortHash(name)}`;
   const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(name)}?type=user`;
 
-  try {
-    const openResult = parseJsonish(
-      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
-        timeout: 30_000,
-        signal: options.signal
-      })
-    );
-    const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
-    const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_SEARCH_EXTRACT_JS], tab ? { tab } : {});
-    const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000, signal: options.signal })));
-    return selectDouyinSecUidFromRows(rows, name);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `opencli browser 没有解析到抖音账号「${name}」：${message || "没有返回结果"}。请确认账号名能在抖音搜索到，或临时填写主页链接 / sec_uid。`
-    );
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    try {
+      const openResult = parseJsonish(
+        await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
+          timeout: 30_000,
+          signal: options.signal
+        })
+      );
+      const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
+      const evalArgs = buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_SEARCH_EXTRACT_JS], tab ? { tab } : {});
+      const rows = asArray(parseJsonish(await runOpenCli(evalArgs, { timeout: 20_000, signal: options.signal })));
+      return selectDouyinSecUidFromRows(rows, name);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `opencli browser 没有解析到抖音账号「${name}」：${message || "没有返回结果"}。请确认账号名能在抖音搜索到，或临时填写主页链接 / sec_uid。`
+      );
+    }
+  }, { signal: options.signal });
 }
 
 export async function getDouyinRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number; minLikes?: number; signal?: AbortSignal } = {}
+  options: {
+    videoLimit?: number;
+    commentLimit?: number;
+    minLikes?: number;
+    excludedVideoIds?: string[];
+    signal?: AbortSignal;
+  } = {}
 ): Promise<DouyinRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
     return { query: "", videos: [], comments: [], commentSamples: [], appliedMinLikes: 0 };
   }
 
-  const workspace = `douyin-topic-comments-${process.pid}-${Date.now()}-${shortHash(cleanQuery)}`;
   const videoLimit = Math.max(1, Math.min(options.videoLimit || DOUYIN_RELATED_COMMENT_VIDEO_LIMIT, 8));
   const commentLimit = Math.max(1, Math.min(options.commentLimit || DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT, 30));
-  const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(cleanQuery)}?type=general`;
-
+  let rawCandidates: unknown[] = [];
   try {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
-      timeout: 30_000,
-      signal: options.signal
-    });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), {
-      timeout: 12_000,
-      signal: options.signal
-    }).catch(() => undefined);
+    const stdout = await runPersistentOpenCliBrowserAdapter([
+      "douyin",
+      "search",
+      cleanQuery,
+      "--limit",
+      String(Math.min(30, Math.max(videoLimit * 4, 20))),
+      "-f",
+      "json"
+    ], { timeout: 45_000, signal: options.signal });
+    rawCandidates = asArray(parseJsonish(stdout));
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    const detail = formatErrorMessage(error);
+    if (/did not render result cards|验证码中间页|verifycenter|captcha/i.test(detail)) {
+      throw new Error(`抖音搜索「${cleanQuery}」进入验证码页，当前没有抓到相关热评；请在 Chrome 完成一次抖音验证后重试`);
+    }
+    throw new Error(`抖音搜索「${cleanQuery}」失败：${detail}`);
+  }
+  const candidates = rawCandidates
+    .map(normalizeDouyinRelatedVideo)
+    .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
+    .filter((video) => !isExcludedRelatedVideo(video.id, options.excludedVideoIds))
+    .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery));
+  if (!candidates.length) {
+    throw new Error(`抖音搜索「${cleanQuery}」返回 ${rawCandidates.length} 条结果，但没有标题相关的视频`);
+  }
+  const videos = candidates.sort(compareDouyinRelatedVideos).slice(0, videoLimit);
+  const appliedMinLikes = videos.length ? Math.min(...videos.map((video) => video.likes)) : 0;
 
-    const candidates = asArray(parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_RELATED_VIDEO_EXTRACT_JS]), {
-      timeout: 20_000,
-      signal: options.signal
-    })))
-      .map(normalizeDouyinRelatedVideo)
-      .filter((video): video is DouyinRelatedCommentVideo => Boolean(video?.id))
-      .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery));
-    const requestedMinLikes = Math.max(0, options.minLikes ?? 50_000);
-    const thresholdTiers = uniqueNumbers([requestedMinLikes, 20_000, 5_000, 0]).filter((value) => value <= requestedMinLikes);
-    const appliedMinLikes = thresholdTiers.find((threshold) => candidates.some((video) => video.likes >= threshold)) ?? 0;
-    const videos = candidates
-      .filter((video) => video.likes >= appliedMinLikes)
-      .sort(compareDouyinRelatedVideos)
-      .slice(0, videoLimit);
-
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    const opened = parseJsonish(await runOpenCli(
+      buildOpenCliBrowserArgs(workspace, "open", [videos[0].url], { window: "background" }),
+      { timeout: 30_000, signal: options.signal }
+    ));
+    const commentTab = opened && typeof opened === "object"
+      ? String((opened as Record<string, unknown>).page || "")
+      : "";
     const comments: string[] = [];
     const commentSamples: DouyinRelatedCommentSample[] = [];
+    const commentErrors: string[] = [];
     for (const video of videos) {
-      const openResult = parseJsonish(
-        await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [video.url]), {
-          timeout: 30_000,
-          signal: options.signal
-        }).catch(() => "")
-      );
-      const tab = openResult && typeof openResult === "object" ? String((openResult as Record<string, unknown>).page || "") : "";
-      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"], tab ? { tab } : {}), {
-        timeout: 12_000,
-        signal: options.signal
-      }).catch(() => undefined);
-      const [detail, rows] = await Promise.all([
-        getDouyinVideoDetailWithBrowser(workspace, video.id, { commentLimit, signal: options.signal, tab }).catch(
-          ignoreAbortToNull
-        ),
-        runOpenCli(
-          buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_VIDEO_COMMENT_EXTRACT_JS], tab ? { tab } : {}),
-          { timeout: 35_000, signal: options.signal }
-        )
-          .then((value) => asArray(parseJsonish(value)))
-          .catch(() => [])
-      ]);
+      let detail: Awaited<ReturnType<typeof getDouyinVideoDetailWithBrowser>> | null = null;
+      try {
+        detail = await getDouyinVideoDetailWithBrowser(workspace, video.id, {
+          commentLimit,
+          signal: options.signal,
+          tab: commentTab || undefined
+        });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        commentErrors.push(`${video.id}：${formatErrorMessage(error)}`);
+      }
       const detailedComments = detail?.topComments || [];
-      const fallbackComments = rows.map(normalizeCommentText).filter(Boolean).map((text) => ({ text, likes: 0, replies: 0 }));
-      const selectedComments = dedupeDouyinCommentSamples([...detailedComments, ...fallbackComments]).slice(0, commentLimit);
+      const selectedComments = dedupeDouyinCommentSamples(detailedComments)
+        .filter((comment) => !containsPlatformUserMention(comment.text))
+        .slice(0, commentLimit);
       comments.push(...selectedComments.map((comment) => comment.text));
       commentSamples.push(...selectedComments.map((comment) => ({
         ...comment,
@@ -267,6 +280,13 @@ export async function getDouyinRelatedTopicComments(
       if (detail?.likeCount && detail.likeCount > video.likes) video.likes = detail.likeCount;
     }
 
+    if (!commentSamples.length) {
+      const detail = commentErrors.length
+        ? commentErrors.slice(0, 3).join("；")
+        : `${videos.length} 个相关视频的评论接口均返回空结果`;
+      throw new Error(`抖音搜索「${cleanQuery}」已命中 ${videos.length} 个相关视频，但没有抓到评论：${detail}`);
+    }
+
     return {
       query: cleanQuery,
       videos,
@@ -274,16 +294,14 @@ export async function getDouyinRelatedTopicComments(
       commentSamples: dedupeDouyinCommentSamples(commentSamples),
       appliedMinLikes
     };
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
+  }, { signal: options.signal });
 }
 
 function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | null {
   const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
   const id = String(object.id || object.aweme_id || extractDouyinAwemeId(String(object.url || ""))).trim();
   if (!id) return null;
-  const title = String(object.title || "").replace(/\s+/g, " ").trim();
+  const title = String(object.title || object.desc || object.description || "").replace(/\s+/g, " ").trim();
   return {
     id,
     title,
@@ -294,13 +312,15 @@ function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | 
 }
 
 function compareDouyinRelatedVideos(left: DouyinRelatedCommentVideo, right: DouyinRelatedCommentVideo) {
-  const leftTime = left.publishedAt ? Date.parse(left.publishedAt) : 0;
-  const rightTime = right.publishedAt ? Date.parse(right.publishedAt) : 0;
-  return right.likes - left.likes || rightTime - leftTime;
+  return relatedVideoRank(right.likes, right.publishedAt) - relatedVideoRank(left.likes, left.publishedAt);
 }
 
-function uniqueNumbers(values: number[]) {
-  return [...new Set(values.map((value) => Math.max(0, Math.round(value))))];
+function relatedVideoRank(metric: number, publishedAt?: string) {
+  const timestamp = publishedAt ? Date.parse(publishedAt) : 0;
+  if (!timestamp) return metric;
+  const ageDays = Math.max(0, (Date.now() - timestamp) / 86_400_000);
+  const recencyWeight = ageDays <= 30 ? 1.25 : ageDays <= 180 ? 1.15 : ageDays <= 365 ? 1.05 : 0.9;
+  return metric * recencyWeight;
 }
 
 function dedupeDouyinCommentSamples<T extends { text: string }>(values: T[]) {
@@ -458,30 +478,29 @@ export async function collectDouyinPostVideosBatch(input: {
 
   const concurrency = Math.min(Math.max(input.concurrency, 1), input.accounts.length);
 
-  const results: DouyinBatchVideoCollectResult[] = [];
-  let accessError: string | null = null;
-  const workspace = `douyin-post-${process.pid}-${Date.now()}-${shortHash(input.accounts[0].uid)}`;
-  const emit = async (result: DouyinBatchVideoCollectResult) => {
-    await input.onResult?.(result);
-    results.push(result);
-  };
-  try {
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    const results: DouyinBatchVideoCollectResult[] = [];
+    let accessError: string | null = null;
+    const emit = async (result: DouyinBatchVideoCollectResult) => {
+      await input.onResult?.(result);
+      results.push(result);
+    };
     try {
-      await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", ["https://www.douyin.com/"], { window: "background" }), { timeout: 30_000, signal: input.signal });
+      await ensureDouyinBatchSession(workspace, input.signal);
     } catch (error) {
       if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
       for (const account of input.accounts) await emit(makeFailedDouyinBatchCollectResult(account, `抖音共享会话初始化失败：${formatErrorMessage(error)}`));
       return results;
     }
-  for (const accounts of chunkItems(input.accounts, Math.max(6, concurrency))) {
-    if (input.signal?.aborted) throw createAbortError();
-    if (accessError) {
-      const reason = pausedDouyinRefreshError(accessError);
-      for (const account of accounts) await emit(makeFailedDouyinBatchCollectResult(account, reason));
-      continue;
-    }
+    for (const accounts of chunkItems(input.accounts, Math.max(6, concurrency))) {
+      if (input.signal?.aborted) throw createAbortError();
+      if (accessError) {
+        const reason = pausedDouyinRefreshError(accessError);
+        for (const account of accounts) await emit(makeFailedDouyinBatchCollectResult(account, reason));
+        continue;
+      }
 
-    let chunkResults: DouyinBatchVideoCollectResult[];
+      let chunkResults: DouyinBatchVideoCollectResult[];
       try {
         const stdout = await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
           accounts, concurrency, limit: Math.min(input.limit, 500), fromDate: input.fromDate, toDate: input.toDate
@@ -493,11 +512,11 @@ export async function collectDouyinPostVideosBatch(input: {
           if (raw?.status !== "completed" || !Array.isArray(raw.rows)) return makeFailedDouyinBatchCollectResult(account, raw?.error || "抖音批量接口缺少账号结果");
           const rows = raw.rows as unknown[];
           return {
-          account,
-          status: "completed" as const,
-          raw: rows,
-          rawCount: rows.length,
-          videos: rows.map((row) => normalizeDouyinVideo(row, account))
+            account,
+            status: "completed" as const,
+            raw: rows,
+            rawCount: rows.length,
+            videos: rows.map((row) => normalizeDouyinVideo(row, account))
           };
         });
       } catch (error) {
@@ -509,15 +528,17 @@ export async function collectDouyinPostVideosBatch(input: {
           normalizedAccessError || `抖音账号「${account.name}」采集失败：${message}`
         ));
       }
-    for (const result of chunkResults) await emit(result);
-    accessError = chunkResults.map((result) => getDouyinAccessError(result.error || "")).find(Boolean) || null;
-  }
+      for (const result of chunkResults) await emit(result);
+      accessError = chunkResults.map((result) => getDouyinAccessError(result.error || "")).find(Boolean) || null;
+    }
 
-  return results;
-  } finally {
-    // 清理本轮 CLI 会话失败不覆盖已取得的结果。
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
+    return results;
+  }, { signal: input.signal });
+}
+
+async function ensureDouyinBatchSession(workspace: string, signal?: AbortSignal) {
+  // 同源纯文本页保留 Cookie 和接口访问能力；每轮切换也停止共享页上遗留的视频播放。
+  await ensureDouyinStatsBrowser(workspace, { signal });
 }
 
 function chunkItems<T>(items: T[], size: number): T[][] {
@@ -629,7 +650,7 @@ async function getDouyinVideoDownloadUrlsWithUserVideos(account: Account, option
 }
 
 async function getDouyinVideoRows(account: Account, options: DouyinMediaLookupOptions = {}) {
-  const stdout = await runOpenCli(buildDouyinUserVideosArgs(account.uid, options.limit, false), {
+  const stdout = await runPersistentOpenCliBrowserAdapter(buildDouyinUserVideosArgs(account.uid, options.limit, false), {
     timeout: 90_000,
     signal: options.signal
   });
@@ -666,10 +687,9 @@ export async function getDouyinVideoDetailMap(
   const details = new Map<string, { commentCount?: number; topComments: string[] }>();
   if (!awemeIds.length) return details;
 
-  const workspace = `douyin-detail-${process.pid}-${Date.now()}-${shortHash(account.uid)}`;
   const profileUrl = `https://www.douyin.com/user/${encodeURIComponent(account.uid)}`;
 
-  try {
+  return withSharedOpenCliBrowserSession(async (workspace) => {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [profileUrl], { window: "background" }), {
       timeout: 30_000
     });
@@ -678,18 +698,17 @@ export async function getDouyinVideoDetailMap(
     for (const awemeId of awemeIds) {
       const detail = await getDouyinVideoDetailWithBrowser(workspace, awemeId, options).catch(() => null);
       if (!detail) continue;
-      details.set(awemeId, detail);
+      details.set(awemeId, {
+        commentCount: detail.commentCount,
+        topComments: detail.topComments.map((comment) => comment.text)
+      });
     }
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
-
-  return details;
+    return details;
+  });
 }
 
 export function resetDouyinVideoStatsBrowser() {
-  douyinStatsBrowserReady = false;
-  return runOpenCli(buildOpenCliBrowserArgs(DOUYIN_STATS_BROWSER_WORKSPACE, "close"), { timeout: 5_000 }).catch(() => undefined);
+  return runOpenCli(buildOpenCliBrowserArgs(sharedOpenCliBrowserSession(), "close"), { timeout: 5_000 }).catch(() => undefined);
 }
 
 export async function getDouyinVideoStatsByUrl(
@@ -787,24 +806,20 @@ async function withDouyinStatsBrowser<T>(
   callback: (workspace: string) => Promise<T>,
   options: VideoStatsTimingOptions = {}
 ): Promise<T> {
-  const run = douyinStatsBrowserQueue.then(async () => {
-    await ensureDouyinStatsBrowser(options);
-    return callback(DOUYIN_STATS_BROWSER_WORKSPACE);
-  });
-  douyinStatsBrowserQueue = run.catch(() => undefined);
-  return run;
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    await ensureDouyinStatsBrowser(workspace, options);
+    return callback(workspace);
+  }, { signal: options.signal });
 }
 
-async function ensureDouyinStatsBrowser(options: VideoStatsTimingOptions = {}) {
-  if (douyinStatsBrowserReady) return;
-  await runOpenCli(buildOpenCliBrowserArgs(DOUYIN_STATS_BROWSER_WORKSPACE, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
+async function ensureDouyinStatsBrowser(workspace: string, options: VideoStatsTimingOptions = {}) {
+  await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [DOUYIN_STATS_HOME_URL], { window: "background" }), {
     timeout: 30_000,
     timingStage: "douyin.browser.ensure-open",
     onTiming: options.onTiming,
     timingMeta: options.timingMeta,
     signal: options.signal
   });
-  douyinStatsBrowserReady = true;
 }
 
 async function getDouyinVideoStatsByUrlInWorkspace(
@@ -822,93 +837,33 @@ async function getDouyinVideoStatsByUrlInWorkspace(
   const initialAwemeId = extractDouyinAwemeId(inputUrl) || extractDouyinAwemeId(resolvedShareUrl);
   const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || resolvedShareUrl || inputUrl : resolvedShareUrl || inputUrl;
 
-  try {
-    if (initialAwemeId) {
-      const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId, options).catch(ignoreAbortToNull);
-      if (fastDetail) {
-        return formatDouyinVideoStatsResult(fastDetail, buildDouyinVideoUrl(initialAwemeId) || pageUrl);
-      }
+  if (initialAwemeId) {
+    const fastDetail = await getDouyinVideoDetailSnapshot(workspace, initialAwemeId, options).catch(ignoreAbortToNull);
+    if (fastDetail) {
+      return formatDouyinVideoStatsResult(fastDetail, buildDouyinVideoUrl(initialAwemeId) || pageUrl);
     }
-
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
-      timeout: 30_000,
-      timingStage: "douyin.browser.open-video",
-      onTiming: options.onTiming,
-      timingMeta: options.timingMeta,
-      signal: options.signal
-    });
-    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId, options);
-    const awemeId = resolved.awemeId;
-    if (!awemeId) {
-      throw new Error("没有从链接里解析到抖音视频 ID，请确认是单条视频链接，或粘贴完整视频页链接。");
-    }
-    const detail = await waitForDouyinVideoStats(workspace, awemeId, options);
-
-    if (!detail) {
-      throw new Error("抖音页面已打开，但没有从真实浏览器网络里抓到点赞、评论、收藏或转发数据。");
-    }
-
-    const resolvedUrl = resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl;
-    return formatDouyinVideoStatsResult(detail, resolvedUrl);
-  } catch (error) {
-    if (isOpenCliBrowserSessionError(error)) {
-      douyinStatsBrowserReady = false;
-    }
-    throw error;
   }
-}
 
-export async function getDouyinVideoCommentsByUrl(
-  url: string,
-  options: { commentLimit?: number; signal?: AbortSignal } = {}
-) {
-  const inputUrl = url.trim();
-  const initialAwemeId = extractDouyinAwemeId(inputUrl);
-  const workspace = `douyin-video-comments-${process.pid}-${Date.now()}-${shortHash(inputUrl || initialAwemeId)}`;
-  const pageUrl = initialAwemeId ? buildDouyinVideoUrl(initialAwemeId) || inputUrl : inputUrl;
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || 30, 50));
-
-  try {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
-      timeout: 30_000,
-      signal: options.signal
-    });
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "5"]), { timeout: 12_000, signal: options.signal }).catch(
-      ignoreAbortToUndefined
-    );
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "state"), { timeout: 12_000, signal: options.signal }).catch(
-      ignoreAbortToUndefined
-    );
-
-    const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId, { signal: options.signal });
-    const awemeId = resolved.awemeId;
-    if (!awemeId) {
-      return {
-        url: inputUrl,
-        resolvedUrl: resolved.url || inputUrl,
-        awemeId: "",
-        title: "",
-        commentCount: 0,
-        comments: []
-      };
-    }
-
-    const [detail, snapshot] = await Promise.all([
-      getDouyinVideoDetailWithBrowser(workspace, awemeId, { commentLimit, signal: options.signal }).catch(ignoreAbortToNull),
-      getDouyinVideoDetailSnapshot(workspace, awemeId, { signal: options.signal }).catch(ignoreAbortToNull)
-    ]);
-
-    return {
-      url: inputUrl,
-      resolvedUrl: resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl,
-      awemeId,
-      title: snapshot?.title || "",
-      commentCount: detail?.commentCount || snapshot?.commentCount || 0,
-      comments: detail?.topComments || []
-    };
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
+  await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [pageUrl], { window: "background" }), {
+    timeout: 30_000,
+    timingStage: "douyin.browser.open-video",
+    onTiming: options.onTiming,
+    timingMeta: options.timingMeta,
+    signal: options.signal
+  });
+  const resolved = await resolveDouyinAwemeIdFromOpenPage(workspace, initialAwemeId, options);
+  const awemeId = resolved.awemeId;
+  if (!awemeId) {
+    throw new Error("没有从链接里解析到抖音视频 ID，请确认是单条视频链接，或粘贴完整视频页链接。");
   }
+  const detail = await waitForDouyinVideoStats(workspace, awemeId, options);
+
+  if (!detail) {
+    throw new Error("抖音页面已打开，但没有从真实浏览器网络里抓到点赞、评论、收藏或转发数据。");
+  }
+
+  const resolvedUrl = resolved.url || buildDouyinVideoUrl(awemeId) || pageUrl;
+  return formatDouyinVideoStatsResult(detail, resolvedUrl);
 }
 
 export async function getDouyinVideoStatsFromAccount(input: {
@@ -1087,10 +1042,6 @@ async function mapWithLocalConcurrency<T, R>(
   );
 }
 
-function isOpenCliBrowserSessionError(error: unknown) {
-  return error instanceof Error && /browser|session|target|tab|context|closed|crash/i.test(error.message);
-}
-
 function isAbortError(error: unknown) {
   return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
 }
@@ -1115,11 +1066,6 @@ function ignoreAbortToNull(error: unknown) {
 function ignoreAbortToEmptyString(error: unknown) {
   if (isAbortError(error)) throw error;
   return "";
-}
-
-function ignoreAbortToUndefined(error: unknown) {
-  if (isAbortError(error)) throw error;
-  return undefined;
 }
 
 async function getDouyinNetworkPreviews(workspace: string, options: VideoStatsTimingOptions = {}) {
@@ -1313,7 +1259,7 @@ async function getDouyinVideoDetailWithBrowser(
   awemeId: string,
   options: { commentLimit?: number; signal?: AbortSignal; tab?: string } = {}
 ) {
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 50));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 10, 200));
   const result = parseJsonish(
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [
       buildDouyinDetailExtractJs({
@@ -1323,12 +1269,26 @@ async function getDouyinVideoDetailWithBrowser(
     ], options.tab ? { tab: options.tab } : {}), { timeout: 20_000, signal: options.signal })
   );
   const object = result && typeof result === "object" && !Array.isArray(result) ? (result as Record<string, unknown>) : {};
+  const commentFetch = object.commentFetch && typeof object.commentFetch === "object"
+    ? object.commentFetch as Record<string, unknown>
+    : {};
   const topComments = Array.isArray(object.topComments)
     ? object.topComments.map(normalizeDouyinHotComment).filter((comment): comment is { text: string; likes: number; replies: number } => Boolean(comment?.text))
     : [];
   const commentCount = toNumber(object.commentCount);
-  if (!topComments.length && commentCount <= 0) return null;
+  const commentFetchError = String(commentFetch.error || "").trim();
+  if (!topComments.length) {
+    if (commentFetchError) {
+      throw new Error(`抖音视频 ${awemeId} 评论抓取失败：${commentFetchError}`);
+    }
+    throw new Error(
+      commentCount > 0
+        ? `抖音视频 ${awemeId} 显示有 ${commentCount} 条评论，但评论接口返回 0 条`
+        : `抖音视频 ${awemeId} 没有可读取的评论`
+    );
+  }
   return {
+    title: String(object.title || "").replace(/\s+/g, " ").trim(),
     commentCount: commentCount > 0 ? commentCount : undefined,
     topComments,
     likeCount: toNumber(object.likeCount),
@@ -1419,7 +1379,7 @@ export async function getDouyinTopComments(account: Account, options: { limit?: 
     "--comment_limit",
     String(Math.max(1, Math.min(options.commentLimit || 10, 30)))
   );
-  const stdout = await runOpenCli(args);
+  const stdout = await runPersistentOpenCliBrowserAdapter(args);
   return asArray(parseJsonish(stdout))
     .flatMap((row) => {
       const object = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
@@ -1436,11 +1396,10 @@ function resolveDouyinVideoLookupLimit(video: Pick<Video, "id" | "url" | "raw">)
 }
 
 async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string, options: { signal?: AbortSignal } = {}) {
-  const workspace = `douyin-media-${process.pid}-${Date.now()}-${shortHash(awemeId)}`;
   const videoUrl = buildDouyinVideoUrl(awemeId);
   if (!videoUrl) return "";
 
-  try {
+  return withSharedOpenCliBrowserSession(async (workspace) => {
     const openResult = parseJsonish(
       await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [videoUrl], { window: "background" }), {
         timeout: 30_000,
@@ -1453,9 +1412,7 @@ async function getDouyinVideoDownloadUrlWithBrowser(awemeId: string, options: { 
       .map((value) => String(value || "").trim())
       .filter(isLikelyDirectMediaUrl);
     return selectBestDouyinMediaUrl(candidates);
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
+  }, { signal: options.signal });
 }
 
 export function getDouyinAwemeId(video: Pick<Video, "id" | "url" | "raw">) {

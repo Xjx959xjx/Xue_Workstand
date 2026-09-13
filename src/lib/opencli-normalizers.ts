@@ -21,6 +21,10 @@ export function normalizeCommentText(value: unknown): string {
   return "";
 }
 
+export function containsPlatformUserMention(value: string) {
+  return /[@＠]/u.test(value);
+}
+
 export function normalizeTimestamp(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     const milliseconds = value > 10_000_000_000 ? value : value * 1000;
@@ -40,6 +44,18 @@ export function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean))];
 }
 
+export function selectFallbackMetricThreshold(
+  metrics: number[],
+  preferred: number,
+  fallbackTiers: number[]
+) {
+  const tiers = [...new Set([preferred, ...fallbackTiers, 0])]
+    .map((value) => Math.max(0, Math.round(value)))
+    .filter((value) => value <= preferred)
+    .sort((left, right) => right - left);
+  return tiers.find((threshold) => metrics.some((metric) => metric >= threshold)) ?? 0;
+}
+
 export function isRelatedVideoRelevant(title: string, query: string) {
   const normalizedTitle = normalizeSearchComparableText(title);
   if (!normalizedTitle) return false;
@@ -49,6 +65,12 @@ export function isRelatedVideoRelevant(title: string, query: string) {
   const matched = terms.filter((term) => normalizedTitle.includes(normalizeSearchComparableText(term)));
   if (matched.length >= Math.min(2, terms.length)) return true;
   return matched.some((term) => Array.from(term).length >= 4);
+}
+
+export function isExcludedRelatedVideo(videoId: string, excludedVideoIds: string[] | undefined) {
+  const key = videoId.trim().toLowerCase();
+  if (!key) return false;
+  return (excludedVideoIds || []).some((value) => value.trim().toLowerCase() === key);
 }
 
 function extractRelatedSearchTerms(query: string) {

@@ -3,7 +3,6 @@ import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { promisify } from "util";
 import {
   buildOpenCliBrowserArgs,
   downloadBilibiliVideo,
@@ -15,7 +14,6 @@ import {
   getDouyinVideoStatsByUrl,
   parseOpenCliJsonish,
   refreshDouyinVideoDownloadUrl,
-  resolveOpenCliCommand
 } from "./opencli";
 import {
   browserUserAgent,
@@ -31,26 +29,17 @@ import {
   sortRemoteAudioMediaUrls,
   videoMediaUrlScore
 } from "./platform-links";
-import { runOpenCli } from "./opencli-runtime";
+import { runOpenCli, withSharedOpenCliBrowserSession } from "./opencli-runtime";
 import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabilities";
 import { getTranscriptSnapshot, getVideo, markTranscriptFailed, saveTranscript } from "./storage";
 import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
 
-const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 type Timing = { stage: string; ms: number };
 type AbortableOptions = {
   signal?: AbortSignal;
 };
-
-function openCliExecArgs(args: string[]) {
-  const runtime = resolveOpenCliCommand();
-  return {
-    command: runtime.command,
-    args: [...runtime.argsPrefix, ...args]
-  };
-}
 
 export type LinkTranscriptionResult = {
   url: string;
@@ -1350,110 +1339,77 @@ async function resolveLinkStatsMetadata(
 }
 
 async function resolveBilibiliLinkMedia(url: string, options: AbortableOptions = {}) {
-  const workspace = `bilibili-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
-
-  try {
-    throwIfAborted(options.signal);
-    const openArgs = buildOpenCliBrowserArgs(workspace, "open", [url], {
-      window: "background"
-    });
-    await runOpenCli(openArgs, {
-      timeout: 30_000,
-      signal: options.signal
-    });
-    const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]));
-    await execFileAsync(waitArgs.command, waitArgs.args, {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024,
-      timeout: 12_000,
-      signal: options.signal
-    }).catch(ignoreNonAbortError);
-    const evalArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "eval", [BILIBILI_LINK_MEDIA_EXTRACT_JS]));
-    const { stdout } = await execFileAsync(
-      evalArgs.command,
-      evalArgs.args,
-      {
-        ...HIDDEN_CHILD_PROCESS_OPTIONS,
-        maxBuffer: 1024 * 1024 * 20,
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    try {
+      throwIfAborted(options.signal);
+      const openArgs = buildOpenCliBrowserArgs(workspace, "open", [url], {
+        window: "background"
+      });
+      await runOpenCli(openArgs, {
         timeout: 30_000,
         signal: options.signal
-      }
-    );
-    const data = parseOpenCliJsonish(stdout.trim());
-    const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
-    const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
-    return {
-      mediaId: String(object.bvid || extractBvid(url) || ""),
-      title: normalizeTitle(String(object.title || object.description || "")),
-      sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
-      coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
-      mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
-    };
-  } catch (error) {
-    if (isAbortError(error)) throw error;
-    throw formatLinkBrowserResolutionError("B站", error);
-  } finally {
-    const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
-    await execFileAsync(closeArgs.command, closeArgs.args, {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024,
-      timeout: 5_000
-    }).catch(() => undefined);
-  }
+      });
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "3"]), {
+        timeout: 12_000,
+        signal: options.signal
+      }).catch(ignoreNonAbortError);
+      const stdout = await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [BILIBILI_LINK_MEDIA_EXTRACT_JS]), {
+        timeout: 30_000,
+        signal: options.signal
+      });
+      const data = parseOpenCliJsonish(stdout);
+      const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+      const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
+      return {
+        mediaId: String(object.bvid || extractBvid(url) || ""),
+        title: normalizeTitle(String(object.title || object.description || "")),
+        sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
+        coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
+        mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
+      };
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throw formatLinkBrowserResolutionError("B站", error);
+    }
+  }, { signal: options.signal });
 }
 
 async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {}) {
-  const workspace = `douyin-link-transcribe-${process.pid}-${Date.now()}-${safeFileName(url).slice(0, 18)}`;
   const pageUrl = buildDouyinVideoUrl(extractDouyinAwemeId(url)) || url;
 
-  try {
-    throwIfAborted(options.signal);
-    const openArgs = buildOpenCliBrowserArgs(workspace, "open", [pageUrl], {
-      window: "background"
-    });
-    await runOpenCli(openArgs, {
-      timeout: 30_000,
-      signal: options.signal
-    });
-    const waitArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]));
-    await execFileAsync(waitArgs.command, waitArgs.args, {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024,
-      timeout: 10_000,
-      signal: options.signal
-    }).catch(ignoreNonAbortError);
-    const evalArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]));
-    const { stdout } = await execFileAsync(
-      evalArgs.command,
-      evalArgs.args,
-      {
-        ...HIDDEN_CHILD_PROCESS_OPTIONS,
-        maxBuffer: 1024 * 1024 * 20,
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    try {
+      throwIfAborted(options.signal);
+      const openArgs = buildOpenCliBrowserArgs(workspace, "open", [pageUrl], {
+        window: "background"
+      });
+      await runOpenCli(openArgs, {
         timeout: 30_000,
         signal: options.signal
-      }
-    );
-    const data = parseOpenCliJsonish(stdout.trim());
-    const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
-    const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
-    return {
-      mediaId: String(object.awemeId || ""),
-      title: normalizeTitle(String(object.title || object.description || "")),
-      sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
-      coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
-      mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
-    };
-  } catch (error) {
-    if (isAbortError(error)) throw error;
-    throw formatLinkBrowserResolutionError("抖音", error);
-  } finally {
-    const closeArgs = openCliExecArgs(buildOpenCliBrowserArgs(workspace, "close"));
-    await execFileAsync(closeArgs.command, closeArgs.args, {
-      ...HIDDEN_CHILD_PROCESS_OPTIONS,
-      maxBuffer: 1024 * 1024,
-      timeout: 5_000
-    }).catch(() => undefined);
-  }
+      });
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
+        timeout: 10_000,
+        signal: options.signal
+      }).catch(ignoreNonAbortError);
+      const stdout = await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]), {
+        timeout: 30_000,
+        signal: options.signal
+      });
+      const data = parseOpenCliJsonish(stdout);
+      const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+      const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
+      return {
+        mediaId: String(object.awemeId || ""),
+        title: normalizeTitle(String(object.title || object.description || "")),
+        sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
+        coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
+        mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
+      };
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throw formatLinkBrowserResolutionError("抖音", error);
+    }
+  }, { signal: options.signal });
 }
 
 function formatLinkBrowserResolutionError(platformLabel: "B站" | "抖音", error: unknown) {

@@ -1,6 +1,14 @@
 import { chatComplete } from "./ai";
 import { DOUYIN_RELATED_VIDEO_EXTRACT_JS } from "./opencli-douyin-scripts";
-import { asArray, buildOpenCliBrowserArgs, parseJsonish, runOpenCli, stringField } from "./opencli-runtime";
+import {
+  asArray,
+  buildOpenCliBrowserArgs,
+  parseJsonish,
+  runOpenCli,
+  runPersistentOpenCliBrowserAdapter,
+  stringField,
+  withSharedOpenCliBrowserSession
+} from "./opencli-runtime";
 import { isRelatedVideoRelevant, uniqueStrings } from "./opencli-normalizers";
 import { extractBvid } from "./platform-links";
 import type {
@@ -187,7 +195,7 @@ function searchPlatformReferences(platform: Platform, query: string, options: { 
 }
 
 async function searchBilibiliReferences(query: string, options: { signal?: AbortSignal }): Promise<PublishCopyReference[]> {
-  const stdout = await runOpenCli([
+  const stdout = await runPersistentOpenCliBrowserAdapter([
     "bilibili",
     "search",
     query,
@@ -204,10 +212,9 @@ async function searchBilibiliReferences(query: string, options: { signal?: Abort
 }
 
 async function searchDouyinReferences(query: string, options: { signal?: AbortSignal }): Promise<PublishCopyReference[]> {
-  const workspace = `publish-copy-douyin-${process.pid}-${Date.now()}-${shortHash(query)}`;
   const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(query)}?type=general`;
 
-  try {
+  return withSharedOpenCliBrowserSession(async (workspace) => {
     await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [searchUrl], { window: "background" }), {
       timeout: 30_000,
       signal: options.signal
@@ -221,9 +228,7 @@ async function searchDouyinReferences(query: string, options: { signal?: AbortSi
       { timeout: 24_000, signal: options.signal }
     )));
     return normalizeSearchRows(rows, "douyin", query);
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
+  }, { signal: options.signal });
 }
 
 function normalizeSearchRows(rows: unknown[], platform: Platform, query: string) {

@@ -1,4 +1,4 @@
-import { buildOpenCliBrowserArgs, parseJsonish, runOpenCli } from "./opencli-runtime";
+import { buildOpenCliBrowserArgs, parseJsonish, runOpenCli, withSharedOpenCliBrowserSession } from "./opencli-runtime";
 import { browserUserAgent, normalizeRemoteImageUrl } from "./platform-links";
 import type { Platform, Video } from "./types";
 import { shortHash } from "./utils";
@@ -83,32 +83,31 @@ async function fetchBilibiliAccountProfile(input: ResolveAccountProfileInput) {
 }
 
 async function fetchDouyinAccountProfile(input: ResolveAccountProfileInput) {
-  const workspace = `douyin-profile-${process.pid}-${Date.now()}-${shortHash(input.uid)}`;
   const profileUrl = defaultAccountSourceUrl("douyin", input.uid);
 
-  try {
-    await openDouyinProfilePage(workspace, profileUrl, input.signal);
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
-      timeout: 10_000,
-      signal: input.signal
-    });
-    const rawProfile = parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinProfileExtractJs(input.uid)]), {
-      timeout: DOUYIN_PROFILE_TIMEOUT_MS,
-      signal: input.signal
-    }));
-    const profile = rawProfile && typeof rawProfile === "object" ? rawProfile as Record<string, unknown> : {};
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    try {
+      await openDouyinProfilePage(workspace, profileUrl, input.signal);
+      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
+        timeout: 10_000,
+        signal: input.signal
+      });
+      const rawProfile = parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinProfileExtractJs(input.uid)]), {
+        timeout: DOUYIN_PROFILE_TIMEOUT_MS,
+        signal: input.signal
+      }));
+      const profile = rawProfile && typeof rawProfile === "object" ? rawProfile as Record<string, unknown> : {};
 
-    return {
-      name: String(profile.name || profile.nickname || input.fallbackName || ""),
-      avatarUrl: String(profile.avatarUrl || profile.avatar_url || ""),
-      sourceUrl: String(profile.sourceUrl || profile.url || profileUrl)
-    };
-  } catch (error) {
-    if (isAbortError(error, input.signal)) throw error;
-    throw new Error(`获取抖音账号资料失败：${formatDouyinProfileError(error)}`);
-  } finally {
-    await runOpenCli(buildOpenCliBrowserArgs(workspace, "close"), { timeout: 5_000 }).catch(() => undefined);
-  }
+      return {
+        name: String(profile.name || profile.nickname || input.fallbackName || ""),
+        avatarUrl: String(profile.avatarUrl || profile.avatar_url || ""),
+        sourceUrl: String(profile.sourceUrl || profile.url || profileUrl)
+      };
+    } catch (error) {
+      if (isAbortError(error, input.signal)) throw error;
+      throw new Error(`获取抖音账号资料失败：${formatDouyinProfileError(error)}`);
+    }
+  }, { signal: input.signal });
 }
 
 async function openDouyinProfilePage(workspace: string, profileUrl: string, signal?: AbortSignal) {

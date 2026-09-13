@@ -6,6 +6,7 @@ import { Copy, FileUp } from "lucide-react";
 type AssetTextListProps = {
   title: string;
   items: string[];
+  itemOrigins?: Array<"ai_generated" | "reused_hot_comment" | undefined>;
   empty: string;
   onCopy: () => void;
   leadingActions?: ReactNode;
@@ -17,6 +18,7 @@ type AssetTextListProps = {
 export function AssetTextList({
   title,
   items,
+  itemOrigins,
   empty,
   onCopy,
   leadingActions,
@@ -56,7 +58,15 @@ export function AssetTextList({
         </div>
       </div>
       <div className={`asset-text-list ${items.length ? "" : "empty"}`}>
-        {items.length ? items.map((item, index) => <p key={`${index}-${item}`}>{item}</p>) : empty}
+        {items.length ? items.map((item, index) => {
+          const isAiGenerated = itemOrigins?.[index] === "ai_generated";
+          return (
+            <p className={isAiGenerated ? "is-ai-generated" : undefined} key={`${index}-${item}`}>
+              {item}
+              {isAiGenerated ? <span className="asset-item-origin">AI 生成</span> : null}
+            </p>
+          );
+        }) : empty}
       </div>
     </div>
   );

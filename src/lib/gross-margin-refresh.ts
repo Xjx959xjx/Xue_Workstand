@@ -27,7 +27,7 @@ import { shortHash } from "./utils";
 
 const DOUYIN_VIDEO_STATS_CACHE_TTL_MS = 3 * 60 * 1000;
 const MONITOR_REFRESH_LOG_PREFIX = "[gross-margin-monitor]";
-const DEFAULT_MONITOR_REFRESH_CONCURRENCY = 3;
+const DEFAULT_MONITOR_REFRESH_CONCURRENCY = 6;
 const MAX_MONITOR_REFRESH_CONCURRENCY = 6;
 
 const douyinSingleVideoStatsCache = new Map<

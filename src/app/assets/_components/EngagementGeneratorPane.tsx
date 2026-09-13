@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { Send } from "lucide-react";
 import type { BusyState } from "./asset-view-utils";
 import { SourceInput } from "./SourceInput";
 import type { Platform } from "@/lib/types";
-
-const COMMENT_COUNT_PRESETS = [30, 50, 100];
 
 type EngagementGeneratorPaneProps = {
   busy: BusyState;
@@ -17,11 +15,6 @@ type EngagementGeneratorPaneProps = {
   includeDanmaku: boolean;
   targetPlatform: Platform;
   supportsDanmaku: boolean;
-  generationProgress: {
-    stage: string;
-    message: string;
-    progress: number;
-  } | null;
   sourceInput: string;
   onCommentCountChange: (count: number) => void;
   onDanmakuCountChange: (count: number) => void;
@@ -41,7 +34,6 @@ export function EngagementGeneratorPane({
   includeDanmaku,
   targetPlatform,
   supportsDanmaku,
-  generationProgress,
   sourceInput,
   onCommentCountChange,
   onDanmakuCountChange,
@@ -51,6 +43,9 @@ export function EngagementGeneratorPane({
   onIncludeDanmakuChange,
   onSourceInputChange
 }: EngagementGeneratorPaneProps) {
+  const sliderCommentCount = Math.min(200, Math.max(5, Math.round(commentCount / 5) * 5));
+  const sliderProgress = ((sliderCommentCount - 5) / (200 - 5)) * 100;
+
   return (
     <section className="engagement-generator-pane">
       <div className="pane-body engagement-generator-body">
@@ -94,15 +89,6 @@ export function EngagementGeneratorPane({
                   <strong>评论</strong>
                   <small>默认生成评论</small>
                 </span>
-                <BoundedNumberInput
-                  ariaLabel="评论条数"
-                  disabled={!includeComments}
-                  max={200}
-                  min={1}
-                  name="commentCount"
-                  value={commentCount}
-                  onChange={onCommentCountChange}
-                />
               </label>
               <label className={`engagement-option ${includeDanmaku ? "active" : ""} ${supportsDanmaku ? "" : "is-disabled"}`}>
                 <input checked={includeDanmaku} disabled={!supportsDanmaku} name="includeDanmaku" type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
@@ -123,21 +109,26 @@ export function EngagementGeneratorPane({
             </div>
           </fieldset>
           <div className="engagement-settings-footer">
-            <div className="engagement-mode-row engagement-count-row">
-              <span className="field-label">常用数量</span>
-              <div className="segmented engagement-count-segmented" aria-label="评论快捷条数" role="group">
-                {COMMENT_COUNT_PRESETS.map((preset) => (
-                  <button
-                    aria-pressed={commentCount === preset}
-                    key={preset}
-                    className={commentCount === preset ? "active" : ""}
-                    disabled={!includeComments}
-                    type="button"
-                    onClick={() => onCommentCountChange(preset)}
-                  >
-                    {preset} 条
-                  </button>
-                ))}
+            <div className="engagement-count-slider-field">
+              <label className="field-label" htmlFor="engagement-comment-count-slider">评论条数</label>
+              <div className="engagement-count-slider-control">
+                <span aria-hidden="true">5</span>
+                <input
+                  aria-label="评论条数滑块"
+                  aria-valuetext={`${sliderCommentCount} 条`}
+                  className="engagement-count-slider"
+                  disabled={!includeComments}
+                  id="engagement-comment-count-slider"
+                  max={200}
+                  min={5}
+                  step={5}
+                  type="range"
+                  value={sliderCommentCount}
+                  style={{ "--engagement-slider-progress": `${sliderProgress}%` } as CSSProperties}
+                  onChange={(event) => onCommentCountChange(Number(event.currentTarget.value))}
+                />
+                <span aria-hidden="true">200</span>
+                <output aria-live="polite" htmlFor="engagement-comment-count-slider">{sliderCommentCount} 条</output>
               </div>
             </div>
             <button className="btn primary engagement-submit" disabled={!canGenerate} onClick={onGenerate} type="button">
@@ -147,24 +138,6 @@ export function EngagementGeneratorPane({
           </div>
         </section>
 
-        {busy === "generate" ? (
-          <div
-            aria-live="polite"
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={generationProgress?.progress || 0}
-            className="project-progress"
-            role="progressbar"
-          >
-            <div className="project-progress-copy">
-              <span>{generationProgress?.message || "任务正在排队"}</span>
-              <strong>{generationProgress ? `${generationProgress.progress}%` : "等待中"}</strong>
-            </div>
-            <div className="progress-track" aria-hidden="true">
-              <div className="progress-fill" style={{ width: `${generationProgress?.progress || 3}%` }} />
-            </div>
-          </div>
-        ) : null}
       </div>
     </section>
   );

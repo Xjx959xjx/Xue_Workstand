@@ -5,6 +5,11 @@ import { callRemoteCapability, hasRemoteCapabilityBridge } from "./remote-capabi
 const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
 const OPENCLI_BROWSER_CONNECT_RETRY_DELAY_MS = 1_200;
+const DEFAULT_SHARED_BROWSER_SESSION = "content-workbench-browser";
+
+type OpenCliQueue = Promise<unknown>;
+
+const browserOperationQueues = new Map<string, OpenCliQueue>();
 
 type OpenCliBrowserWindowMode = "foreground" | "background";
 
@@ -29,6 +34,10 @@ export type RunOpenCliOptions = OpenCliTimingOptions & {
   timingStage?: string;
 };
 
+export type SharedOpenCliBrowserOptions = {
+  signal?: AbortSignal;
+};
+
 export function opencliBin() {
   return process.env.OPENCLI_BIN || "opencli";
 }
@@ -37,17 +46,19 @@ export function resolveOpenCliCommand() {
   const configured = opencliBin().trim() || "opencli";
   const scriptPath = process.env.OPENCLI_SCRIPT?.trim() || "";
   const nodeBin = process.env.OPENCLI_NODE_BIN?.trim() || process.execPath;
+  const profile = process.env.OPENCLI_PROFILE?.trim() || "";
+  const profileArgs = profile ? ["--profile", profile] : [];
 
   if (scriptPath) {
     return {
       command: nodeBin,
-      argsPrefix: [scriptPath]
+      argsPrefix: [scriptPath, ...profileArgs]
     };
   }
 
   return {
     command: configured,
-    argsPrefix: []
+    argsPrefix: profileArgs
   };
 }
 
@@ -75,6 +86,7 @@ export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}
     try {
       const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
         ...HIDDEN_CHILD_PROCESS_OPTIONS,
+        env: withOpenCliBackgroundWindow(process.env),
         maxBuffer: 1024 * 1024 * 20,
         timeout: options.timeout,
         signal: options.signal
@@ -85,6 +97,10 @@ export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}
     } catch (error) {
       if (attempt === 0 && isOpenCliBrowserConnectError(error) && !options.signal?.aborted) {
         await waitForOpenCliRetry(OPENCLI_BROWSER_CONNECT_RETRY_DELAY_MS, options.signal);
+        continue;
+      }
+      if (attempt === 0 && isOpenCliJavaScriptDialogError(error) && !options.signal?.aborted) {
+        await dismissOpenCliJavaScriptDialog(runtime, args, options).catch(() => undefined);
         continue;
       }
       recordTiming(options, startedAt, false, undefined, error);
@@ -101,6 +117,42 @@ export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}
 
   if (!timingRecorded) recordTiming(options, startedAt, true);
   return stdout.trim();
+}
+
+export function sharedOpenCliBrowserSession() {
+  return process.env.OPENCLI_BROWSER_SESSION?.trim() || DEFAULT_SHARED_BROWSER_SESSION;
+}
+
+export function withSharedOpenCliBrowserSession<T>(
+  operation: (session: string) => Promise<T>,
+  options: SharedOpenCliBrowserOptions = {}
+) {
+  // Keep one leased background tab for the server lifetime. Releasing it after
+  // every read makes the Browser Bridge create a new Chrome tab group next time.
+  const session = sharedOpenCliBrowserSession();
+  return enqueueOpenCliBrowserOperation(`browser:${session}`, () => operation(session), options.signal);
+}
+
+export function runPersistentOpenCliBrowserAdapter(args: string[], options: RunOpenCliOptions = {}) {
+  const site = args[0]?.trim();
+  if (!site || site === "browser") {
+    throw new Error("OpenCLI 持久浏览器适配器缺少有效站点名称");
+  }
+  const persistentArgs = withPersistentBrowserAdapterOptions(args);
+  // Read adapters are self-contained, but OpenCLI's ephemeral default creates a
+  // fresh automation group per invocation. Serialize one persistent tab per site.
+  return enqueueOpenCliBrowserOperation(
+    `adapter:${site}`,
+    () => runOpenCli(persistentArgs, options),
+    options.signal
+  );
+}
+
+export function withPersistentBrowserAdapterOptions(args: string[]) {
+  const normalized = [...args];
+  if (!normalized.includes("--window")) normalized.push("--window", "background");
+  if (!normalized.includes("--site-session")) normalized.push("--site-session", "persistent");
+  return normalized;
 }
 
 export async function timeOpenCliOperation<T>(
@@ -247,6 +299,53 @@ function wrapOpenCliError(error: unknown) {
     return error;
   }
   return new Error("opencli 执行失败");
+}
+
+function enqueueOpenCliBrowserOperation<T>(key: string, operation: () => Promise<T>, signal?: AbortSignal) {
+  const previous = browserOperationQueues.get(key) || Promise.resolve();
+  const current = previous.catch(() => undefined).then(async () => {
+    if (signal?.aborted) throw createAbortError();
+    return operation();
+  });
+  const settled = current.then(() => undefined, () => undefined);
+  browserOperationQueues.set(key, settled);
+  void settled.finally(() => {
+    if (browserOperationQueues.get(key) === settled) browserOperationQueues.delete(key);
+  });
+  return current;
+}
+
+function withOpenCliBackgroundWindow(env: NodeJS.ProcessEnv) {
+  if (env.OPENCLI_WINDOW?.trim()) return env;
+  return { ...env, OPENCLI_WINDOW: "background" };
+}
+
+async function dismissOpenCliJavaScriptDialog(
+  runtime: ReturnType<typeof resolveOpenCliCommand>,
+  args: string[],
+  options: RunOpenCliOptions
+) {
+  const session = getOpenCliBrowserSessionArg(args);
+  if (!session) return;
+  await execFileAsync(runtime.command, [...runtime.argsPrefix, "browser", session, "dialog", "dismiss"], {
+    ...HIDDEN_CHILD_PROCESS_OPTIONS,
+    env: withOpenCliBackgroundWindow(process.env),
+    maxBuffer: 1024 * 1024,
+    timeout: Math.min(options.timeout || 10_000, 10_000),
+    signal: options.signal
+  });
+}
+
+function getOpenCliBrowserSessionArg(args: string[]) {
+  return args[0] === "browser" && args[1]?.trim() ? args[1].trim() : "";
+}
+
+function isOpenCliJavaScriptDialogError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const message = "message" in error ? String((error as { message?: unknown }).message || "") : "";
+  const stderr = "stderr" in error ? String((error as { stderr?: unknown }).stderr || "") : "";
+  const stdout = "stdout" in error ? String((error as { stdout?: unknown }).stdout || "") : "";
+  return /javascript_dialog_open|javascript dialog|dialog is open|modal.*open/i.test(`${message}\n${stderr}\n${stdout}`);
 }
 
 function isMissingExecutableError(error: unknown) {

@@ -117,6 +117,7 @@ export type DraftCommentAsset = {
   id: string;
   platform: Platform | "unknown";
   text: string;
+  origin?: "ai_generated" | "reused_hot_comment";
 };
 
 export type DraftDanmakuAsset = {
@@ -198,9 +199,18 @@ export type DraftAssets = {
       };
       relatedResearch?: {
         usedQueries: string[];
+        searchAnchors?: string[];
+        searchEventTerms?: string[];
         failedQueries: string[];
         relatedVideoCount: number;
         relatedCommentCount: number;
+        freshCommentCount?: number;
+        targetPlatformCommentCount?: number;
+        sourceCommentCount?: number;
+        sourceVideoId?: string;
+        sourceTitle?: string;
+        originalFetchError?: string;
+        matchedLibraryCommentCount?: number;
         forumSourceCount?: number;
         forumCommentCount?: number;
         replySampleCount?: number;
@@ -211,6 +221,9 @@ export type DraftAssets = {
           commentCount: number;
           error?: string;
         }>;
+        hotComments?: string[];
+        reusableComments?: string[];
+        sampleLibraryCount?: number;
         longCommentCount?: number;
         lengthBuckets?: {
           short: number;
@@ -271,6 +284,7 @@ export type DraftAssets = {
         parsedCount: number;
         completedCount: number;
         supplementedCount: number;
+        reusedHotCommentCount?: number;
         targetLongCommentCount?: number;
         lengthBuckets?: {
           short: number;

@@ -24,6 +24,7 @@ const BILIBILI_QUERIES = parseBilibiliQueries(process.env.ENGAGEMENT_BENCHMARK_B
 const BILIBILI_PREFERRED_ACCOUNTS = parseBilibiliPreferredAccounts(process.env.ENGAGEMENT_BENCHMARK_BILIBILI_PREFERRED_ACCOUNTS);
 const DOUYIN_ACCOUNTS = parseDouyinAccounts(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_ACCOUNTS);
 const DOUYIN_QUERIES = parseDouyinQueries(process.env.ENGAGEMENT_BENCHMARK_DOUYIN_QUERIES);
+const OPENCLI_BROWSER_SESSION = process.env.OPENCLI_BROWSER_SESSION?.trim() || "content-workbench-browser";
 
 const libraryRoot = path.resolve(process.env.STYLE_LIBRARY_DIR || "./style-library");
 const cacheDirectory = path.join(libraryRoot, "engagement", ".cache", "style");
@@ -431,20 +432,15 @@ async function collectDouyinBenchmarks() {
 }
 
 async function fetchDouyinVideoComments(candidate) {
-  const workspace = `engagement-benchmark-douyin-${process.pid}-${candidate.videoId}`;
-  try {
-    await runOpenCli([
-      "browser", workspace, "open", candidate.url, "--window", "background"
-    ], 30_000);
-    await runOpenCli(["browser", workspace, "wait", "time", "2"], 10_000).catch(() => undefined);
-    await runOpenCli(["browser", workspace, "state"], 20_000);
-    const result = await runOpenCliJson([
-      "browser", workspace, "eval", buildDouyinCommentEvalJs(candidate.videoId, DOUYIN_SEARCH_COMMENT_LIMIT)
-    ], 30_000);
-    return asArray(result?.comments).map(normalizeComment).filter(Boolean);
-  } finally {
-    await runOpenCli(["browser", workspace, "close"], 10_000).catch(() => undefined);
-  }
+  await runOpenCli([
+    "browser", OPENCLI_BROWSER_SESSION, "open", candidate.url, "--window", "background"
+  ], 30_000);
+  await runOpenCli(["browser", OPENCLI_BROWSER_SESSION, "wait", "time", "2"], 10_000).catch(() => undefined);
+  await runOpenCli(["browser", OPENCLI_BROWSER_SESSION, "state"], 20_000);
+  const result = await runOpenCliJson([
+    "browser", OPENCLI_BROWSER_SESSION, "eval", buildDouyinCommentEvalJs(candidate.videoId, DOUYIN_SEARCH_COMMENT_LIMIT)
+  ], 30_000);
+  return asArray(result?.comments).map(normalizeComment).filter(Boolean);
 }
 
 function buildDouyinCommentEvalJs(awemeId, limit) {
@@ -599,7 +595,9 @@ async function runOpenCli(args, timeout) {
       const { command, commandArgs } = resolveOpenCliCommand(args);
       const result = await execFileAsync(command, commandArgs, {
         cwd: process.cwd(),
-        env: process.env,
+        env: process.env.OPENCLI_WINDOW?.trim()
+          ? process.env
+          : { ...process.env, OPENCLI_WINDOW: "background" },
         encoding: "utf8",
         maxBuffer: 30 * 1024 * 1024,
         timeout
@@ -607,10 +605,32 @@ async function runOpenCli(args, timeout) {
       return result.stdout;
     } catch (error) {
       lastError = error;
+      if (isOpenCliJavaScriptDialogError(error) && args[0] === "browser" && args[1]) {
+        await dismissOpenCliDialog(args[1]).catch(() => undefined);
+      }
       if (attempt < 3) await wait(attempt * 750);
     }
   }
   throw new Error(formatError(lastError));
+}
+
+async function dismissOpenCliDialog(session) {
+  const { command, commandArgs } = resolveOpenCliCommand(["browser", session, "dialog", "dismiss"]);
+  await execFileAsync(command, commandArgs, {
+    cwd: process.cwd(),
+    env: process.env.OPENCLI_WINDOW?.trim()
+      ? process.env
+      : { ...process.env, OPENCLI_WINDOW: "background" },
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    timeout: 10_000
+  });
+}
+
+function isOpenCliJavaScriptDialogError(error) {
+  return /javascript_dialog_open|javascript dialog|dialog is open|modal.*open/i.test(
+    `${error?.message || ""}\n${error?.stderr || ""}\n${error?.stdout || ""}`
+  );
 }
 
 function resolveOpenCliCommand(args) {

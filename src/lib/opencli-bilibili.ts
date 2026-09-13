@@ -7,6 +7,7 @@ import {
   opencliBin,
   parseJsonish,
   runOpenCli,
+  runPersistentOpenCliBrowserAdapter,
   stringField,
   timeOpenCliOperation,
   type OpenCliTimingOptions
@@ -14,11 +15,20 @@ import {
 import { extractBilibiliUid, extractBvid } from "./platform-links";
 import { Account, CollectOrder, Video } from "./types";
 import { nowIso, safeSegment, shortHash, toNumber } from "./utils";
-import { firstNumber, isRelatedVideoRelevant, normalizeCommentText, normalizeTimestamp, uniqueStrings } from "./opencli-normalizers";
+import {
+  containsPlatformUserMention,
+  firstNumber,
+  isExcludedRelatedVideo,
+  isRelatedVideoRelevant,
+  normalizeCommentText,
+  normalizeTimestamp,
+  uniqueStrings
+} from "./opencli-normalizers";
 
 const BILIBILI_FETCH_TIMEOUT_MS = 15_000;
 const BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS = 45_000;
 const BILIBILI_DETAIL_CONCURRENCY = 6;
+const BILIBILI_COMMENT_CONCURRENCY = 6;
 
 export type BilibiliCommentSample = {
   rank: number;
@@ -80,6 +90,12 @@ export type BilibiliVideoStatsResult = {
   };
 };
 
+type BilibiliStatsFieldSources = {
+  metadata: Record<string, unknown>;
+  opencliResult: PromiseSettledResult<Record<string, unknown>>;
+  publicResult: PromiseSettledResult<Record<string, unknown>>;
+};
+
 type BilibiliHydratedVideoFieldsResult = {
   error?: string;
   fallbackReason?: string;
@@ -96,7 +112,7 @@ class BilibiliSubtitleFetchError extends Error {
 }
 
 export async function searchBilibiliUserUid(name: string, options: { signal?: AbortSignal } = {}) {
-  const stdout = await runOpenCli(["bilibili", "search", name, "--type", "user", "--limit", "8", "-f", "json"], {
+  const stdout = await runPersistentOpenCliBrowserAdapter(["bilibili", "search", name, "--type", "user", "--limit", "8", "-f", "json"], {
     timeout: BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS,
     signal: options.signal
   });
@@ -141,7 +157,7 @@ export async function collectBilibiliVideos(input: {
     "-f",
     "json"
   ];
-  const stdout = await runOpenCli(args, {
+  const stdout = await runPersistentOpenCliBrowserAdapter(args, {
     timeout: BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS,
     signal: input.signal
   });
@@ -167,7 +183,14 @@ export async function collectBilibiliVideos(input: {
 
 export async function getBilibiliRelatedTopicComments(
   query: string,
-  options: { videoLimit?: number; commentLimit?: number; replyLimit?: number; minViews?: number; signal?: AbortSignal } = {}
+  options: {
+    videoLimit?: number;
+    commentLimit?: number;
+    replyLimit?: number;
+    minViews?: number;
+    excludedVideoIds?: string[];
+    signal?: AbortSignal;
+  } = {}
 ): Promise<BilibiliRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
   if (!cleanQuery) {
@@ -177,7 +200,7 @@ export async function getBilibiliRelatedTopicComments(
   const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
   const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 50));
   const replyLimit = Math.max(0, Math.min(options.replyLimit ?? 8, 20));
-  const stdout = await runOpenCli([
+  const stdout = await runPersistentOpenCliBrowserAdapter([
     "bilibili",
     "search",
     cleanQuery,
@@ -191,19 +214,12 @@ export async function getBilibiliRelatedTopicComments(
   const candidates = asArray(parseJsonish(stdout))
     .map(normalizeBilibiliRelatedVideo)
     .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
+    .filter((video) => !isExcludedRelatedVideo(video.id, options.excludedVideoIds))
     .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery));
-  const requestedMinViews = Math.max(0, options.minViews ?? 150_000);
-  const thresholdTiers = uniqueNumbers([requestedMinViews, 80_000, 30_000, 0]).filter((value) => value <= requestedMinViews);
-  const appliedMinViews = thresholdTiers.find((threshold) => candidates.some((video) => video.views >= threshold)) ?? 0;
-  const videos = candidates
-    .filter((video) => video.views >= appliedMinViews)
-    .sort(compareBilibiliRelatedVideos)
-    .slice(0, videoLimit);
+  const videos = candidates.sort(compareBilibiliRelatedVideos).slice(0, videoLimit);
+  const appliedMinViews = videos.length ? Math.min(...videos.map((video) => video.views)) : 0;
 
-  const comments: string[] = [];
-  const commentSamples: BilibiliRelatedCommentSample[] = [];
-  let replyCommentCount = 0;
-  for (const video of videos) {
+  const videoCommentResults = await mapWithConcurrency(videos, BILIBILI_COMMENT_CONCURRENCY, async (video) => {
     const rows = await getBilibiliComments(
       { id: video.id, url: video.url, raw: video.url },
       commentLimit,
@@ -212,21 +228,28 @@ export async function getBilibiliRelatedTopicComments(
       if (isAbortError(error, options.signal)) throw error;
       return [];
     });
-    comments.push(...rows.map((comment) => comment.text).filter(Boolean));
-    commentSamples.push(...rows.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title })));
-    const replyRoot = rows
+    const usableRows = rows.filter((comment) => !containsPlatformUserMention(comment.text));
+    const comments = usableRows.map((comment) => comment.text).filter(Boolean);
+    const commentSamples = usableRows.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title }));
+    const replyRoot = usableRows
       .filter((comment) => comment.rpid && comment.replies > 0)
       .sort((left, right) => right.replies - left.replies || right.likes - left.likes)[0];
+    let replyCommentCount = 0;
     if (replyLimit && replyRoot?.rpid) {
       const replies = await getBilibiliCommentReplies(video.id, replyRoot.rpid, replyLimit, options.signal).catch((error) => {
         if (isAbortError(error, options.signal)) throw error;
         return [];
       });
-      replyCommentCount += replies.length;
-      comments.push(...replies.map((comment) => comment.text).filter(Boolean));
-      commentSamples.push(...replies.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title })));
+      const usableReplies = replies.filter((comment) => !containsPlatformUserMention(comment.text));
+      replyCommentCount += usableReplies.length;
+      comments.push(...usableReplies.map((comment) => comment.text).filter(Boolean));
+      commentSamples.push(...usableReplies.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title })));
     }
-  }
+    return { comments, commentSamples, replyCommentCount };
+  });
+  const comments = videoCommentResults.flatMap((result) => result.comments);
+  const commentSamples = videoCommentResults.flatMap((result) => result.commentSamples);
+  const replyCommentCount = videoCommentResults.reduce((sum, result) => sum + result.replyCommentCount, 0);
 
   return {
     query: cleanQuery,
@@ -239,20 +262,26 @@ export async function getBilibiliRelatedTopicComments(
 }
 
 async function getBilibiliCommentReplies(bvid: string, rpid: string, limit: number, signal?: AbortSignal) {
-  const stdout = await runOpenCli([
-    "bilibili",
-    "comments",
-    bvid,
-    "--parent",
-    rpid,
-    "--limit",
-    String(Math.max(1, Math.min(limit, 20))),
-    "-f",
-    "json"
-  ], { timeout: 30_000, signal });
-  return asArray(parseJsonish(stdout))
-    .map((row, index) => normalizeBilibiliComment(row, index))
-    .filter((comment) => comment.text);
+  return resolveBilibiliCommentRows(
+    () => getBilibiliPublicCommentReplies(bvid, rpid, limit, signal),
+    async () => {
+      const stdout = await runOpenCli([
+        "bilibili",
+        "comments",
+        bvid,
+        "--parent",
+        rpid,
+        "--limit",
+        String(Math.max(1, Math.min(limit, 20))),
+        "-f",
+        "json"
+      ], { timeout: 30_000, signal });
+      return asArray(parseJsonish(stdout))
+        .map((row, index) => normalizeBilibiliComment(row, index))
+        .filter((comment) => comment.text);
+    },
+    { signal, label: `B站视频 ${bvid} 的回复` }
+  );
 }
 
 export async function getBilibiliSubtitle(video: Video, options: { signal?: AbortSignal } = {}) {
@@ -282,18 +311,49 @@ export async function getBilibiliComments(
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) return [];
 
-  const stdout = await runOpenCli([
-    "bilibili",
-    "comments",
-    bvid,
-    "--limit",
-    String(Math.max(1, Math.min(limit, 50))),
-    "-f",
-    "json"
-  ], { timeout: 30_000, signal: options.signal });
-  return asArray(parseJsonish(stdout))
-    .map((row, index) => normalizeBilibiliComment(row, index))
-    .filter((comment) => comment.text) as BilibiliCommentSample[];
+  const normalizedLimit = Math.max(1, Math.min(limit, 200));
+  return resolveBilibiliCommentRows(
+    () => getBilibiliPublicComments(bvid, normalizedLimit, options.signal),
+    async () => {
+      const stdout = await runOpenCli([
+        "bilibili",
+        "comments",
+        bvid,
+        "--limit",
+        String(Math.min(normalizedLimit, 50)),
+        "-f",
+        "json"
+      ], { timeout: 30_000, signal: options.signal });
+      return asArray(parseJsonish(stdout))
+        .map((row, index) => normalizeBilibiliComment(row, index))
+        .filter((comment) => comment.text) as BilibiliCommentSample[];
+    },
+    { signal: options.signal, label: `B站视频 ${bvid} 的评论` }
+  );
+}
+
+export async function resolveBilibiliCommentRows<T>(
+  loadPublicRows: () => Promise<T[]>,
+  loadOpenCliRows: () => Promise<T[]>,
+  options: { signal?: AbortSignal; label?: string } = {}
+) {
+  let publicError: unknown;
+  try {
+    const rows = await loadPublicRows();
+    if (rows.length) return rows;
+  } catch (error) {
+    if (isAbortError(error, options.signal)) throw error;
+    publicError = error;
+  }
+
+  try {
+    return await loadOpenCliRows();
+  } catch (error) {
+    if (isAbortError(error, options.signal)) throw error;
+    const label = options.label || "B站评论";
+    const publicReason = publicError ? formatErrorMessage(publicError) : "未返回可用数据";
+    throw new Error(`${label}抓取失败：官方接口：${publicReason}；OpenCLI：${formatErrorMessage(error)}`);
+  }
 }
 
 export async function getBilibiliVideoReference(
@@ -355,7 +415,7 @@ export async function downloadBilibiliVideo(video: Video, options: { signal?: Ab
   let completed = false;
 
   try {
-    const stdout = await runOpenCli(["bilibili", "download", bvid, "--output", outputDir, "-f", "json"], {
+    const stdout = await runPersistentOpenCliBrowserAdapter(["bilibili", "download", bvid, "--output", outputDir, "-f", "json"], {
       signal: options.signal
     });
     const raw = parseJsonish(stdout);
@@ -436,18 +496,10 @@ export async function getBilibiliVideoStatsByUrl(
     throw new Error("没有从链接里解析到 B 站 BV 号，请粘贴完整视频链接。");
   }
 
-  const [opencliResult, publicResult] = await Promise.allSettled([
-    getBilibiliVideoFields(bvid, options),
-    getBilibiliPublicVideoFields(bvid, options)
-  ]);
-  const opencliFields = opencliResult.status === "fulfilled" ? opencliResult.value : {};
-  const publicFields = publicResult.status === "fulfilled" ? publicResult.value : {};
-  const stat = publicFields.stat && typeof publicFields.stat === "object" ? (publicFields.stat as Record<string, unknown>) : {};
-  const metadata = {
-    ...publicFields,
-    ...stat,
-    ...opencliFields
-  };
+  const { metadata, opencliResult, publicResult } = await resolveBilibiliStatsFieldSources(
+    () => getBilibiliPublicVideoFields(bvid, options),
+    () => getBilibiliVideoFields(bvid, options)
+  );
   if (!hasBilibiliStatFields(metadata)) {
     throw new Error(formatBilibiliStatsFetchError(bvid, opencliResult, publicResult));
   }
@@ -473,6 +525,39 @@ export async function getBilibiliVideoStatsByUrl(
       share: firstNumber(metadata.share, metadata.shares),
       danmaku: firstNumber(metadata.danmaku)
     }
+  };
+}
+
+export async function resolveBilibiliStatsFieldSources(
+  loadPublicFields: () => Promise<Record<string, unknown>>,
+  loadOpenCliFields: () => Promise<Record<string, unknown>>
+): Promise<BilibiliStatsFieldSources> {
+  const [publicResult] = await Promise.allSettled([loadPublicFields()]);
+  if (publicResult.status === "fulfilled") {
+    const publicFields = publicResult.value;
+    const stat = publicFields.stat && typeof publicFields.stat === "object"
+      ? (publicFields.stat as Record<string, unknown>)
+      : {};
+    const metadata = { ...publicFields, ...stat };
+    if (hasBilibiliStatFields(metadata)) {
+      return {
+        metadata,
+        publicResult,
+        opencliResult: { status: "fulfilled", value: {} }
+      };
+    }
+  }
+
+  const [opencliResult] = await Promise.allSettled([loadOpenCliFields()]);
+  const publicFields = publicResult.status === "fulfilled" ? publicResult.value : {};
+  const stat = publicFields.stat && typeof publicFields.stat === "object"
+    ? (publicFields.stat as Record<string, unknown>)
+    : {};
+  const opencliFields = opencliResult.status === "fulfilled" ? opencliResult.value : {};
+  return {
+    metadata: { ...publicFields, ...stat, ...opencliFields },
+    opencliResult,
+    publicResult
   };
 }
 
@@ -503,13 +588,15 @@ function normalizeBilibiliRelatedVideo(row: unknown): BilibiliRelatedCommentVide
 }
 
 function compareBilibiliRelatedVideos(left: BilibiliRelatedCommentVideo, right: BilibiliRelatedCommentVideo) {
-  const leftTime = left.publishedAt ? Date.parse(left.publishedAt) : 0;
-  const rightTime = right.publishedAt ? Date.parse(right.publishedAt) : 0;
-  return right.score - left.score || rightTime - leftTime;
+  return relatedVideoRank(right.score, right.publishedAt) - relatedVideoRank(left.score, left.publishedAt);
 }
 
-function uniqueNumbers(values: number[]) {
-  return [...new Set(values.map((value) => Math.max(0, Math.round(value))))];
+function relatedVideoRank(metric: number, publishedAt?: string) {
+  const timestamp = publishedAt ? Date.parse(publishedAt) : 0;
+  if (!timestamp) return metric;
+  const ageDays = Math.max(0, (Date.now() - timestamp) / 86_400_000);
+  const recencyWeight = ageDays <= 30 ? 1.25 : ageDays <= 180 ? 1.15 : ageDays <= 365 ? 1.05 : 0.9;
+  return metric * recencyWeight;
 }
 
 function dedupeBilibiliCommentSamples(values: BilibiliRelatedCommentSample[]) {
@@ -635,7 +722,7 @@ async function resolveBilibiliVideoUrl(url: string, options: OpenCliTimingOption
 }
 
 async function getBilibiliVideoFields(bvid: string, options: OpenCliTimingOptions = {}) {
-  const stdout = await runOpenCli(["bilibili", "video", bvid, "-f", "json"], {
+  const stdout = await runPersistentOpenCliBrowserAdapter(["bilibili", "video", bvid, "-f", "json"], {
     timeout: BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS,
     signal: options.signal,
     timingStage: "bilibili.opencli.video",
@@ -686,6 +773,108 @@ async function getBilibiliPublicVideoFields(bvid: string, options: OpenCliTiming
   return data;
 }
 
+async function getBilibiliPublicComments(bvid: string, limit: number, signal?: AbortSignal) {
+  const fields = await getBilibiliPublicVideoFields(bvid, { signal });
+  const aid = stringField(fields.aid);
+  if (!aid) throw new Error("官方接口未返回视频 aid");
+  const pageSize = Math.min(20, limit);
+  const pageCount = Math.ceil(limit / pageSize);
+  const pages: BilibiliCommentSample[][] = [];
+  for (let page = 1; page <= pageCount; page += 1) {
+    pages.push(await getBilibiliPublicCommentPage(bvid, aid, page, pageSize, signal));
+  }
+  return dedupePublicBilibiliComments(pages.flat()).slice(0, limit);
+}
+
+async function getBilibiliPublicCommentPage(
+  bvid: string,
+  aid: string,
+  page: number,
+  pageSize: number,
+  signal?: AbortSignal
+) {
+  const url = new URL("https://api.bilibili.com/x/v2/reply");
+  url.searchParams.set("type", "1");
+  url.searchParams.set("oid", aid);
+  url.searchParams.set("pn", String(page));
+  url.searchParams.set("ps", String(pageSize));
+  url.searchParams.set("sort", "2");
+  const payload = await fetchBilibiliPublicCommentPayload(url, bvid, signal);
+  const data = payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+  const rows = [
+    ...asArray(data.hots),
+    ...asArray(data.top_replies),
+    ...asArray(data.replies)
+  ];
+  return rows.map((row, index) => normalizeBilibiliPublicComment(row, (page - 1) * pageSize + index));
+}
+
+async function getBilibiliPublicCommentReplies(
+  bvid: string,
+  rpid: string,
+  limit: number,
+  signal?: AbortSignal
+) {
+  const fields = await getBilibiliPublicVideoFields(bvid, { signal });
+  const aid = stringField(fields.aid);
+  if (!aid) throw new Error("官方接口未返回视频 aid");
+  const normalizedLimit = Math.max(1, Math.min(limit, 20));
+  const url = new URL("https://api.bilibili.com/x/v2/reply/reply");
+  url.searchParams.set("type", "1");
+  url.searchParams.set("oid", aid);
+  url.searchParams.set("root", rpid);
+  url.searchParams.set("pn", "1");
+  url.searchParams.set("ps", String(normalizedLimit));
+  const payload = await fetchBilibiliPublicCommentPayload(url, bvid, signal);
+  const data = payload.data && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+  return dedupePublicBilibiliComments(
+    asArray(data.replies).map((row, index) => normalizeBilibiliPublicComment(row, index))
+  ).slice(0, normalizedLimit);
+}
+
+async function fetchBilibiliPublicCommentPayload(url: URL, bvid: string, signal?: AbortSignal) {
+  const response = await fetchWithTimeout(url.toString(), {
+    headers: {
+      "User-Agent": "Mozilla/5.0 style-library",
+      Referer: `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`
+    }
+  }, BILIBILI_FETCH_TIMEOUT_MS, signal);
+  if (!response.ok) throw new Error(`公开评论接口 HTTP ${response.status}`);
+  const payload = await response.json() as unknown;
+  const object = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const code = toNumber(object.code);
+  if (code !== 0) {
+    const message = stringField(object.message) || stringField(object.msg);
+    throw new Error(`公开评论接口返回 ${code}${message ? `：${message}` : ""}`);
+  }
+  return object;
+}
+
+function normalizeBilibiliPublicComment(row: unknown, index: number): BilibiliCommentSample {
+  const object = row && typeof row === "object" ? row as Record<string, unknown> : {};
+  const member = object.member && typeof object.member === "object" ? object.member as Record<string, unknown> : {};
+  const content = object.content && typeof object.content === "object" ? object.content as Record<string, unknown> : {};
+  return {
+    rank: index + 1,
+    rpid: stringField(object.rpid_str) || stringField(object.rpid) || undefined,
+    author: stringField(member.uname),
+    text: normalizeCommentText(content.message),
+    likes: toNumber(object.like),
+    replies: toNumber(object.rcount) || asArray(object.replies).length,
+    time: normalizeTimestamp(object.ctime)
+  };
+}
+
+function dedupePublicBilibiliComments(rows: BilibiliCommentSample[]) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = row.rpid || row.text.toLowerCase();
+    if (!row.text || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -734,7 +923,7 @@ function hasBilibiliStatFields(metadata: Record<string, unknown>) {
   ].some((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
 }
 
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
   run: (item: T, index: number) => Promise<R>
@@ -789,7 +978,7 @@ function toError(error: unknown) {
 
 async function runBilibiliSubtitleCommand(args: string[], errors: unknown[], options: { signal?: AbortSignal } = {}) {
   try {
-    return await runOpenCli(args, { signal: options.signal });
+    return await runPersistentOpenCliBrowserAdapter(args, { signal: options.signal });
   } catch (error) {
     if (isAbortError(error, options.signal)) throw error;
     if (isBilibiliSubtitleMissingError(error)) return "";

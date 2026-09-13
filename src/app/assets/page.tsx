@@ -65,7 +65,6 @@ function AssetsPageContent() {
   const {
     activeTitle,
     canGenerate,
-    generationProgress,
     handleGenerate,
     previewComments,
     resultRecord,
@@ -308,7 +307,6 @@ function AssetsPageContent() {
               includeDanmaku={includeDanmaku}
               targetPlatform={targetPlatform}
               supportsDanmaku={supportsDanmaku}
-              generationProgress={generationProgress}
               sourceInput={sourceInput}
               onCommentCountChange={setCommentCount}
               onDanmakuCountChange={setDanmakuCount}

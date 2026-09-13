@@ -39,13 +39,25 @@ export function EngagementResultsPane({
   const actualDanmakuCount = resultRecord?.danmaku?.items.length || 0;
   const missingDanmakuCount = Math.max(requestedDanmakuCount - actualDanmakuCount, 0);
   const isGenerating = busy === "generate";
+  const reusableCommentKeys = new Set((relatedResearch?.reusableComments || []).map(commentDisplayKey));
+  const commentOrigins = activeComments.map((item) => {
+    if (item.origin) return item.origin;
+    if (!relatedResearch) return undefined;
+    return reusableCommentKeys.has(commentDisplayKey(item.text)) ? "reused_hot_comment" as const : "ai_generated" as const;
+  });
 
   return (
     <section className="engagement-result-pane">
       <div className="pane-body engagement-results-pane">
         {generation && !isGenerating ? (
           <div className="engagement-diagnostics">
-            <span>{generation.mode === "keyword_local" ? "关键词生成" : `${generation.batchCount} 批增强`}</span>
+            <span>
+              {generation.mode === "keyword_local"
+                ? "关键词生成"
+                : generation.batchCount > 0
+                  ? `${generation.batchCount} 批 AI 补写`
+                  : "原评直出"}
+            </span>
             <span>完成 {actualCommentCount || generation.completedCount}/{requestedCommentCount || generation.requestedCount}</span>
             {resultRecord?.comments?.timings ? <span>耗时 {formatDuration(resultRecord.comments.timings.totalMs)}</span> : null}
             {resultRecord?.comments?.timings?.cacheHits.length ? <span>缓存 {resultRecord.comments.timings.cacheHits.length}</span> : null}
@@ -57,21 +69,21 @@ export function EngagementResultsPane({
             {generation.unsupportedEntityRejectedCount ? <span>型号过滤 {generation.unsupportedEntityRejectedCount}</span> : null}
             {generation.transportRejectedCount ? <span>链接污染过滤 {generation.transportRejectedCount}</span> : null}
             {entityGuard?.allowedModels?.length ? <span>型号 {entityGuard.allowedModels.length}</span> : null}
-            {typeof generation.nativeEmoteCount === "number" ? <span>表情 {generation.nativeEmoteCount}/{generation.targetNativeEmoteCount || 0}</span> : null}
-            {generation.lengthBuckets?.long ? <span>长评 {generation.lengthBuckets.long}/{generation.targetLongCommentCount || generation.lengthBuckets.long}</span> : null}
-            {generation.intentBuckets ? <span>追问 {generation.intentBuckets.question}</span> : null}
-            {generation.intentBuckets ? <span>价格 {generation.intentBuckets.price}</span> : null}
-            {generation.intentBuckets ? <span>观望 {generation.intentBuckets.skeptical}</span> : null}
-            {generation.intentBuckets?.chatter ? <span>吹水 {generation.intentBuckets.chatter}</span> : null}
-            {relatedResearch?.longCommentCount ? <span>长篇讨论 {relatedResearch.longCommentCount}</span> : null}
+            {typeof generation.nativeEmoteCount === "number" ? <span>含表情 {generation.nativeEmoteCount}</span> : null}
             {relatedResearch?.relatedVideoCount ? <span>相关视频 {relatedResearch.relatedVideoCount}</span> : null}
-            {relatedResearch?.relatedCommentCount ? <span>讨论证据 {relatedResearch.relatedCommentCount}</span> : null}
-            {relatedResearch?.forumSourceCount ? <span>论坛来源 {relatedResearch.forumSourceCount}</span> : null}
+            {typeof relatedResearch?.targetPlatformCommentCount === "number" ? <span>目标平台实抓 {relatedResearch.targetPlatformCommentCount}</span> : null}
+            {typeof relatedResearch?.freshCommentCount === "number" ? <span>双平台实抓 {relatedResearch.freshCommentCount}</span> : null}
+            {typeof relatedResearch?.matchedLibraryCommentCount === "number" && relatedResearch.matchedLibraryCommentCount > 0
+              ? <span>历史语义命中 {relatedResearch.matchedLibraryCommentCount}</span>
+              : null}
+            {relatedResearch?.relatedCommentCount ? <span>最终参考 {relatedResearch.relatedCommentCount}</span> : null}
+            {generation.reusedHotCommentCount ? <span>直接复用 {generation.reusedHotCommentCount}</span> : null}
+            {relatedResearch?.sampleLibraryCount ? <span>样本库 {relatedResearch.sampleLibraryCount}</span> : null}
             {relatedResearch?.replySampleCount ? <span>回复讨论 {relatedResearch.replySampleCount}</span> : null}
             {relatedResearch?.sourceStats?.some((source) => source.status !== "completed")
               ? <span title={relatedResearch.sourceStats.filter((source) => source.error).map((source) => source.error).join("；")}>覆盖不完整</span>
               : null}
-            {generation.mode === "model_batch" ? <span>模型解析 {generation.parsedCount}</span> : null}
+            {generation.mode === "model_batch" && generation.batchCount > 0 ? <span>模型解析 {generation.parsedCount}</span> : null}
           </div>
         ) : null}
         {resultRecord?.danmaku && !isGenerating ? (
@@ -88,6 +100,7 @@ export function EngagementResultsPane({
         <AssetTextList
           empty={isGenerating ? "首批评论生成后会直接显示。" : "生成后会在这里显示评论。"}
           items={activeComments.map((item) => item.text)}
+          itemOrigins={commentOrigins}
           leadingActions={(
             <button
               aria-busy={busy === "export-word"}
@@ -131,6 +144,14 @@ export function EngagementResultsPane({
       </div>
     </section>
   );
+}
+
+function commentDisplayKey(value: string) {
+  return value
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9]+/g, "")
+    .toLowerCase()
+    .replace(/(?:真没想到|这波可以|有点意思|我先观望|哈哈)+$/g, "")
+    .replace(/[啊吧呀呢哦哈]+$/g, "");
 }
 
 function formatDuration(ms: number) {
