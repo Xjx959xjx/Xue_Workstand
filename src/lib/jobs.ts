@@ -719,6 +719,10 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     progress: 55
   });
 
+  let partialText = "";
+  const partialUpdater = createPartialTextUpdater(jobId, {
+    stage: "generate", message: "正在生成正文", progress: text => Math.min(86, 55 + Math.floor(text.length / 120))
+  });
   let completedCount = 0;
   const outcomes = await Promise.all(batch.variants.map(async (variant) => {
     try {
@@ -727,10 +731,14 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
         reasoningEffort: WRITE_COPY_REASONING_EFFORT,
         maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
         signal: getJobAbortSignal(jobId),
-        onDelta() {
-          // Concurrent variants are kept separate; exposing one combined partial text would corrupt the drafts.
+        onDelta(delta) {
+          if (variantCount === 1) {
+            partialText += delta;
+            partialUpdater.update(partialText);
+          }
         }
       });
+      if (variantCount === 1) await partialUpdater.flush(partialText);
       const completed = await completePreparedWriteVariant({
         variant,
         result,

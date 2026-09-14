@@ -1724,3 +1724,7 @@ function isGrossMarginHealthResponse(value: unknown): value is GrossMarginHealth
     typeof (value as { storage?: unknown }).storage === "object"
   );
 }
+
+export function updateWriterPreference(input: { action: "remember"; draftId: string; text: string } | { action: "undo"; draftId: string; preferenceId: string }) {
+  return requestJson<{ preferenceId: string; reference: import("./types").WriteStyleReferenceInput; action: "remember" | "undo" }>("/api/write/preference", { method: "POST", body: JSON.stringify(input) });
+}

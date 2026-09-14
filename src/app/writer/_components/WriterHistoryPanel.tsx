@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate, formatPlatform } from "@/components/Formatters";
@@ -30,7 +30,7 @@ type DraftSession = {
   latest: DraftSummary;
 };
 
-export function WriterHistoryPanel({
+export const WriterHistoryPanel = memo(function WriterHistoryPanel({
   drafts,
   loading,
   open,
@@ -77,12 +77,13 @@ export function WriterHistoryPanel({
     () => visibleSessions.flatMap((session) => session.drafts.map((draft) => draft.id)),
     [visibleSessions]
   );
+  const selectedDraftIdSet = useMemo(() => new Set(selectedDraftIds), [selectedDraftIds]);
   const selectedDrafts = useMemo(
-    () => visibleSessions.flatMap((session) => session.drafts).filter((draft) => selectedDraftIds.includes(draft.id)),
-    [selectedDraftIds, visibleSessions]
+    () => visibleSessions.flatMap((session) => session.drafts).filter((draft) => selectedDraftIdSet.has(draft.id)),
+    [selectedDraftIdSet, visibleSessions]
   );
   const allVisibleDraftsSelected = Boolean(selectableDraftIds.length)
-    && selectableDraftIds.every((draftId) => selectedDraftIds.includes(draftId));
+    && selectableDraftIds.every((draftId) => selectedDraftIdSet.has(draftId));
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
@@ -127,8 +128,10 @@ export function WriterHistoryPanel({
       return;
     }
 
-    setSelectedDraftIds((current) => current.filter((id) => drafts.some((draft) => draft.id === id)));
-    setExpandedSessionIds((current) => current.filter((id) => sessions.some((session) => session.id === id)));
+    const draftIds = new Set(drafts.map((draft) => draft.id));
+    const sessionIds = new Set(sessions.map((session) => session.id));
+    setSelectedDraftIds((current) => current.filter((id) => draftIds.has(id)));
+    setExpandedSessionIds((current) => current.filter((id) => sessionIds.has(id)));
   }, [drafts, sessions]);
 
   useEffect(() => {
@@ -289,7 +292,7 @@ export function WriterHistoryPanel({
   const renderDraftRow = (draft: DraftSummary, nested: boolean) => {
     const active = selectedDraftId === draft.id;
     const editing = editingDraftId === draft.id;
-    const checked = selectedDraftIds.includes(draft.id);
+    const checked = selectedDraftIdSet.has(draft.id);
     const versionLabel = `V${draft.version?.revision || 1}`;
     const versionDetail = draft.version?.instruction || (draft.version?.origin === "manual_edit" ? "手动编辑" : "初稿");
     const meta = nested || historyView === "current"
@@ -603,7 +606,7 @@ export function WriterHistoryPanel({
       ) : null}
     </>
   );
-}
+});
 
 function groupDraftSessions(drafts: DraftSummary[]): DraftSession[] {
   const grouped = new Map<string, DraftSummary[]>();

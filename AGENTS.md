@@ -18,12 +18,7 @@
 
 ## 接手与上下文
 
-开始任务先运行：
-
-```bash
-git status --short
-rg --files
-```
+涉及仓库操作时先运行 `git status --short` 检查工作树。仅在需要定位文件时，按目标目录或文件类型运行 `rg --files`；已知目标文件时直接读取相关片段。
 
 ### MUST
 
@@ -77,7 +72,7 @@ rg --files
 - `APP_MODE=workspace`：完整工作台，根路径默认进入 `/douyin-hotlist`。
 - `APP_MODE=gross-margin`：只开放 `/gross-margin`、`/gross-margin/monitor` 及必要 API；`middleware.ts`、`AppModeGuard`、`AppNav` 和任务类型限制必须一致。
 - `APP_START_PATH` 影响交付包启动页；调整模式或启动页时同步检查 README、`.env.example` 和 `scripts/package-release.mjs`。
-- 开发服务运行时不要直接在同一 `.next` 上执行 `npm run build`。需要构建时先确认并停服，或使用发布脚本的隔离临时目录。
+- 开发服务运行时不要直接在同一 `.next` 上执行 `npm run build`。需要构建时优先使用隔离临时目录（参考发布脚本）；仅在必须中断用户正在使用的服务且尚未获得授权时请求确认。
 - 默认开发服务使用 Turbopack；预热属于可测量的性能实现，不是不可变产品规则。修改时用冷启动 / 路由切换数据验证。
 
 ## SHOULD：稳定业务不变量
@@ -101,15 +96,23 @@ rg --files
 - 长列表使用分页、增量渲染、虚拟化或 `content-visibility`。筛选、排序、分页和当前选择等可恢复状态优先写入 URL。
 - 大页面按“页面编排 + controller hook + 业务组件 + 纯函数”拆分；不要仅为拆行数创建无语义组件，也不要为当前本地工作台盲目引入 Redux / Zustand / React Query。
 
+## SHOULD：React Skills 适配
+
+- 编写、审查或优化 React / Next.js 页面、数据请求和渲染性能时，使用 `vercel-react-best-practices`；重构布尔参数膨胀的组件、共享状态或可复用组件接口时，使用 `vercel-composition-patterns`。从当前会话技能目录定位 `SKILL.md`，只读取任务相关的规则文件，不默认展开完整规则集。
+- Skills 的通用建议必须服从本项目的数据安全、API 契约与运行模式。请求去重和缓存扩展现有客户端机制，不因示例引入 SWR 或第二套缓存；持久化长任务继续走 `jobs.ts`，不能以 `after()` 或未等待的 Promise 替代。
+- 并行优化仅用于互不依赖的操作，保留已有并发上限、串行锁、revision 校验和取消信号；不得把同一资产的读改写流程直接改为 `Promise.all()`。
+- 组件组合沿用既有 primitives、controller hook 和 `DESIGN.md`；仅在真实共享状态或复用需求下增加 Context / Provider，不为套用模式创建第二套组件系统。React API 示例须核对项目已安装版本与服务端 / 客户端边界，不批量迁移无关组件。
+- 优化以当前任务的具体瓶颈为依据，按需比较请求次数、耗时或渲染表现；不为满足技能清单扩大重构范围。验证仍按下节的风险分级执行。
+
 ## 验证
 
-按影响面从小到大执行：
+按改动风险选择适用检查，不要求逐项执行。必要检查通过且请求已完成即停止；只有新改动、失败或未解决的具体风险才扩大或重跑检查。修复本次改动引入的问题并复验受影响范围；无关既有失败如实报告，不扩展修复范围。
 
 1. 目标测试；底层或跨域改动补 `npm test`。
-2. `npm run lint`。
-3. `npm run typecheck`。
+2. 代码改动检查受影响文件的 lint；涉及全局规则或广泛改动时运行 `npm run lint`。
+3. TypeScript 类型、接口或模块依赖改动运行 `npm run typecheck`。
 4. 存储结构、删除或引用联动改动补 `npm run check:library`；未经授权不运行 repair。
-5. 路由、SSR、middleware、Next 配置、跨页面行为或打包改动补 `npm run build`，但先处理正在运行的开发服务。
+5. 路由结构、SSR、middleware、Next 配置、跨页面行为或打包改动补 `npm run build`；路由内部的局部逻辑改动由目标测试和适用的类型检查覆盖，存在构建风险时再补构建。遵守上文的构建隔离规则。
 6. 前端交互改动做最小浏览器 smoke test；涉及真实素材写入时使用临时 `STYLE_LIBRARY_DIR`。
 
 纯文档改动通常执行 `git diff --check` 并人工审查 diff。最终确认没有误改用户资产或无关工作树内容，也没有隐藏真实失败。

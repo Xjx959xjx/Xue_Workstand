@@ -12,6 +12,7 @@ import {
 import { parseStoredRecord } from "../src/lib/storage/schemas";
 import { prepareWriteCopyContext, prepareWriteCopyBatchContext, resolveWriteBatchOutcome, completePreparedWriteCopy, prepareAccountStyleContext, completePreparedAccountStyle } from "../src/lib/ai";
 import { upsertAccount, saveStyle, readStyle, saveVideos, saveTranscript, saveDraft, resolveDraft, getDraftSummaries } from "../src/lib/storage";
+import { POST as preferenceRoute } from "../src/app/api/write/preference/route";
 import { POST as saveDraftRoute } from "../src/app/api/drafts/route";
 import type { Account, Video, Draft } from "../src/lib/types";
 
@@ -104,11 +105,10 @@ test("吃瓜推广的衔接进入选样、首稿和风格卡引用，纯评论�
     setReply(messages => messages[0].includes("完整阅读这一篇") ? JSON.stringify(mixedEventEvidence)
       : JSON.stringify({ ...plan(`douyin:${account.id}:mixed`), applicableStyle: ["先讲真实的活动趣事，揭晓关联后解释参与规则"] }));
     const prepared = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "rewrite", prompt: inputText, sourceText: inputText });
-    const selectionInput = requests.at(-1)![1];
-    assert.ok(selectionInput.includes(eventBefore) && selectionInput.includes(eventAfter), "选择阶段能看到衔接原句");
+    assert.equal(requests.length, 0, "直接写作准备不调用模型");
     assert.ok(prepared.messages[1].content.includes(mixedEventText), "成稿阶段仍有完整原文上下文");
     assert.equal(prepared.draftBase?.writerContext?.samples[0].id, `douyin:${account.id}:mixed`);
-    assert.deepEqual(prepared.draftBase?.writerContext?.plan?.task.facts, task.facts, "范文旧活动不变成本次事实");
+    assert.deepEqual(prepared.draftBase?.writerContext?.plan?.task.facts, [], "范文旧活动不变成本次事实");
     const context = await prepareAccountStyleContext(account.platform, account.id);
     const style = `## 趣事转活动\n单篇观察：揭晓趣事关联，再讲规则。[[mixed]]「${eventBefore}」\n[[mixed]]「${eventAfter}」`;
     await completePreparedAccountStyle(context, { text: style, model: "fixture", ok: true, fallback: false });
@@ -139,11 +139,11 @@ test("真实准备链路读取低热度全文、复用分析；快照经过保�
     });
     const input = { platform: account.platform, accountId: account.id, mode: "rewrite" as const, prompt: inputText, sourceText: inputText };
     const prepared = await prepareWriteCopyContext(input);
-    assert.equal(requests.length, 3);
+    assert.equal(requests.length, 0);
     assert.ok(prepared.messages[1].content.includes(quote));
-    assert.deepEqual(prepared.draftBase?.styleRefs?.[0].targetType === "account" && prepared.draftBase.styleRefs[0].videoIds, ["event"]);
+    assert.ok(prepared.draftBase?.styleRefs?.[0].targetType === "account" && prepared.draftBase.styleRefs[0].videoIds?.includes("event"), "低热度原文仍能进入参考");
     await prepareWriteCopyContext(input);
-    assert.equal(requests.length, 4, "第二次仅任务准备调用，逐篇分析复用");
+    assert.equal(requests.length, 0, "重复写作准备也不调用模型");
     const shortResult = await completePreparedWriteCopy({ prepared, save: false, result: { text: "联名", model: "test", ok: true, fallback: false } });
     assert.match(shortResult.research || "", /成稿检查（需修改）/);
     assert.equal(shortResult.content, "联名", "检查不篡改或隐藏原始输出");
@@ -159,7 +159,7 @@ test("真实准备链路读取低热度全文、复用分析；快照经过保�
     await saveStyle(account.platform, account.id, "新风格：严肃技术报告");
     const revised = await prepareWriteCopyContext({ ...input, action: "revise", parentDraftId: manual.id, currentContent: manual.content,
       revisionInstruction: "换个切入点", revisionMode: "recalibrate" });
-    assert.equal(requests.length, 4, "续改不重新调用模型选样、抓资料或重学");
+    assert.equal(requests.length, 0, "续改不重新调用模型选样、抓资料或重学");
     assert.match(revised.messages[1].content, /旧风格：现场乐子/);
     assert.doesNotMatch(revised.messages[1].content, /严肃技术报告/);
     assert.match(revised.messages[0].content, /重新校准/);
@@ -226,6 +226,28 @@ test("归纳成功后缓存可复用，强制归纳只重做卡片，模型改�
     const changed = await prepareAccountStyleContext(account.platform, account.id);
     assert.equal(changed.cachedStyle, undefined);
     assert.equal(requests.length, 2);
+  });
+});
+
+test("偏好接口仅修改当前稿件风格、可撤销，旧稿快照保持不变", async () => {
+  await fixture(async ({ account }) => {
+    const prepared = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "rewrite", prompt: "写一段", sourceText: "素材" });
+    const result = await completePreparedWriteCopy({ prepared, save: true, result: { text: "测试正文", model: "fixture", ok: true, fallback: false } });
+    const draft = result.draft!;
+    const before = await readStyle(account.platform, account.id);
+    const send = (body: object) => preferenceRoute(new Request("http://local/api/write/preference", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+    const saved = await send({ action: "remember", draftId: draft.id, text: "先讲具体事件" });
+    assert.equal(saved.status, 200);
+    const { preferenceId } = await saved.json();
+    assert.match(await readStyle(account.platform, account.id), /先讲具体事件/);
+    assert.deepEqual((await resolveDraft(draft.id)).draft.writerContext, draft.writerContext);
+    const next = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "rewrite", prompt: "再写", sourceText: "素材" });
+    assert.match(next.messages[1].content, /先讲具体事件/);
+    const undone = await send({ action: "undo", draftId: draft.id, preferenceId });
+    assert.equal(undone.status, 200);
+    assert.equal((await readStyle(account.platform, account.id)).trim(), before.trim());
+    assert.equal((await send({ action: "undo", draftId: draft.id, preferenceId })).status, 409);
+    assert.equal((await send({ action: "remember", draftId: draft.id, text: "" })).status, 400);
   });
 });
 

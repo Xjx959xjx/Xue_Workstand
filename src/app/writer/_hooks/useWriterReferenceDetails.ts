@@ -11,6 +11,8 @@ export type WriterStyleCard = {
   title: string;
   subtitle: string;
   style?: string;
+  loading: boolean;
+  error?: string;
 };
 
 type UseWriterReferenceDetailsInput = {
@@ -28,6 +30,7 @@ export function useWriterReferenceDetails({
 }: UseWriterReferenceDetailsInput) {
   const [styles, setStyles] = useState<Record<string, string | undefined>>({});
   const [loadingKeys, setLoadingKeys] = useState<string[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let ignore = false;
@@ -60,30 +63,22 @@ export function useWriterReferenceDetails({
     }
 
     setStyles(cachedStyles);
+    setErrors({});
     setLoadingKeys(missing.map((item) => item.key));
     if (!missing.length) return;
 
-    Promise.all(missing.map(async ({ key, load }) => {
+    missing.forEach(async ({ key, load }) => {
       try {
         const detail = await load();
-        return { key, style: detail.style, error: "" };
+        if (!ignore) setStyles((current) => ({ ...current, [key]: detail.style }));
       } catch (error) {
-        return {
-          key,
-          style: undefined,
-          error: error instanceof Error ? error.message : "读取参考风格失败"
-        };
+        if (ignore) return;
+        const message = error instanceof Error ? error.message : "读取参考风格失败，请重试";
+        setErrors((current) => ({ ...current, [key]: message }));
+        setNotice(message);
+      } finally {
+        if (!ignore) setLoadingKeys((current) => current.filter((item) => item !== key));
       }
-    })).then((results) => {
-      if (ignore) return;
-      setStyles((current) => {
-        const next = { ...current };
-        for (const result of results) next[result.key] = result.style;
-        return next;
-      });
-      setLoadingKeys([]);
-      const firstError = results.find((result) => result.error)?.error;
-      if (firstError) setNotice(firstError);
     });
 
     return () => {
@@ -100,7 +95,9 @@ export function useWriterReferenceDetails({
           key,
           title: account.name,
           subtitle: `账号风格 · ${formatPlatform(account.platform)}`,
-          style: styles[key]
+          style: styles[key],
+          loading: loadingKeys.includes(key),
+          error: errors[key]
         }] : [];
       }
       const project = projects.find((item) => item.id === reference.projectId);
@@ -108,7 +105,9 @@ export function useWriterReferenceDetails({
         key,
         title: project.name,
         subtitle: `项目风格 · ${project.sourceAccounts.length} 个参考账号`,
-        style: styles[key]
+        style: styles[key],
+        loading: loadingKeys.includes(key),
+        error: errors[key]
       }] : [];
     });
     const activeStyle = styleCards.map((card) => card.style || "").filter(Boolean).join("\n\n");
@@ -116,11 +115,12 @@ export function useWriterReferenceDetails({
     return {
       activeStyle,
       activeStyleLoading: loadingKeys.length > 0,
+      activeStyleError: Object.keys(errors).length > 0,
       activeSubtitle: styleCards.length > 1
         ? `${styleCards.length} 个风格 · 将分别生成 ${styleCards.length} 篇`
         : styleCards[0]?.subtitle || "",
       activeTitle: styleCards.length > 1 ? `${styleCards.length} 个并发风格` : styleCards[0]?.title,
       styleCards
     };
-  }, [accounts, loadingKeys.length, projects, references, styles]);
+  }, [accounts, errors, loadingKeys, projects, references, styles]);
 }

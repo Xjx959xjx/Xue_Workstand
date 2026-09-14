@@ -24,6 +24,7 @@ import {
   X
 } from "lucide-react";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
+import { WriterPreference } from "./_components/WriterPreference";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterReferencePicker } from "./_components/WriterReferencePicker";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -104,6 +105,7 @@ function WriterPageContent() {
   const [styleOpen, setStyleOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
   const [sourceDragActive, setSourceDragActive] = useState(false);
   const [sourceImporting, setSourceImporting] = useState(false);
   const [sessionDraftHydrated, setSessionDraftHydrated] = useState(false);
@@ -222,7 +224,7 @@ function WriterPageContent() {
     []
   );
 
-  const { activeStyle, activeStyleLoading, activeSubtitle, activeTitle, styleCards } = useWriterReferenceDetails({
+  const { activeStyle, activeStyleLoading, activeStyleError, activeSubtitle, activeTitle, styleCards } = useWriterReferenceDetails({
     accounts: library?.accounts || EMPTY_ACCOUNTS,
     projects: library?.projects || EMPTY_PROJECTS,
     references: selectedStyleRefs,
@@ -416,7 +418,7 @@ function WriterPageContent() {
 
   useEffect(() => {
     let ignore = false;
-    if (loading || draftSummaries !== null) return;
+    if (draftSummaries !== null) return;
 
     getDrafts()
       .then((result) => {
@@ -430,7 +432,7 @@ function WriterPageContent() {
     return () => {
       ignore = true;
     };
-  }, [draftSummaries, loading]);
+  }, [draftSummaries]);
 
   const applyLoadedDraft = useCallback((draft: Draft) => {
     setStyleRefs(draftWriteStyleReferenceInputs(draft));
@@ -462,7 +464,6 @@ function WriterPageContent() {
     });
     const draftId = searchParams.get("draftId");
 
-    if (draftId && historyLoading) return;
     if (draftId) {
       if (loadedDraftParamRef.current === draftId || loadedDraftParamRef.current === `loading:${draftId}`) return;
       loadedDraftParamRef.current = `loading:${draftId}`;
@@ -479,6 +480,10 @@ function WriterPageContent() {
         });
       return () => {
         ignore = true;
+        // 释放本次请求的标记，允许依赖变化或 Strict Mode 清理后重新加载。
+        if (loadedDraftParamRef.current === `loading:${draftId}`) {
+          loadedDraftParamRef.current = "";
+        }
       };
     }
     if (!draftId) loadedDraftParamRef.current = "";
@@ -510,7 +515,7 @@ function WriterPageContent() {
     setRevisionScope("full");
     setSelectedDraftText("");
     appliedSearchParamRef.current = searchKey;
-  }, [applyLoadedDraft, historyLoading, searchParams]);
+  }, [applyLoadedDraft, searchParams]);
 
   const handleSelectHistoryDraft = useCallback(
     async (summary: DraftSummary) => {
@@ -707,16 +712,16 @@ function WriterPageContent() {
                 <FileText aria-hidden="true" size={14} />
               </span>
               <span className="writer-reference-copy">
-                <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
+                <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyleError ? "风格卡读取失败" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
                 <small>
                   {activeSubtitle || "参考风格"}
-                  {activeStyleLoading ? "" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
+                  {activeStyleLoading ? "" : activeStyleError ? " · 查看详情" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
                 </small>
               </span>
               <button
                 aria-label={styleCards.length > 1 ? `查看${activeTitle}` : `查看${activeTitle || "当前参考"}风格卡`}
                 className="btn ghost icon-only writer-style-trigger"
-                disabled={activeStyleLoading || !activeStyle}
+                disabled={!styleCards.length}
                 onClick={() => setStyleOpen(true)}
                 title="查看风格卡"
                 type="button"
@@ -995,6 +1000,7 @@ function WriterPageContent() {
                   <p>{busy === "generate" ? "正在整理素材、风格和写作要求。" : `${activeTitle || "当前参考"} · ${materialStatusLabel}`}</p>
                 </div>
               )}
+              {lastDraftId ? <WriterPreference key={lastDraftId} draftId={lastDraftId} disabled={Boolean(busy)} onSaved={refresh} /> : null}
               {lastContent ? (
                 <section className="writer-revision-composer" aria-labelledby="writer-revision-title">
                   <div className="writer-revision-head">
@@ -1058,7 +1064,7 @@ function WriterPageContent() {
           drafts={historyDrafts}
           loading={historyLoading}
           open={historyOpen}
-          onClose={() => setHistoryOpen(false)}
+          onClose={closeHistory}
           onDeleteDraft={handleDeleteHistoryDraft}
           onDeleteDrafts={handleDeleteHistoryDrafts}
           onRenameDraft={handleRenameHistoryDraft}

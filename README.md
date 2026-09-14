@@ -147,9 +147,10 @@ npm run dev
 - `CHAT_API_KEY`、`CHAT_BASE_URL`、`CHAT_RESPONSES_URL`、`CHAT_COMPLETIONS_URL`、`CHAT_MODEL`、`CHAT_WIRE_API`、`CHAT_REASONING_EFFORT`、`CHAT_SERVICE_TIER`：主对话模型配置，用于自动提炼风格和生成文案。新中转站如果只兼容 OpenAI Chat Completions，可设 `CHAT_WIRE_API=chat_completions`；不确定时可设 `CHAT_WIRE_API=auto`，系统会在 Responses 不兼容时自动切到 Chat Completions。`CHAT_SERVICE_TIER=priority` 可显式请求中转站 / Codex 的快速服务层，和 `xhigh` 推理档位是两件事。`CHAT_BASE_URL` 可以填中转站根地址，也可以用 `CHAT_RESPONSES_URL` / `CHAT_COMPLETIONS_URL` 指定完整接口地址。`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 也会作为主模型配置读取。
 - `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：第一备用对话模型配置。默认备用地址和模型是旧配置 `https://www.fhl.mom` / `gpt-5.5` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。还可按相同后缀配置 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`，系统会依次尝试。
 - `CHAT_PROXY_URL`：可选。若 Node/Next 直连模型服务失败，可设为本机代理，例如 `http://127.0.0.1:7890`。
+- 本机模型请求按代理地址复用连接池，空闲连接默认保留 30 秒（服务端 keep-alive 提示优先），最多保留 8 个代理池；淘汰时等待在途请求结束。直连继续使用 Undici 默认连接池，云端继续使用原生 fetch。此优化减少重复建连，不改变模型、推理强度或重试策略。
 - `CHAT_HEALTH_PROBE_TIMEOUT_MS`：对话模型健康检查探针超时，默认 `8000` 毫秒，允许 `2000-30000`。
 - `WEB_RESEARCH_ENABLED`、`WEB_RESEARCH_API_KEY`、`WEB_RESEARCH_BASE_URL`、`WEB_RESEARCH_RESPONSES_URL`、`WEB_RESEARCH_MODEL`、`WEB_RESEARCH_REASONING_EFFORT`、`WEB_RESEARCH_SERVICE_TIER`、`WEB_RESEARCH_PROXY_URL`：写作台联网检索的独立 Responses API 配置，推理档位默认 `medium`。它只负责 `web_search`，不会改变现有 Chat Completions 写作链；未配置独立接口时，系统仍可使用对话模型链里明确支持 Responses 的节点。密钥不会自动跨服务复用，如确实是同一服务，可在本地环境文件写 `WEB_RESEARCH_API_KEY=$CHAT_API_KEY`。
-- `STYLE_SAMPLE_ANALYSIS_CONCURRENCY`：完整原文逐篇分析并发数，默认 `1`，范围 `1-4`。账号与项目学习统一先缓存用途、具体表达动作及已核验原句，再归纳风格卡；缓存键包含原文、提示词版本与模型配置。旧的 `STYLE_ONE_SHOT_MAX_INPUT_CHARS` 不再生效。首次写稿需要补齐缺失分析，后续复用未变化的分析。
+- `STYLE_SAMPLE_ANALYSIS_CONCURRENCY`：完整原文逐篇分析并发数，默认 `2`，范围 `1-4`。账号与项目学习统一先缓存用途、具体表达动作及已核验原句，再归纳风格卡；缓存键包含原文、提示词版本与模型配置。旧的 `STYLE_ONE_SHOT_MAX_INPUT_CHARS` 不再生效。日常写稿只读取已有风格与原文，不补跑逐篇分析；学习仅在更新风格任务中执行。
 - `ENGAGEMENT_MODEL_CONCURRENCY`：评论生成并发批次数，默认 `4`，建议保持在 `1-4` 之间；中转站限流或超时时可先调回 `1`。
 - `ENGAGEMENT_COMMENT_CANDIDATE_RATIO`：评论首轮超采样倍率，默认 `1.4`，允许 `1.05-1.5`；模型会多写一批候选，再按长度、重复结构和事实约束筛到目标数量。
 - `IMAGE_API_KEY`、`IMAGE_BASE_URL`、`IMAGE_MODEL`、`IMAGE_SIZE`、`IMAGE_QUALITY`、`IMAGE_FORMAT`、`IMAGE_PROXY_URL`：可选。用于后续独立封面生成能力，默认按 OpenAI Images API / `gpt-image-2` / `2048x1152` 生成。
@@ -229,3 +230,12 @@ npm run package:release -- --include-library
 - Windows 先完整解压 `.zip`，首次使用运行 `setup-browser-bridge.cmd`，确认 OpenCLI Browser Bridge 扩展连通后再运行 `start.cmd`、`stop.cmd`；不要在压缩包预览窗口里直接双击。`gross-margin-win` 专用包会优先使用包内 `node.exe`，目标机不需要先全局安装 Node 或 opencli。
 
 数据维护 / 数据监控模块不需要大模型；专用包已内置 `opencli` 主程序以支持刷新平台数据，但浏览器型抓取需要 Browser Bridge 扩展，无字幕视频转写才需要 `ffmpeg` 和火山转写配置。
+
+写作改为本地关键词匹配原文，省去分批模型筛选与独立计划调用。准备阶段的 `writer.preparation` 日志记录素材、支持文档、联网和风格准备耗时，`writer.sample-analysis` 记录缓存命中与生成数量，不记录资料正文。
+
+
+### 直接写作与可撤销偏好
+
+选博主或项目并提供素材后，写作台读取现有风格卡和原文，以本地词汇匹配排序，按 14,000 字参考总预算构建快照，通常每种风格只调用一次模型生成正文。长原文的省略会明确标注，参考事实不得进入本次文案。本地词汇匹配不是语义模型，相似表达效果仍需要真实稿件评价；联网或视频转写开启时仍有额外调用。单篇通过后台任务的 partialText 展示生成中正文；多篇继续独立生成，避免混稿。
+
+在成稿下填写“以后也这样写”，点击“记住这条偏好”，只更新当前稿件对应的一个博主或项目。偏好独立标注为用户表达要求，不视为博主原作证据；它对之后的新稿生效，旧稿续改仍用原快照。可撤销本次记住，或在风格卡中编辑清理。更新复用现有原子写入、风格历史和 hash 冲突校验；重新学习保留明确保存的偏好。普通手改和 AI 输出不会自动升级为长期规则。本版没有后台自动采集，也不批量重建旧风格卡。

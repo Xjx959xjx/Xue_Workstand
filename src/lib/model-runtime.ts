@@ -598,8 +598,41 @@ function normalizeServiceTier(value?: string) {
   return (value || "").trim();
 }
 
+// Share pools across model calls and Next development module reloads. Keys may
+// contain proxy credentials and must never be logged.
+const modelTransportGlobal = globalThis as typeof globalThis & {
+  modelProxyDispatchers?: Map<string, ProxyAgent>;
+};
+const proxyDispatchers = modelTransportGlobal.modelProxyDispatchers ??= new Map<string, ProxyAgent>();
+const MAX_PROXY_DISPATCHERS = 8;
+
 function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
-  return proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  if (!proxyUrl) return undefined;
+  const cached = proxyDispatchers.get(proxyUrl);
+  if (cached) {
+    proxyDispatchers.delete(proxyUrl);
+    proxyDispatchers.set(proxyUrl, cached);
+    return cached;
+  }
+  const dispatcher = new ProxyAgent({
+    uri: proxyUrl,
+    // Keep idle tunnels between preparation and generation; upstream keep-alive
+    // hints still take precedence. Do not limit concurrent generation here.
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 60_000
+  });
+  proxyDispatchers.set(proxyUrl, dispatcher);
+  if (proxyDispatchers.size > MAX_PROXY_DISPATCHERS) {
+    const oldestKey = proxyDispatchers.keys().next().value!;
+    const oldest = proxyDispatchers.get(oldestKey)!;
+    proxyDispatchers.delete(oldestKey);
+    // Graceful close drains in-flight requests when proxy configurations rotate.
+    void oldest.close().catch(() => {
+      // Cleanup failure must not replace a generation result or expose credentials.
+      console.warn("模型旧代理连接池关闭失败，请重启服务释放连接。");
+    });
+  }
+  return dispatcher;
 }
 
 function describeChatHttpFailure(status: number, body: string, contentType?: string | null) {

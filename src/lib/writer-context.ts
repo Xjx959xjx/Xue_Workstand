@@ -2,7 +2,7 @@ import { z } from "zod";
 import { shortHash } from "./utils";
 
 export const STYLE_ANALYSIS_VERSION = 4;
-export const WRITER_PROMPT_VERSION = "writer-v7-purpose-and-presentation";
+export const WRITER_PROMPT_VERSION = "writer-v8-direct-reference";
 export const WRITER_REFERENCE_BUDGET = 14_000;
 const text = z.string().trim().min(1);
 const evidence = z.object({ quote: text.max(500), action: text.max(400), when: text.max(300), avoid: z.string().max(300) });

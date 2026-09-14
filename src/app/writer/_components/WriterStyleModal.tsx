@@ -20,7 +20,7 @@ export function WriterStyleModal({ activeTitle, onClose, styleCards }: WriterSty
       </div>
       <div className="modal-content writer-style-card-list">
         {styleCards.length ? styleCards.map((card, index) => (
-          <section className="writer-style-card" key={card.key}>
+          <section aria-busy={card.loading} className="writer-style-card" key={card.key}>
             <header>
               <span>{styleCards.length > 1 ? `独立稿 ${index + 1}` : "当前风格"}</span>
               <div>
@@ -28,7 +28,9 @@ export function WriterStyleModal({ activeTitle, onClose, styleCards }: WriterSty
                 <p>{card.subtitle}</p>
               </div>
             </header>
-            <div className="markdown-box">{card.style || "暂无风格卡"}</div>
+            <div aria-live="polite" className="markdown-box">
+              {card.loading ? "正在载入风格卡…" : card.error ? `读取失败：${card.error}` : card.style || "暂无风格卡"}
+            </div>
           </section>
         )) : <div className="markdown-box">暂无风格卡</div>}
       </div>

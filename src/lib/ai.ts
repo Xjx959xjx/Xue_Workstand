@@ -1,10 +1,13 @@
 import { randomUUID } from "crypto";
+import { preserveWriterPreferences } from "./writer-preference";
+import { logPipelineEvent } from "./observability";
+import { selectFastReferences, fastWriterPlan, type FastReference } from "./writer-fast-reference";
 import {
-  STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION, WRITER_REFERENCE_BUDGET,
-  batchCandidates, candidateIndex, parseModelJson, parseStyleEvidence,
-  styleAnalysisInstruction, referenceSelectionInstruction, styleEvidenceQuotes as collectStyleEvidenceQuotes,
-  validateWriterPlan, snapshotReferences, checkWriterConstraints, validateStyleCardCitations,
-  type StyleEvidence, type WriterCandidate, type WriterContextSnapshot
+  STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION,
+  parseModelJson, parseStyleEvidence,
+  styleAnalysisInstruction, styleEvidenceQuotes as collectStyleEvidenceQuotes,
+  checkWriterConstraints, validateStyleCardCitations,
+  type StyleEvidence, type WriterContextSnapshot
 } from "./writer-context";
 import type { ModelResponseBody } from "./model-runtime";
 import {
@@ -241,7 +244,7 @@ export type AccountStyleGenerationResult = {
 
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
 const STYLE_REASONING_EFFORT: ChatReasoningEffort = "medium";
-const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 1, 1, 4);
+const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 2, 1, 4);
 const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = STYLE_ANALYSIS_VERSION;
 const STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS = 4500;
 export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "medium";
@@ -1910,6 +1913,7 @@ async function resolveStyleSampleAnalyses(
   tasks: StyleAnalysisTask[],
   options: StylePreparationOptions = {}
 ) {
+  const analysisStartedAt = Date.now();
   const totalInputChars = tasks.reduce((total, task) => total + task.inputChars, 0);
   let completedCount = 0;
   let analysisGeneratedCount = 0;
@@ -1978,6 +1982,7 @@ async function resolveStyleSampleAnalyses(
     return styleAnalysisEntryFromCache(task, cache);
   });
 
+  logPipelineEvent("writer.sample-analysis", { totalMs: Date.now() - analysisStartedAt, analysisCount: tasks.length, analysisGeneratedCount, analysisCachedCount, concurrency: STYLE_SAMPLE_ANALYSIS_CONCURRENCY });
   return {
     entries,
     stats: {
@@ -2018,15 +2023,23 @@ async function mapWithConcurrency<T, R>(
   const results: R[] = new Array(items.length);
   let nextIndex = 0;
   const workerCount = Math.min(Math.max(concurrency, 1), items.length);
-  await Promise.all(
+  let failed = false;
+  const outcomes = await Promise.allSettled(
     Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
+      while (!failed && nextIndex < items.length) {
         const currentIndex = nextIndex;
         nextIndex += 1;
-        results[currentIndex] = await run(items[currentIndex], currentIndex);
+        try {
+          results[currentIndex] = await run(items[currentIndex], currentIndex);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
     })
   );
+  const failure = outcomes.find(outcome => outcome.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
   return results;
 }
 
@@ -2169,7 +2182,7 @@ export async function completePreparedAccountStyle(
   const generatedStyle = result.text.trim();
   if (!result.ok || result.fallback || !generatedStyle) throw new Error(result.userMessage || result.fallbackReason || "风格卡生成失败，原卡已保留，请重试。");
   validateStyleCardCitations(generatedStyle, context.evidenceQuotes);
-  const style = generatedStyle || context.fallback;
+  const style = preserveWriterPreferences(generatedStyle || context.fallback, await readStyle(context.platform, context.accountId));
   const isFallbackResult = result.fallback || !generatedStyle;
   const shouldUpdateSampleCache = Boolean(generatedStyle) && !isFallbackResult;
   const shouldSaveStyle = Boolean(style.trim());
@@ -2472,7 +2485,7 @@ export async function completePreparedProjectStyle(
   const generatedStyle = result.text.trim();
   if (!result.ok || result.fallback || !generatedStyle) throw new Error(result.userMessage || result.fallbackReason || "项目风格生成失败，原卡已保留，请重试。");
   validateStyleCardCitations(generatedStyle, context.evidenceQuotes);
-  const style = generatedStyle || context.fallback;
+  const style = preserveWriterPreferences(generatedStyle || context.fallback, await readProjectStyle(context.projectId));
   const isFallbackResult = result.fallback || !generatedStyle;
   await saveProjectStyle(context.projectId, style, context.previousStyleHash);
 
@@ -2701,6 +2714,25 @@ export async function prepareWriteCopyContext(input: WriteCopyInput, options: { 
   return batch.variants[0].prepared;
 }
 
+async function measureWritePreparation<T>(
+  traceId: string,
+  stage: string,
+  options: WritePreparationOptions,
+  message: string,
+  run: () => Promise<T>
+): Promise<T> {
+  options.onProgress?.(message);
+  const startedAt = Date.now();
+  try {
+    const result = await run();
+    logPipelineEvent("writer.preparation", { traceId, stage, status: "completed", totalMs: Date.now() - startedAt });
+    return result;
+  } catch (error) {
+    logPipelineEvent("writer.preparation", { traceId, stage, status: "failed", totalMs: Date.now() - startedAt });
+    throw error;
+  }
+}
+
 export async function prepareWriteCopyBatchContext(
   input: WriteCopyInput,
   options: WritePreparationOptions = {}
@@ -2714,10 +2746,11 @@ export async function prepareWriteCopyBatchContext(
 
   const originalSourceInput = input.originalSourceInput
     ?? mergeWriterSourceInput(input.sourceText, input.supportDocLinks);
-  const normalizedInput = await normalizeWriteCopyInput({
+  const traceId = randomUUID();
+  const normalizedInput = await measureWritePreparation(traceId, "source", options, "正在解析本次素材", () => normalizeWriteCopyInput({
     ...input,
     originalSourceInput
-  }, options);
+  }, options));
   throwIfAborted(options.signal);
   const styleInputs = normalizeWriteStyleReferenceInputs(normalizedInput);
   if (!styleInputs.length) throw new Error("请选择至少一个参考风格");
@@ -2726,12 +2759,13 @@ export async function prepareWriteCopyBatchContext(
     normalizedInput.mode === "topic"
       ? `请基于这个主题生成文案：\n${normalizedInput.prompt}`
       : `请按所选参考风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
-  const supportDocContext = await buildSupportDocumentContext(normalizedInput.supportDocLinks, options);
+  const supportDocContext = await measureWritePreparation(traceId, "support-documents", options, "正在读取支持文档", () => buildSupportDocumentContext(normalizedInput.supportDocLinks, options));
   const webContext = normalizedInput.useWebResearch
-    ? await buildWebResearchContext({ ...normalizedInput, supportDocContext }, options)
+    ? await measureWritePreparation(traceId, "web-research", options, "正在联网检索资料", () => buildWebResearchContext({ ...normalizedInput, supportDocContext }, options))
     : "未启用联网检索。";
   const taskContext = `用户本次要求：\n${normalizedInput.prompt}\n\n原始资料：\n${normalizedInput.sourceText || ""}\n\n支持文档：\n${supportDocContext}\n\n检索资料：\n${webContext}`;
-  const preparation = await Promise.allSettled(styleInputs.map(reference => resolveWriteStyleContext(reference, true, taskContext, options)));
+  const preparation = await Promise.allSettled(styleInputs.map((reference, index) =>
+    measureWritePreparation(traceId, `style-preparation-${index + 1}`, options, "正在准备风格分析与写作参考", () => resolveWriteStyleContext(reference, true, taskContext, options))));
   throwIfAborted(options.signal);
   const styleContexts: WriteStyleContext[] = [];
   const preparationFailures: WriteVariantFailure[] = [];
@@ -2811,7 +2845,7 @@ function buildInitialWriteMessages(input: {
         `支持文档资料：\n${input.supportDocContext}`,
         `联网检索资料：\n${input.webContext}`,
         `任务：\n${input.userTask}`,
-        `任务解析及本次适用写法（原始要求优先；仅明确锁定的框架必须保留）：\n${JSON.stringify(input.styleContext.snapshot?.plan || null)}`,
+        "先在内部判断本次素材适合怎样的开头、叙事与衔接，选择参考中适用的写法，然后直接输出正文；不输出计划。用户明确保存的写作偏好只约束表达，本次明确要求优先。",
         [
           "写作边界：",
           "1. 只输出可直接使用的成稿，不解释创作思路。",
@@ -2994,19 +3028,21 @@ async function resolveWriteStyleContext(
   options: WritePreparationOptions = {}
 ): Promise<WriteStyleContext> {
   let context: WriteStyleContext;
-  const candidates: WriterCandidate[] = [];
+  const candidates: FastReference[] = [];
   const collectAccount = async (platform: Platform, accountId: string) => {
     const samples = await getTopTranscriptSamples(platform, accountId, "all");
     if (!samples.length) return;
-    options.onProgress?.("正在读取完整原文的用途与表达证据，首次分析会缓存");
-    const analyses = await resolveStyleSampleAnalyses(buildAccountStyleAnalysisTasks(platform, accountId, samples), {
-      signal: options.signal,
-      onAnalysisProgress: progress => options.onProgress?.(`正在准备表达依据 ${progress.completedCount}/${progress.analysisCount}`)
-    });
-    for (const sample of samples) {
-      const entry = analyses.entries.find(e => e.sourceId === sample.video.id)!;
-      candidates.push({ id: `${platform}:${accountId}:${sample.video.id}`, title: sample.video.title, transcript: sample.transcript,
-        analysis: parseStyleEvidence(entry.analysis, sample.transcript, sample.video.title) });
+    options.onProgress?.("正在匹配已有博主原文，不重复学习");
+    for (const task of buildAccountStyleAnalysisTasks(platform, accountId, samples)) {
+      const cached = await task.readCache();
+      // A changed model endpoint does not invalidate evidence on the write path.
+      // Quotes must still match the current source; incompatible evidence is explicit.
+      let indexText = "";
+      if (cached?.analysis) {
+        try { indexText = JSON.stringify(parseStyleEvidence(cached.analysis, task.transcript, task.title)); }
+        catch { options.onProgress?.("部分旧分析与当前原文不符，本次直接匹配原文；可更新风格重新学习。"); }
+      }
+      candidates.push({ id: `${platform}:${accountId}:${task.sourceId}`, title: task.title, transcript: task.transcript, indexText });
     }
   };
   if (reference.targetType === "account") {
@@ -3024,11 +3060,8 @@ async function resolveWriteStyleContext(
         await collectAccount(accountId.split(":")[0] as Platform, accountId);
       }
       const sources = await resolveProjectCopySourcesForStyle(project.sourceMaterialIds || []);
-      const analyses = await resolveStyleSampleAnalyses(buildCopySourceStyleAnalysisTasks(sources), { signal: options.signal });
       for (const source of sources) {
-        const entry = analyses.entries.find(e => e.sourceId === source.id)!;
-        candidates.push({ id: `material:${source.id}`, title: source.title, transcript: source.transcript,
-          analysis: parseStyleEvidence(entry.analysis, source.transcript, source.title) });
+        candidates.push({ id: `material:${source.id}`, title: source.title, transcript: source.transcript });
       }
     }
   }
@@ -3039,50 +3072,11 @@ async function resolveWriteStyleContext(
     styleText: context.style, styleHash: shortHash(context.style), samples: [], plan: null,
     notes: [], preparedAt: nowIso()
   };
-  if (unique.length) {
-    options.onProgress?.(`正在按本次用途选择「${context.title}」的写法与参考`);
-    let pool = unique;
-    const batches = batchCandidates(pool);
-    if (batches.length > 1) {
-      const selectedIds = new Set<string>();
-      for (const batch of batches) {
-        throwIfAborted(options.signal);
-        const result = await chatCompleteStrict([
-          { role: "system", content: referenceSelectionInstruction() + "只返回JSON字符串数组，元素为适用候选ID。不适用可以全不选，不固定数量。候选只是风格证据，不是本次事实。" },
-          { role: "user", content: `本次任务：\n${taskContext}\n候选：\n${JSON.stringify(batch.map(candidateIndex))}` }
-        ], WRITE_COPY_REASONING_EFFORT, { signal: options.signal, maxOutputTokens: 2000 });
-        const ids = parseModelJson(result.text, "参考筛选");
-        if (!Array.isArray(ids) || ids.some(id => typeof id !== "string" || !batch.some(c => c.id === id))) throw new Error("参考筛选返回了无效样本，请重试。");
-        for (const id of ids) selectedIds.add(id);
-      }
-      pool = unique.filter(c => selectedIds.has(c.id));
-      // If many candidates survive, retain every candidate's purpose and structure while omitting quote bodies in the final selection index.
-    }
-    const selectionIndex = pool.map(c => batches.length > 1
-      ? { ...candidateIndex(c), moves: c.analysis.moves.map(m => ({ action: m.action, when: m.when, avoid: m.avoid })) }
-      : candidateIndex(c));
-    if (JSON.stringify(selectionIndex).length > 60_000) throw new Error("适用参考仍过多，请缩小本次写作用途或项目来源后重试；没有按热度截掉其余样本。");
-    const result = await chatCompleteStrict([
-      { role: "system", content: [
-        "你是写作任务解析与同风格参考选择器，只输出JSON，不生成成稿。",
-        "严格区分用户要求、资料事实与创意示例；不完整要求不强行补成硬约束。未明确锁定的框架顺序和示例梗可以重组。",
-        referenceSelectionInstruction(),
-        "只能选给定ID，也可不选并说明缺口。selected.reason写明借哪段、怎样衔接及素材限制，不能只写文体或题材相同。",
-        "结合风格卡与原文证据提取本次适用写法，写清如何引入、推进与收束，不用固定万能结构。单篇证据不可当作账号通则。",
-        `参考按优先顺序列出，完整原文总预算${WRITER_REFERENCE_BUDGET}字符，长篇可以只借用证据片段，不固定篇数。`,
-        '输出结构：{"task":{"purpose":"表达用途","facts":[{"text":"事实","quote":"本次资料连续原句"}],"mustKeep":[{"text":"明确必留要求","quote":"要求或资料连续原句"}],"creativeFreedom":"可改范围与合理叙事方向","timeContext":"发布场景，未指定则说明","uncertainties":["不可确认为事实的内容"],"forbiddenTerms":[{"text":"明确禁用的字面词语","quote":"规定禁用的原句"}],"length":{"min":400,"max":500,"quote":"用户字数要求原句"}},"selected":[{"id":"候选ID","reason":"借鉴哪种具体表达及限制"}],"applicableStyle":["本次适用规则与依据"],"notes":["样本不足或文体限制"]}。',
-        "没有明确字数范围时length为null；不要根据参考长度编造范围。facts最多12项，mustKeep最多12项；quote保留原标点逐字摘录，不改字不省略。范文事实不得进入task。"
-      ].join("\n") },
-      { role: "user", content: `本次任务与事实来源：\n${taskContext}\n\n风格卡（按适用条件使用）：\n${context.style}\n\n候选索引：\n${JSON.stringify(selectionIndex)}` }
-    ], WRITE_COPY_REASONING_EFFORT, { signal: options.signal, maxOutputTokens: 4500 });
-    snapshot.plan = validateWriterPlan(parseModelJson(result.text, "写作准备"), pool, taskContext);
-    snapshot.samples = snapshotReferences(pool, snapshot.plan);
-    snapshot.preparationModel = result.model;
-    snapshot.notes = [...snapshot.plan.notes];
-    if (snapshot.samples.length < snapshot.plan.selected.length) snapshot.notes.push("部分参考超出上下文预算，实际采用篇目以已保存参考为准。");
-  } else {
-    snapshot.notes.push("没有可用原文，当前仅参考已有风格卡；补充转写后可按用途自动选择原文。");
-  }
+  snapshot.samples = selectFastReferences(unique, taskContext);
+  snapshot.plan = fastWriterPlan(taskContext, snapshot.samples);
+  snapshot.notes = ["直接写作：使用已有风格卡与本地匹配原文，在正文生成时完成构思；未调用模型逐篇分析或单独生成计划。"];
+  if (!snapshot.samples.length) snapshot.notes.push("没有可用原文，本次仅使用现有风格卡；补充博主作品有助于提高相似度。");
+  options.onProgress?.(`已匹配「${context.title}」的 ${snapshot.samples.length} 份原文参考，准备直接出稿`);
   if (context.reference.targetType === "account") {
     context.reference.videoIds = snapshot.samples.map(sample => sample.id.split(":").at(-1)!);
   }
