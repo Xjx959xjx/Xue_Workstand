@@ -28,6 +28,8 @@ import { WriterPreference } from "./_components/WriterPreference";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterReferencePicker } from "./_components/WriterReferencePicker";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
+import { useWriterHistory, useWriterHistoryActions } from "./_hooks/useWriterHistory";
+import { useWriterSessionSave } from "./_hooks/useWriterSessionSave";
 import { useFeishuPublish } from "./_hooks/useFeishuPublish";
 import { useWriterGeneration } from "./_hooks/useWriterGeneration";
 import { useWriterReferenceDetails } from "./_hooks/useWriterReferenceDetails";
@@ -38,15 +40,9 @@ import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import {
-  deleteDrafts,
-  draftSummaryFromDraft,
-  getCachedDrafts,
   getDraft,
-  getDrafts,
-  renameDraft,
   uploadWriterSourceFiles
 } from "@/lib/client";
-import { buildWriterDraftHref } from "@/lib/draft-links";
 import {
   draftWriteStyleReferenceInputs,
   parseWriteStyleReferenceKey,
@@ -64,7 +60,6 @@ import { appendWriterSourceFiles, countWriterSourceFiles, WRITER_SOURCE_FILE_ACC
 import type {
   AccountListItem,
   Draft,
-  DraftSummary,
   ProjectListItem,
   WriteRevisionScope,
   WriteStyleReferenceInput
@@ -109,7 +104,6 @@ function WriterPageContent() {
   const [sourceDragActive, setSourceDragActive] = useState(false);
   const [sourceImporting, setSourceImporting] = useState(false);
   const [sessionDraftHydrated, setSessionDraftHydrated] = useState(false);
-  const [draftSummaries, setDraftSummaries] = useState<DraftSummary[] | null>(() => getCachedDrafts()?.drafts ?? null);
   const loadedDraftParamRef = useRef("");
   const appliedSearchParamRef = useRef("");
   const draftEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -165,25 +159,9 @@ function WriterPageContent() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!sessionDraftHydrated) return;
-    window.sessionStorage.setItem(WRITER_SESSION_DRAFT_KEY, JSON.stringify({
-      styleRefs,
-      prompt,
-      sourceText,
-      useWebResearch,
-      revisionInstruction,
-      revisionMode
-    }));
-  }, [
-    prompt,
-    revisionInstruction,
-    revisionMode,
-    sessionDraftHydrated,
-    sourceText,
-    styleRefs,
-    useWebResearch
-  ]);
+  useWriterSessionSave(WRITER_SESSION_DRAFT_KEY, sessionDraftHydrated, {
+    styleRefs, prompt, sourceText, useWebResearch, revisionInstruction, revisionMode
+  }, setNotice);
 
   const selectedStyleRefs = useMemo(() => {
     const availableKeys = new Set([
@@ -213,16 +191,7 @@ function WriterPageContent() {
     ? library?.projects.find((project) => project.id === primaryStyleRef.projectId) || null
     : null, [library?.projects, primaryStyleRef]);
 
-  const allDrafts = useMemo(() => draftSummaries || [], [draftSummaries]);
-  const historyLoading = loading || draftSummaries === null;
-  const historyDrafts = useMemo(() => [...allDrafts].sort(compareCreatedAtDesc), [allDrafts]);
-
-  const handleDraftSaved = useCallback(
-    (draft: Draft) => {
-      setDraftSummaries((current) => mergeDraftSummaryLists(current || [], [draftSummaryFromDraft(draft)]));
-    },
-    []
-  );
+  const { historyDrafts, historyLoading, handleDraftSaved, setDraftSummaries } = useWriterHistory(loading, setNotice);
 
   const { activeStyle, activeStyleLoading, activeStyleError, activeSubtitle, activeTitle, styleCards } = useWriterReferenceDetails({
     accounts: library?.accounts || EMPTY_ACCOUNTS,
@@ -416,24 +385,6 @@ function WriterPageContent() {
     notify({ tone: noticeIsError ? "error" : "success", message: notice });
   }, [notice, noticeIsError, notify]);
 
-  useEffect(() => {
-    let ignore = false;
-    if (draftSummaries !== null) return;
-
-    getDrafts()
-      .then((result) => {
-        if (ignore) return;
-        setDraftSummaries((current) => mergeDraftSummaryLists(current || [], result.drafts));
-      })
-      .catch((err) => {
-        if (!ignore) setNotice(err instanceof Error ? err.message : "读取历史记录失败");
-      });
-
-    return () => {
-      ignore = true;
-    };
-  }, [draftSummaries]);
-
   const applyLoadedDraft = useCallback((draft: Draft) => {
     setStyleRefs(draftWriteStyleReferenceInputs(draft));
     setPrompt(draft.prompt);
@@ -517,132 +468,22 @@ function WriterPageContent() {
     appliedSearchParamRef.current = searchKey;
   }, [applyLoadedDraft, searchParams]);
 
-  const handleSelectHistoryDraft = useCallback(
-    async (summary: DraftSummary) => {
-      try {
-        const draft = await getDraft(summary.id);
-        loadedDraftParamRef.current = draft.id;
-        applyLoadedDraft(draft);
-        router.replace(buildWriterDraftHref(draft), { scroll: false });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "读取草稿详情失败";
-        setNotice(message);
-        throw error;
-      }
-    },
-    [applyLoadedDraft, router]
-  );
-
-  const handleDeleteHistoryDraft = useCallback(
-    async (draft: DraftSummary) => {
-      const replacement = findReplacementDraft(historyDrafts, new Set([draft.id]), draft);
-
-      try {
-        await deleteDrafts([draft.id]);
-        setDraftSummaries((current) => (current || []).filter((item) => item.id !== draft.id));
-
-        if (draft.id === lastDraftId) {
-          if (replacement) {
-            await handleSelectHistoryDraft(replacement);
-          } else {
-            loadedDraftParamRef.current = "";
-            clearDraftResult();
-            setPrompt("");
-            setSourceText("");
-            setUseWebResearch(false);
-            setRevisionInstruction("");
-            setRevisionScope("full");
-            setSelectedDraftText("");
-            const params = createWriterReferenceParams(selectedStyleRefs, effectiveMode);
-            router.replace(`/writer?${params.toString()}`, { scroll: false });
-          }
-        }
-
-        notify({ tone: "success", message: "草稿已删除。" });
-        void refresh().catch(() => undefined);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "删除草稿失败";
-        notify({ tone: "error", message });
-        throw error;
-      }
-    },
-    [
-      clearDraftResult,
-      handleSelectHistoryDraft,
-      historyDrafts,
-      effectiveMode,
-      lastDraftId,
-      notify,
-      refresh,
-      router,
-      selectedStyleRefs
-    ]
-  );
-
-  const handleDeleteHistoryDrafts = useCallback(
-    async (draftsToDelete: DraftSummary[]) => {
-      const draftIds = draftsToDelete.map((draft) => draft.id);
-      const deletedIds = new Set(draftIds);
-      const currentDraft = historyDrafts.find((draft) => draft.id === lastDraftId);
-      const replacement = findReplacementDraft(historyDrafts, deletedIds, currentDraft);
-
-      try {
-        await deleteDrafts(draftIds);
-        setDraftSummaries((current) => (current || []).filter((item) => !deletedIds.has(item.id)));
-
-        if (lastDraftId && deletedIds.has(lastDraftId)) {
-          if (replacement) {
-            await handleSelectHistoryDraft(replacement);
-          } else {
-            loadedDraftParamRef.current = "";
-            clearDraftResult();
-            setPrompt("");
-            setSourceText("");
-            setUseWebResearch(false);
-            setRevisionInstruction("");
-            setRevisionScope("full");
-            setSelectedDraftText("");
-            const params = createWriterReferenceParams(selectedStyleRefs, effectiveMode);
-            router.replace(`/writer?${params.toString()}`, { scroll: false });
-          }
-        }
-
-        notify({ tone: "success", message: `已删除 ${draftIds.length} 条草稿。` });
-        void refresh().catch(() => undefined);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "批量删除草稿失败";
-        notify({ tone: "error", message });
-        throw error;
-      }
-    },
-    [
-      clearDraftResult,
-      handleSelectHistoryDraft,
-      historyDrafts,
-      effectiveMode,
-      lastDraftId,
-      notify,
-      refresh,
-      router,
-      selectedStyleRefs
-    ]
-  );
-
-  const handleRenameHistoryDraft = useCallback(
-    async (draft: DraftSummary, title: string) => {
-      try {
-        const updatedDraft = await renameDraft({ draftId: draft.id, title });
-        setDraftSummaries((current) => mergeDraftSummaryLists(current || [], [draftSummaryFromDraft(updatedDraft)]));
-        notify({ tone: "success", message: "草稿名称已更新。" });
-        void refresh().catch(() => undefined);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "更新草稿名称失败";
-        notify({ tone: "error", message });
-        throw error;
-      }
-    },
-    [notify, refresh]
-  );
+  const clearHistoryCurrent = useCallback(() => {
+    loadedDraftParamRef.current = "";
+    clearDraftResult();
+    setPrompt("");
+    setSourceText("");
+    setUseWebResearch(false);
+    setRevisionInstruction("");
+    setRevisionScope("full");
+    setSelectedDraftText("");
+    const params = createWriterReferenceParams(selectedStyleRefs, effectiveMode);
+    router.replace(`/writer?${params.toString()}`, { scroll: false });
+  }, [clearDraftResult, effectiveMode, router, selectedStyleRefs]);
+  const { handleSelectHistoryDraft, handleDeleteHistoryDraft, handleDeleteHistoryDrafts, handleRenameHistoryDraft } = useWriterHistoryActions({
+    historyDrafts, setDraftSummaries, lastDraftId, loadedDraftParamRef, applyLoadedDraft,
+    onClearCurrent: clearHistoryCurrent, setNotice, refresh
+  });
 
   if (!loading && !library?.accounts.length && !library?.projects.length) {
     return (
@@ -1097,46 +938,6 @@ function ResearchReferenceBody({ id, text }: { id?: string; text: string }) {
       )}
     </pre>
   );
-}
-
-function mergeDraftSummaryLists(...groups: DraftSummary[][]) {
-  const byId = new Map<string, DraftSummary>();
-
-  for (const group of groups) {
-    for (const draft of group) {
-      const current = byId.get(draft.id);
-      if (!current) {
-        byId.set(draft.id, draft);
-        continue;
-      }
-      if (+new Date(draft.updatedAt) > +new Date(current.updatedAt)) {
-        byId.set(draft.id, draft);
-      }
-    }
-  }
-
-  return [...byId.values()].sort(compareCreatedAtDesc);
-}
-
-function compareCreatedAtDesc(left: { createdAt: string }, right: { createdAt: string }) {
-  return +new Date(right.createdAt) - +new Date(left.createdAt);
-}
-
-function findReplacementDraft(drafts: DraftSummary[], deletedIds: Set<string>, currentDraft?: DraftSummary) {
-  const remaining = drafts.filter((draft) => !deletedIds.has(draft.id));
-  if (!currentDraft) return remaining[0] || null;
-
-  const sessionId = currentDraft.version?.sessionId || currentDraft.id;
-  const currentRevision = currentDraft.version?.revision || 1;
-  const sameSession = remaining
-    .filter((draft) => (draft.version?.sessionId || draft.id) === sessionId)
-    .sort((left, right) => {
-      const leftDistance = Math.abs((left.version?.revision || 1) - currentRevision);
-      const rightDistance = Math.abs((right.version?.revision || 1) - currentRevision);
-      return leftDistance - rightDistance || compareCreatedAtDesc(left, right);
-    });
-
-  return sameSession[0] || remaining[0] || null;
 }
 
 function createWriterReferenceParams(references: WriteStyleReferenceInput[], mode: Draft["mode"]) {
