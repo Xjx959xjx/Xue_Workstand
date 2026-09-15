@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
+  ImagePlus,
   Activity,
   Calculator,
   FileText,
@@ -29,6 +30,7 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
+  { href: "/images", label: "生图工作台", icon: ImagePlus, group: "创作工作区" },
   { href: "/hotspots", label: "热点雷达", icon: Radar, group: "内容发现" },
   { href: "/douyin-hotlist", label: "视频热榜", icon: Flame, group: "内容发现" },
   { href: "/library", label: "账号库", icon: FileText, group: "创作工作区" },

@@ -1,3 +1,4 @@
+import { imageGenerationInputSchema } from "@/lib/image-generation-types";
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { createJob, listJobSummaryChanges } from "@/lib/jobs";
@@ -185,6 +186,7 @@ const grossMarginRefreshSchema = z.object({
 });
 
 const startJobSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("image-generation"), input: imageGenerationInputSchema }),
   writeCopySchema,
   accountStyleSchema,
   projectStyleSchema,

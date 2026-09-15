@@ -1,5 +1,5 @@
 import { inferAccountAvatarFromCollectedData, inferAccountNameFromCollectedData, resolveAccountProfile } from "./account-profile";
-import { collectVideos, resolveAccountUid } from "./opencli";
+import { collectVideos, hydrateDouyinVideoStatsBatch, resolveAccountUid } from "./opencli";
 import { findAccountByName, getAccountSummary, saveVideos, upsertAccount } from "./storage";
 import type { Account, CollectOrder, CollectResult, Platform, Video } from "./types";
 import { extractFirstLinkFromInput, normalizeLinkInput } from "./platform-links";
@@ -63,6 +63,25 @@ export async function collectAccountContent(
       signal: options.signal
     });
     result.rawCount = result.videos.length;
+  }
+  if (input.platform === "douyin" && result.videos.length) {
+    await options.onProgress?.({ stage: "hydrate-details", message: "正在补全发布日期和互动数据", progress: 56 });
+    try {
+      result.videos = await hydrateDouyinVideoStatsBatch(result.videos, { signal: options.signal });
+    } catch (error) {
+      throwIfAborted(options.signal);
+      const message = error instanceof Error ? error.message : "抖音详情接口请求失败";
+      result.videos = result.videos.map((video) => ({
+        ...video,
+        statsHydration: {
+          status: "failed",
+          source: "opencli",
+          checkedAt: nowIso(),
+          missingFields: video.statsHydration?.missingFields || ["comments", "favorites", "shares"],
+          error: message
+        }
+      }));
+    }
   }
 
   throwIfAborted(options.signal);
@@ -417,4 +436,3 @@ function toDateInputValue(date: Date) {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
-

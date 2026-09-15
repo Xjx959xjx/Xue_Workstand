@@ -1,3 +1,4 @@
+import { callImageApi, imageConfig } from "./image-runtime";
 import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
 import { getBilibiliVideoReference } from "./opencli";
 import { normalizeRemoteImageUrl } from "./platform-links";
@@ -216,55 +217,6 @@ async function downloadReferenceImage(url: string, signal?: AbortSignal) {
   };
 }
 
-async function callImageApi(input: {
-  config: ReturnType<typeof imageConfig>;
-  prompt: string;
-  referenceFiles: Array<{ name: string; bytes: Buffer; contentType: string }>;
-  signal?: AbortSignal;
-}) {
-  throwIfAborted(input.signal);
-  const form = new FormData();
-  form.set("model", input.config.model);
-  form.set("prompt", input.prompt);
-  form.set("size", input.config.size);
-  form.set("quality", input.config.quality);
-  form.set("output_format", input.config.format === "jpeg" ? "jpeg" : input.config.format);
-  form.set("n", "1");
-
-  for (const file of input.referenceFiles) {
-    const arrayBuffer = new ArrayBuffer(file.bytes.byteLength);
-    new Uint8Array(arrayBuffer).set(file.bytes);
-    form.append("image[]", new Blob([arrayBuffer], { type: file.contentType }), file.name);
-  }
-
-  const endpoint = input.referenceFiles.length ? "/images/edits" : "/images/generations";
-  const response = await undiciFetch(`${input.config.baseUrl}${endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.config.apiKey}`
-    },
-    body: form,
-    dispatcher: input.config.proxyUrl ? new ProxyAgent(input.config.proxyUrl) : undefined,
-    signal: input.signal
-  } as FetchInitWithDispatcher);
-
-  if (!response.ok) {
-    throw new Error(describeImageFailure(response.status, await response.text()));
-  }
-
-  throwIfAborted(input.signal);
-  const data = (await response.json()) as {
-    data?: Array<{ b64_json?: string; url?: string }>;
-  };
-  const first = data.data?.[0];
-  if (first?.b64_json) return Buffer.from(first.b64_json, "base64");
-  if (first?.url) {
-    const remote = await downloadReferenceImage(first.url, input.signal);
-    return remote.bytes;
-  }
-  throw new Error("图片模型没有返回可保存的图片。");
-}
-
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return;
   const error = new Error("任务已停止");
@@ -274,18 +226,6 @@ function throwIfAborted(signal?: AbortSignal) {
 
 function isAbortError(error: unknown) {
   return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
-}
-
-function imageConfig() {
-  return {
-    apiKey: process.env.IMAGE_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl: (process.env.IMAGE_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, ""),
-    model: process.env.IMAGE_MODEL || "gpt-image-2",
-    size: process.env.IMAGE_SIZE || "2048x1152",
-    quality: process.env.IMAGE_QUALITY || "medium",
-    format: normalizeImageFormat(process.env.IMAGE_FORMAT),
-    proxyUrl: process.env.IMAGE_PROXY_URL || process.env.CHAT_PROXY_URL || ""
-  };
 }
 
 function buildCoverPrompt(draft: Draft, extraPrompt: string | undefined, references: DraftCoverReference[]) {
@@ -314,19 +254,8 @@ function normalizeImageUrl(url: string) {
   return normalizeRemoteImageUrl(url);
 }
 
-function normalizeImageFormat(value?: string): "jpeg" | "png" | "webp" {
-  return value === "png" || value === "webp" ? value : "jpeg";
-}
-
 function extensionFromContentType(contentType: string) {
   if (contentType.includes("png")) return "png";
   if (contentType.includes("webp")) return "webp";
   return "jpg";
-}
-
-function describeImageFailure(status: number, body: string) {
-  const trimmed = body.trim().replace(/\s+/g, " ").slice(0, 260);
-  if (status === 401 || status === 403) return "图片模型鉴权失败，请检查 IMAGE_API_KEY。";
-  if (status === 429) return "图片模型服务限流，请稍后重试。";
-  return `图片模型调用失败：${status}${trimmed ? ` ${trimmed}` : ""}`;
 }

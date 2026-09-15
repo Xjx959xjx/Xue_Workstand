@@ -59,6 +59,8 @@ type DouyinMediaLookupOptions = {
   signal?: AbortSignal;
 };
 type VideoStatsTimingOptions = OpenCliTimingOptions;
+type DouyinDetailStatField = "likes" | "comments" | "favorites" | "shares";
+const DOUYIN_DETAIL_STAT_FIELDS: DouyinDetailStatField[] = ["likes", "comments", "favorites", "shares"];
 
 export type DouyinBatchVideoCollectResult = {
   account: Account;
@@ -802,6 +804,81 @@ export async function getDouyinVideoStatsBatchByUrl(
   }, options);
 }
 
+export async function hydrateDouyinVideoStatsBatch(
+  videos: Video[],
+  options: VideoStatsTimingOptions = {}
+): Promise<Video[]> {
+  if (!videos.length) return [];
+
+  return withDouyinStatsBrowser(async (workspace) => {
+    const awemeIds = videos.map((video) => extractDouyinAwemeId(video.id) || extractDouyinAwemeId(video.url));
+    const details = await getDouyinVideoDetailSnapshots(workspace, awemeIds.filter(Boolean), options);
+    const checkedAt = nowIso();
+
+    return videos.map((video, index) => {
+      const awemeId = awemeIds[index];
+      const detail = awemeId ? details.get(awemeId) : null;
+      if (!detail) {
+        return {
+          ...video,
+          statsHydration: {
+            status: "failed",
+            source: "opencli",
+            checkedAt,
+            missingFields: missingDouyinDetailFields(video),
+            error: awemeId
+              ? "抖音详情接口没有返回统计数据。"
+              : "没有从视频记录中解析到抖音视频 ID。"
+          }
+        };
+      }
+
+      return {
+        ...video,
+        title: detail.title || video.title,
+        publishedAt: detail.publishedAt || video.publishedAt,
+        stats: {
+          ...video.stats,
+          likes: detail.likeCount,
+          comments: detail.commentCount,
+          favorites: detail.favoriteCount,
+          shares: detail.shareCount
+        },
+        statsHydration: {
+          status: "complete",
+          source: "opencli",
+          checkedAt,
+          missingFields: []
+        },
+        raw: {
+          ...(video.raw && typeof video.raw === "object" ? video.raw : {}),
+          detail: {
+            create_time: detail.publishedAt,
+            statistics: {
+              digg_count: detail.likeCount,
+              comment_count: detail.commentCount,
+              collect_count: detail.favoriteCount,
+              share_count: detail.shareCount
+            }
+          }
+        },
+        updatedAt: checkedAt
+      };
+    });
+  }, options);
+}
+
+export async function hydrateDouyinVideoStats(
+  video: Video,
+  options: VideoStatsTimingOptions = {}
+): Promise<Video> {
+  const [hydrated] = await hydrateDouyinVideoStatsBatch([video], options);
+  if (hydrated.statsHydration?.status === "failed") {
+    throw new Error(hydrated.statsHydration.error || "抖音详情接口没有返回统计数据。");
+  }
+  return hydrated;
+}
+
 async function withDouyinStatsBrowser<T>(
   callback: (workspace: string) => Promise<T>,
   options: VideoStatsTimingOptions = {}
@@ -1350,7 +1427,8 @@ async function getDouyinVideoDetailSnapshots(
       timeout: Math.max(20_000, uniqueAwemeIds.length * 2_500),
       timingStage: "douyin.browser.eval.batch-stats",
       onTiming: options.onTiming,
-      timingMeta: mergeTimingMeta(options.timingMeta, { count: uniqueAwemeIds.length })
+      timingMeta: mergeTimingMeta(options.timingMeta, { count: uniqueAwemeIds.length }),
+      signal: options.signal
     })
   );
   const rows = asArray(result);
@@ -1528,6 +1606,7 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
   const topComments = Array.isArray(object.top_comments)
     ? object.top_comments.map((comment) => normalizeCommentText(comment)).filter(Boolean)
     : [];
+  const missingFields = missingDouyinDetailFieldsFromObject(object);
 
   return {
     id: safeSegment(awemeId || shortHash(`${title}-${downloadUrl}`)),
@@ -1568,9 +1647,45 @@ function normalizeDouyinVideo(row: unknown, account: Account): Video {
     hotScore: 0,
     relativeViewRate: 0,
     transcriptStatus: "not_started",
+    statsHydration: {
+      status: missingFields.length ? "partial" : "complete",
+      source: "collect",
+      checkedAt: nowIso(),
+      missingFields
+    },
     downloadUrl,
     topComments,
     raw: row,
     updatedAt: nowIso()
   };
+}
+
+function missingDouyinDetailFields(video: Video): Array<keyof Video["stats"]> {
+  const recordedMissing = video.statsHydration?.missingFields;
+  if (recordedMissing?.length) return recordedMissing;
+  if (video.statsHydration?.status === "complete") return [];
+  return DOUYIN_DETAIL_STAT_FIELDS.filter((field) => field !== "likes" || video.stats.likes <= 0);
+}
+
+function missingDouyinDetailFieldsFromObject(object: Record<string, unknown>): DouyinDetailStatField[] {
+  const rawStatistics = object.raw_statistics && typeof object.raw_statistics === "object"
+    ? object.raw_statistics as Record<string, unknown>
+    : {};
+  const statistics = object.statistics && typeof object.statistics === "object"
+    ? object.statistics as Record<string, unknown>
+    : {};
+  const nestedStats = object.stats && typeof object.stats === "object"
+    ? object.stats as Record<string, unknown>
+    : {};
+  const sources = [object, rawStatistics, statistics, nestedStats];
+  const aliases: Record<DouyinDetailStatField, string[]> = {
+    likes: ["digg_count", "likes", "like"],
+    comments: ["comment_count", "comments"],
+    favorites: ["collect_count", "favorites", "collect"],
+    shares: ["share_count", "shares"]
+  };
+
+  return DOUYIN_DETAIL_STAT_FIELDS.filter((field) =>
+    !sources.some((source) => aliases[field].some((alias) => Object.prototype.hasOwnProperty.call(source, alias)))
+  );
 }

@@ -1,6 +1,7 @@
 import path from "path";
 import { z } from "zod";
 import { styleEvidenceSchema, writerContextSchema } from "../writer-context";
+import { imageGenerationInputSchema } from "../image-generation-types";
 
 export const STORAGE_SCHEMA_VERSION = 1;
 
@@ -148,6 +149,8 @@ const styleMetaSchema = versionedObject.extend({
 }).passthrough();
 
 export type StoredRecordKind =
+  | "image-generation"
+  | "image-file"
   | "style-analysis"
   | "style-meta"
   | "account"
@@ -159,6 +162,12 @@ export type StoredRecordKind =
   | "support-document-cache";
 
 const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
+  "image-generation": imageGenerationInputSchema.extend({
+    schemaVersion: z.literal(STORAGE_SCHEMA_VERSION), id: z.string().min(1), model: z.string().min(1),
+    createdAt: timestampSchema, updatedAt: timestampSchema,
+    images: z.array(z.object({ id: z.string().uuid(), name: z.string(), format: z.enum(["png", "jpeg", "webp"]), createdAt: timestampSchema })).max(4)
+  }),
+  "image-file": z.object({ schemaVersion: z.literal(STORAGE_SCHEMA_VERSION), id: z.string().uuid(), name: z.string(), format: z.enum(["png", "jpeg", "webp"]), createdAt: timestampSchema }),
   "style-analysis": styleAnalysisSchema,
   "style-meta": styleMetaSchema,
   account: accountSchema,
@@ -175,6 +184,10 @@ export function storedRecordKind(target: string, root: string): StoredRecordKind
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
   const segments = relative.split(path.sep);
   const file = segments.at(-1) || "";
+  if (segments[0] === "images" && segments.length === 3 && file.endsWith(".json")) {
+    if (segments[1] === "records") return "image-generation";
+    if (segments[1] === "files") return "image-file";
+  }
 
   if (["bilibili", "douyin", "projects"].includes(segments[0]) && segments.length === 3 && file === "style.meta.json") return "style-meta";
 

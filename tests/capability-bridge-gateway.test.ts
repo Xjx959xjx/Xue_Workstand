@@ -66,6 +66,19 @@ test("能力桥窄网关只代理桥接接口和一次性素材路径", async ()
     });
     assert.equal(oversized.status, 413);
 
+    const workspace = await fetch(`${origin}/api/capability-bridge/workspace/projects/test?revision=1`, {
+      method: "PUT", headers: { authorization: "Bearer test" }, body: "test-body"
+    });
+    assert.equal(workspace.status, 200);
+    const workspaceBody = await workspace.json() as { method: string; body: string; url: string };
+    assert.equal(workspaceBody.method, "PUT");
+    assert.equal(workspaceBody.body, "test-body");
+    assert.match(workspaceBody.url, /revision=1$/);
+    const oversizedPut = await fetch(`${origin}/api/capability-bridge/workspace/projects/test`, {
+      method: "PUT", body: "x".repeat(64 * 1024 + 1)
+    });
+    assert.equal(oversizedPut.status, 413);
+
     const asset = await fetch(`${origin}/api/capability-bridge/assets/abcdefghijklmnop`);
     assert.equal(asset.status, 200);
     assert.equal((await asset.json() as { url?: string }).url, "/api/capability-bridge/assets/abcdefghijklmnop");

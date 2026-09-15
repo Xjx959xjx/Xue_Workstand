@@ -6,7 +6,7 @@ import { formatNumber } from "@/components/Formatters";
 import { StatusPill } from "@/components/StatusPill";
 import type { AccountDetail, AccountListItem, VideoListItem } from "@/lib/types";
 import type { SortDirection, VideoStatusFilter } from "../_hooks/useLibrarySelection";
-import { getPrimaryMetric, getVideoMetaText, type VideoSortMode } from "./library-view-utils";
+import { getPrimaryMetric, getVideoMetaText, isVideoMetricMissing, type VideoSortMode } from "./library-view-utils";
 
 type VideoTableProps = {
   accountDetailLoading: boolean;
@@ -203,8 +203,8 @@ export const VideoTable = memo(function VideoTable({
                       <span className="metric-bar" aria-hidden="true"><span style={{ transform: `scaleX(${metricWidth / 100})` }} /></span>
                     </td>
                     <td className="video-number-cell" data-label="点赞">{formatNumber(video.stats.likes)}</td>
-                    <td className="video-number-cell" data-label="评论">{formatNumber(video.stats.comments)}</td>
-                    <td className="video-number-cell" data-label="收藏">{formatNumber(video.stats.favorites)}</td>
+                    <td className="video-number-cell" data-label="评论">{isVideoMetricMissing(video, "comments") ? "未取到" : formatNumber(video.stats.comments)}</td>
+                    <td className="video-number-cell" data-label="收藏">{isVideoMetricMissing(video, "favorites") ? "未取到" : formatNumber(video.stats.favorites)}</td>
                     <td className="video-status-cell" data-label="转写"><StatusPill status={video.transcriptStatus} /></td>
                   </tr>
                 );

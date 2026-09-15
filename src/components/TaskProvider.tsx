@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { FeedbackInput } from "./FeedbackProvider";
 import { useFeedback } from "./FeedbackProvider";
 import {
+  invalidateImageRecordsCache,
   cancelJob,
   getJob,
   getJobs,
@@ -361,6 +362,7 @@ function handleJobDataSync(
 }
 
 function invalidateJobClientCaches(job: JobRecord) {
+  if (job.kind === "image-generation") invalidateImageRecordsCache();
   if (job.dataChange?.resource === "douyin-hotlist" || job.kind === "hotlist-refresh") {
     invalidateDouyinHotlistCache();
   }
@@ -543,6 +545,7 @@ function isJobInScope(job: JobListItem, href: string | undefined, kinds: Set<Job
 }
 
 function defaultJobHref(kind: JobRecord["kind"]) {
+  if (kind === "image-generation") return "/images";
   if (kind === "write-copy") return "/writer";
   if (kind === "project-style") return "/project-workbench";
   if (kind === "engagement") return "/assets";

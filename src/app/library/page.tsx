@@ -11,7 +11,7 @@ import { TranscriptEditorModal } from "./_components/TranscriptEditorModal";
 import { VideoTable } from "./_components/VideoTable";
 import { collectOrderOptions, formatTimeRangeLabel, getDateFilter, normalizeCollectOrder, type TimeRange } from "./_components/library-collect-utils";
 import { makePreview } from "./_components/library-view-utils";
-import { useBilibiliStatsHydration } from "./_hooks/useBilibiliStatsHydration";
+import { useVideoStatsHydration } from "./_hooks/useBilibiliStatsHydration";
 import { useLibraryAccountDetail } from "./_hooks/useLibraryAccountDetail";
 import { useLibraryMutations } from "./_hooks/useLibraryMutations";
 import { useLibraryAccountSelection, useLibraryVideoSelection } from "./_hooks/useLibrarySelection";
@@ -267,7 +267,7 @@ function LibraryPageContent() {
   const activeOrderOptions = collectOrderOptions[collectPlatform];
   const canCollect = Boolean(collectName.trim()) && !busy;
 
-  useBilibiliStatsHydration({ refresh, reloadSelectedAccountDetail, selectedAccount });
+  useVideoStatsHydration({ refresh, reloadSelectedAccountDetail, selectedAccount });
   useRestoreFocus(Boolean(openModal), editModalRef);
 
   useEffect(() => {

@@ -1,3 +1,4 @@
+import type { ImageGenerationInput } from "./image-generation-types";
 export const platforms = ["bilibili", "douyin"] as const;
 
 export type Platform = (typeof platforms)[number];
@@ -1158,6 +1159,7 @@ export type BatchTranscribeResult = {
 };
 
 export const jobKinds = [
+  "image-generation",
   "write-copy",
   "account-style",
   "project-style",
@@ -1191,7 +1193,7 @@ export type JobEvent = {
 };
 
 export type JobDataChange = {
-  resource: "library-account" | "douyin-hotlist" | "gross-margin";
+  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin";
   at: string;
   accountId?: string;
   videoId?: string;
@@ -1271,6 +1273,7 @@ export type LibraryTrashOperation = {
 };
 
 export type JobStartInput =
+  | { kind: "image-generation"; title?: string; inputSummary?: string; href?: string; input: ImageGenerationInput }
   | {
       kind: "write-copy";
       title?: string;

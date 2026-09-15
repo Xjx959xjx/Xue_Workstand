@@ -7,6 +7,7 @@ const DEFAULT_UPSTREAM_PORT = 3000;
 const DEFAULT_BODY_LIMIT = 2 * 1024 * 1024;
 const BRIDGE_PATH = "/api/capability-bridge";
 const ASSET_PATH_PREFIX = `${BRIDGE_PATH}/assets/`;
+const WORKSPACE_PATH_PREFIX = `${BRIDGE_PATH}/workspace/`;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -46,7 +47,7 @@ async function proxyRequest(request, response, options) {
   }
 
   const declaredLength = Number.parseInt(String(request.headers["content-length"] || ""), 10);
-  if (request.method === "POST" && Number.isFinite(declaredLength) && declaredLength > options.bodyLimit) {
+  if (Number.isFinite(declaredLength) && declaredLength > options.bodyLimit) {
     return sendJson(response, 413, { error: "远程能力请求正文超过允许上限。" });
   }
 
@@ -82,7 +83,7 @@ async function proxyRequest(request, response, options) {
     upstreamResponse.once("end", finish);
     upstreamResponse.pipe(response);
   });
-  if (request.method !== "POST") {
+  if (request.method === "GET" || request.method === "HEAD") {
     request.pipe(upstream);
     return;
   }
@@ -107,6 +108,9 @@ async function proxyRequest(request, response, options) {
 
 function isAllowedRequest(method = "", pathname) {
   if (pathname === BRIDGE_PATH) return method === "GET" || method === "POST";
+  if (pathname.startsWith(WORKSPACE_PATH_PREFIX)) {
+    return ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].includes(method) && pathname.length > WORKSPACE_PATH_PREFIX.length;
+  }
   if (!pathname.startsWith(ASSET_PATH_PREFIX) || method !== "GET") return false;
   const assetId = pathname.slice(ASSET_PATH_PREFIX.length);
   return /^[A-Za-z0-9_-]{12,128}$/.test(assetId);

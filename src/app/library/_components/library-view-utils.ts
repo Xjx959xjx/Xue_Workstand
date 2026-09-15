@@ -26,6 +26,16 @@ export function getVideoMetaText(video: Pick<Video, "publishedAt">) {
   return formatDateWithYear(video.publishedAt);
 }
 
+export function isVideoMetricMissing(
+  video: Pick<Video, "platform" | "stats" | "statsHydration">,
+  field: "comments" | "favorites"
+) {
+  if (video.platform !== "douyin") return false;
+  if (video.statsHydration?.status === "complete") return false;
+  if (video.statsHydration?.missingFields) return video.statsHydration.missingFields.includes(field);
+  return video.stats[field] === 0;
+}
+
 export function getPrimaryMetric(video: Pick<Video, "platform" | "hotScore" | "stats">) {
   if (video.platform === "douyin") {
     return {

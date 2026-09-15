@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { hydrateVideo } from "@/lib/client";
+import { hydrateVideos } from "@/lib/client";
 import type { AccountDetail } from "@/lib/types";
 
 type UseBilibiliStatsHydrationInput = {
@@ -17,7 +17,7 @@ type HydrationState = {
   status: HydrationStatus;
 };
 
-export function useBilibiliStatsHydration({
+export function useVideoStatsHydration({
   refresh,
   reloadSelectedAccountDetail,
   selectedAccount
@@ -27,10 +27,10 @@ export function useBilibiliStatsHydration({
   const [hydrationRetryVersion, setHydrationRetryVersion] = useState(0);
 
   useEffect(() => {
-    if (!selectedAccount || selectedAccount.platform !== "bilibili") return;
+    if (!selectedAccount) return;
 
     const missingStats = selectedAccount.videos
-      .filter((video) => !video.statsHydration || video.statsHydration.status === "unknown")
+      .filter((video) => !video.statsHydration || video.statsHydration.status !== "complete")
       .slice(0, 10);
     if (!missingStats.length) return;
 
@@ -45,22 +45,18 @@ export function useBilibiliStatsHydration({
       ...hydrationByAccountRef.current,
       [accountId]: { key: hydrationKey, status: "hydrating" }
     };
-    Promise.allSettled(
-      missingStats.map((video) =>
-        hydrateVideo({
-          platform: selectedAccount.platform,
-          accountId,
-          videoId: video.id
-        })
-      )
-    ).then(async (results) => {
+    hydrateVideos({
+      platform: selectedAccount.platform,
+      accountId,
+      videoIds: missingStats.map((video) => video.id)
+    }).then(async (result) => {
       if (ignore) {
         hydrationByAccountRef.current = clearHydrationState(hydrationByAccountRef.current, accountId, hydrationKey);
         return;
       }
 
-      const failedResults = results.filter(isRejectedResult);
-      const succeededCount = results.length - failedResults.length;
+      const failedCount = result.failedCount;
+      const succeededCount = result.videos.length - failedCount;
       let refreshError: unknown = null;
       if (succeededCount > 0) {
         try {
@@ -72,7 +68,7 @@ export function useBilibiliStatsHydration({
       }
 
       if (!ignore) {
-        if (!failedResults.length && !refreshError) {
+        if (!failedCount && !refreshError) {
           hydrationByAccountRef.current = {
             ...hydrationByAccountRef.current,
             [accountId]: { key: hydrationKey, status: "done" }
@@ -86,8 +82,8 @@ export function useBilibiliStatsHydration({
         };
         notify({
           tone: succeededCount > 0 ? "warning" : "error",
-          title: "B站统计补全失败",
-          message: buildHydrationFailureMessage(accountName, succeededCount, failedResults.length, refreshError || failedResults[0]?.reason),
+          title: `${selectedAccount.platform === "bilibili" ? "B站" : "抖音"}统计补全失败`,
+          message: buildHydrationFailureMessage(accountName, succeededCount, failedCount, refreshError),
           durationMs: 10000,
           action: {
             label: "重试",
@@ -98,6 +94,25 @@ export function useBilibiliStatsHydration({
           }
         });
       }
+    }).catch((error) => {
+      if (ignore) return;
+      hydrationByAccountRef.current = {
+        ...hydrationByAccountRef.current,
+        [accountId]: { key: hydrationKey, status: "failed" }
+      };
+      notify({
+        tone: "error",
+        title: `${selectedAccount.platform === "bilibili" ? "B站" : "抖音"}统计补全失败`,
+        message: buildHydrationFailureMessage(accountName, 0, missingStats.length, error),
+        durationMs: 10000,
+        action: {
+          label: "重试",
+          onClick: () => {
+            hydrationByAccountRef.current = clearHydrationState(hydrationByAccountRef.current, accountId, hydrationKey);
+            setHydrationRetryVersion((version) => version + 1);
+          }
+        }
+      });
     });
 
     return () => {
@@ -115,10 +130,6 @@ function clearHydrationState(
   const next = { ...current };
   delete next[accountId];
   return next;
-}
-
-function isRejectedResult<T>(result: PromiseSettledResult<T>): result is PromiseRejectedResult {
-  return result.status === "rejected";
 }
 
 function buildHydrationFailureMessage(

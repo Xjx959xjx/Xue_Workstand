@@ -1,3 +1,4 @@
+import { generateImages } from "./image-generation";
 import { randomUUID } from "crypto";
 import path from "path";
 import {
@@ -608,7 +609,9 @@ async function runJob(jobId: string, input: JobStartInput) {
       attempt: (current.attempt || 0) + 1
     });
 
-    if (input.kind === "write-copy") {
+    if (input.kind === "image-generation") {
+      await runImageGenerationJob(jobId, input);
+    } else if (input.kind === "write-copy") {
       await runWriteCopyJob(jobId, input);
     } else if (input.kind === "account-style") {
       await runAccountStyleJob(jobId, input);
@@ -661,6 +664,21 @@ async function runJob(jobId: string, input: JobStartInput) {
     runtime.abortControllers.delete(jobId);
     runtime.cancelRequests.delete(jobId);
   }
+}
+
+async function runImageGenerationJob(jobId: string, start: Extract<JobStartInput, { kind: "image-generation" }>) {
+  const href = `/images?recordId=${encodeURIComponent(jobId)}`;
+  await patchJob(jobId, { href, resultRef: { id: jobId, href, label: "查看图片" } });
+  const result = await generateImages(jobId, start.input, {
+    signal: getJobAbortSignal(jobId),
+    onProgress: async (message, progress, saved) => {
+      const patch = { message, progress, stage: saved ? "save" : "generate" };
+      if (saved) await patchJobWithDataChange(jobId, patch, { resource: "image-generation", recordId: jobId });
+      else await patchJob(jobId, patch);
+    }
+  });
+  throwIfCancelled(jobId);
+  await completeJob(jobId, { message: `已生成 ${result.images.length} 张图片`, result: { recordId: result.id }, resultRef: { id: jobId, href, label: "查看图片" } });
 }
 
 async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { kind: "write-copy" }>) {
@@ -1457,6 +1475,7 @@ function makeJobId(kind: JobKind) {
 }
 
 function defaultJobTitle(input: JobStartInput) {
+  if (input.kind === "image-generation") return "生成图片";
   if (input.kind === "write-copy") return "生成文案";
   if (input.kind === "account-style") return "生成账号风格卡";
   if (input.kind === "project-style") return "生成项目风格卡";
@@ -1473,6 +1492,7 @@ function defaultJobTitle(input: JobStartInput) {
 }
 
 function defaultInputSummary(input: JobStartInput) {
+  if (input.kind === "image-generation") return input.input.prompt.slice(0, 60);
   if (input.kind === "write-copy") {
     if (input.input.action === "revise") return input.input.revisionScope === "selection" ? "选中段落续改" : "全文续改";
     return input.input.mode === "topic" ? "自由输入" : "素材改写";
@@ -1503,6 +1523,7 @@ function defaultInputSummary(input: JobStartInput) {
 }
 
 function defaultJobScope(input: JobStartInput): JobScope {
+  if (input.kind === "image-generation") return { targetType: "text", sourceKey: shortHash(input.input.prompt) };
   if (input.kind === "write-copy") {
     return compactJobScope({
       targetType: input.input.targetType,
@@ -1597,6 +1618,7 @@ function compactJobScope(scope: JobScope): JobScope {
 }
 
 function defaultHref(input: JobStartInput) {
+  if (input.kind === "image-generation") return "/images";
   if (input.kind === "write-copy") return "/writer";
   if (input.kind === "account-style" || input.kind === "transcribe-video" || input.kind === "batch-transcribe") return "/library";
   if (input.kind === "project-style") return "/project-workbench";

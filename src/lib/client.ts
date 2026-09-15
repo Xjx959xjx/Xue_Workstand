@@ -1,3 +1,4 @@
+import type { ImageFile, ImageGenerationConfig, ImageGenerationList, ImageGenerationRecord } from "./image-generation-types";
 import {
   AccountDraftInput,
   AccountDetail,
@@ -859,6 +860,13 @@ export function transcribeVideo(input: {
 
 export function hydrateVideo(input: { platform: Platform; accountId: string; videoId: string }) {
   return requestJson<{ video: Video }>("/api/videos/hydrate", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function hydrateVideos(input: { platform: Platform; accountId: string; videoIds: string[] }) {
+  return requestJson<{ videos: Video[]; failedCount: number }>("/api/videos/hydrate", {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -1727,4 +1735,41 @@ function isGrossMarginHealthResponse(value: unknown): value is GrossMarginHealth
 
 export function updateWriterPreference(input: { action: "remember"; draftId: string; text: string } | { action: "undo"; draftId: string; preferenceId: string }) {
   return requestJson<{ preferenceId: string; reference: import("./types").WriteStyleReferenceInput; action: "remember" | "undo" }>("/api/write/preference", { method: "POST", body: JSON.stringify(input) });
+}
+
+let imageRecordsCache: ImageGenerationList | null = null;
+let imageRecordsRequest: Promise<ImageGenerationList> | null = null;
+let imageRecordsRevision = 0;
+export function invalidateImageRecordsCache() {
+  imageRecordsCache = null;
+  imageRecordsRequest = null;
+  imageRecordsRevision += 1;
+}
+export function getImageRecords(offset = 0) {
+  if (offset) return requestJson<ImageGenerationList>(`/api/images?offset=${offset}`);
+  if (imageRecordsCache) return Promise.resolve(imageRecordsCache);
+  if (imageRecordsRequest) return imageRecordsRequest;
+  const revision = imageRecordsRevision;
+  const request = requestJson<ImageGenerationList>("/api/images").then((result) => {
+    if (revision === imageRecordsRevision) imageRecordsCache = result;
+    return result;
+  }).finally(() => { if (imageRecordsRequest === request) imageRecordsRequest = null; });
+  imageRecordsRequest = request;
+  return request;
+}
+export function getImageGenerationConfig() {
+  return requestJson<ImageGenerationConfig>("/api/images/config");
+}
+export function getImageGenerationRecord(id: string) {
+  return requestJson<{ record: ImageGenerationRecord; references: ImageFile[] }>(`/api/images/${encodeURIComponent(id)}`);
+}
+export async function uploadImageReferences(files: File[]) {
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file));
+  const response = await fetch("/api/images/references", { method: "POST", body: form }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+  const data = await response.json().catch(() => { throw new Error("上传图片响应无效，请检查服务状态。"); }) as { references: ImageFile[]; error?: unknown };
+  if (!response.ok) throw new Error(normalizeApiError(data.error) || "上传参考图失败，请重试。");
+  return data;
 }
