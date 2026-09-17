@@ -1,43 +1,78 @@
 "use client";
-/* eslint-disable @next/next/no-img-element -- Generated assets use their original local-file URLs. */
-import { Suspense, useState } from "react";
-import { Download, ImagePlus, Plus, RefreshCw, ZoomIn } from "lucide-react";
-import { imageFileUrl, type ImageFile } from "@/lib/image-generation-types";
+import { Suspense, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { Columns2, LayoutGrid, Plus, RefreshCw, Scan, X } from "lucide-react";
+import { type ImageFile, type ImageGenerationSummary } from "@/lib/image-generation-types";
+import { ImageRecordDetails } from "./_components/ImageRecordDetails";
 import { useImageWorkbench } from "./_hooks/useImageWorkbench";
-import { ImageControls } from "./_components/ImageControls";
-import { ImagePreview } from "./_components/ImagePreview";
+import { ImageControls, ImageModelPicker } from "./_components/ImageControls";
+import { ImageGallery } from "./_components/ImageGallery";
+import { ImageResults } from "./_components/ImageResults";
+const ImagePreview = dynamic(() => import("./_components/ImagePreview").then((module) => module.ImagePreview), { ssr: false });
+const ImageCompare = dynamic(() => import("./_components/ImageCompare"), { ssr: false });
 
 export default function ImagesPage() {
   return <Suspense fallback={<div className="empty-state-panel" role="status">正在加载生图工作台…</div>}><ImageWorkbench /></Suspense>;
 }
 function ImageWorkbench() {
   const w = useImageWorkbench();
+  const [jump, setJump] = useState<{ id: string; version: number; submission: string } | null>(null);
+  const [view, setView] = useState<"canvas" | "gallery">("canvas");
+  const [inspector, setInspector] = useState<"record" | null>(null);
   const [preview, setPreview] = useState<ImageFile | null>(null);
-  return <div className="image-workbench" data-unsaved-changes={w.dirty || w.uploading ? "true" : undefined}>
-    <aside className="image-history" aria-label="生成历史">
-      <header className="image-pane-heading"><h2>生成记录</h2><span className="status-pill">{w.total}</span></header>
-      <div className="image-history-actions"><button className="btn small" type="button" onClick={w.newRecord} disabled={w.busy || w.uploading}><Plus size={14} />新建</button><button className="btn icon small" type="button" aria-label="刷新生成记录" onClick={() => void w.refresh()}><RefreshCw size={14} /></button></div>
-      <div className="image-history-list" aria-busy={w.loading}>
-        {w.loading ? <p className="image-help" role="status">正在读取历史…</p> : !w.records.length ? <div className="image-history-empty"><ImagePlus size={24} /><p>暂无生成记录</p><small>从一个画面想法开始</small></div> : null}
-        {w.records.map((record) => <button className={`image-history-item ${w.id === record.id ? "selected" : ""}`} type="button" key={record.id} aria-pressed={w.id === record.id} onClick={() => w.select(record.id)} disabled={w.busy || w.uploading}>
-          {record.thumbnail ? <img src={imageFileUrl(record.thumbnail.id)} alt="" loading="lazy" /> : <span className="image-history-placeholder"><ImagePlus size={20} /></span>}
-          <strong>{record.title}</strong><small>{record.imageCount}/{record.count} 张 · {record.size.replace("x", " × ")}</small><time dateTime={record.createdAt}>{new Date(record.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
-        </button>)}
-        {w.records.length < w.total ? <button className="btn small" type="button" disabled={w.moreLoading} onClick={() => void w.loadMore()}>{w.moreLoading ? "加载中…" : "加载更多"}</button> : null}
+  const [previewDrafts, setPreviewDrafts] = useState<Record<string, string>>({});
+  const [compared, setCompared] = useState<ImageFile[]>([]);
+  const [comparing, setComparing] = useState(false);
+  const [draggedImage, setDraggedImage] = useState<ImageFile | null>(null);
+  const workbenchElement = useRef<HTMLElement>(null);
+  const composerDock = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const dock = composerDock.current;
+    if (!dock) return;
+    const observer = new ResizeObserver(() => workbenchElement.current?.style.setProperty("--composer-clearance", `${dock.getBoundingClientRect().height + 24}px`));
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, []);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const settingsButton = useRef<HTMLButtonElement>(null);
+  const inspectorRef = useRef<HTMLElement>(null);
+  function statusFor(record: ImageGenerationSummary) {
+    const task = w.jobs.find((entry) => entry.id === record.id);
+    if (task?.status === "running") return `生成中 · 已保存 ${record.imageCount}/${record.count} 张`;
+    if (task?.status === "queued") return "排队中";
+    if (task?.status === "failed") return `生成失败 · 已保存 ${record.imageCount} 张`;
+    if (task?.status === "cancelled") return `已停止 · 已保存 ${record.imageCount} 张`;
+    if (task?.status === "interrupted") return `已中断 · 已保存 ${record.imageCount} 张`;
+    return record.imageCount === record.count ? `${record.imageCount} 张已保存` : `${record.imageCount}/${record.count} 张 · 未完成`;
+  }
+  function select(id: string) { setJump({ id, version: Date.now(), submission: w.submissionKey }); w.select(id); setView("canvas"); setInspector(null); }
+  function toggleCompare(image: ImageFile) {
+    if (compared.some((item) => item.id === image.id)) setCompared((items) => items.filter((item) => item.id !== image.id));
+    else if (compared.length < 4) setCompared((items) => [...items, image]);
+    else w.fail(new Error("最多同时对比 4 张图片，请先取消一张。"));
+  }
+  const list = view === "gallery" ? w.records : w.boardRecords;
+  const total = view === "gallery" ? w.total : w.boardTotal;
+  return <div className="page images-page">
+    <h1 className="sr-only">生图工作台</h1>
+    <section ref={workbenchElement} className={`image-workbench ${view === "canvas" ? "is-creation-view" : ""}`}>
+      <header className="image-workbench-toolbar"><div className="image-view-switch" role="group" aria-label="工作区视图"><button ref={settingsButton} className="btn" type="button" aria-pressed={view === "canvas"} onClick={() => setView("canvas")}><Scan size={16} />图片创作</button><button className="btn" type="button" aria-pressed={view === "gallery"} onClick={() => setView("gallery")}><LayoutGrid size={16} />作品图库 <small>{w.total}</small></button></div><div className="image-toolbar-actions"><button className="btn" type="button" disabled={w.busy || w.uploading || w.active} onClick={() => { w.newRecord(); setView("canvas"); }}><Plus size={16} />新建创作</button>{compared.length ? <button className="btn small" type="button" onClick={() => setComparing(true)} disabled={compared.length < 2}><Columns2 size={15} />对比 {compared.length ? `${compared.length}/4` : "方案"}</button> : null}{compared.length ? <button className="btn small" type="button" onClick={() => setCompared([])}>清空选择</button> : null}<button className="btn icon" type="button" aria-label="刷新生成记录" onClick={() => { void w.refresh(); void w.refreshBoard(); }}><RefreshCw size={15} /></button></div></header>
+      {w.deletion ? <div className="image-deletion-feedback" role="status">{w.deletion.message}{w.deletion.operationId ? <button className="btn small" type="button" disabled={w.deleting} onClick={() => void w.undoDelete()}>撤销删除</button> : null}</div> : null}
+      {w.error ? <div className="error image-workbench-error" role="alert">{w.error}</div> : null}
+      {(w.batchJobs.length ? w.batchJobs : w.job ? [w.job] : []).filter((task) => task.status !== "completed").map((task) => <div key={task.id} className="image-job-status" aria-live="polite" aria-busy={task.status === "running" || task.status === "queued"}><span>{task.title} · {task.error || task.message}</span>{task.status === "running" || task.status === "queued" ? <progress max={100} value={task.progress} aria-label="图片生成进度" /> : null}</div>)}
+      <div className={`image-workspace ${inspector ? "has-inspector" : ""}`}>
+        <div className="image-workspace-main">
+          {view === "canvas" ? <>
+          <ImageModelPicker workbench={w} />
+          <ImageResults jump={jump?.submission === w.submissionKey ? jump : null} submissionKey={w.submissionKey} previewOpen={Boolean(preview)} jobs={w.jobs} records={w.boardRecords} record={w.record} loading={w.boardLoading} active={w.active} disabled={w.busy || w.uploading} onReproduce={(id) => { void w.reproduce(id); }} onReference={w.addResultReferences} onPreview={setPreview} onDragImage={setDraggedImage}>{list.length < total ? <div className="image-more-records"><button className="btn small" type="button" disabled={w.moreLoading} onClick={() => void w.loadMore(true)}>{w.moreLoading ? "加载中…" : `加载更多 · ${list.length}/${total}`}</button></div> : null}</ImageResults></> : <ImageGallery records={w.records} loading={w.loading} selectedId={w.id} compared={compared} onSelect={select} onCompare={toggleCompare} deleting={w.deleting} onDelete={(id) => { void w.deleteRecords({ action: "delete", id }); }} onClearFailed={() => { void w.deleteRecords({ action: "clear-failed" }); }} statusFor={statusFor} />}
+          {view === "gallery" && list.length < total ? <div className="image-more-records"><button className="btn small" type="button" disabled={w.moreLoading} onClick={() => void w.loadMore(false)}>{w.moreLoading ? "加载中…" : `加载更多 · ${list.length}/${total}`}</button></div> : null}
+        </div>
+        {inspector ? <aside ref={inspectorRef} id="image-inspector" className="image-inspector" aria-label="生成详情" onKeyDown={(event) => { if (event.key === "Escape") { setInspector(null); settingsButton.current?.focus(); } }}><header className="image-pane-heading"><h2>生成详情</h2><button className="btn icon small" type="button" aria-label="关闭详情栏" onClick={() => { setInspector(null); settingsButton.current?.focus(); }}><X size={17} /></button></header>{w.detailLoading ? <p role="status">正在读取记录…</p> : w.record ? <ImageRecordDetails workbench={w} onPreview={setPreview} onReuse={(image) => { if (w.reuse(image)) { setInspector(null); document.getElementById("image-prompt")?.focus(); } }} /> : <p>选择生成记录查看详情。</p>}</aside> : null}
       </div>
-    </aside>
-    <ImageControls workbench={w} />
-    <section className="image-results" aria-labelledby="image-results-title">
-      <header className="image-pane-heading"><div><h1 id="image-results-title">生成结果</h1><small>{w.record ? `${w.record.model} · ${w.record.images.length} 张已保存` : "把画面想法变成图片"}</small></div><span className="status-pill">{w.form.size.replace("x", " × ")}</span></header>
-      {w.error ? <div className="error" role="alert">{w.error}</div> : null}
-      {w.job ? <div className="image-job-status" aria-live="polite" aria-busy={w.active}><span>{w.job.error || (w.job.status === "interrupted" ? "服务重启，生成已中断。已保存图片保留，可再次生成。" : w.job.status === "cancelled" ? "生成已停止，已保存图片保留。" : w.job.message)}</span>{w.active ? <progress value={w.job.progress} max={100} aria-label="图片生成进度" /> : null}{w.job.status === "failed" ? <small>已保存图片保留。修正参数后点击“再次生成”重试。</small> : null}</div> : null}
-      <div className="image-result-scroll" aria-busy={w.detailLoading}>
-        {w.record?.images.length ? <div className={`image-result-grid ${w.record.images.length === 1 ? "single" : ""}`}>{w.record.images.map((image, index) => <article className="image-result-card" key={image.id}>
-          <button className="image-result-open" type="button" aria-label={`放大第 ${index + 1} 张图片`} onClick={() => setPreview(image)}><img src={imageFileUrl(image.id)} alt={`生成结果 ${index + 1}：${w.record?.prompt.slice(0, 100)}`} /><span className="image-zoom-label"><ZoomIn size={16} />放大预览</span></button>
-          <footer><span>方案 {String(index + 1).padStart(2, "0")}</span><a className="btn small" href={imageFileUrl(image.id, true)} download><Download size={14} />下载</a></footer>
-        </article>)}</div> : <div className="image-results-empty"><ImagePlus size={42} strokeWidth={1.3} /><h2>{w.active ? "正在构建你的画面" : w.detailLoading ? "正在读取图片" : "还没有生成图片"}</h2><p>{w.active ? "图片生成需要一些时间，完成后会逐张出现在这里。" : "输入提示词，选好比例，开始生成。"}</p><small>支持参考图引导 · 多方案生成 · 原图下载</small></div>}
-      </div>
+      <div ref={composerDock} className="image-composer-dock" hidden={view !== "canvas"}><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => { void w.upload(Array.from(event.target.files || [])); event.target.value = ""; }} />
+      <ImageControls draggedImage={draggedImage} onUpload={() => fileInput.current?.click()} workbench={w} onLocate={(id) => { const image = [...w.availableReferences, ...w.recordReferences].find((item) => item.id === id); if (image) setPreview(image); }} /></div>
     </section>
-    {preview ? <ImagePreview image={preview} onClose={() => setPreview(null)} /> : null}
+    {preview ? <ImagePreview drafts={previewDrafts} onDraftChange={(id, text) => setPreviewDrafts((current) => ({ ...current, [id]: text }))} workbench={w} image={preview} images={w.record?.images.length ? w.record.images : w.references} onClose={() => setPreview(null)} /> : null}
+    {comparing ? <ImageCompare images={compared} onClose={() => setComparing(false)} /> : null}
   </div>;
 }

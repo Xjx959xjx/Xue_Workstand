@@ -59,11 +59,16 @@ export function AssetTextList({
       </div>
       <div className={`asset-text-list ${items.length ? "" : "empty"}`}>
         {items.length ? items.map((item, index) => {
-          const isAiGenerated = itemOrigins?.[index] === "ai_generated";
+          const origin = itemOrigins?.[index];
+          const originLabel = origin === "reused_hot_comment"
+            ? "相关原评"
+            : origin === "ai_generated"
+              ? "AI 补写"
+              : "";
           return (
-            <p className={isAiGenerated ? "is-ai-generated" : undefined} key={`${index}-${item}`}>
+            <p className={origin ? `origin-${origin}` : undefined} key={`${index}-${item}`}>
               {item}
-              {isAiGenerated ? <span className="asset-item-origin">AI 生成</span> : null}
+              {originLabel ? <span className={`asset-item-origin origin-${origin}`}>{originLabel}</span> : null}
             </p>
           );
         }) : empty}

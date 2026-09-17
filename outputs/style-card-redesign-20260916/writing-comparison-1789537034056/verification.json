@@ -1,0 +1,21 @@
+{
+  "source": "/Users/xjx/Documents/New project 3/style-library/douyin/最翁说游/drafts/2026-09-16T05-14-30-815Z-ea5a391b70.json",
+  "case": "用户指定的 Faker 素材与表达参照",
+  "sourceHash": "ddd2f215cf526d8d411e930a27798b0cca627e5ac331a79541bde913d2eb9d9b",
+  "note": "单例、每组一次；同一已保存素材/卡/原文，只有系统提示词不同，不等同于稳定质量结论。",
+  "variants": [
+    {
+      "name": "当前提示词",
+      "model": "gpt-6-astra",
+      "wireApi": "chat_completions",
+      "chars": 326
+    },
+    {
+      "name": "候选提示词",
+      "model": "gpt-6-astra",
+      "wireApi": "chat_completions",
+      "chars": 473
+    }
+  ],
+  "sourceUnchanged": true
+}

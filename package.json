@@ -42,6 +42,12 @@
     "engagement:refresh-style": "node scripts/refresh-engagement-comment-benchmarks.mjs"
   },
   "dependencies": {
+    "@tiptap/extension-mention": "^3.31.3",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
+    "@tiptap/suggestion": "^3.31.3",
+    "@xyflow/react": "^12.11.6",
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^0.468.0",
@@ -53,6 +59,7 @@
     "react-server-dom-webpack": "19.2.6",
     "undici": "^8.10.0",
     "vinext": "1.0.0-beta.8",
+    "yet-another-react-lightbox": "^3.32.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {

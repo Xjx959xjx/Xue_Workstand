@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check, ChevronDown, Search } from "lucide-react";
+import { WriterDialogModal } from "./WriterDialogModal";
 import { formatPlatform } from "@/components/Formatters";
 import { writeStyleReferenceKey } from "@/lib/write-references";
 import type { AccountListItem, ProjectListItem, WriteStyleReferenceInput } from "@/lib/types";
@@ -31,7 +32,7 @@ export function WriterReferencePicker({
   references
 }: WriterReferencePickerProps) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const [query, setQuery] = useState("");
   const options = useMemo<ReferenceOption[]>(() => [
     ...projects.map((project) => ({
       key: writeStyleReferenceKey({ targetType: "project", projectId: project.id }),
@@ -55,22 +56,6 @@ export function WriterReferencePicker({
     ? `已选 ${selectedOptions.length} 个风格 · 分别生成`
     : selectedOptions[0]?.label || "选择参考风格";
 
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
   const toggleReference = (option: ReferenceOption) => {
     const selected = selectedKeys.includes(option.key);
     if (selected && references.length === 1) return;
@@ -86,13 +71,13 @@ export function WriterReferencePicker({
       {group.map((option) => {
         const selected = selectedKeys.includes(option.key);
         return (
+          <div className="writer-picker-option-row" key={option.key}>
           <button
-            aria-selected={selected}
+            aria-checked={selected}
             className="writer-reference-option"
-            disabled={!selected && references.length >= MAX_CONCURRENT_STYLES}
-            key={option.key}
+            disabled={(selected && references.length === 1) || (!selected && references.length >= MAX_CONCURRENT_STYLES)}
             onClick={() => toggleReference(option)}
-            role="option"
+            role="checkbox"
             type="button"
           >
             <span className={`writer-reference-check ${selected ? "selected" : ""}`} aria-hidden="true">
@@ -104,31 +89,40 @@ export function WriterReferencePicker({
             </span>
             {selected ? <em>独立成稿</em> : null}
           </button>
+          <button className="btn small ghost" type="button" aria-label={`仅用${option.label}风格`} onClick={() => { onChange([option.reference]); setOpen(false); }}>仅用</button>
+          </div>
         );
       })}
     </section>
   ) : null;
 
   return (
-    <div className="writer-reference-picker" ref={rootRef}>
+    <div className="writer-reference-picker">
       <button
         aria-expanded={open}
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         className="writer-reference-picker-trigger"
         disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => { setQuery(""); setOpen(true); }}
         type="button"
       >
-        <span>{summary}</span>
+        <span className="writer-account-avatar" aria-hidden="true">{selectedOptions[0]?.label.slice(0, 1) || "选"}</span>
+        <span className="writer-account-trigger-copy"><strong>{summary}</strong><small>{selectedOptions.length > 1 ? "每个风格独立成稿" : selectedOptions[0]?.meta || "账号或项目风格"}</small></span>
         {selectedOptions.length > 1 ? <small>{selectedOptions.length}</small> : null}
         <ChevronDown aria-hidden="true" size={15} />
       </button>
       {open ? (
-        <div aria-label="选择参考风格" aria-multiselectable="true" className="writer-reference-menu" role="listbox">
-          {renderGroup("项目风格", options.filter((option) => option.reference.targetType === "project"))}
-          {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account"))}
-          <p>至少保留 1 个，最多 8 个；多选会按每张风格卡并发生成独立文案，不会混合风格。</p>
-        </div>
+        <WriterDialogModal labelledBy="writer-picker-title" onClose={() => setOpen(false)} panelClassName="writer-picker-dialog">
+          <div className="modal-header"><div><h2 id="writer-picker-title">选择写作风格</h2><p className="pane-subtitle">可多选，每个账号或项目分别生成一篇稿件。</p></div><button className="btn compact" onClick={() => setOpen(false)} type="button">完成 · {selectedOptions.length}</button></div>
+          <div className="writer-picker-body">
+            <label className="writer-picker-search"><Search size={16} aria-hidden="true" /><span className="sr-only">搜索账号或项目</span><input type="search" aria-label="搜索账号或项目" placeholder="搜索账号、项目或平台" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+            <div className="writer-picker-selected">已选：{selectedOptions.map((option) => <span key={option.key}>{option.label}</span>)}</div>
+            {renderGroup("项目风格", options.filter((option) => option.reference.targetType === "project" && `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase())))}
+            {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account" && `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase())))}
+            {!options.some((option) => `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase())) ? <p className="subtle" role="status">没有匹配的账号或项目，试试其他名称。</p> : null}
+            <p className="subtle">点“仅用”直接切换；勾选多个风格分别成稿，最多 8 个。</p>
+          </div>
+        </WriterDialogModal>
       ) : null}
     </div>
   );

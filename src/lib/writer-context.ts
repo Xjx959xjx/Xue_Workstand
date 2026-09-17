@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { shortHash } from "./utils";
 
-export const STYLE_ANALYSIS_VERSION = 4;
-export const WRITER_PROMPT_VERSION = "writer-v8-direct-reference";
+export { STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION, styleAnalysisInstruction } from "./writer-prompts";
 export const WRITER_REFERENCE_BUDGET = 14_000;
 const text = z.string().trim().min(1);
 const evidence = z.object({ quote: text.max(500), action: text.max(400), when: text.max(300), avoid: z.string().max(300) });
@@ -102,31 +101,119 @@ export function styleEvidenceQuotes(analysis: StyleEvidence) {
   ])];
 }
 
-export function styleAnalysisInstruction() {
-  return [
-    "完整阅读这一篇原文，分析它实际如何表达，不生成新稿。只输出JSON。",
-    "目的和讲述方式分开记录：purposes写文本实际承担的目的，可以同时介绍、评论、引导参与；narrative.forms写吃瓜、趣事、悬念、科普等讲法。吃瓜切入与推广目的可以同时成立，不是互斥分类。",
-    "完整读到结尾再判断。不能凭标题、开头或题材排除介绍或推广用途；也不能因提到游戏就认定是推广。是否付费合作无法从文本确认时不要推断。",
-    "narrative.beats按原文顺序记录关键段落的作用及原句，允许一篇先聊争议或趣事、再介绍游戏或活动。narrative.bridges记录目的转变时怎样承接，以及借用这种衔接需要哪些真实素材；没有转接就返回空数组，不强造广告段。",
-    "bridge的before和after必须是依次出现且互不重叠的连续原句，选紧邻转接处、足以看懂承接的内容；不能拿相隔很远的两句伪装自然衔接。",
-    "结构记录开场如何引出具体问题、怎样推进与转折、如何收尾；moves记录具体表达动作及适用条件和不适用情形。",
-    "quote必须是原文连续逐字摘录，保留标点，不改字不省略；选足以展示表达动作的段落，不能只有泛泛口头禅。",
-    "不要将单篇习惯升级为账号通则，不从文本臆测镜头或配乐，不把转写错字认作口头禅。",
-    '结构：{"genre":"文体描述，允许混合","purposes":["实际目的"],"unsuitable":["需要哪些事实而当前任务可能不具备，不能仅凭讲法判定不适用"],"structure":"叙述推进方式","narrative":{"forms":["讲述方式"],"beats":[{"purpose":"这段起什么作用","quote":"20至100字连续原句"}],"bridges":[{"before":"转接前原句","after":"转接后原句","action":"怎样把前面的兴趣带到后面的内容","requires":"本次资料要具备什么才能借用"}]},"moves":[{"quote":"20至180字连续原文","action":"如何表达","when":"适用情形","avoid":"例外或限制"}],"limitations":["本篇不能支持的推断"]}。',
-    "按证据选择1至4项moves、1至5段beats、0至2处bridges，不为凑数增加规则；不逐句复述，也不要求每篇都有反转或推广。"
-  ].join("\n");
+export function styleEvidencePassages(analysis: StyleEvidence, transcript: string) {
+  const quotes = styleEvidenceQuotes(analysis);
+  const ranges = quotes.map(quote => {
+    const start = transcript.indexOf(quote);
+    if (start < 0) throw new Error("风格证据无法在原文定位，原卡已保留，请重新分析。");
+    return { start, end: start + quote.length };
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: typeof ranges = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    // Join only overlap or whitespace between verified quotes, keeping the exact original text.
+    // Bound additional passages so a dense set of annotations does not re-insert a whole long transcript.
+    if (previous && range.end - previous.start <= 1500 && (range.start <= previous.end || !transcript.slice(previous.end, range.start).trim())) {
+      previous.end = Math.max(previous.end, range.end);
+    } else merged.push({ ...range });
+  }
+  return [...new Set([...quotes, ...merged.map(range => transcript.slice(range.start, range.end))])];
 }
 
 export function referenceSelectionInstruction() {
   return "目的和讲法分别匹配：推广可以用吃瓜、趣事或悬念切入，不能仅因genre或开头是争议就排除整篇。结合purposes、narrative.beats及bridges判断具体可借鉴段落、怎样转入游戏或活动。借用衔接前核对requires与本次真实资料；无依据不能编造爆料、玩家反应或亲历。纯争议稿也可借鉴适用的局部表达，但不能把提到同一游戏视为推广依据。";
 }
 
-export function validateStyleCardCitations(style: string, evidenceQuotes?: Array<{ sourceId: string; quote: string }>) {
-  if (!evidenceQuotes) return;
-  const citations = [...style.matchAll(/\[\[([^\]\n]+)\]\]「([^」]+)」/g)];
-  if (!citations.length || citations.some(([, id, quote]) => !evidenceQuotes.some(e => e.sourceId === id && e.quote === quote))) {
-    throw new Error("风格卡缺少有效原文引用或改写了证据，原卡已保留，请重新归纳。");
+export type StyleCardEvidence = { sourceId: string; quote: string; workHash?: string };
+type StyleCardCitation = { sourceId: string; start: number; end: number };
+
+export function validateStyleCardCitations(
+  style: string,
+  evidenceQuotes?: StyleCardEvidence[],
+  options: { requireRules?: boolean } = {}
+) {
+  if (!evidenceQuotes) {
+    if (options.requireRules) throw new Error("风格卡缺少本轮核验原文，原卡已保留，请重新归纳。");
+    return;
   }
+  const invalidCitation = () => new Error("风格卡缺少有效原文引用或改写了证据，原卡已保留，请重新归纳。");
+  const citations: StyleCardCitation[] = [];
+  const marker = /\[\[([^\]\n]+)\]\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = marker.exec(style))) {
+    const sourceId = match[1];
+    const quotes = evidenceQuotes.filter(item => item.sourceId === sourceId).map(item => item.quote);
+    if (!quotes.length) throw invalidCitation();
+    // A known bare source ID is a bibliography pointer, not supporting evidence for a rule.
+    if (style[marker.lastIndex] !== "「") continue;
+    const start = marker.lastIndex + 1;
+    const maxLength = Math.max(0, ...quotes.map(quote => quote.length));
+    let end = style.indexOf("」", start);
+    let verifiedEnd = -1;
+    // Quotes may themselves contain 「」. Choose the longest verified continuous excerpt.
+    while (end >= 0 && end - start <= maxLength) {
+      const excerpt = style.slice(start, end);
+      if (excerpt.trim() && quotes.some(quote => quote.includes(excerpt))) verifiedEnd = end;
+      end = style.indexOf("」", end + 1);
+    }
+    if (verifiedEnd < 0) throw invalidCitation();
+    citations.push({ sourceId: match[1], start: match.index, end: verifiedEnd + 1 });
+    marker.lastIndex = verifiedEnd + 1;
+  }
+  if (!citations.length) throw invalidCitation();
+  if (options.requireRules) validateStyleCardRules(style, citations, evidenceQuotes);
+}
+
+function validateStyleCardRules(style: string, citations: StyleCardCitation[], evidence: StyleCardEvidence[]) {
+  // Mask source text before reading Markdown so a heading inside an original quote is not a rule.
+  let markdown = "";
+  let cursor = 0;
+  for (const citation of citations) {
+    markdown += style.slice(cursor, citation.start) + style.slice(citation.start, citation.end).replace(/[^\n\r]/g, " ");
+    cursor = citation.end;
+  }
+  markdown += style.slice(cursor);
+  const fail = (reason: string): never => { throw new Error(`风格卡${reason}，原卡已保留，请重新归纳。`); };
+  if (/^\s*```/m.test(markdown)) fail("应直接输出 Markdown，不能用代码围栏包裹规则");
+  const headings = [...markdown.matchAll(/^(#{1,6})[ \t]+(.+?)[ \t]*\r?$/gm)];
+  const sectionNames = ["风格概览", "跨样本表达倾向", "场景写法与单篇观察", "连续表达示例", "使用边界与证据范围"];
+  const sections = headings.filter(heading => heading[1] === "##");
+  for (const name of sectionNames.filter(name => name !== "连续表达示例")) {
+    if (sections.filter(section => section[2] === name).length !== 1) fail(`缺少或重复“${name}”章节`);
+  }
+  if (sections.some(section => !sectionNames.includes(section[2]))) fail("包含未约定章节，请将规则放入对应的分层章节");
+  const ids = new Set<string>();
+  for (const [index, section] of sections.entries()) {
+    if (section[2] !== "跨样本表达倾向" && section[2] !== "场景写法与单篇观察") continue;
+    const start = section.index! + section[0].length;
+    const end = sections[index + 1]?.index ?? markdown.length;
+    const rules = headings.filter(heading => heading.index! >= start && heading.index! < end);
+    if (!rules.length) {
+      if (!/^本轮不足以确认[。.]?$/.test(markdown.slice(start, end).trim())) fail(`“${section[2]}”缺少编号规则或证据不足说明`);
+      continue;
+    }
+    if (markdown.slice(start, rules[0].index).trim()) fail("包含未编号规则，请按 S/C/O 分层");
+    for (const [ruleIndex, heading] of rules.entries()) {
+      const rule = /^([SCO]\d{2,})[｜|：:、.\s-]+\S/.exec(heading[2]);
+      if (heading[1] !== "###" || !rule) fail("规则标题须使用三级标题及 S/C/O 编号");
+      const id = rule![1];
+      if (ids.has(id)) fail(`规则编号 ${id} 重复`);
+      ids.add(id);
+      if ((id.startsWith("S")) !== (section[2] === "跨样本表达倾向")) fail(`规则 ${id} 所在章节与层级不一致`);
+      const ruleEnd = rules[ruleIndex + 1]?.index ?? end;
+      const body = markdown.slice(heading.index! + heading[0].length, ruleEnd);
+      const lines = body.split(/\r?\n/).map(line => line.replace(/^\s*[-*]\s+/, "").replace(/\*\*/g, "").trim());
+      const fields = id.startsWith("O") ? ["支持范围", "观察", "尚不能确定"] : ["支持范围", "触发条件", "表达动作", "停止与例外"];
+      for (const field of fields) {
+        if (!lines.some(line => new RegExp(`^${field}[:：]\\s*\\S`).test(line))) fail(`规则 ${id} 缺少“${field}”`);
+      }
+      const references = citations.filter(citation => citation.start >= heading.index! && citation.end <= ruleEnd);
+      if (!references.length) fail(`规则 ${id} 缺少原文引用`);
+      const works = new Set(references.map(citation => evidence.find(item => item.sourceId === citation.sourceId)?.workHash || citation.sourceId));
+      if (id.startsWith("S") && works.size < 2) fail(`规则 ${id} 至少需要两个不同作品的原文引用，同文转载不能重复计数`);
+    }
+  }
+  if (!ids.size) fail("没有可核验的分层规则");
 }
 
 export function candidateIndex(candidate: WriterCandidate) {

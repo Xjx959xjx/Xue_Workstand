@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
+import { handleWriterDialogKeyDown } from "./WriterDialogModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate, formatPlatform } from "@/components/Formatters";
 import type { DraftSummary } from "@/lib/types";
@@ -12,7 +13,7 @@ type WriterHistoryPanelProps = {
   open: boolean;
   selectedDraftId: string;
   onClose: () => void;
-  onSelectDraft: (draft: DraftSummary) => Promise<void>;
+  onSelectDraft: (draft: DraftSummary) => Promise<void | boolean>;
   onRenameDraft: (draft: DraftSummary, title: string) => Promise<void>;
   onDeleteDraft: (draft: DraftSummary) => Promise<void>;
   onDeleteDrafts: (drafts: DraftSummary[]) => Promise<void>;
@@ -55,6 +56,7 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [openingDraftId, setOpeningDraftId] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const wasOpenRef = useRef(false);
   const skipBlurSubmitRef = useRef(false);
@@ -87,7 +89,7 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      setHistoryView(selectedSessionId ? "current" : "all");
+      setHistoryView("all");
       setSearchQuery("");
     } else if (!open && wasOpenRef.current) {
       setContextMenu(null);
@@ -113,6 +115,13 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [bulkDeleteOpen, deleteTarget, onClose, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    return () => { previouslyFocused?.focus(); };
+  }, [open]);
 
   useEffect(() => {
     if (!editingDraftId) return;
@@ -373,7 +382,7 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
             }
             setOpeningDraftId(draft.id);
             void onSelectDraft(draft)
-              .then(onClose)
+              .then((selected) => { if (selected !== false) onClose(); })
               .catch(() => undefined)
               .finally(() => setOpeningDraftId(""));
           }}
@@ -412,6 +421,11 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
           role="presentation"
         >
           <aside
+            ref={panelRef}
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === "Tab" && !deleteTarget && !bulkDeleteOpen) handleWriterDialogKeyDown(event, onClose);
+            }}
             aria-labelledby="writer-history-title"
             aria-modal="true"
             className={`writer-history-panel ${manageMode ? "selection-mode" : ""}`}
@@ -420,8 +434,8 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
             <div className="writer-history-shell">
               <div className="writer-history-header">
                 <div>
-                  <h2 id="writer-history-title">版本历史</h2>
-                  <p className="pane-subtitle">从当前任务切换版本，或搜索全部写作会话</p>
+                  <h2 id="writer-history-title">历史任务</h2>
+                  <p className="pane-subtitle">按话题和账号查找以前的稿件</p>
                 </div>
                 <div className="writer-history-header-actions">
                   <button
@@ -432,7 +446,7 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
                   >
                     {manageMode ? "退出管理" : "批量管理"}
                   </button>
-                  <button aria-label="关闭版本历史" className="btn icon-only compact" onClick={onClose} type="button">
+                  <button aria-label="关闭历史任务" className="btn icon-only compact" onClick={onClose} type="button">
                     <X aria-hidden="true" size={16} />
                   </button>
                 </div>

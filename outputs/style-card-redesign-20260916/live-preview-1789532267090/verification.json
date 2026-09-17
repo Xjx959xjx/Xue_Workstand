@@ -1,0 +1,41 @@
+{
+  "preview": "/Users/xjx/Documents/New project 3/outputs/style-card-redesign-20260916/live-preview-1789532267090",
+  "sourceIds": [
+    "7614809579326577777",
+    "7183274570739109177",
+    "7596683369229339377"
+  ],
+  "checks": [
+    {
+      "name": "已保存模型预览重新通过规则校验（不修改文本）",
+      "ok": true,
+      "model": "saved-preview",
+      "chars": 4961,
+      "storedCard": "outputs/style-card-redesign-20260916/live-preview-1789532267090/raw-card-1789532799149.md"
+    },
+    {
+      "name": "叙事转向",
+      "ok": true,
+      "model": "gpt-6-astra",
+      "chars": 173
+    },
+    {
+      "name": "无反转说明",
+      "ok": true,
+      "model": "gpt-6-astra",
+      "chars": 115
+    },
+    {
+      "name": "产品介绍",
+      "ok": true,
+      "model": "gpt-6-astra",
+      "chars": 234
+    }
+  ],
+  "errors": [],
+  "sourceHashes": {
+    "7614809579326577777": "0d3f3d36601384c83bbab87ba36e1f70a11ae318da93a1b821217f3e27bd36dc",
+    "7183274570739109177": "591d27ca625632da0e2d3f55c52966814d00aaefab28d8c9bf3b70fb9b5957cf",
+    "7596683369229339377": "534a627bf74a493ff3fda478bb155eb10894af0465234f93e464f4bf3bbfa04c"
+  }
+}

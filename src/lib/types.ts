@@ -1,3 +1,4 @@
+import type { ImagePromptAssistInput } from "./image-prompt-assist-types";
 import type { ImageGenerationInput } from "./image-generation-types";
 export const platforms = ["bilibili", "douyin"] as const;
 
@@ -222,6 +223,18 @@ export type DraftAssets = {
           commentCount: number;
           error?: string;
         }>;
+        quarantinedVideoCount?: number;
+        quarantinedCommentCount?: number;
+        quarantinedSources?: Array<{
+          platform: Platform;
+          videoId: string;
+          videoTitle: string;
+          commentCount: number;
+          detection: "heuristic" | "model";
+          reasons: string[];
+        }>;
+        quarantineClassifierStatus?: "completed" | "fallback" | "not_needed";
+        quarantineClassifierError?: string;
         hotComments?: string[];
         reusableComments?: string[];
         sampleLibraryCount?: number;
@@ -272,6 +285,8 @@ export type DraftAssets = {
         usedQueries: string[];
         failedQueries: string[];
         skippedRelatedSearch: boolean;
+        quarantinedVideoCount?: number;
+        quarantinedCommentCount?: number;
         sourceCommentCount?: number;
         sourceAwemeId?: string;
         sourceTitle?: string;
@@ -286,6 +301,8 @@ export type DraftAssets = {
         completedCount: number;
         supplementedCount: number;
         reusedHotCommentCount?: number;
+        reusedRelatedCommentCount?: number;
+        aiGeneratedCount?: number;
         targetLongCommentCount?: number;
         lengthBuckets?: {
           short: number;
@@ -1159,6 +1176,7 @@ export type BatchTranscribeResult = {
 };
 
 export const jobKinds = [
+  "image-prompt-assist",
   "image-generation",
   "write-copy",
   "account-style",
@@ -1273,6 +1291,7 @@ export type LibraryTrashOperation = {
 };
 
 export type JobStartInput =
+  | { kind: "image-prompt-assist"; title?: string; inputSummary?: string; href?: string; input: ImagePromptAssistInput }
   | { kind: "image-generation"; title?: string; inputSummary?: string; href?: string; input: ImageGenerationInput }
   | {
       kind: "write-copy";

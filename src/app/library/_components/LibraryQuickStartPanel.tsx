@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, Search } from "lucide-react";
+import { Monitor, Music2, Play, Search } from "lucide-react";
 import type { CollectOrder, Platform } from "@/lib/types";
 import { timeRangeOptions, type TimeRange } from "./library-collect-utils";
 
@@ -129,6 +129,7 @@ function CollectControls({
             onClick={() => onPlatformChange("bilibili")}
             type="button"
           >
+            <Monitor aria-hidden="true" size={14} />
             B站
           </button>
           <button
@@ -137,6 +138,7 @@ function CollectControls({
             onClick={() => onPlatformChange("douyin")}
             type="button"
           >
+            <Music2 aria-hidden="true" size={14} />
             抖音
           </button>
         </div>

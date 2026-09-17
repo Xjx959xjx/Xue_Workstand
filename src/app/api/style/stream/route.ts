@@ -34,7 +34,7 @@ export async function POST(request: Request) {
           emit({
             type: "stage",
             stage: "analysis",
-            message: `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
+            message: progress.message || `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
             progress: Math.min(34, 12 + percent)
           });
         }
@@ -57,7 +57,6 @@ export async function POST(request: Request) {
       });
       const result = await streamStyleResponseTextWithFallback({
         messages: context.messages,
-        maxOutputTokens: 3200,
         signal,
         onDelta(delta) {
           if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;

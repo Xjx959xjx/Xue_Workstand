@@ -759,6 +759,14 @@ html[data-skin="shinigami"] :is(.field input, .field select, .field textarea, .w
     0 8px 24px color-mix(in oklch, var(--accent) 12%, transparent);
 }
 
+/* Composite controls own their border and focus ring on the outer shell. */
+html[data-skin="shinigami"] :is(.tools-input-shell, .gross-rate-input, .gross-quantity-input) > input {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: 0;
+}
+
 html[data-skin="shinigami"] :is(.segmented, .source-tabs) {
   border-color: color-mix(in oklch, var(--accent) 22%, var(--line));
   background: color-mix(in oklch, var(--panel-muted) 58%, var(--panel-soft));
@@ -945,6 +953,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .douyin-hotlist-item:hover {
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--accent-tint) 12%, var(--panel-raised)), color-mix(in oklch, var(--panel) 96%, black));
   box-shadow: 0 9px 22px color-mix(in oklch, black 32%, transparent);
+  transform: none;
 }
 
 html[data-skin="shinigami"] .douyin-hotlist-page .douyin-hotlist-item.is-surging {
@@ -957,6 +966,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .douyin-hotlist-item.is-surging
 html[data-skin="shinigami"] .douyin-hotlist-page .douyin-hotlist-item.is-surging:hover {
   border-color: color-mix(in oklch, var(--surge-color) 26%, var(--line));
   box-shadow: 0 9px 22px color-mix(in oklch, black 32%, transparent);
+  transform: none;
 }
 
 html[data-skin="shinigami"] .douyin-hotlist-page .douyin-hotlist-rank {

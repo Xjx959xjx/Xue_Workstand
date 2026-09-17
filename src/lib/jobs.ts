@@ -1,3 +1,4 @@
+import { assistImagePrompt } from "./image-prompt-assist";
 import { generateImages } from "./image-generation";
 import { randomUUID } from "crypto";
 import path from "path";
@@ -395,7 +396,11 @@ export async function listJobs() {
   return [...jobs.values()].sort(compareJobsByUpdatedAtDesc);
 }
 
-export async function listJobSummaries() {
+export function isJobExecuting(jobId: string) {
+  return runtime.abortControllers.has(jobId) || runtime.pending.has(jobId);
+}
+
+export async function listJobSummaries(options: { all?: boolean } = {}) {
   await ensureInitialized();
   const summaries = new Map(
     (await listJobSummariesFromDisk()).map((job) => [job.id, stripSummaryFilePath(job)])
@@ -403,7 +408,8 @@ export async function listJobSummaries() {
   for (const job of runtime.records.values()) {
     if (isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
   }
-  return [...summaries.values()].sort(compareJobsByUpdatedAtDesc).slice(0, JOB_SUMMARY_LIMIT);
+  const sorted = [...summaries.values()].sort(compareJobsByUpdatedAtDesc);
+  return options.all ? sorted : sorted.slice(0, JOB_SUMMARY_LIMIT);
 }
 
 export async function listJobSummaryChanges(cursor?: string) {
@@ -609,7 +615,12 @@ async function runJob(jobId: string, input: JobStartInput) {
       attempt: (current.attempt || 0) + 1
     });
 
-    if (input.kind === "image-generation") {
+    if (input.kind === "image-prompt-assist") {
+      await patchJob(jobId, { message: "正在优化图片提示词", progress: 20 });
+      const result = await assistImagePrompt(input.input, getJobAbortSignal(jobId));
+      throwIfCancelled(jobId);
+      await completeJob(jobId, { message: "提示词建议已生成", result, resultRef: { id: jobId, href: `/images?assistId=${encodeURIComponent(jobId)}`, label: "查看建议" } });
+    } else if (input.kind === "image-generation") {
       await runImageGenerationJob(jobId, input);
     } else if (input.kind === "write-copy") {
       await runWriteCopyJob(jobId, input);
@@ -883,7 +894,7 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
         : 0;
       void patchJob(jobId, {
         stage: "analysis",
-        message: `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
+        message: progress.message || `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
         progress: Math.min(34, 12 + percent)
       });
     }
@@ -918,7 +929,6 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
   });
   const result = await streamStyleResponseTextWithFallback({
     messages: context.messages,
-    maxOutputTokens: 3200,
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {
       if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
@@ -990,7 +1000,7 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
         : 0;
       void patchJob(jobId, {
         stage: "analysis",
-        message: `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
+        message: progress.message || `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
         progress: Math.min(44, 15 + percent)
       });
     }
@@ -1025,7 +1035,6 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
   });
   const completion = await streamStyleResponseTextWithFallback({
     messages: prepared.context.messages,
-    maxOutputTokens: 3200,
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {
       if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
@@ -1475,6 +1484,7 @@ function makeJobId(kind: JobKind) {
 }
 
 function defaultJobTitle(input: JobStartInput) {
+  if (input.kind === "image-prompt-assist") return input.input.mode === "polish" ? "AI 润色提示词" : "AI 构图建议";
   if (input.kind === "image-generation") return "生成图片";
   if (input.kind === "write-copy") return "生成文案";
   if (input.kind === "account-style") return "生成账号风格卡";
@@ -1492,7 +1502,7 @@ function defaultJobTitle(input: JobStartInput) {
 }
 
 function defaultInputSummary(input: JobStartInput) {
-  if (input.kind === "image-generation") return input.input.prompt.slice(0, 60);
+  if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return input.input.prompt.slice(0, 60);
   if (input.kind === "write-copy") {
     if (input.input.action === "revise") return input.input.revisionScope === "selection" ? "选中段落续改" : "全文续改";
     return input.input.mode === "topic" ? "自由输入" : "素材改写";
@@ -1523,7 +1533,7 @@ function defaultInputSummary(input: JobStartInput) {
 }
 
 function defaultJobScope(input: JobStartInput): JobScope {
-  if (input.kind === "image-generation") return { targetType: "text", sourceKey: shortHash(input.input.prompt) };
+  if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return { targetType: "text", sourceKey: shortHash(input.input.prompt) };
   if (input.kind === "write-copy") {
     return compactJobScope({
       targetType: input.input.targetType,
@@ -1618,7 +1628,7 @@ function compactJobScope(scope: JobScope): JobScope {
 }
 
 function defaultHref(input: JobStartInput) {
-  if (input.kind === "image-generation") return "/images";
+  if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return "/images";
   if (input.kind === "write-copy") return "/writer";
   if (input.kind === "account-style" || input.kind === "transcribe-video" || input.kind === "batch-transcribe") return "/library";
   if (input.kind === "project-style") return "/project-workbench";

@@ -65,6 +65,7 @@ function AssetsPageContent() {
   const {
     activeTitle,
     canGenerate,
+    generationProgress,
     handleGenerate,
     previewComments,
     resultRecord,
@@ -276,7 +277,7 @@ function AssetsPageContent() {
             </span>
             <div className="page-title-copy">
               <h1>评论生成</h1>
-              <p className="subtle">链接转写，文案直接生成。</p>
+              <p className="subtle">读取正文，匹配真实参考后生成。</p>
             </div>
           </div>
         </div>
@@ -305,6 +306,7 @@ function AssetsPageContent() {
               danmakuCount={danmakuCount}
               includeComments={includeComments}
               includeDanmaku={includeDanmaku}
+              generationProgress={generationProgress}
               targetPlatform={targetPlatform}
               supportsDanmaku={supportsDanmaku}
               sourceInput={sourceInput}

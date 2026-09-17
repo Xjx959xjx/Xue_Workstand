@@ -164,7 +164,7 @@ export type StoredRecordKind =
 const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
   "image-generation": imageGenerationInputSchema.extend({
     schemaVersion: z.literal(STORAGE_SCHEMA_VERSION), id: z.string().min(1), model: z.string().min(1),
-    createdAt: timestampSchema, updatedAt: timestampSchema,
+    createdAt: timestampSchema, updatedAt: timestampSchema, deletedAt: timestampSchema.optional(),
     images: z.array(z.object({ id: z.string().uuid(), name: z.string(), format: z.enum(["png", "jpeg", "webp"]), createdAt: timestampSchema })).max(4)
   }),
   "image-file": z.object({ schemaVersion: z.literal(STORAGE_SCHEMA_VERSION), id: z.string().uuid(), name: z.string(), format: z.enum(["png", "jpeg", "webp"]), createdAt: timestampSchema }),

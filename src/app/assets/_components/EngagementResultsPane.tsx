@@ -32,6 +32,9 @@ export function EngagementResultsPane({
   const sourceBrief = diagnostics?.sourceBrief;
   const entityGuard = diagnostics?.entityGuard;
   const relatedResearch = diagnostics?.relatedResearch;
+  const quarantineDetails = (relatedResearch?.quarantinedSources || [])
+    .map((source) => `${source.videoTitle || source.videoId}：${source.reasons.join("；")}`)
+    .join("\n");
   const requestedCommentCount = resultRecord?.comments?.requestedCount || resultRecord?.options.commentCount || 0;
   const actualCommentCount = resultRecord?.comments?.items.length || 0;
   const missingCommentCount = Math.max(requestedCommentCount - actualCommentCount, 0);
@@ -77,7 +80,14 @@ export function EngagementResultsPane({
               ? <span>历史语义命中 {relatedResearch.matchedLibraryCommentCount}</span>
               : null}
             {relatedResearch?.relatedCommentCount ? <span>最终参考 {relatedResearch.relatedCommentCount}</span> : null}
-            {generation.reusedHotCommentCount ? <span>直接复用 {generation.reusedHotCommentCount}</span> : null}
+            {relatedResearch?.quarantinedVideoCount ? (
+              <span title={quarantineDetails || undefined}>人机评论源过滤 {relatedResearch.quarantinedVideoCount}个</span>
+            ) : null}
+            {relatedResearch?.quarantineClassifierStatus === "fallback" ? (
+              <span title={relatedResearch.quarantineClassifierError}>人机复核降级</span>
+            ) : null}
+            {generation.reusedRelatedCommentCount ? <span>相关原评 {generation.reusedRelatedCommentCount}</span> : null}
+            {generation.aiGeneratedCount ? <span>AI 补写 {generation.aiGeneratedCount}</span> : null}
             {relatedResearch?.sampleLibraryCount ? <span>样本库 {relatedResearch.sampleLibraryCount}</span> : null}
             {relatedResearch?.replySampleCount ? <span>回复讨论 {relatedResearch.replySampleCount}</span> : null}
             {relatedResearch?.sourceStats?.some((source) => source.status !== "completed")

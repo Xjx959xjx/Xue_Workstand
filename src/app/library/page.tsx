@@ -87,22 +87,13 @@ function LibraryPageContent() {
   const {
     accountFilter,
     accountManageMode,
-    accountSort,
     filteredAccounts,
-    platformFilter,
     selectedAccountIds,
     selectedAccountMeta,
-    statusFilter,
-    totalMissingStyleCount,
-    totalPendingTranscriptCount,
-    totalTranscriptCount,
     clearAccountFilters,
     selectAccount,
     setAccountFilter,
     setAccountManageMode,
-    setAccountPlatformFilter,
-    setAccountSort,
-    setAccountStatusFilter,
     setSelectedAccountIds,
     toggleAccountManage,
     toggleManagedAccount
@@ -120,7 +111,6 @@ function LibraryPageContent() {
   const selectedAccount = accountDetail?.id === selectedAccountMeta?.id ? accountDetail : null;
 
   const {
-    completedCount,
     changeSortMode,
     effectiveSortMode,
     failedCount,
@@ -613,27 +603,17 @@ function LibraryPageContent() {
         <AccountSidebar
           accountFilter={accountFilter}
           accountManageMode={accountManageMode}
-          accountSort={accountSort}
           accounts={filteredAccounts}
-          allAccountCount={accounts.length}
           busy={busy}
           loading={initialLibraryLoading}
-          platformFilter={platformFilter}
           selectedAccountId={selectedAccountMeta?.id || ""}
           selectedAccountIds={selectedAccountIds}
-          statusFilter={statusFilter}
-          totalMissingStyleCount={totalMissingStyleCount}
-          totalPendingTranscriptCount={totalPendingTranscriptCount}
-          totalTranscriptCount={totalTranscriptCount}
           onAccountFilterChange={setAccountFilter}
-          onAccountSortChange={setAccountSort}
           onClearFilters={clearAccountFilters}
-          onPlatformFilterChange={setAccountPlatformFilter}
           onRequestDeleteAccounts={requestDeleteAccounts}
           onSelectAccount={(accountId) => {
             selectAccount(accountId, "videos");
           }}
-          onStatusFilterChange={setAccountStatusFilter}
           onToggleAccountManage={() => {
             setVideoManageMode(false);
             setSelectedVideoIds([]);
@@ -646,7 +626,6 @@ function LibraryPageContent() {
         <VideoTable
           accountDetailLoading={accountDetailLoading}
           busy={busy}
-          completedCount={completedCount}
           effectiveSortMode={effectiveSortMode}
           failedCount={failedCount}
           loading={initialLibraryLoading}

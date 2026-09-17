@@ -92,6 +92,75 @@
   line-height: var(--line-height-card-title);
 }
 
+.engagement-chain-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 18%, var(--line));
+  border-radius: var(--control-radius);
+  background: color-mix(in oklch, var(--accent-tint) 28%, var(--panel-raised));
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.engagement-chain-summary strong {
+  margin-right: 2px;
+  color: var(--text-strong);
+  font-size: var(--text-meta);
+}
+
+.engagement-chain-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.engagement-chain-summary span:not(:last-child)::after {
+  color: color-mix(in oklch, var(--muted) 70%, transparent);
+  content: "›";
+}
+
+.engagement-generation-progress {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--line));
+  border-radius: var(--control-radius);
+  background: color-mix(in oklch, var(--accent-tint) 22%, var(--panel-raised));
+}
+
+.engagement-generation-progress > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.engagement-generation-progress strong {
+  color: var(--text-strong);
+  font-size: var(--text-meta);
+}
+
+.engagement-generation-progress span {
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.engagement-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--panel-muted) 84%, var(--line));
+}
+
+.engagement-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--motion-base) var(--ease-apple);
+}
+
 .engagement-source-panel .engagement-source-input {
   min-height: 148px;
   resize: vertical;
@@ -427,9 +496,14 @@
     border-color var(--motion-base) var(--ease-apple);
 }
 
-.asset-text-list p.is-ai-generated {
+.asset-text-list p.origin-ai_generated {
   border-color: color-mix(in oklch, var(--purple) 48%, var(--line-subtle));
   box-shadow: inset 3px 0 0 color-mix(in oklch, var(--purple) 72%, transparent);
+}
+
+.asset-text-list p.origin-reused_hot_comment {
+  border-color: color-mix(in oklch, var(--accent) 38%, var(--line-subtle));
+  box-shadow: inset 3px 0 0 color-mix(in oklch, var(--accent) 62%, transparent);
 }
 
 .asset-item-origin {
@@ -444,6 +518,12 @@
   font-size: 10px;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.asset-item-origin.origin-reused_hot_comment {
+  border-color: color-mix(in oklch, var(--accent) 34%, var(--line));
+  color: var(--accent-strong);
+  background: color-mix(in oklch, var(--accent-tint) 42%, var(--panel-raised));
 }
 
 .progress-fill.indeterminate {

@@ -1,9 +1,11 @@
+import { runRecoverableLibraryMutation } from "./transactions";
 import path from "path";
 import { randomUUID } from "crypto";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { readJsonFile, storageFs, writeFileAtomic, writeJsonFile } from "./fs";
 import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "./schemas";
 import type { ImageFile, ImageGenerationRecord, ImageGenerationSummary } from "../image-generation-types";
+import { imagePromptLabel } from "../image-mentions";
 
 function recordPath(id: string) {
   return path.join(libraryRoot(), "images", "records", `${normalizeStorageSegment(id, "生图记录 ID")}.json`);
@@ -56,7 +58,7 @@ export async function saveImageRecord(record: ImageGenerationRecord) {
   try { await writeJsonFile(target, valid); }
   catch { throw new Error("保存生图记录失败，请检查素材库目录权限和磁盘空间。"); }
 }
-export async function listImageRecords(offset = 0, limit = 40) {
+export async function listImageRecords(offset = 0, limit = 40, canvasId?: string) {
   let entries: string[];
   try { entries = await storageFs.readdir(path.join(libraryRoot(), "images", "records")); }
   catch (error) {
@@ -67,8 +69,27 @@ export async function listImageRecords(offset = 0, limit = 40) {
   // Bounded reads avoid opening every historical asset concurrently; image bytes stay lazy.
   for (const entry of entries.filter((name) => name.endsWith(".json"))) {
     const record = await getImageRecord(entry.slice(0, -5));
-    if (record) records.push({ id: record.id, model: record.model, size: record.size, count: record.count, createdAt: record.createdAt, updatedAt: record.updatedAt, title: record.prompt.slice(0, 60), imageCount: record.images.length, thumbnail: record.images[0] });
+    if (record && !record.deletedAt && (!canvasId || (record.canvasId || record.id) === canvasId)) records.push({ id: record.id, canvasId: record.canvasId || record.id, parentRecordId: record.parentRecordId, parentImageId: record.parentImageId, referenceIds: record.referenceIds, model: record.model, size: record.size, count: record.count, createdAt: record.createdAt, updatedAt: record.updatedAt, title: imagePromptLabel(record.prompt).slice(0, 60), imageCount: record.images.length, thumbnail: record.images[0] });
   }
   records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return { records: records.slice(offset, offset + limit), total: records.length };
+}
+
+// Keep the original record and image files available to descendant references.
+// The shared transaction keeps backups so this removal can be undone.
+export async function deleteImageRecords(ids: string[]) {
+  const records: ImageGenerationRecord[] = [];
+  for (const id of new Set(ids)) {
+    const record = await getImageRecord(id);
+    if (record && !record.deletedAt) records.push(record);
+  }
+  if (!records.length) return { deleted: [] as string[] };
+  const transaction = await runRecoverableLibraryMutation({
+    kind: "delete-image-records", targets: [], backupTargets: records.map((record) => recordPath(record.id)),
+    run: async () => {
+      for (const record of records) await saveImageRecord({ ...record, deletedAt: new Date().toISOString() });
+      return records.map((record) => record.id);
+    }
+  });
+  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }

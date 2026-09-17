@@ -1745,7 +1745,8 @@ export function invalidateImageRecordsCache() {
   imageRecordsRequest = null;
   imageRecordsRevision += 1;
 }
-export function getImageRecords(offset = 0) {
+export function getImageRecords(offset = 0, canvasId?: string) {
+  if (canvasId) return requestJson<ImageGenerationList>(`/api/images?offset=${offset}&canvasId=${encodeURIComponent(canvasId)}`);
   if (offset) return requestJson<ImageGenerationList>(`/api/images?offset=${offset}`);
   if (imageRecordsCache) return Promise.resolve(imageRecordsCache);
   if (imageRecordsRequest) return imageRecordsRequest;
@@ -1772,4 +1773,10 @@ export async function uploadImageReferences(files: File[]) {
   const data = await response.json().catch(() => { throw new Error("上传图片响应无效，请检查服务状态。"); }) as { references: ImageFile[]; error?: unknown };
   if (!response.ok) throw new Error(normalizeApiError(data.error) || "上传参考图失败，请重试。");
   return data;
+}
+
+export async function deleteImageGenerationRecords(input: { action: "delete"; id: string } | { action: "clear-failed" }) {
+  const result = await requestJson<import("./image-generation-types").ImageRecordDeleteResult>("/api/images", { method: "DELETE", body: JSON.stringify(input) });
+  invalidateImageRecordsCache();
+  return result;
 }

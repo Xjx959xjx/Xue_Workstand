@@ -82,14 +82,14 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
         <div className="detail-section selected-video-section">
           <div className="detail-module-heading">
             <h3>转写稿</h3>
-            <p className="pane-subtitle">{selectedVideoHasTranscript ? "已有原稿，可继续查看或重新转写" : "选择视频后生成可编辑原稿"}</p>
+            <p className="pane-subtitle detail-video-title" title={selectedVideo?.title}>{selectedVideo?.title || "选择视频后生成可编辑原稿"}</p>
           </div>
           <p className="detail-preview-text detail-transcript-preview">
             {busy === "transcribe" ? transcribeStage || "正在转写视频" : transcriptPreviewText}
           </p>
           <div className="detail-action-grid">
             <button
-              className="btn primary detail-action-primary"
+              className={`btn ${selectedVideoHasTranscript ? "" : "primary"} detail-action-primary`}
               disabled={!selectedVideo || transcriptLoading || busy === "transcribe"}
               onClick={selectedVideoHasTranscript ? onOpenTranscriptModal : onTranscribe}
               type="button"
@@ -119,7 +119,7 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
           <p className="detail-preview-text detail-style-preview">{stylePreviewText}</p>
           <div className="detail-action-grid account-style-actions">
             <button
-              className="btn primary detail-action-primary"
+              className="btn detail-action-primary"
               disabled={!selectedAccount || styleLoading || busy === "style"}
               onClick={onOpenStyleModal}
               type="button"

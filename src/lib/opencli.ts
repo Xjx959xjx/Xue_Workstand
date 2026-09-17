@@ -488,7 +488,7 @@ export async function collectDouyinPostVideosBatch(input: {
       results.push(result);
     };
     try {
-      await ensureDouyinBatchSession(workspace, input.signal);
+      await ensureDouyinBatchSession(workspace, input.accounts[0].uid, input.signal);
     } catch (error) {
       if (input.signal?.aborted || isAbortError(error)) throw createAbortError();
       for (const account of input.accounts) await emit(makeFailedDouyinBatchCollectResult(account, `抖音共享会话初始化失败：${formatErrorMessage(error)}`));
@@ -538,9 +538,23 @@ export async function collectDouyinPostVideosBatch(input: {
   }, { signal: input.signal });
 }
 
-async function ensureDouyinBatchSession(workspace: string, signal?: AbortSignal) {
-  // 同源纯文本页保留 Cookie 和接口访问能力；每轮切换也停止共享页上遗留的视频播放。
-  await ensureDouyinStatsBrowser(workspace, { signal });
+async function ensureDouyinBatchSession(workspace: string, secUid: string, signal?: AbortSignal) {
+  // aweme/post 依赖抖音网页安全 SDK 为 fetch 补充动态签名。robots.txt 虽然同源，
+  // 但不会加载该 SDK，会让整批请求以 ArgusSecurityPlugin Signature Not Found 失败。
+  // 每轮只打开一次种子账号主页，后续所有账号仍在同一页内并发走批量接口。
+  await runOpenCli(buildOpenCliBrowserArgs(
+    workspace,
+    "open",
+    [buildDouyinBatchSessionUrl(secUid)],
+    { window: "background" }
+  ), {
+    timeout: 30_000,
+    signal
+  });
+}
+
+export function buildDouyinBatchSessionUrl(secUid: string) {
+  return `https://www.douyin.com/user/${encodeURIComponent(secUid)}`;
 }
 
 function chunkItems<T>(items: T[], size: number): T[][] {

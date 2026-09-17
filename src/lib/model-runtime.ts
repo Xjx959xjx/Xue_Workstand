@@ -531,16 +531,16 @@ export function classifyModelFailure(error: unknown): {
   if (/524\b|响应超时|a timeout occurred|timeout|timed out|AbortError|TimeoutError|aborted|UND_ERR_HEADERS_TIMEOUT/i.test(message)) {
     return { kind: "timeout", userMessage: "对话模型服务超时", rawMessage: compactErrorMessage(message) };
   }
-  if (/429\b|rate limit/i.test(message)) {
-    return { kind: "rate_limit", userMessage: "对话模型服务限流", rawMessage: compactErrorMessage(message) };
-  }
   if (/402\b|insufficient[_\s-]*(?:user[_\s-]*)?quota|insufficient[_\s-]*balance|quota[_\s-]*exceeded|billing|payment[_\s-]*required|credit|余额|额度|预扣费|扣费/i.test(message)) {
     return { kind: "quota", userMessage: "对话模型服务额度不足", rawMessage: compactErrorMessage(message) };
+  }
+  if (/429\b|rate limit/i.test(message)) {
+    return { kind: "rate_limit", userMessage: "对话模型服务限流", rawMessage: compactErrorMessage(message) };
   }
   if (/401\b|403\b|unauthorized|forbidden/i.test(message)) {
     return { kind: "auth", userMessage: "对话模型服务鉴权异常", rawMessage: compactErrorMessage(message) };
   }
-  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
+  if (/ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
     return { kind: "network", userMessage: "对话模型服务连接异常", rawMessage: compactErrorMessage(message) };
   }
   if (/404\b|405\b|unknown endpoint|not found|unsupported|invalid url|no route|cannot post/i.test(message)) {

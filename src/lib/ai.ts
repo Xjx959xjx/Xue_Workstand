@@ -1,15 +1,18 @@
 import { randomUUID } from "crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { preserveWriterPreferences } from "./writer-preference";
+import { STYLE_CARD_PROMPT_VERSION, styleCardInstruction, initialWriteInstruction, writerResearchBoundaryInstruction } from "./writer-prompts";
 import { logPipelineEvent } from "./observability";
 import { selectFastReferences, fastWriterPlan, type FastReference } from "./writer-fast-reference";
 import {
   STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION,
   parseModelJson, parseStyleEvidence,
-  styleAnalysisInstruction, styleEvidenceQuotes as collectStyleEvidenceQuotes,
+  styleAnalysisInstruction, styleEvidencePassages,
   checkWriterConstraints, validateStyleCardCitations,
-  type StyleEvidence, type WriterContextSnapshot
+  type StyleEvidence, type StyleCardEvidence, type WriterContextSnapshot
 } from "./writer-context";
 import type { ModelResponseBody } from "./model-runtime";
+import { ModelHttpError } from "./model-runtime";
 import {
   AccountDraftInput,
   Draft,
@@ -218,7 +221,7 @@ export type PreparedAccountStyleContext = {
   cachedFallback?: boolean;
   cachedFallbackReason?: string;
   previousStyleHash?: string;
-  evidenceQuotes?: Array<{ sourceId: string; quote: string }>;
+  evidenceQuotes?: StyleCardEvidence[];
 };
 
 export type AccountStyleGenerationResult = {
@@ -242,7 +245,7 @@ export type AccountStyleGenerationResult = {
   actualServiceTier?: string;
 };
 
-const STYLE_MAX_OUTPUT_TOKENS = 3200;
+const STYLE_MAX_OUTPUT_TOKENS = 6000;
 const STYLE_REASONING_EFFORT: ChatReasoningEffort = "medium";
 const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 2, 1, 4);
 const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = STYLE_ANALYSIS_VERSION;
@@ -348,25 +351,56 @@ export async function chatComplete(
 export async function chatCompleteStrict(
   messages: ChatMessage[],
   reasoningEffort?: ChatReasoningEffort,
-  options: ChatRequestOptions = {}
+  options: ChatRequestOptions & {
+    model?: string;
+    retryTransientFailure?: boolean;
+    onRetry?: (message: string) => void;
+  } = {}
 ): Promise<ChatCompletionResult> {
   throwIfAborted(options.signal);
-  const configs = configuredChatConfigs();
+  const configs = configuredChatConfigs().map((config) => options.model ? { ...config, model: options.model } : config);
   if (!configs.length) {
     throw new Error("未配置对话模型，请先配置 CHAT_API_KEY / OPENAI_API_KEY、CHAT_BASE_URL 和 CHAT_MODEL 后再生成。");
   }
 
   let lastError: unknown;
   for (const config of configs) {
-    try {
-      return await chatCompleteWithConfig(config, messages, reasoningEffort, undefined, options);
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      lastError = error;
+    for (let attempt = 0; attempt < (options.retryTransientFailure ? 2 : 1); attempt += 1) {
+      throwIfAborted(options.signal);
+      try {
+        return await chatCompleteWithConfig(config, messages, reasoningEffort, undefined, options);
+      } catch (error) {
+        throwIfAborted(options.signal);
+        if (isAbortError(error)) throw error;
+        lastError = error;
+        const failure = classifyModelFailure(error);
+        const retry = Boolean(options.retryTransientFailure && attempt === 0 &&
+          ["network", "timeout", "rate_limit", "server"].includes(failure.kind));
+        // Log only classified diagnostics, never upstream bodies, URLs, prompts or credentials.
+        const diagnostic = modelFailureDiagnostic(error);
+        logPipelineEvent("model.strict-failure", {
+          model: config.model, wireApi: config.wireApi, kind: failure.kind,
+          diagnostic, attempt: attempt + 1, retry
+        });
+        if (!retry) break;
+        options.onRetry?.(`${failure.userMessage}${diagnostic ? `（${diagnostic}）` : ""}，正在自动重试 1/1`);
+        await delay(1000, undefined, { signal: options.signal });
+      }
     }
   }
 
-  throw new Error(formatStrictChatError(lastError));
+  throw new Error(formatStrictChatError(lastError), { cause: lastError });
+}
+
+function modelFailureDiagnostic(error: unknown, depth = 0): string | undefined {
+  if (!error || typeof error !== "object" || depth > 5) return undefined;
+  if (error instanceof ModelHttpError) return `HTTP ${error.status}`;
+  // The allowlist keeps transport diagnostics useful without exposing provider error bodies.
+  const code = "code" in error ? error.code : undefined;
+  if (typeof code === "string" && /^(?:UND_ERR_[A-Z_]+|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE)$/.test(code)) return code;
+  if ("originalError" in error) return modelFailureDiagnostic(error.originalError, depth + 1);
+  if ("cause" in error) return modelFailureDiagnostic(error.cause, depth + 1);
+  return undefined;
 }
 
 function formatStrictChatError(error: unknown) {
@@ -377,7 +411,8 @@ function formatStrictChatError(error: unknown) {
         userMessage: "对话模型暂时不可用",
         rawMessage: "unknown model error"
       };
-  return `${failure.userMessage}，此功能不会切到本地模板。${strictChatFailureAction(failure.kind)}`;
+  const diagnostic = modelFailureDiagnostic(error);
+  return `${failure.userMessage}${diagnostic ? `（${diagnostic}）` : ""}，此功能不会切到本地模板。${strictChatFailureAction(failure.kind)}`;
 }
 
 function strictChatFailureAction(kind: ModelErrorKind) {
@@ -386,8 +421,8 @@ function strictChatFailureAction(kind: ModelErrorKind) {
   if (kind === "quota") return "请检查模型额度是否不足，必要时补余额或切换到可用的备用对话模型。";
   if (kind === "endpoint") return "请检查 CHAT_BASE_URL、CHAT_WIRE_API、CHAT_RESPONSES_URL 或 CHAT_COMPLETIONS_URL。";
   if (kind === "network") return "请检查网络、中转站地址和 CHAT_PROXY_URL。";
-  if (kind === "rate_limit") return "可以稍后重试，或先把 ENGAGEMENT_MODEL_CONCURRENCY 调低。";
-  if (kind === "timeout") return "可以稍后重试，或先把 ENGAGEMENT_MODEL_CONCURRENCY 调低。";
+  if (kind === "rate_limit") return "请稍后重试，或降低当前功能的模型并发数。";
+  if (kind === "timeout") return "请检查模型节点响应速度，稍后重试或切换可用节点。";
   if (kind === "server") return "请稍后重试，或切换到可用的备用对话模型。";
   if (kind === "parse" || kind === "empty") return "请重试或切换到更稳定的对话模型。";
   return "请检查对话模型配置后再重试。";
@@ -735,7 +770,8 @@ export async function streamResponseTextWithFallback(input: {
     }
     try {
       return await chatCompleteWithEffort(input.messages, input.reasoningEffort, input.tools, {
-        signal: input.signal
+        signal: input.signal,
+        maxOutputTokens: input.maxOutputTokens
       });
     } catch (retryError) {
       if (isAbortError(retryError)) throw retryError;
@@ -1436,7 +1472,7 @@ function buildWebResearchFailureContext(error: unknown) {
   return [
     `联网资料：模型联网暂时不可用${reason ? `，${reason}` : ""}。`,
     "写作处理：不要硬编最新事实，先按已有风格、原文和用户要求继续完成成稿。",
-    "如果这条内容必须追热点、价格或具体型号，请让用户补一个链接、品牌型号，或者更具体的关键词后再试。"
+    "资料面板提示（不写入成稿）：如果内容必须追热点、价格或具体型号，可补充链接、品牌型号，或者更具体的关键词后再试。"
   ].join("\n");
 }
 
@@ -1489,7 +1525,7 @@ async function buildNativeWebResearchContext(
     {
       role: "system",
       content:
-        "你是中文写作研究助手。请使用联网搜索工具查找与任务直接相关的最新事实，优先采用权威来源。输出必须使用中文纯文本，结构固定为：检索结论、关键信息、来源。若信息不足，明确写出“信息不足”。"
+        "你是中文写作研究助手。请使用联网搜索工具查找与任务直接相关的最新事实，优先采用权威来源。输出必须使用中文纯文本，结构固定为：检索结论、关键信息、来源。检索结论只记录检索状态；若信息不足，在检索结论中明确写出“信息不足”。关键信息只列有来源支持的相关事实，无可用事实时写“无”。不要把搜索无结果推断为事件不存在或原始素材不可靠，不要为凑结果编造事实。"
     },
     {
       role: "user",
@@ -1706,7 +1742,7 @@ function buildAccountStyleSampleState(samples: AccountStyleSample[]) {
   return {
     sampleFingerprints,
     sampleVideoIds: sampleFingerprints.map((sample) => sample.videoId),
-    sampleHash: shortHash(JSON.stringify({ sampleFingerprints, learning: styleLearningSignature() }))
+    sampleHash: shortHash(JSON.stringify({ sampleFingerprints, learning: styleCardSignature() }))
   };
 }
 
@@ -1721,6 +1757,7 @@ type StyleAnalysisStats = {
 export type StyleAnalysisProgress = StyleAnalysisStats & {
   completedCount: number;
   currentTitle?: string;
+  message?: string;
 };
 
 type StyleCompletionTimings = {
@@ -1729,6 +1766,9 @@ type StyleCompletionTimings = {
 };
 
 type StyleAnalysisEntry = {
+  citationId: string;
+  workHash: string;
+  passages: string[];
   kind: StyleSampleAnalysisCache["kind"];
   sourceId: string;
   title: string;
@@ -1764,19 +1804,6 @@ type WritePreparationOptions = {
   onProgress?: (message: string) => void;
 };
 
-function styleCardInstruction() {
-  return [
-    "根据全部已核验的逐篇分析生成 Markdown 风格卡，作为检索和写作指南。",
-    "结构：账号定位；跨文体稳定习惯；目的与讲法的组合；段落衔接；不适用情形；证据与覆盖限制。",
-    "稳定习惯须有多个独立样本依据，凑不够就明确说明，不固定规则数量。目的和讲法不是互斥分类：推广可以用吃瓜形式切入，不因周报或争议开头就忽略后面的介绍、推广段落。",
-    "结合narrative.beats和bridges归纳怎样从趣事、问题或评论转入游戏、卖点或参与规则，引用转接前后两处原句，写清需要什么真实素材。没有转接证据就说明缺口，不能给每篇强加推广或反转。",
-    "每条写法写清适用条件、具体表达动作、例外，附来源ID及提供的连续原文段落。保留能看懂开场、推进、反差和收尾的证据，不只抄口头禅。",
-    "引句只能逐字引用已提供的quote或衔接before/after，不能改写；单篇证据说明有限。摘要没记录不等于账号从未使用，不推测未提供的画面或付费合作关系。",
-    "证据统一写为 [[来源ID]]「完整quote原句」，每条规则附这种引用；至少保留一处，不改写quote。来源ID使用分析条目的来源字段。",
-    "写作时按任务选择适用规则，规则不适用时不要硬套；不用统一开头或固定段落公式。"
-  ].join("\n");
-}
-
 const emptyStyleAnalysisStats = (): StyleAnalysisStats => ({
   analysisCount: 0,
   analysisGeneratedCount: 0,
@@ -1785,17 +1812,21 @@ const emptyStyleAnalysisStats = (): StyleAnalysisStats => ({
   inputChars: 0
 });
 
-function styleLearningSignature() {
+function styleAnalysisSignature() {
   return { version: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION, models: configuredChatConfigs().map(c => ({
     model: c.model, wireApi: c.wireApi, endpointHash: shortHash([c.baseUrl, c.responsesUrl, c.chatCompletionsUrl].join("|"))
   })), reasoning: STYLE_REASONING_EFFORT };
+}
+
+function styleCardSignature() {
+  return { ...styleAnalysisSignature(), cardVersion: STYLE_CARD_PROMPT_VERSION };
 }
 
 function accountStyleAnalysisCacheKey(sample: AccountStyleSample) {
   return shortHash(JSON.stringify({
     version: 1,
     promptVersion: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION,
-    learning: styleLearningSignature(),
+    learning: styleAnalysisSignature(),
     kind: "account-video",
     videoId: sample.video.id,
     title: sample.video.title,
@@ -1807,7 +1838,7 @@ function copySourceStyleAnalysisCacheKey(source: CopySource) {
   return shortHash(JSON.stringify({
     version: 1,
     promptVersion: STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION,
-    learning: styleLearningSignature(),
+    learning: styleAnalysisSignature(),
     kind: "copy-source",
     sourceId: source.id,
     title: source.title,
@@ -1866,11 +1897,12 @@ function buildAccountSampleAnalysisMessages(platform: Platform, sample: AccountS
     {
       role: "user",
       content: [
+        `样本来源 ID：${sample.video.id}`,
         `平台：${platform}`,
         `标题：${sample.video.title}`,
         `播放:${sample.video.stats.views} 点赞:${sample.video.stats.likes} 评论:${sample.video.stats.comments} 收藏:${sample.video.stats.favorites} 分享:${sample.video.stats.shares ?? 0}`,
         `完整转写（${sample.transcript.length} 字）：`,
-        sample.transcript
+        `<source_text>\n${sample.transcript}\n</source_text>`
       ].join("\n")
     }
   ];
@@ -1898,12 +1930,13 @@ function buildCopySourceSampleAnalysisMessages(source: CopySource): ChatMessage[
     {
       role: "user",
       content: [
+        `样本来源 ID：${source.id}`,
         `标题：${source.title}`,
         `平台：${source.platform}`,
         `来源：${source.url}`,
         materialAnalysis,
         `完整转写（${source.transcript.length} 字）：`,
-        source.transcript
+        `<source_text>\n${source.transcript}\n</source_text>`
       ].join("\n")
     }
   ];
@@ -1919,8 +1952,8 @@ async function resolveStyleSampleAnalyses(
   let analysisGeneratedCount = 0;
   let analysisCachedCount = 0;
 
-  const emitProgress = (task: StyleAnalysisTask) => {
-    completedCount += 1;
+  const emitProgress = (task: StyleAnalysisTask, message?: string) => {
+    if (!message) completedCount += 1;
     options.onAnalysisProgress?.({
       analysisCount: tasks.length,
       analysisGeneratedCount,
@@ -1928,12 +1961,14 @@ async function resolveStyleSampleAnalyses(
       analysisConcurrency: STYLE_SAMPLE_ANALYSIS_CONCURRENCY,
       inputChars: totalInputChars,
       completedCount,
-      currentTitle: task.title
+      currentTitle: task.title,
+      message
     });
   };
 
   const entries = await mapWithConcurrency(tasks, STYLE_SAMPLE_ANALYSIS_CONCURRENCY, async (task) => {
     throwIfAborted(options.signal);
+    if (!task.transcript.trim()) throw new Error(`样本「${task.title}」没有可用原文，请补充完整转写后重新归纳；原卡已保留。`);
     const cached = await task.readCache();
     if (isUsableStyleSampleAnalysisCache(cached, task.cacheKey)) {
       parseStyleEvidence(cached.analysis, task.transcript, task.title);
@@ -1942,18 +1977,55 @@ async function resolveStyleSampleAnalyses(
       return styleAnalysisEntryFromCache(task, cached);
     }
 
-    const result = await chatCompleteStrict(task.messages(), STYLE_REASONING_EFFORT, {
-      signal: options.signal,
-      maxOutputTokens: STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS
-    });
-    const analysis = result.text.trim();
+    const messages = task.messages();
+    const analyze = async (requestMessages: ChatMessage[]) => {
+      try {
+        return await chatCompleteStrict(requestMessages, STYLE_REASONING_EFFORT, {
+          signal: options.signal,
+          maxOutputTokens: STYLE_SAMPLE_ANALYSIS_MAX_OUTPUT_TOKENS,
+          retryTransientFailure: true,
+          onRetry: message => emitProgress(task, `样本「${task.title}」：${message}；已完成 ${completedCount}/${tasks.length}`)
+        });
+      } catch (error) {
+        throwIfAborted(options.signal);
+        if (isAbortError(error)) throw error;
+        throw new Error(`样本「${task.title}」分析失败：${error instanceof Error ? error.message : String(error)} 已完成的样本分析已缓存，重试会复用；原卡已保留。`, { cause: error });
+      }
+    };
+    let result = await analyze(messages);
+    let analysis = result.text.trim();
     if (result.fallback || !analysis) {
       throw new Error(
         `样本「${task.title}」风格分析失败：${result.fallbackReason || result.userMessage || "模型没有返回可用分析"}`
       );
     }
 
-    const evidence = parseStyleEvidence(analysis, task.transcript, task.title);
+    let evidence: ReturnType<typeof parseStyleEvidence>;
+    try {
+      evidence = parseStyleEvidence(analysis, task.transcript, task.title);
+    } catch (error) {
+      // Retry only invalid model evidence once; never relax source validation or save the rejected output.
+      throwIfAborted(options.signal);
+      const reason = error instanceof Error ? error.message : String(error);
+      logStyleModelRequest("style-sample-analysis-validation-retry", result, {
+        sourceId: task.sourceId, title: task.title, validationError: reason
+      });
+      result = await analyze([
+        ...messages,
+        { role: "assistant", content: analysis },
+        { role: "user", content: `上次分析未通过校验：${reason}\n请对照上方完整原文修正分析，重新输出完整JSON。所有quote、before、after必须连续逐字摘录，保留原文标点和换行；不纠正转写字词，不拼接片段。beats保持原文顺序，bridge两端依次出现且不重叠。只修正无效结构和证据，不改变分析任务。` }
+      ]);
+      analysis = result.text.trim();
+      if (result.fallback || !analysis) {
+        throw new Error(`样本「${task.title}」自动纠正失败：${result.fallbackReason || result.userMessage || "模型没有返回可用分析"}；原卡已保留。`);
+      }
+      try {
+        evidence = parseStyleEvidence(analysis, task.transcript, task.title);
+      } catch (retryError) {
+        const retryReason = retryError instanceof Error ? retryError.message : String(retryError);
+        throw new Error(`${retryReason} 已自动纠正一次仍未通过，原卡已保留。`);
+      }
+    }
     throwIfAborted(options.signal);
     const cache: StyleSampleAnalysisCache = {
       version: 1,
@@ -2004,6 +2076,9 @@ function isUsableStyleSampleAnalysisCache(
 
 function styleAnalysisEntryFromCache(task: StyleAnalysisTask, cache: StyleSampleAnalysisCache): StyleAnalysisEntry {
   return {
+    citationId: task.kind === "copy-source" ? `material:${task.sourceId}` : task.groupId ? `account:${task.groupId}:${task.sourceId}` : task.sourceId,
+    workHash: shortHash(task.transcript.replace(/\s+/gu, "")),
+    passages: styleEvidencePassages(parseModelJson(cache.analysis, "样本分析") as StyleEvidence, task.transcript),
     kind: task.kind,
     sourceId: task.sourceId,
     title: task.title,
@@ -2047,16 +2122,13 @@ function formatStyleAnalysisCorpus(entries: StyleAnalysisEntry[], label = "样�
   return entries
     .map(
       (entry, index) =>
-        `${label} ${index + 1}｜${entry.title}\n来源:${entry.sourceId} 原文完整字数:${entry.inputChars}\n${entry.analysis}`
+        `${label} ${index + 1}｜${entry.title}\n来源:${entry.citationId} 作品指纹:${entry.workHash} 原文完整字数:${entry.inputChars}\n${entry.analysis}\n可引用的连续证据（按原文位置核验，相邻或重叠证据保留原始间隔）：\n${JSON.stringify(entry.passages)}`
     )
     .join("\n\n---\n\n");
 }
 
 function styleEvidenceQuotes(entries: StyleAnalysisEntry[]) {
-  return entries.flatMap(entry => {
-    const data = parseModelJson(entry.analysis, "样本分析") as StyleEvidence;
-    return collectStyleEvidenceQuotes(data).map(quote => ({ sourceId: entry.sourceId, quote }));
-  });
+  return entries.flatMap(entry => entry.passages.map(quote => ({ sourceId: entry.citationId, quote, workHash: entry.workHash })));
 }
 
 function styleGenerationMetrics(
@@ -2157,7 +2229,7 @@ export async function prepareAccountStyleContext(
   const fallback = generationMode === "incremental" ? currentStyle : buildFallbackStyle(account.name, corpus);
   const messages: ChatMessage[] = [
     { role: "system", content: styleCardInstruction() },
-    { role: "user", content: `账号：${account.name}\n平台：${platform}\n已有卡仅作基线，不沿用无证据结论：\n${currentStyle}\n\n全部逐篇分析及核验原句：\n${corpus}` }
+    { role: "user", content: `账号：${account.name}\n平台：${platform}\n归纳依据仅为本轮逐篇分析与核验原句。相同作品指纹不计作独立支持。\n\n<verified_analyses>\n${corpus}\n</verified_analyses>` }
   ];
 
   return {
@@ -2181,7 +2253,7 @@ export async function completePreparedAccountStyle(
 ): Promise<AccountStyleGenerationResult> {
   const generatedStyle = result.text.trim();
   if (!result.ok || result.fallback || !generatedStyle) throw new Error(result.userMessage || result.fallbackReason || "风格卡生成失败，原卡已保留，请重试。");
-  validateStyleCardCitations(generatedStyle, context.evidenceQuotes);
+  validateStyleCardCitations(generatedStyle, context.evidenceQuotes, { requireRules: true });
   const style = preserveWriterPreferences(generatedStyle || context.fallback, await readStyle(context.platform, context.accountId));
   const isFallbackResult = result.fallback || !generatedStyle;
   const shouldUpdateSampleCache = Boolean(generatedStyle) && !isFallbackResult;
@@ -2282,9 +2354,9 @@ async function buildProjectStyleAccountContexts(sourceAccountIds: string[]): Pro
 
 function formatProjectStyleAccountCorpus(accountContexts: ProjectStyleAccountContext[]) {
   return accountContexts
-    .map(({ account, style, analyses }) => {
+    .map(({ account, analyses }) => {
       const analysisBlock = formatStyleAnalysisCorpus(analyses, "账号样本分析");
-      return `参考账号：${account.name}｜${account.platform}\n\n账号风格卡：\n${style}\n\n爆款样本分析（每条分析均已读取对应完整转写）：\n${analysisBlock || "暂无转写样本"}`;
+      return `参考账号：${account.name}｜${account.platform}\n账号分组：${account.id}\n\n原文样本分析（每条分析均已读取对应完整转写）：\n${analysisBlock || "暂无转写样本"}`;
     })
     .join("\n\n---\n\n");
 }
@@ -2306,7 +2378,7 @@ function formatProjectStyleCopySourceContext(sources: CopySource[], analyses: St
             .filter(Boolean)
             .join("\n")
         : "素材底稿：只有转写，未做原视频画面描述";
-      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n素材样本分析（已读取完整转写 ${source.transcript.length} 字）：\n${analysis?.analysis || "暂无样本分析"}`;
+      return `文案素材 ${index + 1}｜${source.title}\n平台：${source.platform}\n来源：${source.url}\n${materialAnalysis}\n\n素材样本分析（已读取完整转写 ${source.transcript.length} 字）：\n${analysis ? formatStyleAnalysisCorpus([analysis], "素材分析") : "暂无样本分析"}`;
     })
     .filter(Boolean)
     .join("\n\n");
@@ -2348,14 +2420,15 @@ function buildProjectStyleSampleState(
     ].join("\n"))
   }));
   const sampleHash = shortHash(JSON.stringify({
-    learning: styleLearningSignature(),
+    learning: styleCardSignature(),
     project: {
       name: project.name,
       description: project.description || "",
       sourceAccountIds,
       sourceMaterialIds
     },
-    accountFingerprints,
+    // Existing account cards are metadata only, not evidence for project learning.
+    accountFingerprints: accountFingerprints.map(({ accountId, sampleFingerprints }) => ({ accountId, sampleFingerprints })),
     materialFingerprints
   }));
 
@@ -2382,7 +2455,7 @@ export type PreparedProjectStyleContext = {
   analysisStats: StyleAnalysisStats;
   cachedStyle?: string;
   previousStyleHash?: string;
-  evidenceQuotes?: Array<{ sourceId: string; quote: string }>;
+  evidenceQuotes?: StyleCardEvidence[];
 };
 
 export type PreparedSavedProjectStyleContext = {
@@ -2426,6 +2499,7 @@ export async function prepareProjectStyleContext(
     })
   );
   const materialTasks = buildCopySourceStyleAnalysisTasks(materialSources);
+  if (!accountTasks.length && !materialTasks.length) throw new Error("项目还没有可用于归纳的原文，请先添加完整转写；原卡已保留。");
   const analysis = await resolveStyleSampleAnalyses([...accountTasks, ...materialTasks], options);
   const analysesByGroupId = new Map<string, StyleAnalysisEntry[]>();
   for (const entry of analysis.entries) {
@@ -2453,7 +2527,7 @@ export async function prepareProjectStyleContext(
       },
       {
         role: "user",
-        content: `项目：${project.name}\n项目说明：${project.description || "暂无"}\n\n参考素材：\n${corpus}`
+        content: `项目：${project.name}\n项目明确要求与主参考（未指定则不推断）：${project.description || "未指定"}\n相同作品指纹不计作独立支持。\n\n<verified_analyses>\n${corpus}\n</verified_analyses>`
       }
     ],
     fallback,
@@ -2484,7 +2558,7 @@ export async function completePreparedProjectStyle(
 ): Promise<ProjectStyleProfileResult> {
   const generatedStyle = result.text.trim();
   if (!result.ok || result.fallback || !generatedStyle) throw new Error(result.userMessage || result.fallbackReason || "项目风格生成失败，原卡已保留，请重试。");
-  validateStyleCardCitations(generatedStyle, context.evidenceQuotes);
+  validateStyleCardCitations(generatedStyle, context.evidenceQuotes, { requireRules: true });
   const style = preserveWriterPreferences(generatedStyle || context.fallback, await readProjectStyle(context.projectId));
   const isFallbackResult = result.fallback || !generatedStyle;
   await saveProjectStyle(context.projectId, style, context.previousStyleHash);
@@ -2833,28 +2907,14 @@ function buildInitialWriteMessages(input: {
   userTask: string;
 }): ChatMessage[] {
   return [
-    {
-      role: "system",
-      content:
-        "你是中文短视频文案写手。本次只使用用户指定的这一张风格卡及其代表样本，独立完成一篇成稿。不要融合、借用或补入其他账号或项目的风格，也不要输出中间策划过程、创作思路或审稿意见。"
-    },
+    { role: "system", content: initialWriteInstruction() },
     {
       role: "user",
       content: [
-        `本篇唯一参考风格：\n${formatWriteStyleContexts([input.styleContext], true)}`,
-        `支持文档资料：\n${input.supportDocContext}`,
-        `联网检索资料：\n${input.webContext}`,
-        `任务：\n${input.userTask}`,
-        "先在内部判断本次素材适合怎样的开头、叙事与衔接，选择参考中适用的写法，然后直接输出正文；不输出计划。用户明确保存的写作偏好只约束表达，本次明确要求优先。",
-        [
-          "写作边界：",
-          "1. 只输出可直接使用的成稿，不解释创作思路。",
-          "2. 开头方式、句长、节奏、具象程度和结尾方式只服从本篇风格卡与代表样本，不自行补统一模板。",
-          "3. 推广目的与吃瓜、趣事等讲法可以组合，按本次资料选择有依据的切入，并自然承接到游戏、卖点或活动规则。参考段落只学承接方法，不搬用旧事件，不为制造悬念编造爆料、争议、玩家反应或亲身经历；资料不支持时换合适切入。不照搬整套栏目结构。",
-          "4. 事实仅来自本次用户资料、支持文档和检索资料；范文只学表达，其中旧产品、事件、数字和个人经历不能成为本次事实。事实冲突不可自行认定，宣传评价不得升级为实测结论。",
-          "5. 保留明确必留信息、指定原话及硬性品牌口径。普通素材顺序、创意示例与未锁定框架均可重组；要求不完整时依据目的选择合理切入，不发明客户要求。用户明确要求润色或保留框架时遵从。",
-          "6. 输出前核对明确字数和禁用词。字数按汉字、字母和数字计数，不计标点空白；未给字数时不自行增加硬性范围。"
-        ].join("\n")
+        `本篇唯一参考风格与对应原文（包含独立标注的用户表达偏好）：\n${formatWriteStyleContexts([input.styleContext], true)}`,
+        `本次支持文档资料：\n${input.supportDocContext}`,
+        `本次联网检索资料（含内部检索状态，仅有依据的相关事实可用于成稿）：\n${input.webContext}`,
+        `本次任务与用户素材：\n${input.userTask}`
       ].join("\n\n")
     }
   ];
@@ -2944,8 +3004,9 @@ async function prepareWriteRevisionContext(
         recalibrate ? "你是中文短视频文案修订编辑。本轮重新校准风格，按已保存的表达证据重组允许修改的内容，保留事实和明确硬约束。" : "你是中文短视频文案修订编辑。你的任务是在现有成稿上做有边界的修改，而不是重新另写一篇。",
         "只输出修改后的完整成稿，不解释修改过程，不输出差异说明。",
         recalibrate ? "未锁定的结构、类比和衔接可以重写；选中段落模式下范围外仍不改。" : "未被本轮要求点名的事实、产品信息、梗、结构和语气尽量保持不变。",
-        "表达方式以当前稿件和它保存的风格卡为准；不要在续改时引入其他账号或项目的风格。",
-        "不得添加原始素材及已保存事实资料没有依据的新事实；风格样本不是事实来源，旧稿的无依据说法也不能作为证据。"
+        "表达方式以当前稿件和它保存的风格卡及原文为准；不要在续改时引入其他账号或项目的风格。S 只作倾向参考，C 须满足触发条件，O 不自动成为要求；旧卡无分层时结合已保存原文谨慎判断。规则与匹配原文冲突时收窄或跳过，不能为套规则强造比喻、短句、反转或重复总结；仍须遵守本轮修改范围。",
+        "不得添加原始素材及已保存事实资料没有依据的新事实；风格样本不是事实来源，旧稿的无依据说法也不能作为证据。",
+        writerResearchBoundaryInstruction()
       ].join("\n")
     },
     {
@@ -2961,7 +3022,7 @@ async function prepareWriteRevisionContext(
         ...(parent.brief ? [`历史策划备注：\n${clampText(parent.brief, 12_000)}`] : []),
         `风格卡：\n${style}`,
         parent.input ? `原始素材：\n${parent.input}` : "原始素材：未保存",
-        parent.research ? `已保存参考资料：\n${parent.research}` : "已保存参考资料：无",
+        parent.research ? `已保存参考资料（含内部检索状态及检查备注，不作为正文复述）：\n${parent.research}` : "已保存参考资料：无",
         `当前完整稿件：\n${clampText(currentContent, 70_000)}`,
         [
           "输出检查：",
@@ -3029,20 +3090,23 @@ async function resolveWriteStyleContext(
 ): Promise<WriteStyleContext> {
   let context: WriteStyleContext;
   const candidates: FastReference[] = [];
+  const collectTask = async (task: StyleAnalysisTask, id: string) => {
+    const cached = await task.readCache();
+    let analysis: StyleEvidence | undefined;
+    if (cached?.analysis) {
+      try { analysis = parseStyleEvidence(cached.analysis, task.transcript, task.title); }
+      // Invalid optional evidence cannot be used as verified anchors. The original
+      // remains available, with the limitation recorded in the selection reason.
+      catch { options.onProgress?.("部分旧分析与当前原文不符，本次使用原文分段参考；可更新风格重新学习。"); }
+    }
+    candidates.push({ id, title: task.title, transcript: task.transcript, analysis });
+  };
   const collectAccount = async (platform: Platform, accountId: string) => {
     const samples = await getTopTranscriptSamples(platform, accountId, "all");
     if (!samples.length) return;
     options.onProgress?.("正在匹配已有博主原文，不重复学习");
     for (const task of buildAccountStyleAnalysisTasks(platform, accountId, samples)) {
-      const cached = await task.readCache();
-      // A changed model endpoint does not invalidate evidence on the write path.
-      // Quotes must still match the current source; incompatible evidence is explicit.
-      let indexText = "";
-      if (cached?.analysis) {
-        try { indexText = JSON.stringify(parseStyleEvidence(cached.analysis, task.transcript, task.title)); }
-        catch { options.onProgress?.("部分旧分析与当前原文不符，本次直接匹配原文；可更新风格重新学习。"); }
-      }
-      candidates.push({ id: `${platform}:${accountId}:${task.sourceId}`, title: task.title, transcript: task.transcript, indexText });
+      await collectTask(task, `${platform}:${accountId}:${task.sourceId}`);
     }
   };
   if (reference.targetType === "account") {
@@ -3060,19 +3124,18 @@ async function resolveWriteStyleContext(
         await collectAccount(accountId.split(":")[0] as Platform, accountId);
       }
       const sources = await resolveProjectCopySourcesForStyle(project.sourceMaterialIds || []);
-      for (const source of sources) {
-        candidates.push({ id: `material:${source.id}`, title: source.title, transcript: source.transcript });
+      for (const task of buildCopySourceStyleAnalysisTasks(sources)) {
+        await collectTask(task, `material:${task.sourceId}`);
       }
     }
   }
   if (!includeSamples) return context;
-  const unique = [...new Map(candidates.map(c => [shortHash(c.transcript.replace(/\s/g, "")), c])).values()];
   const snapshot: WriterContextSnapshot = {
     schemaVersion: 1, promptVersion: WRITE_PROMPT_VERSION, referenceKey: writeStyleReferenceKey(context.reference),
     styleText: context.style, styleHash: shortHash(context.style), samples: [], plan: null,
     notes: [], preparedAt: nowIso()
   };
-  snapshot.samples = selectFastReferences(unique, taskContext);
+  snapshot.samples = selectFastReferences(candidates, taskContext);
   snapshot.plan = fastWriterPlan(taskContext, snapshot.samples);
   snapshot.notes = ["直接写作：使用已有风格卡与本地匹配原文，在正文生成时完成构思；未调用模型逐篇分析或单独生成计划。"];
   if (!snapshot.samples.length) snapshot.notes.push("没有可用原文，本次仅使用现有风格卡；补充博主作品有助于提高相似度。");

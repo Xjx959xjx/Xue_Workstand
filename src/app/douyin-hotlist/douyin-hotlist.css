@@ -331,6 +331,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 
 .douyin-hotlist-rank-pane {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   overflow: hidden;
@@ -486,6 +487,8 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 }
 
 .douyin-hotlist-item {
+  --rank-color: var(--blue);
+  --rank-soft: var(--blue-soft);
   position: relative;
   content-visibility: auto;
   contain-intrinsic-size: auto 66px;
@@ -496,57 +499,62 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   align-items: center;
   min-width: 0;
   min-height: 64px;
-  padding: 4px 8px;
+  padding: 4px var(--space-3);
   overflow: hidden;
   border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
   border-radius: 12px;
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 96%, var(--panel)) 0%, var(--panel) 100%);
-  box-shadow: 0 6px 16px color-mix(in oklch, var(--text-strong) 2.5%, transparent);
+  box-shadow: none;
   transition:
-    background-color var(--motion-base) var(--ease-apple),
-    border-color var(--motion-base) var(--ease-apple),
-    box-shadow var(--motion-base) var(--ease-apple),
-    transform var(--motion-base) var(--ease-apple);
+    border-color var(--motion-fast) var(--ease-apple),
+    box-shadow var(--motion-fast) var(--ease-apple);
 }
 
 .douyin-hotlist-item::before {
   position: absolute;
-  inset: 8px auto 8px 0;
+  z-index: 2;
+  inset: 16px auto 16px 0;
   width: 3px;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: color-mix(in oklch, var(--rank-color) 55%, var(--line));
+  opacity: 0.62;
+  transform: scaleY(0.72);
+  transform-origin: center;
+  transition:
+    opacity var(--motion-fast) var(--ease-apple),
+    transform var(--motion-fast) var(--ease-apple);
   content: "";
 }
 
-.douyin-hotlist-item:hover {
-  border-color: color-mix(in oklch, var(--accent) 24%, var(--line));
-  box-shadow: 0 10px 24px color-mix(in oklch, var(--text-strong) 4.5%, transparent);
-  transform: translateY(-1px);
+.douyin-hotlist-item::after {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--accent-tint) 34%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-apple);
+  content: "";
+}
+
+.douyin-hotlist-item > * {
+  position: relative;
+  z-index: 1;
 }
 
 .douyin-hotlist-item.rank-one {
-  border-color: color-mix(in oklch, var(--rose) 18%, var(--line));
-}
-
-.douyin-hotlist-item.rank-one::before {
-  background: linear-gradient(180deg, var(--rose), var(--amber));
+  --rank-color: var(--rose);
+  --rank-soft: var(--rose-soft);
 }
 
 .douyin-hotlist-item.rank-two {
-  border-color: color-mix(in oklch, var(--blue) 18%, var(--line));
-}
-
-.douyin-hotlist-item.rank-two::before {
-  background: linear-gradient(180deg, var(--blue), var(--accent));
+  --rank-color: var(--hotlist-rising);
+  --rank-soft: var(--hotlist-rising-soft);
 }
 
 .douyin-hotlist-item.rank-three {
-  border-color: color-mix(in oklch, var(--green) 18%, var(--line));
-}
-
-.douyin-hotlist-item.rank-three::before {
-  background: linear-gradient(180deg, var(--green), var(--blue));
+  --rank-color: var(--amber);
+  --rank-soft: var(--amber-soft);
 }
 
 .douyin-hotlist-item.is-surging,
@@ -568,18 +576,35 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 }
 
 .douyin-hotlist-item.is-surging {
-  border-color: var(--surge-border);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, var(--panel)) 0%, var(--panel) 100%);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklch, var(--surge-color) 18%, transparent),
-    0 10px 24px color-mix(in oklch, var(--surge-color) 7%, transparent);
+  border-color: color-mix(in oklch, var(--line) 78%, transparent);
+  box-shadow: none;
 }
 
-.douyin-hotlist-item.is-surging::before {
-  width: 4px;
-  background: linear-gradient(180deg, var(--surge-color), var(--surge-accent));
-  box-shadow: 0 0 0 1px color-mix(in oklch, var(--surge-color) 14%, transparent);
+@media (hover: hover) {
+  .douyin-hotlist-item:hover,
+  .douyin-hotlist-item:focus-within {
+    border-color: color-mix(in oklch, var(--accent) 34%, var(--line));
+    box-shadow:
+      inset 0 0 0 1px color-mix(in oklch, var(--accent) 8%, transparent),
+      0 5px 14px color-mix(in oklch, var(--text-strong) 5%, transparent);
+  }
+
+  .douyin-hotlist-item:hover::before,
+  .douyin-hotlist-item:focus-within::before {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+
+  .douyin-hotlist-item:hover::after,
+  .douyin-hotlist-item:focus-within::after {
+    opacity: 1;
+  }
+
+  .douyin-hotlist-item:hover .douyin-hotlist-rank,
+  .douyin-hotlist-item:focus-within .douyin-hotlist-rank {
+    border-color: color-mix(in oklch, var(--rank-color) 44%, var(--line));
+    background-color: color-mix(in oklch, var(--rank-soft) 86%, var(--panel));
+  }
 }
 
 .douyin-hotlist-rank {
@@ -588,11 +613,14 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   min-height: 34px;
   place-items: center;
   padding: 3px;
-  border: 1px solid color-mix(in oklch, var(--accent) 18%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--rank-color) 30%, var(--line));
   border-radius: 10px;
-  color: var(--accent-strong);
-  background: color-mix(in oklch, var(--accent-tint) 62%, var(--panel));
+  color: color-mix(in oklch, var(--rank-color) 75%, var(--text-strong));
+  background-color: color-mix(in oklch, var(--rank-soft) 70%, var(--panel));
   font-variant-numeric: tabular-nums;
+  transition:
+    background-color var(--motion-fast) var(--ease-apple),
+    border-color var(--motion-fast) var(--ease-apple);
 }
 
 .douyin-hotlist-rank strong {
@@ -613,36 +641,12 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   line-height: 1.1;
 }
 
-.rank-one .douyin-hotlist-rank {
-  border-color: color-mix(in oklch, var(--rose) 26%, var(--line));
-  color: color-mix(in oklch, var(--rose) 78%, var(--text-strong));
-  background: color-mix(in oklch, var(--rose-soft) 62%, var(--panel));
-}
-
-.rank-two .douyin-hotlist-rank {
-  border-color: color-mix(in oklch, var(--blue) 26%, var(--line));
-  color: color-mix(in oklch, var(--blue) 82%, var(--text-strong));
-  background: color-mix(in oklch, var(--blue-soft) 68%, var(--panel));
-}
-
-.rank-three .douyin-hotlist-rank {
-  border-color: color-mix(in oklch, var(--green) 26%, var(--line));
-  color: color-mix(in oklch, var(--green) 82%, var(--text-strong));
-  background: color-mix(in oklch, var(--green-soft) 70%, var(--panel));
-}
-
-.douyin-hotlist-item.is-surging .douyin-hotlist-rank {
-  border-color: var(--surge-border);
-  color: var(--surge-deep);
-  background: color-mix(in oklch, var(--surge-soft) 76%, var(--panel));
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--surge-color) 12%, transparent);
-}
-
 .douyin-hotlist-item-content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.32fr) 140px;
+  grid-template-columns: minmax(0, 1fr) minmax(248px, 0.36fr) 140px;
   grid-template-areas: "head metrics heat";
-  gap: 8px;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
   align-items: center;
   min-width: 0;
 }
@@ -651,7 +655,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   grid-area: head;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
-  gap: 6px;
+  gap: var(--space-2);
   align-items: center;
   min-width: 0;
 }
@@ -717,7 +721,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-card-title);
-  font-weight: var(--font-weight-heading);
+  font-weight: var(--font-weight-label);
   line-height: var(--line-height-card-title);
 }
 
@@ -808,15 +812,15 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  padding: 1px 6px;
-  border: 1px solid color-mix(in oklch, var(--green) 18%, transparent);
+  padding: 1px 0;
+  border: 1px solid transparent;
   border-radius: 999px;
-  color: color-mix(in oklch, var(--green) 74%, var(--text-strong));
-  background: color-mix(in oklch, var(--green-soft) 62%, transparent);
+  color: var(--muted-strong);
+  background: transparent;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 10px;
-  font-weight: 720;
+  font-weight: var(--font-weight-medium);
   line-height: 1.12;
 }
 
@@ -850,12 +854,6 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   color: color-mix(in oklch, var(--surge-soft) 88%, white);
 }
 
-.douyin-hotlist-item.is-surging .douyin-hotlist-signal {
-  border-color: color-mix(in oklch, var(--line-strong) 42%, transparent);
-  color: var(--muted-strong);
-  background: color-mix(in oklch, var(--panel-soft) 72%, transparent);
-}
-
 .douyin-hotlist-tags {
   display: none;
 }
@@ -868,7 +866,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   grid-area: metrics;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  gap: var(--space-2);
   align-items: center;
   min-width: 0;
 }
@@ -886,7 +884,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   min-height: 36px;
   align-content: center;
   padding: 4px 6px;
-  border: 1px solid color-mix(in oklch, var(--metric-color) 13%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--metric-color) 28%, var(--line));
   border-radius: 10px;
   background: color-mix(in oklch, var(--metric-soft) 44%, var(--panel));
 }
@@ -946,7 +944,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   gap: 3px;
   min-height: 44px;
   padding: 5px 8px;
-  border: 1px solid color-mix(in oklch, var(--rose) 16%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--rose) 26%, var(--line));
   border-radius: 10px;
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--rose-soft) 36%, var(--panel-raised)) 0%, var(--panel) 100%);
@@ -1488,12 +1486,13 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 
   .douyin-hotlist-rank-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
 
   .douyin-hotlist-window-filter,
   .douyin-hotlist-platform-filter {
+    grid-column: 1 / -1;
     justify-content: center;
     width: 100%;
   }

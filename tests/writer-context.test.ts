@@ -10,11 +10,13 @@ import {
   type StyleEvidence, type WriterCandidate, type WriterPlan
 } from "../src/lib/writer-context";
 import { parseStoredRecord } from "../src/lib/storage/schemas";
-import { prepareWriteCopyContext, prepareWriteCopyBatchContext, resolveWriteBatchOutcome, completePreparedWriteCopy, prepareAccountStyleContext, completePreparedAccountStyle } from "../src/lib/ai";
-import { upsertAccount, saveStyle, readStyle, saveVideos, saveTranscript, saveDraft, resolveDraft, getDraftSummaries } from "../src/lib/storage";
+import { prepareWriteCopyContext, prepareWriteCopyBatchContext, resolveWriteBatchOutcome, completePreparedWriteCopy, prepareAccountStyleContext, completePreparedAccountStyle, prepareProjectStyleContext, completePreparedProjectStyle } from "../src/lib/ai";
+import { upsertAccount, saveStyle, readStyle, saveVideos, saveTranscript, saveDraft, resolveDraft, getDraftSummaries, readAccountStyleMeta, saveAccountStyleMeta, readAccountStyleSampleAnalysis, saveAccountStyleSampleAnalysis, upsertProject, saveCopySource, saveProjectStyle, readProjectStyle, readProjectStyleMeta, saveProjectStyleMeta } from "../src/lib/storage";
+import { addWriterPreference } from "../src/lib/writer-preference";
 import { POST as preferenceRoute } from "../src/app/api/write/preference/route";
 import { POST as saveDraftRoute } from "../src/app/api/drafts/route";
 import type { Account, Video, Draft } from "../src/lib/types";
+import { streamStyleResponseTextWithFallback } from "../src/lib/ai";
 
 const quote = "先看这座景区发生了什么，再说游戏联动的具体规则。";
 const evidence: StyleEvidence = {
@@ -30,6 +32,20 @@ const task: WriterPlan["task"] = {
 };
 const inputText = "活动可试驾，不用联名，4—20字。原框架仅供参考。";
 const candidate: WriterCandidate = { id: "event", title: "低热度活动", transcript: quote, analysis: evidence };
+const styleCard = (sourceId = "event", excerpt = quote) => `# 活动风格卡
+## 风格概览
+用现场内容引入。
+## 跨样本表达倾向
+本轮不足以确认
+## 场景写法与单篇观察
+### C01｜现场承接介绍
+支持范围：单篇支持。
+触发条件：有真实现场素材与活动关联。
+表达动作：从现象引出活动，再解释规则。
+停止与例外：解释清楚后停止，没有现场时换切入。
+原文证据：[[${sourceId}]]「${excerpt}」
+## 使用边界与证据范围
+单篇支持，不代表全部作品。`;
 const plan = (id = "event"): WriterPlan => ({ task, selected: [{ id, reason: "活动用途相符，借鉴现场切入" }], applicableStyle: ["先讲具体活动，再解释规则"], notes: [] });
 
 test("风格引句与任务事实必须来自各自原文，跨账号ID不能混入", () => {
@@ -42,6 +58,20 @@ test("风格引句与任务事实必须来自各自原文，跨账号ID不能混
   assert.throws(() => validateStyleCardCitations("没有依据的新卡", [{ sourceId: "event", quote }]), /引用/);
   assert.throws(() => validateStyleCardCitations(`[[other]]「${quote}」`, [{ sourceId: "event", quote }]), /引用/);
   validateStyleCardCitations(`[[event]]「${quote}」`, [{ sourceId: "event", quote }]);
+});
+
+test("风格卡允许同一证据的连续摘录，但拒绝改字、拼接或错误来源", () => {
+  const excerpt = "最后实在受不了了，趁板上出门采购，翻出电话报警，才被解救了出来。";
+  const next = "可就在板上被警察摁倒前，还在叮嘱两姐妹，一定要好好学习啊，等我出来就聘用你们当员工。";
+  const ending = "果然资本家的 play 没人顶得住啊！";
+  const quotes = [{ sourceId: "7518313891584380217", quote: `${excerpt}\n${next}\n${ending}` }];
+  const citation = (value: string) => `[[7518313891584380217]]「${value}」`;
+  validateStyleCardCitations(citation(excerpt), quotes);
+  validateStyleCardCitations(citation(`${next}\n${ending}`), quotes);
+  for (const invalid of [excerpt.replace("电话", "手机"), `${excerpt}\n${ending}`, `${excerpt}${next}`]) {
+    assert.throws(() => validateStyleCardCitations(citation(invalid), quotes), /引用/);
+  }
+  assert.throws(() => validateStyleCardCitations(`[[other]]「${excerpt}」`, quotes), /引用/);
 });
 
 test("参考按总预算保留全文或完整证据，不截掉长文结尾也不固定篇数", () => {
@@ -102,15 +132,14 @@ test("吃瓜推广的衔接进入选样、首稿和风格卡引用，纯评论�
   await fixture(async ({ account, requests, setReply }) => {
     await saveVideos(account, [video(account, "mixed", "景区奇怪现象", 10)]);
     await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "mixed", text: mixedEventText, source: "manual" });
-    setReply(messages => messages[0].includes("完整阅读这一篇") ? JSON.stringify(mixedEventEvidence)
-      : JSON.stringify({ ...plan(`douyin:${account.id}:mixed`), applicableStyle: ["先讲真实的活动趣事，揭晓关联后解释参与规则"] }));
+    setReply(() => JSON.stringify(mixedEventEvidence));
     const prepared = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "rewrite", prompt: inputText, sourceText: inputText });
     assert.equal(requests.length, 0, "直接写作准备不调用模型");
     assert.ok(prepared.messages[1].content.includes(mixedEventText), "成稿阶段仍有完整原文上下文");
     assert.equal(prepared.draftBase?.writerContext?.samples[0].id, `douyin:${account.id}:mixed`);
     assert.deepEqual(prepared.draftBase?.writerContext?.plan?.task.facts, [], "范文旧活动不变成本次事实");
     const context = await prepareAccountStyleContext(account.platform, account.id);
-    const style = `## 趣事转活动\n单篇观察：揭晓趣事关联，再讲规则。[[mixed]]「${eventBefore}」\n[[mixed]]「${eventAfter}」`;
+    const style = styleCard("mixed", eventBefore).replace("## 使用边界", `[[mixed]]「${eventAfter}」\n## 使用边界`);
     await completePreparedAccountStyle(context, { text: style, model: "fixture", ok: true, fallback: false });
     assert.equal((await readStyle(account.platform, account.id)).trim(), style);
     const commentary = { ...evidence, purposes: ["评论事件"], narrative: { forms: ["吃瓜"], beats: [{ purpose: "解释事件", quote }], bridges: [] } };
@@ -177,6 +206,9 @@ test("学习失败不覆盖旧卡；旧稿无快照时明确记录兼容行为",
     setReply(() => JSON.stringify(evidence));
     const context = await prepareAccountStyleContext(account.platform, account.id);
     await assert.rejects(() => completePreparedAccountStyle(context, { text: "错误模板", model: "bad", ok: false, fallback: true }), /原卡已保留/);
+    await assert.rejects(() => completePreparedAccountStyle(context, {
+      text: "[[event]]「改写了原文的证据」", model: "fixture", ok: true, fallback: false
+    }), /原卡已保留/);
     assert.equal(await readStyle(account.platform, account.id), "旧风格：现场乐子\n");
     const draft = await saveDraft({ platform: account.platform, accountId: account.id, accountName: account.name,
       title: "旧稿", mode: "topic", prompt: "活动", content: "旧版正文", styleRef: { platform: account.platform, accountId: account.id, accountName: account.name } });
@@ -187,7 +219,7 @@ test("学习失败不覆盖旧卡；旧稿无快照时明确记录兼容行为",
     assert.match(prepared.research || "", /旧稿未保存原始风格快照/);
     assert.equal(prepared.draftBase?.writerContext?.compatibility, "legacy-current-style");
     await saveStyle(account.platform, account.id, "用户并发编辑的新卡");
-    await assert.rejects(() => completePreparedAccountStyle(context, { text: `## 新卡\n[[event]]「${quote}」`, model: "fixture", ok: true, fallback: false }), /生成期间已被修改/);
+    await assert.rejects(() => completePreparedAccountStyle(context, { text: styleCard(), model: "fixture", ok: true, fallback: false }), /生成期间已被修改/);
     assert.equal((await readStyle(account.platform, account.id)).trim(), "用户并发编辑的新卡");
   });
 });
@@ -215,7 +247,7 @@ test("归纳成功后缓存可复用，强制归纳只重做卡片，模型改�
     await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
     setReply(() => JSON.stringify(evidence));
     const context = await prepareAccountStyleContext(account.platform, account.id);
-    await completePreparedAccountStyle(context, { text: `## 活动场景\n具体现场引入，单篇证据有限。[[event]]「${quote}」`, model: "fixture", ok: true, fallback: false });
+    await completePreparedAccountStyle(context, { text: styleCard(), model: "fixture", ok: true, fallback: false });
     const cached = await prepareAccountStyleContext(account.platform, account.id);
     assert.ok(cached.cachedStyle);
     const forced = await prepareAccountStyleContext(account.platform, account.id, { force: true });
@@ -238,7 +270,7 @@ test("偏好接口仅修改当前稿件风格、可撤销，旧稿快照保持�
     const send = (body: object) => preferenceRoute(new Request("http://local/api/write/preference", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
     const saved = await send({ action: "remember", draftId: draft.id, text: "先讲具体事件" });
     assert.equal(saved.status, 200);
-    const { preferenceId } = await saved.json();
+    const { preferenceId } = await saved.json() as { preferenceId: string };
     assert.match(await readStyle(account.platform, account.id), /先讲具体事件/);
     assert.deepEqual((await resolveDraft(draft.id)).draft.writerContext, draft.writerContext);
     const next = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "rewrite", prompt: "再写", sourceText: "素材" });
@@ -251,24 +283,137 @@ test("偏好接口仅修改当前稿件风格、可撤销，旧稿快照保持�
   });
 });
 
+test("归纳不输入旧卡规则；卡片缓存失效复用分析，旧分析缓存失效重新学习且保留偏好", async () => {
+  await fixture(async ({ account, setReply, requests }) => {
+    const previous = addWriterPreference("旧卡公式：每段都要硬加吐槽。", "abc-123", "不要重复解释结尾");
+    await saveStyle(account.platform, account.id, previous);
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => JSON.stringify(evidence));
+    const context = await prepareAccountStyleContext(account.platform, account.id);
+    assert.ok(context.messages.every(message => !message.content.includes("每段都要硬加吐槽") && !message.content.includes("不要重复解释结尾")));
+    const valid = styleCard();
+    const invalid = valid.replace("停止与例外：解释清楚后停止，没有现场时换切入。", "");
+    await assert.rejects(() => completePreparedAccountStyle(context, { text: invalid, model: "fixture", ok: true, fallback: false }), /停止与例外/);
+    assert.equal((await readStyle(account.platform, account.id)).trim(), previous);
+    assert.equal(await readAccountStyleMeta(account.platform, account.id), null);
+    await completePreparedAccountStyle(context, { text: valid, model: "fixture", ok: true, fallback: false });
+    assert.match(await readStyle(account.platform, account.id), /不要重复解释结尾/);
+    const meta = (await readAccountStyleMeta(account.platform, account.id))!;
+    await saveAccountStyleMeta(account.platform, account.id, { ...meta, sampleHash: "previous-card-version" });
+    const cardChanged = await prepareAccountStyleContext(account.platform, account.id);
+    assert.equal(cardChanged.cachedStyle, undefined);
+    assert.equal(cardChanged.analysisStats.analysisCachedCount, 1);
+    assert.equal(requests.length, 1, "仅最终卡失效时无需重新分析");
+    const cache = (await readAccountStyleSampleAnalysis(account.platform, account.id, "event"))!;
+    await saveAccountStyleSampleAnalysis(account.platform, account.id, "event", { ...cache, cacheKey: "previous-analysis-version" });
+    const analysisChanged = await prepareAccountStyleContext(account.platform, account.id);
+    assert.equal(analysisChanged.analysisStats.analysisGeneratedCount, 1);
+    assert.equal(requests.length, 2);
+    assert.match(await readStyle(account.platform, account.id), /不要重复解释结尾/);
+  });
+});
+
+test("项目归纳隔离账号与素材来源，复用分析、保留偏好并拒绝同文多算与并发覆盖", async () => {
+  await fixture(async ({ account, setReply, requests }) => {
+    const other = await upsertAccount({ platform: "douyin", name: "另一个风格", uid: "other-fixture" });
+    const otherQuote = "先把过程交代清楚，然后解释大家关心的原因。";
+    for (const [owner, transcript] of [[account, quote], [other, otherQuote]] as const) {
+      await saveVideos(owner, [video(owner, "event", "同名来源", 1)]);
+      await saveTranscript({ platform: owner.platform, accountId: owner.id, videoId: "event", text: transcript, source: "manual" });
+      await saveStyle(owner.platform, owner.id, "旧卡专有规则：每段必须反转");
+    }
+    const material = await saveCopySource({ title: "同文转载", platform: "douyin", url: "https://example.test/material", transcript: quote, source: "manual" });
+    const project = await upsertProject({ name: "风格测试项目", sourceAccountIds: [account.id, other.id], sourceMaterialIds: [material.id] });
+    await saveProjectStyle(project.id, addWriterPreference("旧项目风格", "def-456", "保留自然过渡"));
+    setReply(messages => {
+      const excerpt = messages[1].includes(otherQuote) ? otherQuote : quote;
+      return JSON.stringify({ ...evidence, narrative: { forms: ["叙事"], beats: [{ purpose: "交代原因", quote: excerpt }], bridges: [] }, moves: [{ ...evidence.moves[0], quote: excerpt }] });
+    });
+    const context = await prepareProjectStyleContext(project.id);
+    assert.equal(requests.length, 3);
+    const ids = [...new Set(context.evidenceQuotes!.map(item => item.sourceId))];
+    assert.equal(ids.length, 3, "同名视频与独立素材必须有唯一引用 ID");
+    for (const id of ids) assert.ok(context.messages[1].content.includes(`来源:${id}`));
+    assert.doesNotMatch(context.messages[1].content, /旧卡专有规则|保留自然过渡/);
+    const accountId = `account:${account.id}:event`;
+    const materialId = `material:${material.id}`;
+    assert.equal(context.evidenceQuotes!.find(item => item.sourceId === accountId)?.workHash, context.evidenceQuotes!.find(item => item.sourceId === materialId)?.workHash);
+    await assert.rejects(() => completePreparedProjectStyle(context, { text: styleCard("event"), model: "fixture", ok: true, fallback: false }), /引用/);
+    const valid = styleCard(accountId);
+    const stableDuplicate = valid.replace("## 跨样本表达倾向\n本轮不足以确认\n## 场景写法与单篇观察\n### C01", "## 跨样本表达倾向\n### S01")
+      .replace("## 使用边界与证据范围", `[[${materialId}]]「${quote}」\n## 场景写法与单篇观察\n本轮不足以确认\n## 使用边界与证据范围`);
+    await assert.rejects(() => completePreparedProjectStyle(context, { text: stableDuplicate, model: "fixture", ok: true, fallback: false }), /同文转载/);
+    assert.match(await readProjectStyle(project.id), /旧项目风格/);
+    await completePreparedProjectStyle(context, { text: valid, model: "fixture", ok: true, fallback: false });
+    assert.match(await readProjectStyle(project.id), /保留自然过渡/);
+    await saveStyle(account.platform, account.id, "修改账号卡不改变项目原文证据");
+    assert.ok((await prepareProjectStyleContext(project.id)).cachedStyle);
+    const meta = (await readProjectStyleMeta(project.id))!;
+    await saveProjectStyleMeta(project.id, { ...meta, sampleHash: "previous-card-version" });
+    const next = await prepareProjectStyleContext(project.id);
+    assert.equal(next.analysisStats.analysisCachedCount, 3);
+    assert.equal(requests.length, 3);
+    await saveProjectStyle(project.id, "用户正在编辑项目卡");
+    await assert.rejects(() => completePreparedProjectStyle(next, { text: valid, model: "fixture", ok: true, fallback: false }), /生成期间已被修改/);
+    assert.equal((await readProjectStyle(project.id)).trim(), "用户正在编辑项目卡");
+  });
+});
+
+test("样本引句校验失败自动纠正一次，成功后复用缓存", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(messages => JSON.stringify(messages.length > 2 ? evidence : {
+      ...evidence, moves: [{ ...evidence.moves[0], quote: "模型改写的句子" }]
+    }));
+    await prepareAccountStyleContext(account.platform, account.id);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1].at(-1)!, /无法在原文定位/);
+    await prepareAccountStyleContext(account.platform, account.id);
+    assert.equal(requests.length, 2, "成功纠正的分析可以复用");
+  });
+});
+
+test("样本连续校验失败停止重试且保留原卡", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => "无效JSON");
+    await assert.rejects(() => prepareAccountStyleContext(account.platform, account.id), /自动纠正一次仍未通过/);
+    assert.equal(requests.length, 2);
+    assert.equal((await readStyle(account.platform, account.id)).trim(), "旧风格：现场乐子");
+  });
+});
+
 function video(account: Account, id: string, title: string, views: number): Video {
   return { id, title, platform: account.platform, accountId: account.id, url: `https://www.douyin.com/video/${id}`,
     stats: { views, likes: 0, comments: 0, favorites: 0 }, hotScore: views, relativeViewRate: 1,
     transcriptStatus: "not_started", updatedAt: new Date().toISOString() };
 }
 
-async function fixture(run: (context: { account: Account; root: string; requests: string[][]; setReply: (fn: (messages: string[]) => string) => void }) => Promise<void>) {
+type ModelReply = string | { status: number; body: string } | { disconnect: true };
+async function fixture(run: (context: { account: Account; root: string; requests: string[][]; requestBodies: Record<string, unknown>[]; setReply: (fn: (messages: string[]) => ModelReply) => void }) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-context-test-"));
   const original = { ...process.env };
   const requests: string[][] = [];
-  let respond: (messages: string[]) => string = () => "{}";
+  const requestBodies: Record<string, unknown>[] = [];
+  let respond: (messages: string[]) => ModelReply = () => "{}";
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
-    const messages = JSON.parse(body).messages.map((m: { content: string }) => m.content);
+    const payload = JSON.parse(body);
+    requestBodies.push(payload);
+    const messages = payload.messages.map((m: { content: string }) => m.content);
     requests.push(messages);
+    const reply = respond(messages);
+    if (typeof reply !== "string") {
+      if ("disconnect" in reply) req.socket.destroy();
+      else { res.writeHead(reply.status, { "Content-Type": "application/json" }); res.end(reply.body); }
+      return;
+    }
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: respond(messages) } }] }));
+    res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: reply } }] }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as { port: number };
@@ -278,7 +423,7 @@ async function fixture(run: (context: { account: Account; root: string; requests
   try {
     const account = await upsertAccount({ platform: "douyin", name: "测试风格", uid: "writer-fixture" });
     await saveStyle(account.platform, account.id, "旧风格：现场乐子");
-    await run({ account, root, requests, setReply(fn) { respond = fn; } });
+    await run({ account, root, requests, requestBodies, setReply(fn) { respond = fn; } });
   } finally {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
@@ -287,3 +432,84 @@ async function fixture(run: (context: { account: Account; root: string; requests
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test("样本连接中断自动重试一次，恢复后缓存并复用分析", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => requests.length === 1 ? { disconnect: true } : JSON.stringify(evidence));
+    const progress: Array<{ completedCount: number; message?: string }> = [];
+    await prepareAccountStyleContext(account.platform, account.id, { onAnalysisProgress: p => progress.push(p) });
+    assert.equal(requests.length, 2);
+    assert.match(progress[0].message!, /活动.*自动重试 1\/1/);
+    assert.equal(progress[0].completedCount, 0, "重试不虚增已完成数量");
+    assert.equal(progress.at(-1)?.completedCount, 1);
+    const next = await prepareAccountStyleContext(account.platform, account.id);
+    assert.equal(next.analysisStats.analysisCachedCount, 1);
+    assert.equal(requests.length, 2);
+    assert.equal(await readStyle(account.platform, account.id), "旧风格：现场乐子\n");
+  });
+});
+
+test("持续连接故障有重试上限，标明样本并保留原卡和已完成缓存", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "saved", "已完成", 2)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "saved", text: quote, source: "manual" });
+    setReply(() => JSON.stringify(evidence));
+    await prepareAccountStyleContext(account.platform, account.id);
+    await saveVideos(account, [video(account, "event", "故障样本", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => ({ disconnect: true }));
+    await assert.rejects(() => prepareAccountStyleContext(account.platform, account.id), /故障样本.*连接异常.*UND_ERR_SOCKET.*已缓存.*原卡已保留/);
+    assert.equal(requests.length, 3, "仅新增样本请求两次");
+    assert.ok(await readAccountStyleSampleAnalysis(account.platform, account.id, "saved"));
+    assert.equal(await readAccountStyleSampleAnalysis(account.platform, account.id, "event"), null);
+    assert.equal(await readStyle(account.platform, account.id), "旧风格：现场乐子\n");
+  });
+});
+
+test("鉴权和额度不足不自动重试，临时限流及服务异常会重试", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    for (const [status, body, count, message] of [
+      [401, "unauthorized", 1, /鉴权异常/],
+      [429, "insufficient_quota", 1, /额度不足/],
+      [429, "rate limit", 2, /限流/],
+      [503, "service unavailable", 2, /服务暂时异常/]
+    ] as const) {
+      const before = requests.length;
+      setReply(() => ({ status, body }));
+      await assert.rejects(() => prepareAccountStyleContext(account.platform, account.id), message);
+      assert.equal(requests.length - before, count);
+    }
+  });
+});
+
+test("等待自动重试时取消任务，不会继续发请求或写分析缓存", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => ({ status: 503, body: "service unavailable" }));
+    const controller = new AbortController();
+    await assert.rejects(() => prepareAccountStyleContext(account.platform, account.id, {
+      signal: controller.signal,
+      onAnalysisProgress: p => { if (p.message) setTimeout(() => controller.abort(), 10); }
+    }), { name: "AbortError" });
+    assert.equal(requests.length, 1);
+    assert.equal(await readAccountStyleSampleAnalysis(account.platform, account.id, "event"), null);
+  });
+});
+
+test("风格卡流式调用及无输出补偿请求使用相同的新版输出预算", async () => {
+  await fixture(async ({ requests, requestBodies, setReply }) => {
+    setReply(() => requests.length === 1 ? { status: 503, body: "service unavailable" } : styleCard());
+    const result = await streamStyleResponseTextWithFallback({ messages: [{ role: "user", content: "归纳风格" }], onDelta() {} });
+    assert.equal(result.ok, true);
+    assert.equal(result.text, styleCard());
+    assert.equal(requests.length, 2);
+    assert.equal(requestBodies[0].stream, true);
+    assert.equal(requestBodies[1].stream, false);
+    for (const payload of requestBodies) assert.equal(payload.max_tokens, 6000);
+  });
+});

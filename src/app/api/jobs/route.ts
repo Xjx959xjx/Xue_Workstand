@@ -1,3 +1,4 @@
+import { imagePromptAssistSchema } from "@/lib/image-prompt-assist-types";
 import { imageGenerationInputSchema } from "@/lib/image-generation-types";
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
@@ -186,6 +187,7 @@ const grossMarginRefreshSchema = z.object({
 });
 
 const startJobSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("image-prompt-assist"), input: imagePromptAssistSchema }),
   z.object({ kind: z.literal("image-generation"), input: imageGenerationInputSchema }),
   writeCopySchema,
   accountStyleSchema,

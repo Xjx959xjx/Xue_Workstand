@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "sampleHash": "29a0fc9470",
+  "sampleCount": 3,
+  "usedModel": "saved-preview",
+  "updatedAt": "2026-09-16T04:28:26.996Z",
+  "sampleFingerprints": [
+    {
+      "videoId": "7614809579326577777",
+      "hash": "a52ecd7b32"
+    },
+    {
+      "videoId": "7183274570739109177",
+      "hash": "30805aa8d5"
+    },
+    {
+      "videoId": "7596683369229339377",
+      "hash": "77c5f58f6b"
+    }
+  ],
+  "sampleVideoIds": [
+    "7614809579326577777",
+    "7183274570739109177",
+    "7596683369229339377"
+  ],
+  "generationMode": "full",
+  "fallback": false
+}

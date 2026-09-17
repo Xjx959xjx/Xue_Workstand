@@ -5,11 +5,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { generateImages } from "../src/lib/image-generation";
-import { callImageApi, imageConfig } from "../src/lib/image-runtime";
+import { callImageApi, defaultImageProfileId, imageConfig } from "../src/lib/image-runtime";
 import { imageGenerationInputSchema } from "../src/lib/image-generation-types";
 import { getImageFile, getImageRecord, listImageRecords, saveImageFile } from "../src/lib/storage/images";
 import { isResumableJobKind } from "../src/lib/job-persistence";
 import { isJobKindAllowedForAppMode } from "../src/lib/app-mode";
+import { imageMentionToken, resolveImageMentions } from "../src/lib/image-mentions";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
 const input = { prompt: "一只猫", size: "1024x1024" as const, quality: "low" as const, count: 2, referenceIds: [] };
@@ -51,8 +52,22 @@ test("生图使用 JSON 文生图和 multipart 参考图；部分失败保留图
     assert.equal(requests[2].url, "/v1/images/edits");
     assert.match(requests[2].type, /multipart\/form-data; boundary=/);
     assert.match(requests[2].body, /name="image\[\]"/);
+    const branchPrompt = `调整 ${imageMentionToken(reference.id, "人物照")} 的表情`;
+    const branch = await generateImages("image-test-branch", { ...input, count: 1, canvasId: record.id, parentRecordId: record.id, parentImageId: record.images[0].id, referenceIds: [record.images[0].id, reference.id], prompt: branchPrompt }, { onProgress: async () => {} });
+    assert.match(requests[3].body, /参考图 2（人物照）/);
+    assert.doesNotMatch(requests[3].body, /@\[/);
+    assert.equal(branch.prompt, branchPrompt);
+    assert.equal((await getImageRecord(branch.id))?.parentImageId, record.images[0].id);
+    const board = await listImageRecords(0, 40, record.id);
+    assert.deepEqual(new Set(board.records.map((item) => item.id)), new Set([record.id, branch.id]));
+    assert.equal(board.records.find((item) => item.id === branch.id)?.parentRecordId, record.id);
+    assert.equal((await listImageRecords(1, 1, record.id)).records.length, 1);
+    await assert.rejects(generateImages("invalid-branch", { ...input, canvasId: "another-board", parentRecordId: record.id }, { onProgress: async () => {} }), /画布不一致/);
+    assert.equal(await getImageRecord("invalid-branch"), null);
+    await assert.rejects(generateImages("missing-mention", { ...input, prompt: branchPrompt }, { onProgress: async () => {} }), /已不在参考图/);
+    assert.equal(await getImageRecord("missing-mention"), null);
     failAt = requests.length + 2;
-    await assert.rejects(generateImages("image-test-partial", input, { onProgress: async () => {} }), /限流或额度不足/);
+    await assert.rejects(generateImages("image-test-partial", input, { onProgress: async () => {} }), /返回 429/);
     assert.equal((await getImageRecord("image-test-partial"))?.images.length, 1);
     assert.equal((await getImageRecord("image-test-1"))?.images.length, 2);
     const controller = new AbortController();
@@ -74,6 +89,18 @@ test("生图使用 JSON 文生图和 multipart 参考图；部分失败保留图
   }
 });
 
+test("图片引用绑定 ID，重排后使用正确序号；删除、重复和越界显式失败", () => {
+  const a = "11111111-1111-4111-8111-111111111111";
+  const b = "22222222-2222-4222-8222-222222222222";
+  const prompt = `${imageMentionToken(a, "人物照")} 参考 ${imageMentionToken(b, "姿势图")}`;
+  assert.equal(resolveImageMentions(prompt, [b, a]), "参考图 2（人物照） 参考 参考图 1（姿势图）");
+  assert.throws(() => resolveImageMentions(prompt, [a]), /已不在参考图/);
+  assert.throws(() => resolveImageMentions(prompt, [a, a]), /重复/);
+  assert.equal(resolveImageMentions("旧提示词参考图一", [a]), "旧提示词参考图一");
+  assert.equal(imageGenerationInputSchema.safeParse({ ...input, canvasId: "../escape" }).success, false);
+  assert.equal(imageGenerationInputSchema.safeParse({ ...input, referenceIds: Array(7).fill(a) }).success, false);
+});
+
 test("生图参数与运行模式边界；重启不自动重复收费", () => {
   assert.equal(imageGenerationInputSchema.safeParse({ ...input, prompt: "   " }).success, false);
   assert.equal(imageGenerationInputSchema.safeParse({ ...input, count: 5 }).success, false);
@@ -81,4 +108,24 @@ test("生图参数与运行模式边界；重启不自动重复收费", () => {
   assert.equal(isResumableJobKind("image-generation"), false);
   assert.equal(isJobKindAllowedForAppMode("image-generation", "gross-margin"), false);
   assert.equal(isJobKindAllowedForAppMode("image-generation", "workspace"), true);
+});
+
+test("图片配置按 ID 隔离密钥，自定义尺寸兼容旧记录", () => {
+  const old = process.env.IMAGE_PROFILES;
+  const oldDefault = process.env.IMAGE_DEFAULT_PROFILE;
+  try {
+    process.env.IMAGE_PROFILES = JSON.stringify([{ id: "test-profile", label: "测试", model: "gpt-image-2", apiKey: "profile-key", baseUrl: "https://example.com/v1" }]);
+    process.env.IMAGE_DEFAULT_PROFILE = "test-profile";
+    assert.equal(imageConfig("test-profile").apiKey, "profile-key");
+    assert.equal(imageConfig("test-profile").model, "gpt-image-2");
+    assert.equal(defaultImageProfileId(), "test-profile");
+    assert.throws(() => imageConfig("missing"), /不存在/);
+    assert.equal(imageGenerationInputSchema.safeParse({ ...input, size: "3840x2160", profileId: "test-profile" }).success, true);
+    assert.equal(imageGenerationInputSchema.safeParse({ ...input, size: "auto" }).success, true);
+    assert.equal(imageGenerationInputSchema.safeParse({ ...input, size: "99999x1" }).success, false);
+    assert.equal(imageGenerationInputSchema.safeParse(input).success, true);
+  } finally {
+    if (old === undefined) delete process.env.IMAGE_PROFILES; else process.env.IMAGE_PROFILES = old;
+    if (oldDefault === undefined) delete process.env.IMAGE_DEFAULT_PROFILE; else process.env.IMAGE_DEFAULT_PROFILE = oldDefault;
+  }
 });

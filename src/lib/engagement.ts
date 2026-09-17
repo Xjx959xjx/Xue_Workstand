@@ -127,7 +127,7 @@ type CommentEntityGuard = {
   aliases: Map<string, string>;
 };
 
-const ENGAGEMENT_ENGINE_VERSION = "engagement-v4.0";
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v4.1";
 const ENGAGEMENT_DANMAKU_ENGINE_VERSION = "danmaku-v2";
 const ENGAGEMENT_SOURCE_CACHE_VERSION = "engagement-v3";
 const ENGAGEMENT_BRIEF_CACHE_VERSION = "engagement-v3.2";
@@ -575,6 +575,9 @@ function mergeSupplementDiagnostics(
       parsedCount: (existingGeneration?.parsedCount || 0) + incomingGeneration.parsedCount,
       completedCount: mergedItems.length,
       supplementedCount: (existingGeneration?.supplementedCount || 0) + Math.max(supplementedCount, 0),
+      reusedHotCommentCount: mergedItems.filter((item) => item.origin === "reused_hot_comment").length,
+      reusedRelatedCommentCount: mergedItems.filter((item) => item.origin === "reused_hot_comment").length,
+      aiGeneratedCount: mergedItems.filter((item) => item.origin === "ai_generated").length,
       targetLongCommentCount: existingGeneration?.targetLongCommentCount ?? incomingGeneration.targetLongCommentCount,
       lengthBuckets: summarizeCommentLengthBuckets(mergedTexts),
       targetIntentBuckets: existingGeneration?.targetIntentBuckets ?? incomingGeneration.targetIntentBuckets,
@@ -902,11 +905,11 @@ async function buildAccountSourceContext(
 
 function buildCommentSystemPrompt(platform: Platform) {
   if (platform === "bilibili") {
-    return `你在模拟真实的 B站视频评论区，不是弹幕，也不是给视频写摘要。每条评论来自不同用户。多数人只抓一个细节随手反应、接梗、与 UP 互动或说一句自己的判断；少数人才会认真补充、纠错、追问或反驳。允许长短评论并存，但不要把普通网友都写成产品经理、评测编辑或课代表。
+    return `你在补齐真实的 B站视频评论区，不是弹幕，也不是给视频写摘要。每条评论来自不同用户。多数人只抓一个细节随手反应、接梗、与 UP 互动或说一句自己的判断；少数人才会认真补充、纠错、追问或反驳。允许长短评论并存，但不要把普通网友都写成产品经理、评测编辑或课代表。保留网友会省略主语、话说一半、标点不统一的自然状态，不要追求“句句漂亮”。
 
 评论必须对素材有反应，可以使用稳定常识做一步推理；技术质疑必须有明确事实关系，不能把两个同时出现的参数硬凑成因果问题。不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。真实热评已经由程序优先加入结果，你只负责补足缺口，不能复制、改写或近义复述已有热评。不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 字符串数组。`;
   }
-  return `你在模拟真实的抖音评论区，不是在写产品评测或给文案做摘要。每条评论来自不同网友：有人玩梗，有人顺着一个词跳到熟悉场景，有人接话，有人只丢半句，也有人认真追问或泼冷水。评论必须对素材有反应，但不能只是把素材卖点换成口语再说一次。
+  return `你在补齐真实的抖音评论区，不是在写产品评测或给文案做摘要。每条评论来自不同网友：有人玩梗，有人顺着一个词跳到熟悉场景，有人接话，有人只丢半句，也有人认真追问或泼冷水。评论必须对素材有反应，但不能只是把素材卖点换成口语再说一次。保留网友会省略主语、话说一半、标点不统一的自然状态，不要追求“句句漂亮”。
 
 可以使用稳定、常见的文化常识、平台语感、游戏或日常场景做“一步联想”，也可以用明显夸张和假设制造笑点；不能编造新闻、销量、官方结论，也不能伪装自己真实购买、长期使用或亲历了素材没有写的事情。真实热评已经由程序优先加入结果，你只负责补足缺口，不能复制、改写或近义复述已有热评。不要攻击、造谣、色情、歧视或引导刷量。只输出 JSON 字符串数组。`;
 }
@@ -949,7 +952,7 @@ async function generateComments(input: {
   const sourceBrief = sourceBriefResult.brief;
   await onProgress?.({
     stage: "research",
-    message: "正在让 AI 提炼主体关键词并抓取相关视频热评",
+    message: "正在检索相关爆款并做视频级反人机质检",
     progress: 30
   });
 
@@ -1107,9 +1110,10 @@ async function generateComments(input: {
           reusableFingerprints.has(commentFingerprint(text)) ? "reused_hot_comment" : "ai_generated"
         )
       );
+      const relatedPreviewCount = preview.filter((item) => item.origin === "reused_hot_comment").length;
       await onProgress?.({
         stage: "generate",
-        message: `当前原评 ${preview.filter((item) => item.origin === "reused_hot_comment").length} 条，AI 补写后共 ${preview.length}/${count} 条`,
+        message: `已匹配相关原评 ${relatedPreviewCount} 条，AI 补写后共 ${preview.length}/${count} 条`,
         progress: Math.min(88, 42 + Math.round((preview.length / count) * 44)),
         previewComments: preview
       });
@@ -1148,6 +1152,7 @@ async function generateComments(input: {
   const outputLengthBuckets = summarizeCommentLengthBuckets(texts.slice(0, count));
   const outputIntentBuckets = summarizeCommentIntentBuckets(texts.slice(0, count));
   const reusedHotCommentCount = texts.filter((text) => reusableFingerprints.has(commentFingerprint(text))).length;
+  const reusedRelatedCommentCount = reusedHotCommentCount;
   await onProgress?.({
     stage: "filter",
     message: texts.length < count ? `已保留 ${texts.length}/${count} 条，系统将继续自动补齐` : `已完成 ${texts.length} 条评论`,
@@ -1178,6 +1183,8 @@ async function generateComments(input: {
       completedCount: texts.length,
       supplementedCount: Math.max(0, texts.length - reusedHotCommentCount),
       reusedHotCommentCount,
+      reusedRelatedCommentCount,
+      aiGeneratedCount: Math.max(texts.length - reusedHotCommentCount, 0),
       lengthBuckets: outputLengthBuckets,
       intentBuckets: outputIntentBuckets,
       lowSignalRejectedCount: selection.lowSignalRejectedCount,
@@ -1268,12 +1275,15 @@ ${clampText(input.source.content, 2600)}
 真实原评数量不足，请只补写缺少的 ${input.requestedCount} 条。长短、语气和评论类型自然变化，不需要凑任何比例或结构。
 
 要求：
-1. 每条像不同网友随手发的，允许短句、半句、玩梗、追问和轻微歪楼；不要写成摘要或整齐的产品分析。
+1. 每条像不同网友随手发的。优先写短反应、半句、追问、纠错、接梗、圈内黑话和轻微歪楼；少量长评论才允许完整展开。
 2. 不要复制、改写或近义复述“已经生成/历史已有的评论”。
 3. 只能围绕当前正文，不能带入其他视频的对象、型号、事实或经历。
 4. 型号只能使用“一致性约束”里的写法；不能编新闻、销量、购买经历或长期使用证词，也不能输出链接、短链码和视频 ID。
 5. 同一个事实、梗、担忧和句式最多用一次；表情按语气自然使用。
-6. 技术问题必须有明确事实关系。只输出 ${input.requestedCount} 个 JSON 字符串。`;
+6. 禁止“本来……看完……”“看着……自己……”“不影响……这才是……”等工整转折；禁止每条都给结论、都像金句。
+7. 不要为了通顺统一补全主谓宾；允许无句号、问号连用、重复字、口语停顿和自然错字，但不要故意制造乱码。
+8. 禁止输出 &#x20;、&nbsp;、<br> 等 HTML 实体或标签。
+9. 技术问题必须有明确事实关系。只输出 ${input.requestedCount} 个 JSON 字符串。`;
 }
 
 async function generateDanmaku(
@@ -2074,6 +2084,11 @@ function toRelatedCommentResearchDiagnostics(research: EngagementCommentResearch
     matchedLibraryCommentCount: research.matchedLibraryCommentCount,
     replySampleCount: research.replySampleCount,
     sourceStats: research.sourceStats,
+    quarantinedVideoCount: research.quarantinedVideoCount,
+    quarantinedCommentCount: research.quarantinedCommentCount,
+    quarantinedSources: research.quarantinedSources,
+    quarantineClassifierStatus: research.quarantineClassifierStatus,
+    quarantineClassifierError: research.quarantineClassifierError,
     hotComments: research.hotComments,
     reusableComments: research.reusableComments,
     sampleLibraryCount: research.sampleLibraryCount,
@@ -2104,6 +2119,8 @@ function toRelatedCommentResearchSummary(research: EngagementCommentResearch) {
     relatedIntentBuckets: research.intentBuckets,
     usedQueries: research.usedQueries,
     failedQueries: research.failedQueries,
+    quarantinedVideoCount: research.quarantinedVideoCount,
+    quarantinedCommentCount: research.quarantinedCommentCount,
     skippedRelatedSearch: false
   };
 }
@@ -2203,7 +2220,7 @@ function selectCommentSamples(
   let transportRejectedCount = 0;
   const entityCorrections: CommentEntityCorrection[] = [];
   for (const raw of values) {
-    const rawText = String(raw || "").replace(/\s+/g, " ").trim();
+    const rawText = sanitizeCommentPresentationText(String(raw || ""));
     const isReusableHotComment = reusableFingerprints.has(commentFingerprint(rawText));
     const normalized = isReusableHotComment
       ? { text: rawText, corrections: [] as CommentEntityCorrection[] }
@@ -2264,10 +2281,22 @@ function selectCommentSamples(
 
 function normalizeGeneratedCommentText(raw: unknown, entityGuard: CommentEntityGuard) {
   return normalizeTextWithEntityGuard(
-    String(raw || "").replace(/^"+|"+$/g, "").replace(/^\d+(?:[.．]\s+|、\s*)/, "").replace(/\s+/g, " ").trim(),
+    sanitizeCommentPresentationText(String(raw || ""))
+      .replace(/^"+|"+$/g, "")
+      .replace(/^\d+(?:[.．]\s+|、\s*)/, "")
+      .trim(),
     entityGuard,
     "comment"
   );
+}
+
+function sanitizeCommentPresentationText(value: string) {
+  return value
+    .replace(/&#x20;|&#32;|&nbsp;/gi, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildCommentAnchorTerms(brief: CommentSourceBrief) {
@@ -2311,9 +2340,11 @@ function isSyntheticComment(value: string, anchorTerms: string[]) {
   const aiWordCount = (value.match(/确实|感觉|适合|需求|路线|定位|配置|参数|普通人|对我来说|我这种|这个点|这点|至少|其实|反而|尤其|兼顾|取舍|场景/g) || []).length;
   const hasPolishedTurn = /(听着|看着|主打|核心|如果|虽然|不过|但).{0,18}(确实|感觉|适合|需求|路线|定位|配置|参数|普通人|对我来说|我这种|取舍)/.test(value);
   const hasReviewTone = /(核心卖点|需求场景|适合人群|产品力|配置拉满|定位清晰|取舍很明确|体验闭环)/.test(value);
+  const hasPolishedSummaryTemplate = /(本来.{0,18}(冲着|以为|只是).{0,18}(看完|结果|最后)|看.{0,12}(觉得|起来).{0,12}(自己|真到).{0,18}|不影响.{0,18}这才是|不是.{0,16}而是|既.{0,12}又.{0,12}|前脚.{0,16}后脚)/.test(value);
   const hasHumanCue = /(想问|有没有|会不会|怕|担心|预算|到手|纠结|等|蹲)/.test(value);
 
   if (hasReviewTone) return true;
+  if (value.length >= 18 && hasPolishedSummaryTemplate && !hasHumanCue) return true;
   if (value.length >= 48 && punctuationCount >= 2 && aiWordCount >= 5 && !hasHumanCue) return true;
   if (value.length >= 36 && hasPolishedTurn && aiWordCount >= 4 && !hasHumanCue) return true;
   if (!hasAnchor && !hasChatterCue && value.length >= 32 && aiWordCount >= 3) return true;

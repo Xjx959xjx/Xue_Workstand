@@ -8,7 +8,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     assertJobKindAllowedForAppMode("image-generation");
     const { id } = await context.params;
     const record = await getImageRecord(id);
-    if (!record) throw Object.assign(new Error("生图记录尚未保存或不存在，请稍后刷新。"), { statusCode: 404 });
+    if (!record || record.deletedAt) throw Object.assign(new Error("生图记录尚未保存或不存在，请稍后刷新。"), { statusCode: 404 });
     const references = [];
     for (const referenceId of record.referenceIds) references.push(await getImageMetadata(referenceId));
     return { record, references };

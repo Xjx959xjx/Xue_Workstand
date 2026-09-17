@@ -1,0 +1,76 @@
+{
+  "accountId": "douyin:最翁说游",
+  "accountName": "最游话说",
+  "sampleCount": 8,
+  "samples": [
+    {
+      "id": "7614809579326577777",
+      "title": "搁这养死士呢？#日本 #离谱 #偶像 #国外",
+      "chars": 550
+    },
+    {
+      "id": "7386993686015479066",
+      "title": "《解放军占领东京》#国外 #离谱 #解放",
+      "chars": 352
+    },
+    {
+      "id": "7183274570739109177",
+      "title": "美国蛤蟆惨遭毒手，印度巨蜥深表同情！ #离谱  #万万没想到",
+      "chars": 438
+    },
+    {
+      "id": "7502280662896938294",
+      "title": "太阳打西边出来了？12小时算奴役？！我：？ #国外 #离谱 #打工人",
+      "chars": 324
+    },
+    {
+      "id": "7094960101093543176",
+      "title": "从被网暴到全网开团第一人#整活 #大佬 ",
+      "chars": 271
+    },
+    {
+      "id": "7510974007232073020",
+      "title": "10男vs10女？什么才叫人性挑战？！#国外 #名场面 #离谱 #猎奇",
+      "chars": 444
+    },
+    {
+      "id": "7596683369229339377",
+      "title": "质疑痞老板，理解痞老板 #ai #女友 #离谱",
+      "chars": 363
+    },
+    {
+      "id": "7518313891584380217",
+      "title": "日本人还是太懂调教play了 #女高 #日本 #国外",
+      "chars": 454
+    }
+  ],
+  "sourceHashes": {
+    "account.json": "15ce764b7b9bdac643cc429dd1576fbc63ea0cedb9d75048bf339070d33df7c0",
+    "style.md": "b2703f2ea701cfcfae10077ea757dd1315c478d09d60a8d3f8a08489e2d2aa23",
+    "style.meta.json": "ffb0162b8d26cc5c179294ce60ab26f3703707a0312cfd927dd6377100bdf160",
+    "videos/7094960101093543176.json": "c4ab3ea649117e709383bb8e6830afca287912b42b641daf92b1736a5c44ca2c",
+    "videos/7183274570739109177.json": "bc73ef93e815d8f28529c1ea0a34e9dff19210bed0b1edcab781d4ea27ee4df2",
+    "videos/7386993686015479066.json": "0065860fdf95c838685f79500f089aa91661a47aed562bf232a9cd9b33c78f0e",
+    "videos/7502280662896938294.json": "d2f5f526f2348049aee04709ad73bf30bf5273b74680d46ef2ba50aa91687f37",
+    "videos/7510974007232073020.json": "de3a0d5ecf8b8e0ca1028b6f8574334705809b00ce0c4e4eec0fdbb6ac7079e5",
+    "videos/7518313891584380217.json": "f7c347b7564570aba2ba2bb31f2e35c4847991b7ea41304dcd8ca5dd6c5efcbd",
+    "videos/7596683369229339377.json": "6e15b8961fb3f2f845803896fb83c7f7d015103e9e195f91959d7c0f02c6cc0d",
+    "videos/7614809579326577777.json": "8d8bddb3390996522a35ff6c1c2a3657e24a0dd05d3d83477ae1d03f215c4b31",
+    "transcripts/7094960101093543176.txt": "3333fc9184aadabe6b2081cce499b379b8736700f2f075da338412f39f03361f",
+    "transcripts/7183274570739109177.txt": "591d27ca625632da0e2d3f55c52966814d00aaefab28d8c9bf3b70fb9b5957cf",
+    "transcripts/7386993686015479066.txt": "a381aaf242213217810dae1688ece2cb3a53bc56c20e17fb2fe683012ff348ea",
+    "transcripts/7502280662896938294.txt": "52b01615d42c675d8489328f522ceee5deb8fdcac788d7451e50977fbb98a02d",
+    "transcripts/7510974007232073020.txt": "2f6abd19495a475285324d0ab1f036a261f66f7ca3965c82d5cce88fb867b15e",
+    "transcripts/7518313891584380217.txt": "62b28ac11a76b19625c3a40110792db0b6718a7db1f99cff0fdf9586fa60c291",
+    "transcripts/7596683369229339377.txt": "534a627bf74a493ff3fda478bb155eb10894af0465234f93e464f4bf3bbfa04c",
+    "transcripts/7614809579326577777.txt": "0d3f3d36601384c83bbab87ba36e1f70a11ae318da93a1b821217f3e27bd36dc",
+    "style-samples/7094960101093543176.json": "2b96e808f119ffdbd4cf65d8db8b3dda86b6b0b26bdd0e2e0742ca16db7b7865",
+    "style-samples/7183274570739109177.json": "fca445a5412722e75040f9d1720f689664f5747de4d76a12bac01589f2266f69",
+    "style-samples/7386993686015479066.json": "1c68fbbbc02336a812ed9972e589f421b9452f96329d7510902f6e97dc7b4ed6",
+    "style-samples/7502280662896938294.json": "44b17f6cb950276b269417c9dd08c9580d5ed2f041a7cdb20a3c0601b63b0508",
+    "style-samples/7510974007232073020.json": "10bcfd1b8e4d4fcba5f535b42730e1cb68d178628be0dd34f0ec79f15e1b68b0",
+    "style-samples/7518313891584380217.json": "d91dbb7f0df011e87cb40abaefdc181317a3595312b828660b59397f8ba2cd42",
+    "style-samples/7596683369229339377.json": "27cbf7be65530a5887cbbd1ee0de7cf82d8b487a66408223a0ab04d8a241e324",
+    "style-samples/7614809579326577777.json": "6f1aba962a0ef9a9abca7948c44c2629c01f4520e5ad1677edddd1334e4960df"
+  }
+}

@@ -1,33 +1,22 @@
 "use client";
 
 import { memo } from "react";
-import { CheckCircle2, Search, Trash2, X } from "lucide-react";
+import { CheckCircle2, CircleDashed, ListChecks, Music2, Search, Trash2, TvMinimal, X } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import type { AccountListItem } from "@/lib/types";
-import type { AccountPlatformFilter, AccountSortMode, AccountStatusFilter } from "../_hooks/useLibrarySelection";
 
 type AccountSidebarProps = {
   accountFilter: string;
   accountManageMode: boolean;
-  accountSort: AccountSortMode;
   accounts: AccountListItem[];
-  allAccountCount: number;
   busy: string;
   loading: boolean;
-  platformFilter: AccountPlatformFilter;
   selectedAccountId: string;
   selectedAccountIds: string[];
-  statusFilter: AccountStatusFilter;
-  totalMissingStyleCount: number;
-  totalPendingTranscriptCount: number;
-  totalTranscriptCount: number;
   onAccountFilterChange: (value: string) => void;
-  onAccountSortChange: (value: AccountSortMode) => void;
   onClearFilters: () => void;
-  onPlatformFilterChange: (value: AccountPlatformFilter) => void;
   onRequestDeleteAccounts: () => void;
   onSelectAccount: (accountId: string) => void;
-  onStatusFilterChange: (value: AccountStatusFilter) => void;
   onToggleAccountManage: () => void;
   onToggleAllAccounts: () => void;
   onToggleManagedAccount: (accountId: string) => void;
@@ -36,64 +25,49 @@ type AccountSidebarProps = {
 export const AccountSidebar = memo(function AccountSidebar({
   accountFilter,
   accountManageMode,
-  accountSort,
   accounts,
-  allAccountCount,
   busy,
   loading,
-  platformFilter,
   selectedAccountId,
   selectedAccountIds,
-  statusFilter,
-  totalMissingStyleCount,
-  totalPendingTranscriptCount,
-  totalTranscriptCount,
   onAccountFilterChange,
-  onAccountSortChange,
   onClearFilters,
-  onPlatformFilterChange,
   onRequestDeleteAccounts,
   onSelectAccount,
-  onStatusFilterChange,
   onToggleAccountManage,
   onToggleAllAccounts,
   onToggleManagedAccount
 }: AccountSidebarProps) {
   const allVisibleSelected = Boolean(accounts.length && accounts.every((account) => selectedAccountIds.includes(account.id)));
   return (
-    <aside className={`pane ${accountManageMode ? "selection-mode" : ""}`}>
+    <aside aria-busy={loading} className={`pane account-sidebar ${accountManageMode ? "selection-mode" : ""}`}>
       <div className="pane-header">
         <div>
           <h2>{accountManageMode ? "选择账号" : "账号"}</h2>
-          <p className="pane-subtitle">
-            {loading
-              ? "正在读取本地库"
-              : `${accounts.length}/${allAccountCount} · ${totalPendingTranscriptCount} 待转写 · ${totalMissingStyleCount} 待风格`}
-          </p>
-          <span className="sr-only">账号库共有 {totalTranscriptCount} 份转写稿</span>
         </div>
         <div className="account-manage-actions">
           <button
-            className={`btn icon-btn icon-only mobile-destructive-action ${accountManageMode ? "primary" : ""}`}
+            className="btn compact account-manage-toggle"
             aria-label={accountManageMode ? "退出账号选择" : "批量选择账号"}
             onClick={onToggleAccountManage}
             title={accountManageMode ? "退出选择" : "批量选择"}
             type="button"
           >
-            {accountManageMode ? <X aria-hidden="true" size={15} /> : <CheckCircle2 aria-hidden="true" size={15} />}
+            {accountManageMode ? <X aria-hidden="true" size={15} /> : <ListChecks aria-hidden="true" size={15} />}
+            {accountManageMode ? "取消" : "多选"}
           </button>
         </div>
       </div>
       {accountManageMode ? (
         <div className="selection-toolbar" role="toolbar" aria-label="账号批量操作">
           <button className="btn compact" disabled={!accounts.length} onClick={onToggleAllAccounts} type="button">
-            {allVisibleSelected ? "清空" : "全选当前"}
+            {allVisibleSelected ? "清空" : "全选"}
           </button>
-          <div className="selection-copy">
+          <div className="selection-copy" aria-live="polite">
             <strong>已选 {selectedAccountIds.length} 个</strong>
           </div>
           <button
-            className="btn danger compact mobile-destructive-action"
+            className="btn danger compact"
             disabled={!selectedAccountIds.length || busy === "account-delete"}
             onClick={onRequestDeleteAccounts}
             type="button"
@@ -116,24 +90,6 @@ export const AccountSidebar = memo(function AccountSidebar({
             type="search"
           />
         </div>
-        <div className="account-filter-row">
-          <select className="filter-select" aria-label="筛选账号平台" onChange={(event) => onPlatformFilterChange(event.target.value as AccountPlatformFilter)} value={platformFilter}>
-            <option value="all">全部平台</option>
-            <option value="bilibili">B站</option>
-            <option value="douyin">抖音</option>
-          </select>
-          <select className="filter-select" aria-label="筛选账号状态" onChange={(event) => onStatusFilterChange(event.target.value as AccountStatusFilter)} value={statusFilter}>
-            <option value="all">全部状态</option>
-            <option value="pending">待转写</option>
-            <option value="missing-style">待风格</option>
-          </select>
-          <select className="filter-select" aria-label="账号排序" onChange={(event) => onAccountSortChange(event.target.value as AccountSortMode)} value={accountSort}>
-            <option value="recent">最近采集</option>
-            <option value="pending">待转写最多</option>
-            <option value="videos">视频最多</option>
-            <option value="name">账号名称</option>
-          </select>
-        </div>
       </div>
       <div className="pane-body">
         {accounts.map((account) => {
@@ -143,7 +99,7 @@ export const AccountSidebar = memo(function AccountSidebar({
             <button
               aria-current={!accountManageMode && selected ? "true" : undefined}
               aria-pressed={accountManageMode ? managed : undefined}
-              className={`list-button account-list-button ${selected ? "active" : ""} ${accountManageMode && managed ? "checked" : ""}`}
+              className={`list-button account-list-button ${!accountManageMode && selected ? "active" : ""} ${accountManageMode && managed ? "checked" : ""}`}
               key={account.id}
               onClick={() => accountManageMode ? onToggleManagedAccount(account.id) : onSelectAccount(account.id)}
               type="button"
@@ -156,10 +112,18 @@ export const AccountSidebar = memo(function AccountSidebar({
               </span>
               <span className="account-list-copy">
                 <span className="list-title">{account.name}</span>
-                <span className="list-meta">
-                  {formatPlatform(account.platform)} · {account.videoCount} 视频 · {account.missingTranscriptCount ? `待转写 ${account.missingTranscriptCount}` : "转写已齐"}
+                <span className="account-list-badges">
+                  <span className={`account-platform-label ${account.platform}`}>
+                    {account.platform === "douyin" ? <Music2 size={11} aria-hidden="true" /> : <TvMinimal size={11} aria-hidden="true" />}
+                    {formatPlatform(account.platform)}
+                  </span>
+                  <span className={`status-pill ${!account.videoCount ? "" : account.missingTranscriptCount ? "pending" : "done"}`}>
+                    {account.videoCount && !account.missingTranscriptCount ? <CheckCircle2 size={11} aria-hidden="true" /> : <CircleDashed size={11} aria-hidden="true" />}
+                    {!account.videoCount ? "暂无视频" : account.missingTranscriptCount ? `待转写 ${account.missingTranscriptCount}` : "转写已齐"}
+                  </span>
                 </span>
                 <span className="account-list-flags">
+                  <span>{account.videoCount} 视频</span>
                   {account.styleStatus === "not_generated" ? <span className="status-text warning">待生成风格</span> : null}
                   {account.styleStatus === "fallback" ? <span className="status-text warning">降级风格</span> : null}
                   {account.lastCollectedAt ? <span>采集 {formatShortDate(account.lastCollectedAt)}</span> : <span>尚未采集</span>}
@@ -176,7 +140,7 @@ export const AccountSidebar = memo(function AccountSidebar({
         {!loading && !accounts.length ? (
           <div className="library-filter-empty">
             <p className="subtle">没有匹配的账号。</p>
-            <button className="btn compact" onClick={onClearFilters} type="button">清除筛选</button>
+            <button className="btn compact" onClick={onClearFilters} type="button">清除搜索</button>
           </div>
         ) : null}
       </div>

@@ -8,7 +8,7 @@ import {
 } from "../src/app/douyin-hotlist/_lib/douyin-hotlist-model";
 import { buildRefreshLogEntries, buildRefreshLogEntry } from "../src/lib/douyin-hotlist-refresh-log";
 import { getDouyinAccessError } from "../src/lib/douyin-access-errors";
-import { buildDouyinUserVideosArgs } from "../src/lib/opencli";
+import { buildDouyinBatchSessionUrl, buildDouyinUserVideosArgs } from "../src/lib/opencli";
 import type { DouyinHotlistItem, DouyinHotlistRefreshJobResult, JobRecord, Platform } from "../src/lib/types";
 
 test("抖音媒体地址查询使用后台持久 CLI 会话", () => {
@@ -27,6 +27,13 @@ test("抖音媒体地址查询使用后台持久 CLI 会话", () => {
     "-f",
     "json"
   ]);
+});
+
+test("抖音批量抓取从真实账号页初始化安全签名环境", () => {
+  assert.equal(
+    buildDouyinBatchSessionUrl("MS4wLjABAAAAa/b"),
+    "https://www.douyin.com/user/MS4wLjABAAAAa%2Fb"
+  );
 });
 
 test("归一化抖音访问错误", () => {

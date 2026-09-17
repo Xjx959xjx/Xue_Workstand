@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  analyzeCoordinatedCommentSection,
   buildPlatformResearchTasks,
   buildLocalEngagementResearchQueries,
   countTargetPlatformResearchComments,
+  filterQuarantinedVideoCommentSamples,
   hasResearchSemanticMatch,
   normalizeEngagementResearchPlan
 } from "../src/lib/engagement-research";
@@ -158,6 +160,29 @@ test("AI 检索计划必须使用正文里的主题主体，泛词不能单独�
   }), /事件锚点/);
 });
 
+test("AI 检索计划允许从同一事件扩一层到正文明确相关的话题", () => {
+  const brief = {
+    summary: "AI 外接大脑可以长期记忆并自动提醒待办",
+    topic: "AI 外接大脑长期记忆",
+    subjects: ["AI 外接大脑", "AI助手"],
+    keyFacts: ["可以长期记忆聊天内容", "支持日历提醒", "用户担心隐私和收费"],
+    discussionAngles: ["AI待办", "AI日历", "第二大脑"],
+    skepticalAngles: ["长期记忆是否可靠", "隐私与本地存储", "会员收费"],
+    anchorTerms: ["AI助手", "长期记忆", "日历提醒"]
+  };
+
+  assert.deepEqual(normalizeEngagementResearchPlan(brief, {
+    queries: ["AI助手 长期记忆"],
+    referenceQueries: ["AI待办 隐私", "第二大脑 会员收费", "AI"],
+    anchors: ["AI助手"],
+    eventTerms: ["长期记忆"]
+  }), {
+    queries: ["AI助手 长期记忆", "AI待办 隐私", "第二大脑 会员收费"],
+    anchors: ["AI助手"],
+    eventTerms: ["长期记忆"]
+  });
+});
+
 test("全网评论调研不再使用固定评论类别比例", async () => {
   const source = await import("../src/lib/engagement-research");
   assert.equal("buildEngagementResearchLaneSequence" in source, false);
@@ -174,6 +199,53 @@ test("相关视频搜索在抓评论前排除输入视频本身", () => {
   assert.equal(isExcludedRelatedVideo("7684475511262825737", ["7684475511262825737"]), true);
   assert.equal(isExcludedRelatedVideo("BV1ABC123456", ["bv1abc123456"]), true);
   assert.equal(isExcludedRelatedVideo("7682995913781972258", ["7684475511262825737"]), false);
+});
+
+test("高一致营销模板会被识别为人机评论区", () => {
+  const analysis = analyzeCoordinatedCommentSection([
+    "真的太好用了，效率直接拉满！",
+    "颜值在线实力也在线，闭眼入不亏",
+    "用了以后幸福感提升太多，真心推荐",
+    "质感满满，性价比真的拉满了",
+    "功能全面又实用，这波直接冲",
+    "体验感绝了，买到就是赚到",
+    "细节做得很到位，值得入手",
+    "这才是年轻人的首选，已经安排上了"
+  ]);
+
+  assert.equal(analysis.quarantined, true);
+  assert.ok(analysis.signals.marketingRatio >= 0.75);
+  assert.match(analysis.reasons.join("；"), /广告结论|购买号召|营销话术/);
+});
+
+test("商单视频下的自然分歧评论不会仅因商业属性被误杀", () => {
+  const analysis = analyzeCoordinatedCommentSection([
+    "这价格我还是先看看吧",
+    "有没有人说下真实续航？",
+    "镜头那段没看懂，为啥突然切了",
+    "我用上一代，最大问题其实是发热",
+    "笑死，评论区已经有人开始算分期了",
+    "别急着冲，等第一批用户反馈",
+    "外观确实好看，但这个颜色不耐脏吧",
+    "路过蹲一个半年后的评测"
+  ]);
+
+  assert.equal(analysis.quarantined, false);
+  assert.ok(analysis.signals.naturalStanceRatio >= 0.5);
+});
+
+test("一个视频命中人机评论源后整组评论全部隔离", () => {
+  const samples = [
+    { platform: "douyin" as const, videoId: "ad-video", text: "模板夸赞一" },
+    { platform: "douyin" as const, videoId: "ad-video", text: "看起来像真人的一条" },
+    { platform: "douyin" as const, videoId: "organic-video", text: "正常评论" },
+    { platform: "bilibili" as const, videoId: "ad-video", text: "不同平台同 ID 不连坐" }
+  ];
+
+  assert.deepEqual(
+    filterQuarantinedVideoCommentSamples(samples, ["douyin:ad-video"]),
+    [samples[2], samples[3]]
+  );
 });
 
 test("带用户 @ 的评论不会进入热评研究或最终候选", () => {

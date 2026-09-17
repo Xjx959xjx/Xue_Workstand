@@ -3,12 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { formatPlatform } from "@/components/Formatters";
-import type { AccountDetail, AccountListItem, Platform, VideoListItem } from "@/lib/types";
+import type { AccountDetail, AccountListItem, VideoListItem } from "@/lib/types";
 import { getPrimaryMetric, getVideoOpenUrl, type VideoSortMode } from "../_components/library-view-utils";
 
-export type AccountPlatformFilter = "all" | Platform;
-export type AccountStatusFilter = "all" | "pending" | "missing-style";
-export type AccountSortMode = "recent" | "pending" | "videos" | "name";
 export type VideoStatusFilter = "all" | "pending" | "completed" | "failed";
 export type SortDirection = "asc" | "desc";
 type LibraryMobileView = "accounts" | "videos" | "detail";
@@ -21,24 +18,18 @@ export function useLibraryAccountSelection(accounts: AccountListItem[]) {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
 
   const accountFilter = searchParams.get("q") || "";
-  const platformFilter = parseAccountPlatformFilter(searchParams.get("platform"));
-  const statusFilter = parseAccountStatusFilter(searchParams.get("accountStatus"));
-  const accountSort = parseAccountSortMode(searchParams.get("accountSort"));
   const requestedAccountId = searchParams.get("account") || "";
 
   const filteredAccounts = useMemo(() => {
     const keyword = accountFilter.trim().toLowerCase();
     return accounts
       .filter((account) => {
-        if (platformFilter !== "all" && account.platform !== platformFilter) return false;
-        if (statusFilter === "pending" && !account.missingTranscriptCount) return false;
-        if (statusFilter === "missing-style" && account.styleStatus !== "not_generated") return false;
         if (!keyword) return true;
         const haystack = `${account.name} ${formatPlatform(account.platform)} ${account.uid}`.toLowerCase();
         return haystack.includes(keyword);
       })
-      .sort(getAccountSorter(accountSort));
-  }, [accountFilter, accountSort, accounts, platformFilter, statusFilter]);
+      .sort((a, b) => +new Date(b.lastCollectedAt || b.updatedAt) - +new Date(a.lastCollectedAt || a.updatedAt));
+  }, [accountFilter, accounts]);
 
   const selectedAccountMeta = useMemo(
     () => filteredAccounts.find((account) => account.id === requestedAccountId) || filteredAccounts[0] || null,
@@ -90,23 +81,14 @@ export function useLibraryAccountSelection(accounts: AccountListItem[]) {
   return {
     accountFilter,
     accountManageMode,
-    accountSort,
     filteredAccounts,
-    platformFilter,
     requestedAccountId,
     selectedAccountIds,
     selectedAccountMeta,
-    statusFilter,
-    totalMissingStyleCount: accounts.filter((account) => account.styleStatus === "not_generated").length,
-    totalPendingTranscriptCount: accounts.reduce((sum, account) => sum + account.missingTranscriptCount, 0),
-    totalTranscriptCount: accounts.reduce((sum, account) => sum + account.transcriptCount, 0),
     clearAccountFilters: () => replaceParams({ q: null, platform: null, accountStatus: null, accountSort: null }),
     selectAccount,
     setAccountFilter: (value: string) => replaceParams({ q: value || null }),
     setAccountManageMode,
-    setAccountPlatformFilter: (value: AccountPlatformFilter) => replaceParams({ platform: value === "all" ? null : value }),
-    setAccountSort: (value: AccountSortMode) => replaceParams({ accountSort: value === "recent" ? null : value }),
-    setAccountStatusFilter: (value: AccountStatusFilter) => replaceParams({ accountStatus: value === "all" ? null : value }),
     setSelectedAccountIds,
     toggleAccountManage,
     toggleManagedAccount
@@ -226,28 +208,8 @@ export function useLibraryVideoSelection(selectedAccount: AccountDetail | null) 
   };
 }
 
-const accountNameCollator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
 const videoTitleCollator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
 const videoSortModes: VideoSortMode[] = ["hot", "title", "views", "likes", "comments", "favorites", "latest"];
-
-function getAccountSorter(mode: AccountSortMode) {
-  if (mode === "pending") return (a: AccountListItem, b: AccountListItem) => b.missingTranscriptCount - a.missingTranscriptCount;
-  if (mode === "videos") return (a: AccountListItem, b: AccountListItem) => b.videoCount - a.videoCount;
-  if (mode === "name") return (a: AccountListItem, b: AccountListItem) => accountNameCollator.compare(a.name, b.name);
-  return (a: AccountListItem, b: AccountListItem) => +new Date(b.lastCollectedAt || b.updatedAt) - +new Date(a.lastCollectedAt || a.updatedAt);
-}
-
-function parseAccountPlatformFilter(value: string | null): AccountPlatformFilter {
-  return value === "bilibili" || value === "douyin" ? value : "all";
-}
-
-function parseAccountStatusFilter(value: string | null): AccountStatusFilter {
-  return value === "pending" || value === "missing-style" ? value : "all";
-}
-
-function parseAccountSortMode(value: string | null): AccountSortMode {
-  return value === "pending" || value === "videos" || value === "name" ? value : "recent";
-}
 
 function parseVideoStatusFilter(value: string | null): VideoStatusFilter {
   return value === "pending" || value === "completed" || value === "failed" ? value : "all";
