@@ -1780,3 +1780,17 @@ export async function deleteImageGenerationRecords(input: { action: "delete"; id
   invalidateImageRecordsCache();
   return result;
 }
+
+let aiSettingsRequest: Promise<import("./ai-policy-catalog").AiSettingsView> | null = null;
+export function getAiModelSettings() {
+  if (!aiSettingsRequest) {
+    aiSettingsRequest = requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings")
+      .finally(() => { aiSettingsRequest = null; });
+  }
+  return aiSettingsRequest;
+}
+export function saveAiModelSettings(value: import("./ai-policy-catalog").AiSettings) {
+  return requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings", {
+    method: "PUT", body: JSON.stringify(value)
+  });
+}

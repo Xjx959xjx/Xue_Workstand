@@ -52,6 +52,7 @@ export async function cleanTranscriptText(input: {
   try {
     const chunks = splitTranscriptChunks(localCleaned, TRANSCRIPT_CLEAN_CHUNK_SIZE);
     const cleanedChunks: string[] = [];
+    const usedModels = new Set<string>();
 
     for (const [index, chunk] of chunks.entries()) {
       throwIfAborted(input.signal);
@@ -70,9 +71,10 @@ export async function cleanTranscriptText(input: {
             chunkCount: chunks.length
           })
         }
-      ], undefined, { signal: input.signal });
+      ], undefined, { policy: "transcript_clean", signal: input.signal });
       throwIfAborted(input.signal);
 
+      usedModels.add(result.model);
       const cleanedChunk = finalizeModelOutput(result.text);
       if (result.fallback || !cleanedChunk) {
         return {
@@ -98,7 +100,7 @@ export async function cleanTranscriptText(input: {
 
     return {
       text: cleanedText,
-      usedModel: runtime.model,
+      usedModel: [...usedModels].join(", "),
       fallback: false
     };
   } catch (error) {

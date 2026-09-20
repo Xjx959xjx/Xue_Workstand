@@ -15,6 +15,7 @@ style-library
 .vendor
 *.log
 .dev-server
+.dev-sandbox
 .remote-server
 .playwright-cli
 .promptfoo

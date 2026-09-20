@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  parseResearchRelevanceDecisions,
   analyzeCoordinatedCommentSection,
+  buildEngagementResearchPlanningPrompt,
   buildPlatformResearchTasks,
   buildLocalEngagementResearchQueries,
   countTargetPlatformResearchComments,
   filterQuarantinedVideoCommentSamples,
   hasResearchSemanticMatch,
-  normalizeEngagementResearchPlan
+  normalizeEngagementResearchPlan,
+  rankHotComments
 } from "../src/lib/engagement-research";
+
+test("AI 评论筛选必须逐条完整返回，不能漏评或伪造编号", () => {
+  assert.deepEqual([...parseResearchRelevanceDecisions('{"decisions":[{"id":1,"keep":true},{"id":0,"keep":false}]}', 2)], [1]);
+  for (const decisions of [[], [{ id: 0, keep: true }], [{ id: 0, keep: true }, { id: 0, keep: false }], [{ id: 0, keep: true }, { id: 2, keep: true }], [null, null]]) {
+    assert.throws(() => parseResearchRelevanceDecisions(JSON.stringify({ decisions }), 2));
+  }
+});
 import {
   containsPlatformUserMention,
   isExcludedRelatedVideo,
@@ -133,55 +143,7 @@ test("搜索词本身不能替错误视频和无关评论证明相关", () => {
   }, brief, ["Whys", "率土之滨", "王浩宇"], ["100万", "陪玩", "擂台"]), false);
 });
 
-test("AI 检索计划必须使用正文里的主题主体，泛词不能单独入选", () => {
-  const brief = {
-    summary: "花百万点陪玩，惨遭拒单",
-    topic: "Whys跨圈擂台约战，杀进率土除三害",
-    subjects: ["Whys", "率土之滨", "王浩宇", "wise", "呆皇"],
-    keyFacts: ["wise 给自己挂了100万一小时的陪玩费", "呆皇下单后双方线下打擂台"],
-    discussionAngles: ["三角洲与率土之滨跨圈约战"],
-    skepticalAngles: [],
-    anchorTerms: ["Whys", "率土之滨", "王浩宇", "呆皇"]
-  };
 
-  assert.deepEqual(normalizeEngagementResearchPlan(brief, {
-    queries: ["100万一小时", "Whys 呆皇 陪玩", "王浩宇 率土之滨", "王浩宇 100万"],
-    anchors: ["100万一小时", "Whys", "率土之滨", "王浩宇"],
-    eventTerms: ["100万", "陪玩", "擂台"]
-  }), {
-    queries: ["Whys 呆皇 陪玩", "王浩宇 100万"],
-    anchors: ["Whys", "率土之滨", "王浩宇"],
-    eventTerms: ["100万", "陪玩", "擂台"]
-  });
-  assert.throws(() => normalizeEngagementResearchPlan(brief, {
-    queries: ["王浩宇 0人头"],
-    anchors: ["王浩宇"],
-    eventTerms: ["0人头"]
-  }), /事件锚点/);
-});
-
-test("AI 检索计划允许从同一事件扩一层到正文明确相关的话题", () => {
-  const brief = {
-    summary: "AI 外接大脑可以长期记忆并自动提醒待办",
-    topic: "AI 外接大脑长期记忆",
-    subjects: ["AI 外接大脑", "AI助手"],
-    keyFacts: ["可以长期记忆聊天内容", "支持日历提醒", "用户担心隐私和收费"],
-    discussionAngles: ["AI待办", "AI日历", "第二大脑"],
-    skepticalAngles: ["长期记忆是否可靠", "隐私与本地存储", "会员收费"],
-    anchorTerms: ["AI助手", "长期记忆", "日历提醒"]
-  };
-
-  assert.deepEqual(normalizeEngagementResearchPlan(brief, {
-    queries: ["AI助手 长期记忆"],
-    referenceQueries: ["AI待办 隐私", "第二大脑 会员收费", "AI"],
-    anchors: ["AI助手"],
-    eventTerms: ["长期记忆"]
-  }), {
-    queries: ["AI助手 长期记忆", "AI待办 隐私", "第二大脑 会员收费"],
-    anchors: ["AI助手"],
-    eventTerms: ["长期记忆"]
-  });
-});
 
 test("全网评论调研不再使用固定评论类别比例", async () => {
   const source = await import("../src/lib/engagement-research");
@@ -269,17 +231,79 @@ test("带用户 @ 的评论不会进入热评研究或最终候选", () => {
 
 test("评论调研同时抓双平台，并向目标平台倾斜", () => {
   assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "bilibili", true), [
-    { source: "bilibili", query: "苹果折叠屏", videoLimit: 6 },
+    { source: "bilibili", query: "苹果折叠屏", videoLimit: 8 },
     { source: "douyin", query: "苹果折叠屏", videoLimit: 2 }
   ]);
   assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "douyin", true), [
-    { source: "douyin", query: "苹果折叠屏", videoLimit: 6 },
+    { source: "douyin", query: "苹果折叠屏", videoLimit: 8 },
     { source: "bilibili", query: "苹果折叠屏", videoLimit: 2 }
   ]);
   assert.deepEqual(buildPlatformResearchTasks("苹果折痕", "bilibili", false), [
-    { source: "bilibili", query: "苹果折痕", videoLimit: 3 }
+    { source: "bilibili", query: "苹果折痕", videoLimit: 6 }
   ]);
   assert.deepEqual(buildPlatformResearchTasks("苹果折痕", "douyin", false), [
-    { source: "douyin", query: "苹果折痕", videoLimit: 3 }
+    { source: "douyin", query: "苹果折痕", videoLimit: 6 }
   ]);
+});
+
+const shortAnchorBrief = {
+  summary: "呆皇下单百万陪玩", topic: "呆皇陪玩约战", subjects: ["呆皇"],
+  keyFacts: ["呆皇下单陪玩"], discussionAngles: [], skepticalAngles: [], anchorTerms: ["呆皇"]
+};
+
+test("正文确认的两字主体可命中，标题与当前评论共同提供事件证据", () => {
+  for (const [videoTitle, text] of [
+    ["呆皇陪玩约战", "一个敢挂一个敢点"],
+    ["呆皇的新挑战", "这陪玩价格谁敢下单"],
+    ["百万陪玩约战", "呆皇真敢下单"]
+  ]) {
+    assert.equal(hasResearchSemanticMatch({ videoTitle, text, query: "呆皇 陪玩" },
+      shortAnchorBrief, ["呆皇"], ["陪玩"]), true);
+  }
+});
+
+test("两字主体修复仍拒绝只有检索词相关、缺少事件或主体的样本", () => {
+  for (const [videoTitle, text] of [
+    ["呆皇日常", "今天真热闹"],
+    ["百万陪玩", "一个敢挂一个敢点"],
+    ["无关视频", "太好笑了"],
+    ["呆皇陪玩", "@用户 一起来看"]
+  ]) {
+    assert.equal(hasResearchSemanticMatch({ videoTitle, text, query: "呆皇 陪玩" },
+      shortAnchorBrief, ["呆皇"], ["陪玩"]), false);
+  }
+});
+
+test("相关性通过的冷门评论不会被热度分数再次淘汰", () => {
+  const sample = {
+    platform: "douyin" as const, query: "呆皇 陪玩", videoId: "test-video",
+    videoTitle: "呆皇的新挑战", text: "这陪玩价格谁敢下单", videoMetric: 0,
+    likes: 0, replies: 0, collectedAt: "2026-09-17T00:00:00Z"
+  };
+  assert.deepEqual(rankHotComments([sample], shortAnchorBrief, undefined, ["呆皇"], ["陪玩"]), [sample]);
+});
+
+
+
+
+
+test("关键词计划保留 AI 的语义表达、顺序和数量，不按原文字面过滤", () => {
+  const queries = ["折叠手机真的适合普通人吗", "苹果入局折叠屏的意义", "安卓和苹果的产品取舍", "折叠手机使用门槛", "商务手机与日常需求"];
+  assert.deepEqual(normalizeEngagementResearchPlan({ queries }), { queries, anchors: [], eventTerms: [] });
+  assert.deepEqual(normalizeEngagementResearchPlan({ queries: ["为什么还要买直板机"], anchors: ["普通消费者"], eventTerms: ["选择成本"] }), {
+    queries: ["为什么还要买直板机"], anchors: ["普通消费者"], eventTerms: ["选择成本"]
+  });
+});
+
+test("计划只拒绝错误格式和超过执行上限，不静默截断", () => {
+  for (const value of [{ queries: [] }, { queries: [42] }, { queries: [""] }, { queries: "关键词" }, { queries: Array(13).fill("词") }]) {
+    assert.throws(() => normalizeEngagementResearchPlan(value));
+  }
+});
+
+test("正文理解阶段接收全文，不注入机械摘要或具体搜索词示例", () => {
+  const fullText = "正文内容。".repeat(3000) + "结尾的真正观点";
+  const prompt = buildEngagementResearchPlanningPrompt({ ...shortAnchorBrief, fullText });
+  assert.ok(prompt.includes(fullText));
+  assert.equal(prompt.includes(shortAnchorBrief.summary), false);
 });

@@ -55,7 +55,7 @@ test("风格引句与任务事实必须来自各自原文，跨账号ID不能混
   assert.throws(() => validateWriterPlan({ ...plan(), task: { ...task, facts: [{ text: "销量高", quote: "旧案例销量高" }] } }, [candidate], inputText), /引句/);
   assert.throws(() => validateWriterPlan({ ...plan(), selected: [plan().selected[0], plan().selected[0]] }, [candidate], inputText), /重复/);
   assert.equal(validateWriterPlan(plan(), [candidate], inputText).selected.length, 1);
-  assert.throws(() => validateStyleCardCitations("没有依据的新卡", [{ sourceId: "event", quote }]), /引用/);
+  validateStyleCardCitations("以自然叙述推进，评价融入细节。", [{ sourceId: "event", quote }]);
   assert.throws(() => validateStyleCardCitations(`[[other]]「${quote}」`, [{ sourceId: "event", quote }]), /引用/);
   validateStyleCardCitations(`[[event]]「${quote}」`, [{ sourceId: "event", quote }]);
 });
@@ -292,9 +292,9 @@ test("归纳不输入旧卡规则；卡片缓存失效复用分析，旧分析�
     setReply(() => JSON.stringify(evidence));
     const context = await prepareAccountStyleContext(account.platform, account.id);
     assert.ok(context.messages.every(message => !message.content.includes("每段都要硬加吐槽") && !message.content.includes("不要重复解释结尾")));
-    const valid = styleCard();
-    const invalid = valid.replace("停止与例外：解释清楚后停止，没有现场时换切入。", "");
-    await assert.rejects(() => completePreparedAccountStyle(context, { text: invalid, model: "fixture", ok: true, fallback: false }), /停止与例外/);
+    const valid = "# 表达特点\n先交代现场，再顺着事情表达看法。";
+    const invalid = "[[不存在的来源]]「伪造引用」";
+    await assert.rejects(() => completePreparedAccountStyle(context, { text: invalid, model: "fixture", ok: true, fallback: false }), /引用/);
     assert.equal((await readStyle(account.platform, account.id)).trim(), previous);
     assert.equal(await readAccountStyleMeta(account.platform, account.id), null);
     await completePreparedAccountStyle(context, { text: valid, model: "fixture", ok: true, fallback: false });
@@ -314,7 +314,7 @@ test("归纳不输入旧卡规则；卡片缓存失效复用分析，旧分析�
   });
 });
 
-test("项目归纳隔离账号与素材来源，复用分析、保留偏好并拒绝同文多算与并发覆盖", async () => {
+test("项目归纳隔离账号与素材来源，复用分析、保留偏好与作品指纹并拒绝并发覆盖", async () => {
   await fixture(async ({ account, setReply, requests }) => {
     const other = await upsertAccount({ platform: "douyin", name: "另一个风格", uid: "other-fixture" });
     const otherQuote = "先把过程交代清楚，然后解释大家关心的原因。";
@@ -341,9 +341,6 @@ test("项目归纳隔离账号与素材来源，复用分析、保留偏好并�
     assert.equal(context.evidenceQuotes!.find(item => item.sourceId === accountId)?.workHash, context.evidenceQuotes!.find(item => item.sourceId === materialId)?.workHash);
     await assert.rejects(() => completePreparedProjectStyle(context, { text: styleCard("event"), model: "fixture", ok: true, fallback: false }), /引用/);
     const valid = styleCard(accountId);
-    const stableDuplicate = valid.replace("## 跨样本表达倾向\n本轮不足以确认\n## 场景写法与单篇观察\n### C01", "## 跨样本表达倾向\n### S01")
-      .replace("## 使用边界与证据范围", `[[${materialId}]]「${quote}」\n## 场景写法与单篇观察\n本轮不足以确认\n## 使用边界与证据范围`);
-    await assert.rejects(() => completePreparedProjectStyle(context, { text: stableDuplicate, model: "fixture", ok: true, fallback: false }), /同文转载/);
     assert.match(await readProjectStyle(project.id), /旧项目风格/);
     await completePreparedProjectStyle(context, { text: valid, model: "fixture", ok: true, fallback: false });
     assert.match(await readProjectStyle(project.id), /保留自然过渡/);
@@ -392,7 +389,7 @@ function video(account: Account, id: string, title: string, views: number): Vide
     transcriptStatus: "not_started", updatedAt: new Date().toISOString() };
 }
 
-type ModelReply = string | { status: number; body: string } | { disconnect: true };
+type ModelReply = string | { status: number; body: string; contentType?: string } | { disconnect: true };
 async function fixture(run: (context: { account: Account; root: string; requests: string[][]; requestBodies: Record<string, unknown>[]; setReply: (fn: (messages: string[]) => ModelReply) => void }) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-context-test-"));
   const original = { ...process.env };
@@ -409,7 +406,7 @@ async function fixture(run: (context: { account: Account; root: string; requests
     const reply = respond(messages);
     if (typeof reply !== "string") {
       if ("disconnect" in reply) req.socket.destroy();
-      else { res.writeHead(reply.status, { "Content-Type": "application/json" }); res.end(reply.body); }
+      else { res.writeHead(reply.status, { "Content-Type": reply.contentType || "application/json" }); res.end(reply.body); }
       return;
     }
     res.setHeader("Content-Type", "application/json");
@@ -501,7 +498,7 @@ test("等待自动重试时取消任务，不会继续发请求或写分析缓�
   });
 });
 
-test("风格卡流式调用及无输出补偿请求使用相同的新版输出预算", async () => {
+test("风格卡流式调用及无输出补偿不再注入固定输出预算", async () => {
   await fixture(async ({ requests, requestBodies, setReply }) => {
     setReply(() => requests.length === 1 ? { status: 503, body: "service unavailable" } : styleCard());
     const result = await streamStyleResponseTextWithFallback({ messages: [{ role: "user", content: "归纳风格" }], onDelta() {} });
@@ -510,6 +507,43 @@ test("风格卡流式调用及无输出补偿请求使用相同的新版输出�
     assert.equal(requests.length, 2);
     assert.equal(requestBodies[0].stream, true);
     assert.equal(requestBodies[1].stream, false);
-    for (const payload of requestBodies) assert.equal(payload.max_tokens, 6000);
+    for (const payload of requestBodies) assert.equal(payload.max_tokens, undefined);
+  });
+});
+
+
+test("逐篇分析允许超过旧条数和字符上限，仍核验原文", () => {
+  const longQuote = "连续原文".repeat(180);
+  const transcript = Array.from({ length: 10 }, (_, i) => `段落${i}：${longQuote}`).join("\n");
+  const beats = Array.from({ length: 10 }, (_, i) => ({ purpose: "承接上一段".repeat(60), quote: `段落${i}：${longQuote}` }));
+  const expanded = { genre: "文体".repeat(100), purposes: Array(9).fill("表达目的".repeat(40)),
+    unsuitable: Array(9).fill("场景限制".repeat(50)), structure: "全文结构".repeat(250),
+    narrative: { forms: Array(8).fill("讲述方式".repeat(40)), beats,
+      bridges: beats.slice(0, 5).map((beat, i) => ({ before: beat.quote, after: beats[i + 1].quote, action: "自然承接".repeat(150), requires: "相关信息".repeat(150) })) },
+    moves: Array.from({ length: 12 }, () => ({ quote: longQuote, action: "表达动作".repeat(150), when: "适用场景".repeat(100), avoid: "避免误用".repeat(100) })),
+    limitations: Array(9).fill("材料缺口".repeat(60)) };
+  assert.equal(parseStyleEvidence(JSON.stringify(expanded), transcript, "长文").moves.length, 12);
+  assert.throws(() => parseStyleEvidence(JSON.stringify(expanded), "无相关原文", "长文"), /原文定位/);
+});
+
+
+test("续改完整传入超过七万字符的当前稿件", async () => {
+  await fixture(async ({ account }) => {
+    const draft = await saveDraft({ platform: account.platform, accountId: account.id, mode: "topic", prompt: "测试", title: "长稿检查", accountName: account.name, content: "旧稿", styleRef: { platform: account.platform, accountId: account.id, accountName: account.name } });
+    const content = "完整原文".repeat(18000) + "结尾必须保留";
+    const prepared = await prepareWriteCopyContext({ action: "revise", mode: "topic", prompt: "测试", parentDraftId: draft.id,
+      currentContent: content, revisionInstruction: "只修改开头" });
+    assert.ok(prepared.messages[1].content.includes(content));
+  });
+});
+
+test("模型报告输出长度截断时，流式和普通响应都不能作为成功风格卡", async () => {
+  for (const streaming of [false, true]) await fixture(async ({ setReply }) => {
+    setReply(() => ({ status: 200, contentType: streaming ? "text/event-stream" : "application/json", body: streaming
+      ? 'data: {"choices":[{"delta":{"content":"未完成正文"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n'
+      : JSON.stringify({ choices: [{ message: { content: "未完成正文" }, finish_reason: "length" }] }) }));
+    const result = await streamStyleResponseTextWithFallback({ messages: [{ role: "user", content: "生成" }], onDelta() {} });
+    assert.equal(result.ok, false);
+    assert.equal(result.fallback, true);
   });
 });

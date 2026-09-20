@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus, Trash2, Users, X } from "lucide-react";
-import { useEffect, useMemo, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { useMemo, useRef, type FormEvent } from "react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import type { DouyinHotlistAccount, DouyinHotlistResponse, Platform } from "@/lib/types";
 import {
@@ -59,21 +59,12 @@ export function AccountManagementDrawer({
   const visibleRecentVideoCount = visibleAccounts.reduce((sum, account) => sum + account.recentVideoCount, 0);
   const platformSelection = getPlatformAccountSelection(accountPlatform);
 
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    inputRef.current?.focus();
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, []);
-
   return (
-    <ModalBackdrop closeLabel="点击空白处关闭账号管理" disabled={locked} onClose={onClose}>
+    <ModalBackdrop closeLabel="点击空白处关闭账号管理" disabled={locked} onClose={onClose} initialFocusRef={inputRef}>
       <aside
         aria-labelledby="douyin-hotlist-account-drawer-title"
         aria-modal="true"
         className="douyin-hotlist-account-drawer"
-        onKeyDown={(event) => handleDrawerKeyDown(event, locked, onClose)}
         role="dialog"
         tabIndex={-1}
       >
@@ -255,38 +246,4 @@ function AccountRow({
       </button>
     </div>
   );
-}
-
-function handleDrawerKeyDown(event: KeyboardEvent<HTMLElement>, locked: boolean, onClose: () => void) {
-  if (event.key === "Escape" && !locked) {
-    event.preventDefault();
-    onClose();
-    return;
-  }
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }

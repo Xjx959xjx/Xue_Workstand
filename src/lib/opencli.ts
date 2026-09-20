@@ -213,7 +213,7 @@ export async function getDouyinRelatedTopicComments(
   }
 
   const videoLimit = Math.max(1, Math.min(options.videoLimit || DOUYIN_RELATED_COMMENT_VIDEO_LIMIT, 8));
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT, 30));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || DOUYIN_RELATED_COMMENT_PER_VIDEO_LIMIT, 100));
   let rawCandidates: unknown[] = [];
   try {
     const stdout = await runPersistentOpenCliBrowserAdapter([

@@ -1,3 +1,4 @@
+import { resolveAiPolicy } from "./ai-policy-runtime";
 import { callImageApi, imageConfig } from "./image-runtime";
 import { imageGenerationInputSchema, type ImageGenerationInput, type ImageGenerationRecord } from "./image-generation-types";
 import { getImageFile, getImageRecord, saveImageFile, saveImageRecord } from "./storage/images";
@@ -9,7 +10,9 @@ export async function generateImages(id: string, input: ImageGenerationInput, op
   onProgress: (message: string, progress: number, saved: boolean) => Promise<void>;
 }) {
   const params = imageGenerationInputSchema.parse(input);
-  const config = imageConfig(params.profileId);
+  const baseConfig = imageConfig(params.profileId);
+  const policy = await resolveAiPolicy("image_generate");
+  const config = { ...baseConfig, model: policy.model || baseConfig.model };
   const prompt = resolveImageMentions(params.prompt, params.referenceIds);
   if (params.parentRecordId) {
     const parent = await getImageRecord(params.parentRecordId);

@@ -1,0 +1,3384 @@
+diff --git a/src/app/_hooks/useManagedSelection.ts b/src/app/_hooks/useManagedSelection.ts
+deleted file mode 100644
+index b7892e6..0000000
+--- a/src/app/_hooks/useManagedSelection.ts
++++ /dev/null
+@@ -1,31 +0,0 @@
+-"use client";
+-
+-import { useCallback, useState } from "react";
+-
+-export function useManagedSelection() {
+-  const [manageMode, setManageModeState] = useState(false);
+-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+-
+-  const setManageMode = useCallback((enabled: boolean) => {
+-    setManageModeState(enabled);
+-    setSelectedIds([]);
+-  }, []);
+-
+-  const toggleSelectedId = useCallback((id: string) => {
+-    setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+-  }, []);
+-
+-  const clearSelection = useCallback(() => {
+-    setSelectedIds([]);
+-    setManageModeState(false);
+-  }, []);
+-
+-  return {
+-    clearSelection,
+-    manageMode,
+-    selectedIds,
+-    setManageMode,
+-    setSelectedIds,
+-    toggleSelectedId
+-  };
+-}
+diff --git a/src/app/assets/_components/SourcePreviewModal.tsx b/src/app/assets/_components/SourcePreviewModal.tsx
+deleted file mode 100644
+index 8a60cb9..0000000
+--- a/src/app/assets/_components/SourcePreviewModal.tsx
++++ /dev/null
+@@ -1,37 +0,0 @@
+-"use client";
+-
+-import { formatDate, formatPlatform } from "@/components/Formatters";
+-import { ModalBackdrop } from "@/components/ModalBackdrop";
+-import type { Draft } from "@/lib/types";
+-import { getDraftReferenceLabel } from "./asset-view-utils";
+-
+-type SourcePreviewModalProps = {
+-  draft: Draft;
+-  onClose: () => void;
+-};
+-
+-export function SourcePreviewModal({ draft, onClose }: SourcePreviewModalProps) {
+-  return (
+-    <ModalBackdrop onClose={onClose}>
+-      <div aria-labelledby="source-preview-title" aria-modal="true" className="modal-panel source-preview-modal" role="dialog" tabIndex={-1}>
+-        <div className="modal-header">
+-          <div>
+-            <h2 id="source-preview-title">来源预览</h2>
+-            <p className="pane-subtitle">{draft.title}</p>
+-          </div>
+-          <button className="btn" onClick={onClose} type="button">
+-            关闭
+-          </button>
+-        </div>
+-        <div className="source-preview-body">
+-          <div className="stat-row">
+-            <span className="stat-pill">{draft.targetType === "project" ? "项目" : formatPlatform(draft.platform)}</span>
+-            <span className="stat-pill">{getDraftReferenceLabel(draft)}</span>
+-            <span className="stat-pill">{formatDate(draft.createdAt)}</span>
+-          </div>
+-          <article className="markdown-box draft-document">{draft.content}</article>
+-        </div>
+-      </div>
+-    </ModalBackdrop>
+-  );
+-}
+diff --git a/src/app/douyin-hotlist/_components/AccountManagementDrawer.tsx b/src/app/douyin-hotlist/_components/AccountManagementDrawer.tsx
+index a04295e..c608e32 100644
+--- a/src/app/douyin-hotlist/_components/AccountManagementDrawer.tsx
++++ b/src/app/douyin-hotlist/_components/AccountManagementDrawer.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { Plus, Trash2, Users, X } from "lucide-react";
+-import { useEffect, useMemo, useRef, type FormEvent, type KeyboardEvent } from "react";
++import { useMemo, useRef, type FormEvent } from "react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ import type { DouyinHotlistAccount, DouyinHotlistResponse, Platform } from "@/lib/types";
+ import {
+@@ -59,21 +59,12 @@ export function AccountManagementDrawer({
+   const visibleRecentVideoCount = visibleAccounts.reduce((sum, account) => sum + account.recentVideoCount, 0);
+   const platformSelection = getPlatformAccountSelection(accountPlatform);
+ 
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    inputRef.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   return (
+-    <ModalBackdrop closeLabel="点击空白处关闭账号管理" disabled={locked} onClose={onClose}>
++    <ModalBackdrop closeLabel="点击空白处关闭账号管理" disabled={locked} onClose={onClose} initialFocusRef={inputRef}>
+       <aside
+         aria-labelledby="douyin-hotlist-account-drawer-title"
+         aria-modal="true"
+         className="douyin-hotlist-account-drawer"
+-        onKeyDown={(event) => handleDrawerKeyDown(event, locked, onClose)}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -256,37 +247,3 @@ function AccountRow({
+     </div>
+   );
+ }
+-
+-function handleDrawerKeyDown(event: KeyboardEvent<HTMLElement>, locked: boolean, onClose: () => void) {
+-  if (event.key === "Escape" && !locked) {
+-    event.preventDefault();
+-    onClose();
+-    return;
+-  }
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/gross-margin/_components/GrossMarginBulkMonitorModal.tsx b/src/app/gross-margin/_components/GrossMarginBulkMonitorModal.tsx
+index 7ee1993..a9510cf 100644
+--- a/src/app/gross-margin/_components/GrossMarginBulkMonitorModal.tsx
++++ b/src/app/gross-margin/_components/GrossMarginBulkMonitorModal.tsx
+@@ -1,7 +1,6 @@
+ "use client";
+ 
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import type { KeyboardEvent } from "react";
++import { useEffect, useMemo, useState } from "react";
+ import { Check, ClipboardPaste, X } from "lucide-react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
+@@ -15,7 +14,6 @@ export function GrossMarginBulkMonitorModal({
+   onClose: () => void;
+   onSubmit: (input: { template: string; createProject: boolean; projectName: string }) => Promise<void>;
+ }) {
+-  const panelRef = useRef<HTMLDivElement>(null);
+   const [template, setTemplate] = useState("");
+   const parsed = useMemo(() => parseGrossMarginBulkMonitorTemplate(template), [template]);
+   const defaultProjectName = useMemo(() => makeDefaultProjectName(parsed.items.length), [parsed.items.length]);
+@@ -39,22 +37,12 @@ export function GrossMarginBulkMonitorModal({
+     if (!createProjectTouched) setCreateProject(true);
+   }, [canCreateProject, createProjectTouched]);
+ 
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    panelRef.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   return (
+     <ModalBackdrop disabled={busy} onClose={onClose}>
+       <div
+         aria-labelledby="gross-bulk-monitor-modal-title"
+         aria-modal="true"
+         className="modal-panel gross-bulk-monitor-modal"
+-        onKeyDown={(event) => handleDialogKeyDown(event, onClose, busy)}
+-        ref={panelRef}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -192,39 +180,3 @@ function formatMetric(value: number) {
+   if (value >= 10000) return `${Number((value / 10000).toFixed(2)).toLocaleString("zh-CN")}万`;
+   return value.toLocaleString("zh-CN");
+ }
+-
+-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void, busy: boolean) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    if (!busy) onClose();
+-    return;
+-  }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/gross-margin/_components/GrossMarginImportModal.tsx b/src/app/gross-margin/_components/GrossMarginImportModal.tsx
+index cac41c0..15830e9 100644
+--- a/src/app/gross-margin/_components/GrossMarginImportModal.tsx
++++ b/src/app/gross-margin/_components/GrossMarginImportModal.tsx
+@@ -1,7 +1,6 @@
+ "use client";
+ 
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import type { KeyboardEvent } from "react";
++import { useMemo, useState } from "react";
+ import { Check, ClipboardPaste, X } from "lucide-react";
+ import { useFeedback } from "@/components/FeedbackProvider";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+@@ -42,17 +41,8 @@ export function GrossMarginImportModal({
+   onImport: (template: GrossMarginImportedTemplate) => void;
+ }) {
+   const { notify } = useFeedback();
+-  const panelRef = useRef<HTMLDivElement>(null);
+   const [template, setTemplate] = useState("");
+ 
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    panelRef.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   const parsed = useMemo(() => parseImportTemplate(template, initialPlatform), [initialPlatform, template]);
+   const canImport = Boolean(template.trim()) && Boolean(parsed.accountName || parsed.metrics.length || parsed.videoUrl);
+ 
+@@ -74,8 +64,6 @@ export function GrossMarginImportModal({
+         aria-labelledby="gross-import-modal-title"
+         aria-modal="true"
+         className="modal-panel gross-import-modal"
+-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
+-        ref={panelRef}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -207,39 +195,3 @@ function cleanMetricValue(value: string) {
+ function escapeRegExp(value: string) {
+   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+ }
+-
+-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    onClose();
+-    return;
+-  }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/gross-margin/_components/GrossMarginPriceTableEditorModal.tsx b/src/app/gross-margin/_components/GrossMarginPriceTableEditorModal.tsx
+index b51f0ad..8154e0f 100644
+--- a/src/app/gross-margin/_components/GrossMarginPriceTableEditorModal.tsx
++++ b/src/app/gross-margin/_components/GrossMarginPriceTableEditorModal.tsx
+@@ -1,7 +1,6 @@
+ "use client";
+ 
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import type { KeyboardEvent } from "react";
++import { useMemo, useState } from "react";
+ import { Plus, Save, X } from "lucide-react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ import type {
+@@ -49,20 +48,11 @@ export function GrossMarginPriceTableEditorModal({
+   onClose: () => void;
+   onSave: (items: GrossMarginPriceTableSaveItem[]) => Promise<void>;
+ }) {
+-  const panelRef = useRef<HTMLDivElement>(null);
+   const [rows, setRows] = useState<DraftPriceOption[]>(() => table.items.map(makeDraftRow));
+   const [error, setError] = useState("");
+   const activeCount = useMemo(() => rows.filter((row) => row.active).length, [rows]);
+   const inactiveCount = rows.length - activeCount;
+ 
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    panelRef.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   function updateRow(rowId: string, patch: Partial<DraftPriceOption>) {
+     setError("");
+     setRows((current) => current.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
+@@ -106,8 +96,6 @@ export function GrossMarginPriceTableEditorModal({
+         aria-labelledby="gross-price-editor-title"
+         aria-modal="true"
+         className="modal-panel gross-price-editor-modal"
+-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
+-        ref={panelRef}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -298,39 +286,3 @@ function createDraftOptionId(platform: GrossMarginPriceTable["platform"]) {
+       : `${Date.now().toString(36)}`;
+   return `${platform}-custom-${suffix}`;
+ }
+-
+-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    onClose();
+-    return;
+-  }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/gross-margin/_components/GrossMarginTemplateModal.tsx b/src/app/gross-margin/_components/GrossMarginTemplateModal.tsx
+index 8be5b60..172ddd3 100644
+--- a/src/app/gross-margin/_components/GrossMarginTemplateModal.tsx
++++ b/src/app/gross-margin/_components/GrossMarginTemplateModal.tsx
+@@ -1,7 +1,6 @@
+ "use client";
+ 
+-import { useEffect, useMemo, useRef, useState } from "react";
+-import type { KeyboardEvent } from "react";
++import { useMemo, useRef, useState } from "react";
+ import { RotateCcw, Save, X } from "lucide-react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ import {
+@@ -28,7 +27,6 @@ export function GrossMarginTemplateModal({
+   onReset: () => Promise<void>;
+   onSave: (value: string) => Promise<void>;
+ }) {
+-  const panelRef = useRef<HTMLDivElement>(null);
+   const textareaRef = useRef<HTMLTextAreaElement>(null);
+   const [draft, setDraft] = useState(template.content);
+   const preview = useMemo(() => {
+@@ -41,14 +39,6 @@ export function GrossMarginTemplateModal({
+   const canSave = Boolean(draft.trim()) && !preview.error && !busy;
+   const lineCount = useMemo(() => draft.split("\n").filter((line) => line.trim()).length, [draft]);
+ 
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    panelRef.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   function insertVariable(name: string) {
+     const token = `{{${name}}}`;
+     const textarea = textareaRef.current;
+@@ -73,8 +63,6 @@ export function GrossMarginTemplateModal({
+         aria-labelledby="gross-template-modal-title"
+         aria-modal="true"
+         className="modal-panel gross-template-modal"
+-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
+-        ref={panelRef}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -158,39 +146,3 @@ export function GrossMarginTemplateModal({
+ function countTemplateLines(value: string) {
+   return value.split("\n").filter((line) => line.trim()).length;
+ }
+-
+-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    onClose();
+-    return;
+-  }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/hotspots/page.tsx b/src/app/hotspots/page.tsx
+index 63961a1..9cb4666 100644
+--- a/src/app/hotspots/page.tsx
++++ b/src/app/hotspots/page.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ 
+ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
++import type { CSSProperties } from "react";
+ import {
+   ArrowUpRight,
+   BarChart3,
+@@ -544,58 +544,16 @@ function HotspotDetailModal({
+   onClose: () => void;
+   onAction: (action: DetailAction) => void;
+ }) {
+-  const dialogRef = useRef<HTMLDivElement>(null);
+-
+-  useEffect(() => {
+-    if (!hotspot) return;
+-    const previousOverflow = document.body.style.overflow;
+-    const trigger = triggerRef.current;
+-    document.body.style.overflow = "hidden";
+-    const frame = window.requestAnimationFrame(() => dialogRef.current?.focus());
+-
+-    return () => {
+-      window.cancelAnimationFrame(frame);
+-      document.body.style.overflow = previousOverflow;
+-      trigger?.focus();
+-    };
+-  }, [hotspot, triggerRef]);
+-
+   if (!hotspot) return null;
+ 
+   const StatusIcon = statusMeta[hotspot.status].icon;
+ 
+-  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+-    if (event.key === "Escape") {
+-      event.preventDefault();
+-      onClose();
+-      return;
+-    }
+-
+-    if (event.key !== "Tab" || !dialogRef.current) return;
+-    const focusable = Array.from(
+-      dialogRef.current.querySelectorAll<HTMLElement>(
+-        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-      )
+-    );
+-    if (!focusable.length) return;
+-    const first = focusable[0];
+-    const last = focusable[focusable.length - 1];
+-    if (event.shiftKey && document.activeElement === first) {
+-      event.preventDefault();
+-      last.focus();
+-    } else if (!event.shiftKey && document.activeElement === last) {
+-      event.preventDefault();
+-      first.focus();
+-    }
+-  }
+-
+   return (
+-    <ModalBackdrop closeLabel="关闭热点详情" onClose={onClose} onKeyDown={handleKeyDown}>
++    <ModalBackdrop closeLabel="关闭热点详情" onClose={onClose} returnFocusRef={triggerRef}>
+       <div
+         aria-labelledby="hotspot-detail-title"
+         aria-modal="true"
+         className={`modal-panel hotspots-detail-modal priority-${hotspot.status}`}
+-        ref={dialogRef}
+         role="dialog"
+         tabIndex={-1}
+       >
+diff --git a/src/app/images/_components/ImageCanvas.tsx b/src/app/images/_components/ImageCanvas.tsx
+deleted file mode 100644
+index 93ece71..0000000
+--- a/src/app/images/_components/ImageCanvas.tsx
++++ /dev/null
+@@ -1,149 +0,0 @@
+-"use client";
+-/* eslint-disable @next/next/no-img-element -- Canvas displays local user assets. */
+-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+-import { Background, Panel, ReactFlow, useNodesState, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
+-import { z } from "zod";
+-import { GripVertical, ImagePlus, X, Plus, Minus, LayoutGrid, Scan, Download, Pencil, Info } from "lucide-react";
+-import { imageFileUrl, type ImageFile, type ImageGenerationRecord, type ImageGenerationSummary } from "@/lib/image-generation-types";
+-
+-type CardData = { onReference: (image: ImageFile) => void; referenceIds: string[]; disabled: boolean; onRemove: () => void; title: string; subtitle: string; images: ImageFile[]; reference: boolean; selected: boolean; onSelect: () => void; onPreview: (image: ImageFile) => void };
+-type CardNode = Node<CardData, "imageCard">;
+-function ImageCard({ data }: NodeProps<CardNode>) {
+-  return <article className={`image-canvas-card ${data.selected ? "is-selected" : ""}`}>
+-    <button className="btn icon small nodrag image-node-remove" type="button" disabled={data.disabled} aria-label={`移出画布 ${data.title}`} title="移出画布（保留原图与历史）" onClick={data.onRemove}><X size={14} /></button>
+-    <header className="image-node-heading"><span><GripVertical size={14} aria-hidden="true" />{data.title}</span><small>{data.subtitle}</small></header>
+-    {data.images.length ? <div className={`image-node-pictures ${data.images.length > 1 ? "multiple" : ""}`}>{data.images.map((image) => <div className="image-node-media nodrag" key={image.id}>
+-      <button type="button" className="image-node-picture" aria-label={`放大并编辑 ${image.name}`} onClick={() => data.onPreview(image)}><img src={imageFileUrl(image.id)} alt={image.name} loading="lazy" /></button>
+-      <div className="image-node-hover-actions"><button className="btn" type="button" onClick={() => data.onPreview(image)}><Pencil size={16} />编辑图片</button>{!data.reference ? <button className="btn" type="button" onClick={data.onSelect}><Info size={16} />生成详情</button> : null}<a className="btn" href={imageFileUrl(image.id, true)} download><Download size={16} />下载</a></div>
+-    </div>)}</div> : <div className="image-node-empty"><ImagePlus size={28} /><span>{data.subtitle}</span></div>}
+-  </article>;
+-}
+-const nodeTypes = { imageCard: ImageCard };
+-const positionSchema = z.object({ schemaVersion: z.literal(1), positions: z.record(z.object({ x: z.number().finite(), y: z.number().finite() })), hiddenIds: z.array(z.string()).default([]), viewport: z.object({ x: z.number().finite(), y: z.number().finite(), zoom: z.number().min(0.25).max(2) }).optional() });
+-export default function ImageCanvas({ loading, arrangeVersion, canvasId, records, record, references, recordReferences, selectedId, focusReference, focusVersion, onSelect, onPreview, onError, statusFor, disabled, onUpload, onRemoveReference, onAddReference }: {
+-  loading: boolean; arrangeVersion: number;
+-  onAddReference: (image: ImageFile) => boolean;
+-  disabled: boolean; onUpload: (files: File[]) => Promise<ImageFile[] | undefined>; onRemoveReference: (id: string) => boolean;
+-  canvasId: string; records: ImageGenerationSummary[]; record: ImageGenerationRecord | null; references: ImageFile[]; recordReferences: ImageFile[]; selectedId: string; focusReference: string; focusVersion: number;
+-  onSelect: (id: string) => void; onPreview: (image: ImageFile) => void; onError: (error: unknown) => void; statusFor: (record: ImageGenerationSummary) => string;
+-}) {
+-  const [nodes, setNodes, onNodesChange] = useNodesState<CardNode>([]);
+-  const [flow, setFlow] = useState<ReactFlowInstance<CardNode> | null>(null);
+-  const focused = useRef(-1);
+-  const container = useRef<HTMLDivElement>(null);
+-  const pendingFit = useRef(false);
+-  const fitFrame = useRef(0);
+-  useEffect(() => () => cancelAnimationFrame(fitFrame.current), []);
+-  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
+-  const [dragging, setDragging] = useState(false);
+-  const [knownReferences, setKnownReferences] = useState<ImageFile[]>([]);
+-  useEffect(() => { setKnownReferences((current) => [...new Map([...current, ...references, ...recordReferences].map((image) => [image.id, image])).values()]); }, [references, recordReferences]);
+-  const visibleReferences = useMemo(() => [...new Map([...knownReferences, ...references, ...recordReferences].map((image) => [image.id, image])).values()], [knownReferences, references, recordReferences]);
+-  const latest = useRef({ onSelect, onPreview, onError, statusFor, onAddReference }); latest.current = { onSelect, onPreview, onError, statusFor, onAddReference };
+-  const viewport = useRef<{ x: number; y: number; zoom: number } | undefined>(undefined);
+-  const initialized = useRef(false);
+-  const [zoom, setZoom] = useState(1);
+-  const arranged = useRef<Record<string, { x: number; y: number }>>({});
+-  const saved = useRef<Record<string, { x: number; y: number }>>({});
+-  const storageKey = `image-canvas-layout/v1/${canvasId || "new"}`;
+-  useEffect(() => {
+-    try { const raw = localStorage.getItem(storageKey); const value = raw ? positionSchema.parse(JSON.parse(raw)) : { positions: {}, hiddenIds: [] }; saved.current = value.positions; viewport.current = "viewport" in value ? value.viewport : undefined; setHiddenIds(value.hiddenIds); }
+-    catch { saved.current = {}; latest.current.onError(new Error("画布位置记录无法读取，已使用自动排列；原图与生成记录不受影响。")); }
+-  }, [storageKey]);
+-  const persist = useCallback((hidden = hiddenIds) => {
+-    try { localStorage.setItem(storageKey, JSON.stringify({ schemaVersion: 1, positions: saved.current, hiddenIds: hidden, viewport: viewport.current })); }
+-    catch { latest.current.onError(new Error("画布布局保存失败，请检查浏览器存储空间；原图与生成记录不受影响。")); }
+-  }, [hiddenIds, storageKey]);
+-  useEffect(() => {
+-    if (loading) return;
+-    const ordered = [...records].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+-    const next: CardNode[] = visibleReferences.map((image, index) => ({ id: `ref-${image.id}`, type: "imageCard", position: { x: 0, y: index * 390 }, data: { onReference: (image) => { latest.current.onAddReference(image); }, referenceIds: references.map((image) => image.id), disabled, onRemove: () => {}, title: `@${image.name}`, subtitle: references.some((item) => item.id === image.id) ? "本次参考图" : "历史参考图", images: [image], reference: true, selected: focusReference === image.id, onSelect: () => latest.current.onPreview(image), onPreview: (image) => latest.current.onPreview(image) } }));
+-    ordered.forEach((item, index) => next.push({ id: item.id, type: "imageCard", position: { x: (visibleReferences.length ? 400 : 0) + index % 2 * 400, y: Math.floor(index / 2) * 390 }, data: { onReference: (image) => { latest.current.onAddReference(image); }, referenceIds: references.map((image) => image.id), disabled, onRemove: () => {}, title: item.title, subtitle: latest.current.statusFor(item), images: record?.id === item.id ? record.images : item.thumbnail ? [item.thumbnail] : [], reference: false, selected: selectedId === item.id, onSelect: () => latest.current.onSelect(item.id), onPreview: (image) => latest.current.onPreview(image) } }));
+-    const visible = next.filter((node) => !hiddenIds.includes(node.id));
+-    arranged.current = Object.fromEntries(visible.map((node, index) => [node.id, { x: index % 3 * 350, y: Math.floor(index / 3) * 390 }]));
+-    // Preserve existing slots across asynchronous refreshes; only place new cards.
+-    let changed = false;
+-    for (const node of visible) {
+-      if (saved.current[node.id]) continue;
+-      let slot = 0;
+-      while (Object.values(saved.current).some((position) => Math.abs(position.x - slot % 3 * 350) < 320 && Math.abs(position.y - Math.floor(slot / 3) * 390) < 370)) slot++;
+-      saved.current[node.id] = { x: slot % 3 * 350, y: Math.floor(slot / 3) * 390 };
+-      changed = true;
+-    }
+-    if (changed) persist();
+-    setNodes((current) => visible.map((node) => ({ ...node, deletable: !disabled, dragHandle: ".image-node-heading", data: { ...node.data, onRemove: () => { void flow?.deleteElements({ nodes: [{ id: node.id }] }); } }, position: saved.current[node.id] || current.find((entry) => entry.id === node.id)?.position || node.position })));
+-  }, [loading, records, record, references, visibleReferences, selectedId, focusReference, setNodes, disabled, hiddenIds, flow, persist]);
+-  const arrangeNodes = useCallback(() => {
+-    saved.current = { ...saved.current, ...arranged.current };
+-    setNodes((current) => current.map((node) => ({ ...node, position: arranged.current[node.id] || node.position })));
+-    persist();
+-    pendingFit.current = true;
+-    cancelAnimationFrame(fitFrame.current);
+-    let previous = "";
+-    let stableFrames = 0;
+-    let frames = 0;
+-    // Loading closes the inspector and can change both card sizes and canvas size.
+-    // Fit only after those measurements settle, using the same path as the button.
+-    const fitWhenReady = () => {
+-      const bounds = container.current?.getBoundingClientRect();
+-      const current = flow?.getNodes() || [];
+-      const signature = JSON.stringify([bounds?.width, bounds?.height, current.map((node) => [node.id, node.position, node.measured])]);
+-      stableFrames = signature === previous ? stableFrames + 1 : 0;
+-      previous = signature;
+-      const measured = current.length > 0 && current.some((node) => node.measured?.width && node.measured?.height);
+-      if (measured && stableFrames >= 3) {
+-        void flow?.fitView({ padding: 0.08, minZoom: 0.85, maxZoom: 1 });
+-        pendingFit.current = false;
+-      } else if (++frames < 120) {
+-        fitFrame.current = requestAnimationFrame(fitWhenReady);
+-      } else {
+-        pendingFit.current = false;
+-        latest.current.onError(new Error("画布尚未完成布局，请点击自动排列重试。"));
+-      }
+-    };
+-    fitFrame.current = requestAnimationFrame(fitWhenReady);
+-  }, [flow, persist, setNodes]);
+-  useEffect(() => {
+-    if (!flow || loading || !nodes.length || initialized.current) return;
+-    initialized.current = true;
+-    if (viewport.current) { void flow.setViewport(viewport.current); setZoom(viewport.current.zoom); }
+-    else arrangeNodes();
+-  }, [flow, loading, nodes.length, arrangeNodes]);
+-  // A record load can remount the canvas; its arrange request must still run.
+-  const appliedArrange = useRef(0);
+-  useEffect(() => {
+-    if (!flow || loading || !nodes.length || appliedArrange.current === arrangeVersion) return;
+-    appliedArrange.current = arrangeVersion;
+-    arrangeNodes();
+-  }, [arrangeVersion, flow, loading, nodes.length, arrangeNodes]);
+-  useEffect(() => {
+-    if (pendingFit.current || !focusReference || focused.current === focusVersion) return;
+-    const nodeId = `ref-${focusReference}`;
+-    if (hiddenIds.includes(nodeId)) { const next = hiddenIds.filter((id) => id !== nodeId); setHiddenIds(next); persist(next); return; }
+-    const node = nodes.find((entry) => entry.id === nodeId);
+-    if (!flow || !node) return;
+-    focused.current = focusVersion;
+-    void flow.setCenter(node.position.x + 150, node.position.y + 140, { zoom: 1, duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 180 });
+-  }, [flow, nodes, focusReference, focusVersion, hiddenIds, persist]);
+-  return <div ref={container} className={`image-flow ${dragging ? "is-dragging-file" : ""}`} aria-label="图片创作画布，可拖入图片、拖动卡片、缩放和平移" onDragOver={(event) => {
+-    if (!event.dataTransfer.types.includes("Files")) return;
+-    event.preventDefault(); event.dataTransfer.dropEffect = disabled ? "none" : "copy"; setDragging(!disabled);
+-  }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setDragging(false); }} onDrop={async (event) => {
+-    event.preventDefault(); setDragging(false);
+-    if (disabled) return;
+-    await onUpload(Array.from(event.dataTransfer.files));
+-  }}>
+-    <ReactFlow proOptions={{ hideAttribution: true }} onMoveEnd={(_event, next) => { if (initialized.current) { viewport.current = next; setZoom(next.zoom); persist(); } }} nodes={nodes} edges={[]} nodeTypes={nodeTypes} onInit={setFlow} onNodesChange={onNodesChange} panOnScroll zoomOnScroll={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={["Backspace", "Delete"]} onBeforeDelete={async ({ nodes: requested }) => ({ nodes: disabled ? [] : requested.filter((node) => node.data.images.every((image) => !references.some((ref) => ref.id === image.id) || onRemoveReference(image.id))), edges: [] })} onNodesDelete={(removed) => {
+-      const next = [...new Set([...hiddenIds, ...removed.map((node) => node.id)])]; setHiddenIds(next); persist(next);
+-    }} minZoom={0.25} maxZoom={2} defaultViewport={{ x: 28, y: 32, zoom: 1 }} onlyRenderVisibleElements onNodeDragStop={(_event, moved) => {
+-      saved.current[moved.id] = moved.position;
+-      persist();
+-    }} ariaLabelConfig={{ "controls.zoomIn.ariaLabel": "放大画布", "controls.zoomOut.ariaLabel": "缩小画布", "controls.fitView.ariaLabel": "适应全部图片", "controls.interactive.ariaLabel": "切换画布交互", "minimap.ariaLabel": "画布缩略图" }}>
+-      <Panel position="bottom-right"><div className="image-canvas-tools" role="group" aria-label="画布视图工具"><button className="btn icon small" type="button" aria-label="缩小画布" onClick={() => void flow?.zoomOut()}><Minus size={16} /></button><button className="btn small" type="button" aria-label="恢复到100%" title="恢复到100%" onClick={() => void flow?.zoomTo(1)}>{Math.round(zoom * 100)}%</button><button className="btn icon small" type="button" aria-label="放大画布" onClick={() => void flow?.zoomIn()}><Plus size={16} /></button><span className="image-tool-divider" /><button className="btn icon small" type="button" aria-label="适应全部图片" title="适应全部图片" onClick={() => void flow?.fitView({ padding: 0.08, maxZoom: 1 })}><Scan size={16} /></button><button className="btn small" type="button" disabled={!nodes.length} onClick={arrangeNodes}><LayoutGrid size={15} />自动排列</button>{hiddenIds.length ? <button className="btn small" type="button" onClick={() => { setHiddenIds([]); persist([]); }}>恢复卡片 ({hiddenIds.length})</button> : null}</div></Panel>
+-      {dragging ? <Panel position="top-center"><div className="image-canvas-drop-hint">松开图片，加入本次参考图</div></Panel> : null}
+-      <Background gap={24} size={0.7} />
+-
+-      {!nodes.length ? <Panel position="top-center"><div className="image-canvas-empty"><ImagePlus size={32} /><h2>从一张图开始</h2><p>添加参考图，在下方输入提示词。每轮结果会留在这张画布上。</p></div></Panel> : null}
+-    </ReactFlow>
+-  </div>;
+-}
+diff --git a/src/app/images/_components/ImageCompare.tsx b/src/app/images/_components/ImageCompare.tsx
+index 0832a29..a4e2826 100644
+--- a/src/app/images/_components/ImageCompare.tsx
++++ b/src/app/images/_components/ImageCompare.tsx
+@@ -1,14 +1,18 @@
+ "use client";
+ /* eslint-disable @next/next/no-img-element -- Compare original local images. */
+-import { useEffect, useRef } from "react";
++import { useLayoutEffect, useRef } from "react";
++import { useDialogInteraction } from "@/components/useDialogInteraction";
+ import { X, Download } from "lucide-react";
+ import { imageFileUrl, type ImageFile } from "@/lib/image-generation-types";
+ export default function ImageCompare({ images, onClose }: { images: ImageFile[]; onClose: () => void }) {
+   const ref = useRef<HTMLDialogElement>(null);
+-  useEffect(() => {
+-    const dialog = ref.current; const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; const overflow = document.body.style.overflow;
+-    document.body.style.overflow = "hidden"; dialog?.showModal();
+-    return () => { dialog?.close(); document.body.style.overflow = overflow; previous?.focus(); };
++  const returnFocusRef = useRef<HTMLElement | null>(null);
++  useLayoutEffect(() => {
++    const dialog = ref.current;
++    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
++    dialog?.showModal();
++    return () => { dialog?.close(); };
+   }, []);
+-  return <dialog ref={ref} className="modal-panel image-compare" aria-modal="true" aria-labelledby="image-compare-title" onCancel={(event) => { event.preventDefault(); onClose(); }}><header className="image-pane-heading"><h2 id="image-compare-title">方案对比 · {images.length} 张</h2><button type="button" className="btn icon" aria-label="关闭对比" onClick={onClose}><X size={18} /></button></header><div className="image-compare-grid">{images.map((image, index) => <figure key={image.id}><img src={imageFileUrl(image.id)} alt={`对比方案 ${index + 1}：${image.name}`} /><figcaption><span>方案 {index + 1}</span><a className="btn small" download href={imageFileUrl(image.id, true)}><Download size={14} />下载</a></figcaption></figure>)}</div></dialog>;
++  const closeDialog = useDialogInteraction(ref, { onClose, returnFocusRef });
++  return <dialog ref={ref} tabIndex={-1} className="modal-panel image-compare" aria-modal="true" aria-labelledby="image-compare-title" onCancel={(event) => { event.preventDefault(); closeDialog(); }}><header className="image-pane-heading"><h2 id="image-compare-title">方案对比 · {images.length} 张</h2><button type="button" className="btn icon" aria-label="关闭对比" onClick={onClose}><X size={18} /></button></header><div className="image-compare-grid">{images.map((image, index) => <figure key={image.id}><img src={imageFileUrl(image.id)} alt={`对比方案 ${index + 1}：${image.name}`} /><figcaption><span>方案 {index + 1}</span><a className="btn small" download href={imageFileUrl(image.id, true)}><Download size={14} />下载</a></figcaption></figure>)}</div></dialog>;
+ }
+diff --git a/src/app/images/images.css b/src/app/images/images.css
+index 640cd9a..34f148f 100644
+--- a/src/app/images/images.css
++++ b/src/app/images/images.css
+@@ -1,6 +1,7 @@
++.main-content:has(.images-page) { --page-pad: 0px; }
+ .images-page { min-height: 0; position: relative; }
+ .images-page > .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+-.image-workbench { display: flex; flex-direction: column; min-height: 660px; min-width: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-soft); }
++.image-workbench { display: flex; flex-direction: column; min-height: 660px; min-width: 0; overflow: hidden; background: var(--panel); border: 0; border-radius: 0; box-shadow: none; }
+ .image-workbench h2, .image-workbench h3 { margin: 0; color: var(--text-strong); font-size: var(--text-section-title); }
+ .image-workbench small { color: var(--muted); font-size: var(--text-meta); }
+ .image-workbench-toolbar { display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); }
+@@ -107,7 +108,7 @@
+ .image-compare-grid figure { margin: 0; min-width: 0; }
+ .image-compare-grid img { width: 100%; height: min(50dvh, 500px); object-fit: contain; background: var(--panel-soft); }
+ .image-compare-grid figcaption { display: flex; justify-content: space-between; padding: var(--space-2); }
+-@media (min-width: 1181px) { .images-page { grid-template-rows: minmax(0, 1fr); gap: 0; height: var(--workspace-page-height); } .image-workbench { min-height: 0; height: 100%; } .image-workspace { min-height: 200px; } .image-flow { min-height: 180px; } }
++@media (min-width: 901px) { .images-page { grid-template-rows: minmax(0, 1fr); gap: 0; height: 100dvh; } .image-workbench { min-height: 0; height: 100%; } .image-workspace { min-height: 200px; } .image-flow { min-height: 180px; } }
+ @media (max-width: 1000px) { .image-workspace.has-inspector { grid-template-columns: minmax(0, 1fr) 250px; } .image-submit > small { display: none; } }
+ @media (max-width: 760px) { .image-workspace.has-inspector { grid-template-columns: minmax(0, 1fr); } .image-inspector { max-height: 420px; border-left: 0; border-top: 1px solid var(--line); } .image-flow { flex: none; height: 460px; } .image-reference-label small { display: none; } .image-workspace { overflow: visible; } .image-gallery { max-height: 650px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); } .image-composer-bottom { align-items: stretch; } .image-submit { margin-left: auto; } .image-compare-grid { grid-template-columns: 1fr; } .image-composer .tiptap { font-size: 16px; } }
+ @media (prefers-reduced-motion: reduce) { .image-workbench *, .image-compare * { scroll-behavior: auto !important; transition: none !important; } }
+diff --git a/src/app/library/_components/LibraryEditorModal.tsx b/src/app/library/_components/LibraryEditorModal.tsx
+index 3b7ac7a..998abbd 100644
+--- a/src/app/library/_components/LibraryEditorModal.tsx
++++ b/src/app/library/_components/LibraryEditorModal.tsx
+@@ -1,6 +1,6 @@
+ "use client";
+ 
+-import { memo, type KeyboardEvent, type ReactNode, type RefObject } from "react";
++import { memo, type ReactNode, type RefObject } from "react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ 
+ type LibraryEditorModalProps = {
+@@ -27,7 +27,6 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
+         aria-modal="true"
+         className={`modal-panel ${panelClassName}`}
+         data-unsaved-changes={unsavedChanges ? "true" : undefined}
+-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
+         ref={panelRef}
+         role="dialog"
+         tabIndex={-1}
+@@ -37,39 +36,3 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
+     </ModalBackdrop>
+   );
+ });
+-
+-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    onClose();
+-    return;
+-  }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/library/_hooks/useRestoreFocus.ts b/src/app/library/_hooks/useRestoreFocus.ts
+deleted file mode 100644
+index 9ddea50..0000000
+--- a/src/app/library/_hooks/useRestoreFocus.ts
++++ /dev/null
+@@ -1,14 +0,0 @@
+-"use client";
+-
+-import { useEffect, type RefObject } from "react";
+-
+-export function useRestoreFocus<T extends HTMLElement>(active: boolean, ref: RefObject<T | null>) {
+-  useEffect(() => {
+-    if (!active) return;
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    ref.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, [active, ref]);
+-}
+diff --git a/src/app/library/page.tsx b/src/app/library/page.tsx
+index fc8b8f6..415ca32 100644
+--- a/src/app/library/page.tsx
++++ b/src/app/library/page.tsx
+@@ -18,7 +18,6 @@ import { useLibraryAccountSelection, useLibraryVideoSelection } from "./_hooks/u
+ import { useLibraryTaskActions } from "./_hooks/useLibraryTaskActions";
+ import { useLibraryTaskEffects } from "./_hooks/useLibraryTaskEffects";
+ import { useLibraryTranscriptActions } from "./_hooks/useLibraryTranscriptActions";
+-import { useRestoreFocus } from "./_hooks/useRestoreFocus";
+ import { ConfirmDialog } from "@/components/ConfirmDialog";
+ import { EmptyState } from "@/components/EmptyState";
+ import { useFeedback, type FeedbackTone } from "@/components/FeedbackProvider";
+@@ -258,7 +257,6 @@ function LibraryPageContent() {
+   const canCollect = Boolean(collectName.trim()) && !busy;
+ 
+   useVideoStatsHydration({ refresh, reloadSelectedAccountDetail, selectedAccount });
+-  useRestoreFocus(Boolean(openModal), editModalRef);
+ 
+   useEffect(() => {
+     if (!visibleMessage || isTaskProgressMessage(visibleMessage)) return;
+diff --git a/src/app/mobile/more/page.tsx b/src/app/mobile/more/page.tsx
+index eaef43d..aa77ae4 100644
+--- a/src/app/mobile/more/page.tsx
++++ b/src/app/mobile/more/page.tsx
+@@ -13,12 +13,14 @@ import {
+   Radar,
+   RefreshCw,
+   Server,
++  Settings2,
+   Wrench
+ } from "lucide-react";
+ import { useRemoteStatus } from "@/components/RemoteStatusProvider";
+ import type { RemoteStatusResponse } from "@/lib/types";
+ 
+ const featureItems = [
++  { href: "/ai-settings", label: "AI 模型配置", detail: "按业务调整模型与推理等级", icon: Settings2, mobileReady: true },
+   { href: "/hotspots", label: "热点雷达", detail: "查看热点发现和内容机会", icon: Radar, mobileReady: false },
+   { href: "/project-workbench", label: "项目工作台", detail: "组合账号、素材和项目风格", icon: FolderKanban, mobileReady: false },
+   { href: "/assets", label: "评论生成", detail: "生成评论、弹幕和封面素材", icon: MessageSquarePlus, mobileReady: false },
+diff --git a/src/app/project-workbench/_components/AccountPickerModal.tsx b/src/app/project-workbench/_components/AccountPickerModal.tsx
+deleted file mode 100644
+index e21fbc6..0000000
+--- a/src/app/project-workbench/_components/AccountPickerModal.tsx
++++ /dev/null
+@@ -1,88 +0,0 @@
+-"use client";
+-
+-import type { KeyboardEvent } from "react";
+-import { Check, UsersRound, X } from "lucide-react";
+-import { ModalBackdrop } from "@/components/ModalBackdrop";
+-import { formatPlatform } from "@/components/Formatters";
+-import type { AccountListItem } from "@/lib/types";
+-
+-type AccountPickerModalProps = {
+-  accounts: AccountListItem[];
+-  selectedAccountIds: string[];
+-  selectedAccounts: AccountListItem[];
+-  onClose: () => void;
+-  onToggleAccount: (accountId: string) => void;
+-};
+-
+-export function AccountPickerModal({
+-  accounts,
+-  selectedAccountIds,
+-  selectedAccounts,
+-  onClose,
+-  onToggleAccount
+-}: AccountPickerModalProps) {
+-  const orderedAccounts = [...accounts].sort((left, right) => {
+-    const leftSelected = selectedAccountIds.includes(left.id);
+-    const rightSelected = selectedAccountIds.includes(right.id);
+-    if (leftSelected === rightSelected) return left.name.localeCompare(right.name, "zh-CN");
+-    return leftSelected ? -1 : 1;
+-  });
+-  const transcriptCount = selectedAccounts.reduce((sum, account) => sum + account.transcriptCount, 0);
+-
+-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+-    if (event.key === "Escape") onClose();
+-  }
+-
+-  return (
+-    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
+-      <div aria-labelledby="account-picker-title" aria-modal="true" className="modal-panel account-picker-modal" role="dialog" tabIndex={-1}>
+-        <div className="modal-header">
+-          <div>
+-            <h2 id="account-picker-title">补足风格账号</h2>
+-            <p className="pane-subtitle">选长期口吻相近的账号，素材池仍是主参考。</p>
+-          </div>
+-          <button className="btn icon-btn" aria-label="关闭账号选择弹窗" onClick={onClose} type="button">
+-            <X aria-hidden="true" size={16} />
+-          </button>
+-        </div>
+-
+-        <div className="account-picker-body">
+-          <div className="account-picker-summary">
+-            <span className="project-account-summary-icon">
+-              <UsersRound aria-hidden="true" size={15} />
+-            </span>
+-            <span>
+-              <strong>已选 {selectedAccounts.length} 个账号</strong>
+-              <small>{transcriptCount ? `${transcriptCount} 份转写可参与风格补足` : "不选也可以直接用素材池生成"}</small>
+-            </span>
+-          </div>
+-
+-          <div className="account-picker-list" aria-label="账号列表">
+-            {orderedAccounts.map((account) => {
+-              const checked = selectedAccountIds.includes(account.id);
+-              return (
+-                <label className={`account-picker-row ${checked ? "selected" : ""}`} key={account.id}>
+-                  <input checked={checked} name="accountIds" onChange={() => onToggleAccount(account.id)} type="checkbox" />
+-                  <span>
+-                    <strong>{account.name}</strong>
+-                    <small>{formatPlatform(account.platform)} · {account.transcriptCount} 转写 · {account.videoCount} 视频</small>
+-                  </span>
+-                  <span className={`status-pill ${checked ? "done" : ""}`}>{checked ? "已选" : "可选"}</span>
+-                </label>
+-              );
+-            })}
+-            {!orderedAccounts.length ? <div className="project-workbench-empty compact">暂无账号，可先只用素材池生成。</div> : null}
+-          </div>
+-        </div>
+-
+-        <div className="account-picker-footer">
+-          <span>{selectedAccounts.length ? `当前会补足 ${selectedAccounts.length} 个账号` : "当前不使用账号补足"}</span>
+-          <button className="btn primary" onClick={onClose} type="button">
+-            <Check aria-hidden="true" size={16} />
+-            完成
+-          </button>
+-        </div>
+-      </div>
+-    </ModalBackdrop>
+-  );
+-}
+diff --git a/src/app/project-workbench/_components/CopySourcePreviewModal.tsx b/src/app/project-workbench/_components/CopySourcePreviewModal.tsx
+index 3223db8..c9084a2 100644
+--- a/src/app/project-workbench/_components/CopySourcePreviewModal.tsx
++++ b/src/app/project-workbench/_components/CopySourcePreviewModal.tsx
+@@ -1,6 +1,5 @@
+ "use client";
+ 
+-import type { KeyboardEvent } from "react";
+ import { ExternalLink, FileText, X } from "lucide-react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ import { formatDateWithYear, formatPlatform } from "@/components/Formatters";
+@@ -14,12 +13,8 @@ type CopySourcePreviewModalProps = {
+ export function CopySourcePreviewModal({ source, onClose }: CopySourcePreviewModalProps) {
+   const analysis = source.materialAnalysis;
+ 
+-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+-    if (event.key === "Escape") onClose();
+-  }
+-
+   return (
+-    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
++    <ModalBackdrop onClose={onClose}>
+       <div aria-labelledby="copy-source-preview-title" aria-modal="true" className="modal-panel copy-source-preview-modal" role="dialog" tabIndex={-1}>
+         <div className="modal-header">
+           <div>
+diff --git a/src/app/project-workbench/_components/ProjectCaseDrawer.tsx b/src/app/project-workbench/_components/ProjectCaseDrawer.tsx
+index 63d0893..01aaf45 100644
+--- a/src/app/project-workbench/_components/ProjectCaseDrawer.tsx
++++ b/src/app/project-workbench/_components/ProjectCaseDrawer.tsx
+@@ -1,6 +1,5 @@
+ "use client";
+ 
+-import type { KeyboardEvent } from "react";
+ import { Check, LinkIcon, Search, UsersRound, X } from "lucide-react";
+ import { formatPlatform } from "@/components/Formatters";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+@@ -71,12 +70,8 @@ export function ProjectCaseDrawer({
+         ? "粘贴 B站或抖音链接，转写完成后自动加入项目"
+         : "只在需要补充长期口吻时选择账号";
+ 
+-  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+-    if (event.key === "Escape" && !locked) onClose();
+-  }
+-
+   return (
+-    <ModalBackdrop disabled={locked} onClose={onClose} onKeyDown={handleKeyDown}>
++    <ModalBackdrop disabled={locked} onClose={onClose}>
+       <div aria-labelledby="project-case-dialog-title" aria-modal="true" className="modal-panel project-case-modal" role="dialog" tabIndex={-1}>
+         <div className="modal-header">
+           <div>
+diff --git a/src/app/project-workbench/_components/ProjectPickerModal.tsx b/src/app/project-workbench/_components/ProjectPickerModal.tsx
+index efbe330..4d9cdc7 100644
+--- a/src/app/project-workbench/_components/ProjectPickerModal.tsx
++++ b/src/app/project-workbench/_components/ProjectPickerModal.tsx
+@@ -1,6 +1,5 @@
+ "use client";
+ 
+-import type { KeyboardEvent } from "react";
+ import { Plus, Save, X } from "lucide-react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ import type { ProjectListItem } from "@/lib/types";
+@@ -36,12 +35,8 @@ export function ProjectPickerModal({
+ }: ProjectPickerModalProps) {
+   const formTitle = selectedProjectId ? "编辑当前项目" : "新建项目";
+ 
+-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+-    if (event.key === "Escape") onClose();
+-  }
+-
+   return (
+-    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
++    <ModalBackdrop onClose={onClose}>
+       <div aria-labelledby="project-picker-title" aria-modal="true" className="modal-panel project-picker-modal" role="dialog" tabIndex={-1}>
+         <div className="modal-header">
+           <div>
+diff --git a/src/app/project-workbench/_components/SourceAddModal.tsx b/src/app/project-workbench/_components/SourceAddModal.tsx
+deleted file mode 100644
+index 1f8db96..0000000
+--- a/src/app/project-workbench/_components/SourceAddModal.tsx
++++ /dev/null
+@@ -1,98 +0,0 @@
+-"use client";
+-
+-import type { KeyboardEvent } from "react";
+-import { LinkIcon, X } from "lucide-react";
+-import { ModalBackdrop } from "@/components/ModalBackdrop";
+-import { formatJob, type LinkJob } from "./project-workbench-utils";
+-
+-type SourceAddModalProps = {
+-  busy: string;
+-  jobs: LinkJob[];
+-  linkAnalyzeVideo: boolean;
+-  linkInput: string;
+-  parsedLinkCount: number;
+-  onClose: () => void;
+-  onLinkAnalyzeVideoChange: (enabled: boolean) => void;
+-  onLinkInputChange: (value: string) => void;
+-  onTranscribeLinks: () => void;
+-};
+-
+-export function SourceAddModal({
+-  busy,
+-  jobs,
+-  linkAnalyzeVideo,
+-  linkInput,
+-  parsedLinkCount,
+-  onClose,
+-  onLinkAnalyzeVideoChange,
+-  onLinkInputChange,
+-  onTranscribeLinks
+-}: SourceAddModalProps) {
+-  const locked = busy === "links";
+-
+-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+-    if (event.key === "Escape" && !locked) onClose();
+-  }
+-
+-  return (
+-    <ModalBackdrop disabled={locked} onClose={onClose} onKeyDown={handleKeyDown}>
+-      <div aria-labelledby="source-add-title" aria-modal="true" className="modal-panel project-source-add-modal" role="dialog" tabIndex={-1}>
+-        <div className="modal-header">
+-          <div>
+-            <h2 id="source-add-title">添加素材</h2>
+-            <p className="pane-subtitle">粘贴 B站 / 抖音链接，解析后加入当前项目素材池。</p>
+-          </div>
+-          <button className="btn icon-btn" aria-label="关闭添加素材弹窗" disabled={locked} onClick={onClose} type="button">
+-            <X aria-hidden="true" size={16} />
+-          </button>
+-        </div>
+-
+-        <div className="project-source-add-body">
+-          <label className="field">
+-            <span>链接</span>
+-            <textarea
+-              autoComplete="off"
+-              className="project-workbench-linkbox source-add-linkbox"
+-              disabled={locked}
+-              name="sourceLinks"
+-              value={linkInput}
+-              onChange={(event) => onLinkInputChange(event.target.value)}
+-              placeholder="每行一个 B站 / 抖音链接，也可以直接粘贴分享文案…"
+-            />
+-          </label>
+-
+-          <label className={`source-analysis-option ${linkAnalyzeVideo ? "active" : ""}`}>
+-            <input checked={linkAnalyzeVideo} disabled={locked} name="sourceAnalyzeVideo" onChange={(event) => onLinkAnalyzeVideoChange(event.target.checked)} type="checkbox" />
+-            <span>
+-              <strong>生成画面描述</strong>
+-              <small>转写后抽关键帧，按画面顺序补充场景、字幕、UI 和动作；抽不到视频时只保存标题和转写。</small>
+-            </span>
+-          </label>
+-
+-          <div className="source-add-actions">
+-            <span>识别 {parsedLinkCount} 条</span>
+-            <button className="btn primary" disabled={!parsedLinkCount || locked} onClick={onTranscribeLinks} type="button">
+-              <LinkIcon aria-hidden="true" size={16} />
+-              {locked ? "解析中" : "解析并加入"}
+-            </button>
+-          </div>
+-
+-          {jobs.length ? <ProjectLinkJobList jobs={jobs} /> : null}
+-        </div>
+-      </div>
+-    </ModalBackdrop>
+-  );
+-}
+-
+-function ProjectLinkJobList({ jobs }: { jobs: LinkJob[] }) {
+-  return (
+-    <div className="project-workbench-job-list">
+-      {jobs.map((job) => (
+-        <div className={`project-workbench-job ${job.status}`} key={job.url}>
+-          <span className={`status-pill ${job.status === "completed" ? "done" : job.status === "failed" ? "failed" : "pending"}`}>{formatJob(job.status)}</span>
+-          <span>{job.message || job.url}</span>
+-        </div>
+-      ))}
+-    </div>
+-  );
+-}
+diff --git a/src/app/styles/00-tokens.css b/src/app/styles/00-tokens.css
+index 508409a..bc806e8 100644
+--- a/src/app/styles/00-tokens.css
++++ b/src/app/styles/00-tokens.css
+@@ -127,7 +127,7 @@
+   --text-meta: 12px;
+   --text-body: 14px;
+   --text-card-title: 14px;
+-  --text-section-title: 16px;
++  --text-section-title: 20px;
+   --text-page-title: 30px;
+   --font-weight-regular: 400;
+   --font-weight-medium: 500;
+@@ -150,8 +150,8 @@
+   --card-pad-sm: 12px;
+   --card-pad-md: 16px;
+   --card-pad-lg: 20px;
+-  --pane-header-pad: 12px 14px;
+-  --pane-body-pad: 12px;
++  --pane-header-pad: 16px;
++  --pane-body-pad: 16px;
+   --pane-body-gap: 12px;
+   --section-pad: 18px;
+   --section-gap: 12px;
+@@ -263,3 +263,13 @@ html[data-skin="shinigami"] {
+   --radius-lg: 10px;
+   --radius-xl: 12px;
+ }
++
++/* Expressive tools sample; consumed only by the tools route. */
++:root {
++  --studio-ink: #202128;
++  --studio-paper: #f8f7f2;
++  --studio-lime: #d9f86a;
++  --studio-violet: #e8e1fc;
++  --studio-violet-ink: #49307c;
++  --studio-on-dark: #faf9f5;
++}
+diff --git a/src/app/styles/01-base.css b/src/app/styles/01-base.css
+index 1df0175..d91bd60 100644
+--- a/src/app/styles/01-base.css
++++ b/src/app/styles/01-base.css
+@@ -160,7 +160,7 @@ h2 {
+   font-size: var(--text-section-title);
+   font-weight: var(--font-weight-heading);
+   line-height: var(--line-height-section-title);
+-  letter-spacing: -0.012em;
++  letter-spacing: -0.025em;
+   text-wrap: balance;
+ }
+ 
+diff --git a/src/app/styles/16-workbench-system.css b/src/app/styles/16-workbench-system.css
+index d6e48aa..4a64c1f 100644
+--- a/src/app/styles/16-workbench-system.css
++++ b/src/app/styles/16-workbench-system.css
+@@ -35,17 +35,7 @@
+ }
+ 
+ .page-title-eyebrow {
+-  margin-bottom: 0;
+-  padding: 0;
+-  border: 0;
+-  border-radius: 0;
+-  color: color-mix(in oklch, var(--muted) 88%, var(--text));
+-  background: transparent;
+-  font-size: var(--text-caption);
+-  font-weight: var(--font-weight-label);
+-  letter-spacing: 0;
+-  line-height: var(--line-height-caption);
+-  text-transform: none;
++  display: none;
+ }
+ 
+ .page-title-mark {
+@@ -60,9 +50,9 @@
+   line-height: var(--line-height-page-title);
+ }
+ 
+-.page-header .subtle {
++.page .page-header .page-title-copy .subtle {
+   max-width: 58ch;
+-  margin-top: 2px;
++  margin: 0;
+   color: var(--muted);
+   font-size: var(--text-meta);
+   line-height: var(--line-height-meta);
+@@ -136,8 +126,14 @@
+ }
+ 
+ .pane-header h2,
++.modal-header h2 {
++  font-size: var(--text-section-title);
++  font-weight: var(--font-weight-heading);
++  line-height: var(--line-height-section-title);
++  letter-spacing: -0.025em;
++}
++
+ .pane-header h3,
+-.modal-header h2,
+ .modal-header h3 {
+   font-size: var(--text-card-title);
+   font-weight: var(--font-weight-heading);
+diff --git a/src/app/styles/primitives/workspaces.css b/src/app/styles/primitives/workspaces.css
+index 5b129ad..b98ff43 100644
+--- a/src/app/styles/primitives/workspaces.css
++++ b/src/app/styles/primitives/workspaces.css
+@@ -27,10 +27,10 @@
+ }
+ 
+ .pane-subtitle {
+-  margin-top: 3px;
++  margin-top: 4px;
+   color: var(--muted);
+-  font-size: var(--text-caption);
+-  line-height: var(--line-height-caption);
++  font-size: var(--text-meta);
++  line-height: var(--line-height-meta);
+ }
+ 
+ .pane-body {
+diff --git a/src/app/tools/page.tsx b/src/app/tools/page.tsx
+index db27aa0..90d3150 100644
+--- a/src/app/tools/page.tsx
++++ b/src/app/tools/page.tsx
+@@ -29,23 +29,11 @@ import {
+ import type { PublishCopyCandidate, PublishCopyResult, PublishCopyTargetPlatform } from "@/lib/publish-copy-types";
+ import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
+ 
+-type WorkspaceMode = "video" | "publish-copy" | "stirling-pdf";
+ type BusyState = "" | "transcribe" | "download" | "publish-copy";
+ type NoticeTone = "success" | "info" | "error";
+ 
+ const defaultStirlingPdfUrl = process.env.NEXT_PUBLIC_STIRLING_PDF_URL || "http://localhost:8080";
+ 
+-const workspaceModes: Array<{
+-  id: WorkspaceMode;
+-  label: string;
+-  meta: string;
+-  icon: LucideIcon;
+-}> = [
+-  { id: "video", label: "视频处理", meta: "文案 + 素材", icon: Video },
+-  { id: "publish-copy", label: "标题与发布", meta: "检索 + 生成", icon: Sparkles },
+-  { id: "stirling-pdf", label: "Stirling-PDF", meta: "PDF 工具箱", icon: FileText }
+-];
+-
+ const downloadOptions: Array<{
+   kind: SingleVideoAssetKind;
+   label: string;
+@@ -71,7 +59,6 @@ export default function ToolsPage() {
+     href: "/tools",
+     kinds: ["single-video-transcribe", "publish-copy"]
+   });
+-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>("video");
+   const [url, setUrl] = useState("");
+   const [result, setResult] = useState<SingleVideoTranscribeResult | null>(null);
+   const [downloadingKind, setDownloadingKind] = useState<SingleVideoAssetKind | "">("");
+@@ -250,7 +237,7 @@ export default function ToolsPage() {
+     if (!result?.text.trim()) return;
+     setPublishSourceText(result.text);
+     setPublishResult(null);
+-    setActiveWorkspace("publish-copy");
++    document.getElementById("tools-publish-source-text")?.focus();
+     setNotice("");
+   }
+ 
+@@ -306,45 +293,15 @@ export default function ToolsPage() {
+           <span className="stat-pill">B站 / 抖音 / PDF</span>
+         </div>
+       </header>
++      <div className="tools-section-label"><span>你的创作装备</span><span>03 TOOLS / 随时开工</span></div>
+ 
+-      <section className="panel tools-workspace" aria-busy={Boolean(busy)}>
+-        <div className="tools-workspace-bar">
+-          <div className="tools-workspace-tabs" role="tablist" aria-label="工具台工作区">
+-            {workspaceModes.map((mode) => {
+-              const Icon = mode.icon;
+-              const active = mode.id === activeWorkspace;
+-              return (
+-                <button
+-                  className={active ? "active" : ""}
+-                  key={mode.id}
+-                  type="button"
+-                  role="tab"
+-                  aria-selected={active}
+-                  onClick={() => setActiveWorkspace(mode.id)}
+-                >
+-                  <Icon size={17} aria-hidden="true" />
+-                  <span>
+-                    <strong>{mode.label}</strong>
+-                    <small>{mode.meta}</small>
+-                  </span>
+-                </button>
+-              );
+-            })}
+-          </div>
+-          <span className="tools-workspace-state">
+-            {busy ? <Loader2 className="tools-spin" size={14} aria-hidden="true" /> : null}
+-            {busy ? busyLabel(busy) : "就绪"}
+-          </span>
+-        </div>
+-
+-        <div className="tools-workspace-body">
+-          {activeWorkspace === "video"
+-            ? renderVideoWorkspace()
+-            : activeWorkspace === "publish-copy"
+-              ? renderPublishWorkspace()
+-              : renderStirlingPdfWorkspace()}
++      <div className="tools-modules">
++        <div className="tools-utility-column">
++          {renderVideoWorkspace()}
++          {renderStirlingPdfWorkspace()}
+         </div>
+-      </section>
++        {renderPublishWorkspace()}
++      </div>
+ 
+       {notice ? (
+         <div className={noticeIsError ? "error" : "notice"} role={noticeIsError ? "alert" : "status"}>
+@@ -356,9 +313,9 @@ export default function ToolsPage() {
+ 
+   function renderVideoWorkspace() {
+     return (
+-      <div className="tools-split tools-video-workspace">
++      <section id="tools-video" className="panel tools-module tools-video-workspace" aria-label="视频提取与下载" aria-busy={busy === "transcribe" || busy === "download"}>
+         <div className="tools-control-pane">
+-          <PaneHeading eyebrow="单条视频" title="提取与下载" />
++          <PaneHeading index="01" icon={Video} title="视频提取" description="一个链接，提取文案与素材。" />
+ 
+           <VideoLinkField url={url} setUrl={handleUrlChange} />
+ 
+@@ -400,15 +357,8 @@ export default function ToolsPage() {
+           </div>
+         </div>
+ 
+-        <div className="tools-result-pane" aria-live="polite">
+-          <div className="tools-result-heading">
+-            <div>
+-              <h2>视频结果</h2>
+-              <p className="pane-subtitle">{result ? result.title || "已完成内容识别" : "等待处理"}</p>
+-            </div>
+-            <MetaPills items={videoMeta(result, Boolean(cleanUrl))} />
+-          </div>
+-
++        {result ? <div className="tools-result-pane" aria-live="polite">
++          {result.fallback ? <p className="notice">{result.fallbackReason || "使用了备用提取结果，请检查文稿。"}</p> : null}
+           {result ? (
+             <div className="tools-video-result">
+               <VideoSourceSummary result={result} />
+@@ -430,6 +380,9 @@ export default function ToolsPage() {
+                     </button>
+                   </div>
+                 </div>
++                <p className="tools-transcript-preview">{result.text}</p>
++                <details className="tools-transcript-details">
++                  <summary>查看完整文稿</summary>
+                 <textarea
+                   aria-label="提取结果文案"
+                   autoComplete="off"
+@@ -438,25 +391,20 @@ export default function ToolsPage() {
+                   value={result.text}
+                   readOnly
+                 />
++                </details>
+               </div>
+             </div>
+-          ) : (
+-            <ToolEmptyState
+-              icon={Video}
+-              title={cleanUrl ? "链接已就绪" : "等待视频链接"}
+-              text={cleanUrl ? "可以提取文案，或直接下载需要的素材。" : "支持 B站和抖音单条视频。"}
+-            />
+-          )}
+-        </div>
+-      </div>
++          ) : null}
++        </div> : null}
++      </section>
+     );
+   }
+ 
+   function renderPublishWorkspace() {
+     return (
+-      <div className="tools-split tools-publish-workspace">
++      <section id="tools-publish" className="panel tools-module tools-publish-workspace" aria-label="标题与发布文案" aria-busy={busy === "publish-copy"}>
+         <div className="tools-control-pane">
+-          <PaneHeading eyebrow="发布包装" title="标题与发布文案" />
++          <PaneHeading index="02" icon={Sparkles} title="标题与发布" description="把内容，变成让人想点开的表达。" />
+ 
+           <div className="tools-inline-group">
+             <span className="tools-label">发布平台</span>
+@@ -563,15 +511,8 @@ export default function ToolsPage() {
+           </button>
+         </div>
+ 
+-        <div className="tools-result-pane" aria-live="polite">
+-          <div className="tools-result-heading">
+-            <div>
+-              <h2>生成结果</h2>
+-              <p className="pane-subtitle">{publishResult?.sourceSummary || "标题与发布文案"}</p>
+-            </div>
+-            <MetaPills items={publishMeta(publishResult)} />
+-          </div>
+-
++        {publishResult ? <div className="tools-result-pane" aria-live="polite">
++          {publishResult.fallback ? <p className="notice">{publishResult.fallbackReason || "使用了备用生成结果，请检查生成依据。"}</p> : null}
+           {publishResult?.candidates.length ? (
+             <div className="tools-publish-results">
+               <div className="tools-provenance-strip">
+@@ -614,95 +555,50 @@ export default function ToolsPage() {
+ 
+               <GenerationBasis result={publishResult} />
+             </div>
+-          ) : (
+-            <ToolEmptyState icon={Sparkles} title="等待内容原稿" text="生成结果与实际参考依据会显示在这里。" />
+-          )}
+-        </div>
+-      </div>
++          ) : null}
++        </div> : null}
++      </section>
+     );
+   }
+ 
+   function renderStirlingPdfWorkspace() {
+     return (
+-      <div className="tools-split tools-pdf-workspace">
++      <section className="panel tools-module tools-pdf-workspace" aria-label="PDF 工具">
+         <div className="tools-control-pane">
+-          <PaneHeading eyebrow="PDF 工作区" title="Stirling-PDF" />
+-
+-          <label className="field">
+-            <span>Stirling-PDF 地址</span>
+-            <div className={`tools-input-shell ${stirlingPdfUrlValid ? "" : "invalid"}`}>
+-              <LinkIcon size={16} aria-hidden="true" />
+-              <input
+-                autoComplete="url"
+-                name="stirlingPdfUrl"
+-                type="url"
+-                value={stirlingPdfUrl}
+-                onChange={(event) => setStirlingPdfUrl(event.target.value)}
+-                placeholder="http://localhost:8080"
+-                aria-invalid={Boolean(cleanStirlingPdfUrl) && !stirlingPdfUrlValid}
+-              />
+-            </div>
+-            <small className="subtle">默认是本机 Docker 的 8080 端口，也可以填写局域网地址。</small>
+-          </label>
+-
+-          <button
+-            className="btn primary tools-primary-action"
+-            disabled={!stirlingPdfUrlValid}
+-            type="button"
+-            onClick={handleOpenStirlingPdf}
+-          >
+-            <ExternalLink size={16} aria-hidden="true" />
+-            打开 Stirling-PDF
+-          </button>
+-
+-          <div className="tools-pdf-security-note">
+-            <strong>本地处理</strong>
+-            <span>文件直接交给 Stirling-PDF 实例，不经过内容运营工作台。</span>
+-          </div>
+-        </div>
+-
+-        <div className="tools-result-pane" aria-live="polite">
+-          <div className="tools-result-heading">
+-            <div>
+-              <h2>PDF 工具箱</h2>
+-              <p className="pane-subtitle">合并、拆分、压缩、转换、OCR、签名和更多 PDF 操作</p>
+-            </div>
+-            <MetaPills items={[stirlingPdfUrlValid ? "服务地址就绪" : "需要配置地址", "Docker"]} />
+-          </div>
+-
+-          <div className="tools-pdf-overview">
+-            <div className="tools-pdf-overview-mark" aria-hidden="true">
+-              <FileText size={26} />
+-            </div>
+-            <div>
+-              <h3>在 Stirling-PDF 中处理 PDF</h3>
+-              <p>点击左侧按钮打开完整工作区。首次登录默认账号通常是 <code>admin</code>，请立即修改初始密码。</p>
+-            </div>
+-            <div className="tools-pdf-feature-grid">
+-              {[
+-                ["文件整理", "合并 / 拆分 / 旋转"],
+-                ["格式处理", "压缩 / 转换 / 修复"],
+-                ["内容识别", "OCR / 加水印 / 脱敏"],
+-                ["安全操作", "签名 / 加密 / 元数据"]
+-              ].map(([title, detail]) => (
+-                <div key={title}>
+-                  <strong>{title}</strong>
+-                  <span>{detail}</span>
+-                </div>
+-              ))}
+-            </div>
++          <PaneHeading index="03" icon={FileText} title="PDF 工具" description="压缩、转换、合并，交给 Stirling-PDF。" />
++          <div className="tools-pdf-launch">
++            <span className="tools-pdf-caption">连接你的 PDF 工作区</span>
++            <button className="btn tools-pdf-open" disabled={!stirlingPdfUrlValid} type="button" onClick={handleOpenStirlingPdf}>
++              打开工具 <ExternalLink size={15} aria-hidden="true" />
++            </button>
+           </div>
++          <details className="tools-pdf-settings">
++            <summary>服务地址</summary>
++            <label className="field">
++              <span>Stirling-PDF 地址</span>
++              <div className={`tools-input-shell ${stirlingPdfUrlValid ? "" : "invalid"}`}>
++                <LinkIcon size={16} aria-hidden="true" />
++                <input autoComplete="url" name="stirlingPdfUrl" type="url" value={stirlingPdfUrl}
++                  onChange={(event) => setStirlingPdfUrl(event.target.value)} placeholder="http://localhost:8080"
++                  aria-invalid={Boolean(cleanStirlingPdfUrl) && !stirlingPdfUrlValid} />
++              </div>
++              {!stirlingPdfUrlValid ? <small className="error">请输入以 http:// 或 https:// 开头的有效地址。</small> : null}
++              <small className="subtle">文件由该服务处理，不经过本工作台。</small>
++            </label>
++          </details>
+         </div>
+-      </div>
++      </section>
+     );
+   }
+ }
+ 
+-function PaneHeading(input: { eyebrow: string; title: string }) {
++function PaneHeading(input: { index: string; icon: LucideIcon; title: string; description: string }) {
++  const Icon = input.icon;
+   return (
+     <div className="tools-pane-heading">
+-      <span>{input.eyebrow}</span>
+-      <h2>{input.title}</h2>
++      <span className="tools-module-icon"><Icon size={22} strokeWidth={1.7} aria-hidden="true" /></span>
++      <div><h2>{input.title}</h2><p>{input.description}</p></div>
++      <span className="tools-module-number" aria-hidden="true">{input.index}</span>
+     </div>
+   );
+ }
+@@ -794,50 +690,6 @@ function GenerationBasis(input: { result: PublishCopyResult }) {
+   );
+ }
+ 
+-function MetaPills(input: { items: string[] }) {
+-  return (
+-    <div className="tools-result-meta">
+-      {input.items.map((item) => (
+-        <span className="status-pill" key={item}>{item}</span>
+-      ))}
+-    </div>
+-  );
+-}
+-
+-function ToolEmptyState(input: { icon: LucideIcon; title: string; text: string }) {
+-  const Icon = input.icon;
+-  return (
+-    <div className="tools-empty-result">
+-      <span className="empty-state-mark" aria-hidden="true">
+-        <Icon aria-hidden="true" size={18} />
+-      </span>
+-      <h3>{input.title}</h3>
+-      <p className="subtle">{input.text}</p>
+-    </div>
+-  );
+-}
+-
+-function videoMeta(result: SingleVideoTranscribeResult | null, hasUrl: boolean) {
+-  if (!result) return [hasUrl ? "链接就绪" : "待链接"];
+-  return [platformLabel(result.platform), transcriptionSourceLabel(result.source), result.fallback ? "需检查" : "已提取"];
+-}
+-
+-function publishMeta(result: PublishCopyResult | null) {
+-  if (!result) return ["6 组候选"];
+-  return [
+-    formatTargetPlatformLabel(result.platform),
+-    `${result.research.referenceCount} 条参考`,
+-    result.fallback ? "需检查" : "已生成"
+-  ];
+-}
+-
+-function busyLabel(busy: BusyState) {
+-  if (busy === "transcribe") return "正在提取文案";
+-  if (busy === "download") return "正在下载素材";
+-  if (busy === "publish-copy") return "正在检索生成";
+-  return "就绪";
+-}
+-
+ function formatTargetPlatformLabel(platform: PublishCopyTargetPlatform) {
+   if (platform === "both") return "双平台";
+   return formatPlatformLabel(platform);
+diff --git a/src/app/tools/tools.css b/src/app/tools/tools.css
+index ae42571..278a7ae 100644
+--- a/src/app/tools/tools.css
++++ b/src/app/tools/tools.css
+@@ -1,169 +1,26 @@
+-/* Tools route workspace */
+-.tools-page {
+-  width: 100%;
+-  align-content: start;
+-  gap: var(--workbench-page-gap);
+-}
+-
+-.tools-workspace {
+-  display: grid;
+-  grid-template-rows: auto minmax(0, 1fr);
+-  width: 100%;
+-  min-width: 0;
+-  overflow: hidden;
+-  padding: 0;
+-}
+-
+-.tools-workspace-bar {
+-  display: flex;
+-  align-items: center;
+-  justify-content: space-between;
+-  gap: var(--space-3);
+-  min-width: 0;
+-  padding: var(--space-2);
+-  border-bottom: 1px solid var(--line-subtle);
+-  background: var(--panel-raised);
+-}
+-
+-.tools-workspace-tabs {
+-  display: flex;
+-  align-items: center;
+-  gap: var(--space-1);
+-  min-width: 0;
+-}
+-
+-.tools-workspace-tabs button {
+-  display: grid;
+-  grid-template-columns: auto minmax(0, 1fr);
+-  align-items: center;
+-  gap: var(--space-2);
+-  min-width: 176px;
+-  min-height: 48px;
+-  padding: 7px 12px;
+-  border: 1px solid transparent;
+-  border-radius: var(--radius-md);
+-  color: var(--muted-strong);
+-  background: transparent;
+-  cursor: pointer;
+-  text-align: left;
+-  transition:
+-    color var(--motion-fast) var(--ease-out),
+-    border-color var(--motion-fast) var(--ease-out),
+-    background-color var(--motion-fast) var(--ease-out);
+-}
+-
+-.tools-workspace-tabs button:hover:not(:disabled) {
+-  color: var(--text-strong);
+-  background: var(--surface-hover);
+-}
+-
+-.tools-workspace-tabs button.active {
+-  border-color: var(--selected-border);
+-  color: var(--control-active-text);
+-  background: var(--surface-selected);
+-}
+-
+-.tools-workspace-tabs button span {
+-  display: grid;
+-  gap: 1px;
+-  min-width: 0;
+-}
+-
+-.tools-workspace-tabs button strong,
+-.tools-workspace-tabs button small {
+-  overflow: hidden;
+-  text-overflow: ellipsis;
+-  white-space: nowrap;
+-}
+-
+-.tools-workspace-tabs button strong {
+-  font-size: var(--text-body);
+-  font-weight: var(--font-weight-heading);
+-  line-height: var(--line-height-card-title);
+-}
+-
+-.tools-workspace-tabs button small {
+-  color: var(--muted);
+-  font-size: var(--text-caption);
+-  line-height: var(--line-height-caption);
+-}
+-
+-.tools-workspace-state {
+-  display: inline-flex;
+-  align-items: center;
+-  gap: 6px;
+-  min-height: var(--status-pill-height);
+-  padding: 2px 9px;
+-  border: 1px solid var(--line);
+-  border-radius: 999px;
+-  color: var(--muted-strong);
+-  background: var(--surface-soft);
+-  font-size: var(--text-caption);
+-  font-weight: var(--font-weight-medium);
+-  line-height: var(--line-height-caption);
+-  white-space: nowrap;
+-}
+-
+-.tools-workspace-body,
+-.tools-split {
+-  min-width: 0;
+-  min-height: 0;
+-}
+-
+-.tools-split {
+-  display: grid;
+-  grid-template-columns: minmax(340px, 390px) minmax(0, 1fr);
+-  height: 100%;
+-}
+-
+-.tools-control-pane,
+-.tools-result-pane {
+-  min-width: 0;
+-  min-height: 0;
+-  padding: var(--space-4);
+-}
+-
+-.tools-control-pane {
+-  display: grid;
+-  align-content: start;
+-  gap: var(--space-4);
+-  overflow-y: auto;
+-  border-right: 1px solid var(--line-subtle);
+-  background: var(--surface-soft);
+-}
+-
+-.tools-result-pane {
+-  display: grid;
+-  grid-template-rows: auto minmax(0, 1fr);
+-  align-content: start;
+-  gap: var(--space-4);
+-  overflow: hidden;
+-  background: var(--surface-panel);
+-}
+-
+-.tools-pane-heading {
+-  display: grid;
+-  gap: 3px;
+-  padding-bottom: var(--space-1);
+-}
+-
+-.tools-pane-heading span {
+-  color: var(--muted);
+-  font-size: var(--text-caption);
+-  font-weight: var(--font-weight-label);
+-  line-height: var(--line-height-caption);
+-}
+-
+-.tools-pane-heading h2,
+-.tools-result-heading h2 {
+-  margin: 0;
+-  color: var(--text-strong);
+-  font-size: var(--text-section-title);
+-  font-weight: var(--font-weight-heading);
+-  letter-spacing: 0;
+-  line-height: var(--line-height-section-title);
+-}
+-
++/* Direct-use tools: compact controls, with results shown only when available. */
++.tools-page { width: 100%; align-content: start; gap: var(--space-5); }
++.tools-modules { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); align-items: start; gap: var(--space-5); width: 100%; margin: 0; }
++.tools-utility-column { display: grid; gap: var(--space-5); min-width: 0; }
++.tools-module.panel { padding: 0; min-width: 0; overflow: hidden; border-radius: var(--radius-xl); background: var(--panel); box-shadow: var(--shadow-soft); transition: border-color var(--motion-base) var(--ease-apple), box-shadow var(--motion-base) var(--ease-apple); }
++.tools-module:focus-within { border-color: var(--line-strong); }
++.tools-control-pane { display: grid; align-content: start; min-width: 0; gap: var(--space-5); padding: var(--space-6); }
++.tools-pane-heading { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
++.tools-module-icon { display: grid; place-items: center; flex: 0 0 46px; height: 46px; border-radius: var(--radius-md); background: var(--panel-soft); color: var(--text-strong); box-shadow: var(--surface-inset-highlight); }
++.tools-publish-workspace .tools-module-icon { color: var(--accent-strong); background: var(--accent-tint); }
++.tools-pane-heading h2 { margin: 0; color: var(--text-strong); font-size: var(--text-section-title); font-weight: var(--font-weight-heading); letter-spacing: -0.025em; }
++.tools-pane-heading p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-meta); }
++.tools-module .btn { border-radius: var(--radius-md); }
++.tools-module .btn.primary { background: var(--control-hero-bg); color: var(--control-primary-text); border-color: var(--text-strong); }
++.tools-module .btn.primary:hover:not(:disabled) { background: var(--control-hero-hover-bg); }
++.tools-module .btn:active:not(:disabled) { transform: scale(0.98); }
++.tools-result-pane { min-width: 0; padding: 0 var(--space-6) var(--space-6); animation: page-content-enter var(--motion-base) var(--ease-apple) both; }
++.tools-transcript-preview { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; color: var(--text); font-size: var(--text-body); line-height: var(--line-height-reading); margin: 0; }
++.tools-transcript-details summary, .tools-pdf-settings summary { cursor: pointer; color: var(--muted-strong); font-size: var(--text-meta); padding-block: var(--space-2); }
++.tools-pdf-launch { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
++.tools-pdf-caption { color: var(--muted); font-size: var(--text-meta); }
++.tools-pdf-settings { border-top: 1px solid var(--line-subtle); }
++.tools-pdf-settings .field { margin-top: var(--space-2); }
+ .tools-inline-group,
+ .tools-action-block {
+   display: grid;
+@@ -185,7 +42,7 @@
+   gap: var(--space-2);
+   min-height: var(--field-height);
+   padding: 0 var(--control-padding-x);
+-  border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
++  border: 1px solid var(--line);
+   border-radius: var(--radius-md);
+   color: var(--muted);
+   background: var(--control-bg);
+@@ -274,7 +131,7 @@
+ 
+ .field .tools-source-textarea {
+   width: 100%;
+-  min-height: 240px;
++  min-height: 130px;
+   resize: vertical;
+ }
+ 
+@@ -335,34 +192,6 @@
+   min-width: 0;
+ }
+ 
+-.tools-empty-result {
+-  display: grid;
+-  min-height: 280px;
+-  align-content: center;
+-  justify-items: center;
+-  gap: var(--space-2);
+-  padding: var(--space-6);
+-  color: var(--muted);
+-  text-align: center;
+-}
+-
+-.tools-empty-result h3,
+-.tools-empty-result p {
+-  margin: 0;
+-}
+-
+-.tools-empty-result h3 {
+-  color: var(--text-strong);
+-  font-size: var(--text-card-title);
+-  line-height: var(--line-height-card-title);
+-}
+-
+-.tools-empty-result p {
+-  max-width: 320px;
+-  font-size: var(--text-body);
+-  line-height: var(--line-height-body);
+-}
+-
+ .tools-video-result {
+   display: grid;
+   grid-template-rows: auto minmax(0, 1fr);
+@@ -460,10 +289,10 @@
+ 
+ .tools-result-text {
+   width: 100%;
+-  min-height: 260px;
++  min-height: 180px;
+   resize: none;
+   padding: var(--space-3);
+-  border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
++  border: 1px solid var(--line);
+   border-radius: var(--radius-md);
+   color: var(--text);
+   background: var(--panel-raised);
+@@ -490,7 +319,7 @@
+ 
+ .tools-provenance-strip {
+   display: grid;
+-  grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.6fr) minmax(150px, 0.8fr);
++  grid-template-columns: repeat(3, minmax(0, 1fr));
+   gap: var(--space-3);
+   padding: var(--space-3);
+   border: 1px solid var(--line-subtle);
+@@ -521,7 +350,7 @@
+ 
+ .tools-candidate-list {
+   display: grid;
+-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
++  grid-template-columns: minmax(0, 1fr);
+   gap: var(--space-3);
+   min-width: 0;
+ }
+@@ -629,7 +458,7 @@
+ 
+ .tools-research-grid {
+   display: grid;
+-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.85fr);
++  grid-template-columns: minmax(0, 1fr);
+   gap: var(--space-3);
+ }
+ 
+@@ -675,83 +504,6 @@
+   line-height: var(--line-height-meta);
+ }
+ 
+-.tools-pdf-overview {
+-  display: grid;
+-  align-content: start;
+-  grid-template-columns: auto minmax(0, 1fr);
+-  gap: var(--space-4);
+-  min-width: 0;
+-  padding: var(--space-5);
+-  border: 1px solid var(--line-subtle);
+-  border-radius: var(--radius-lg);
+-  background: var(--surface-soft);
+-}
+-
+-.tools-pdf-overview-mark {
+-  display: grid;
+-  width: 52px;
+-  height: 52px;
+-  place-items: center;
+-  border: 1px solid var(--selected-border);
+-  border-radius: var(--radius-md);
+-  color: var(--control-active-text);
+-  background: var(--surface-selected);
+-}
+-
+-.tools-pdf-overview h3,
+-.tools-pdf-overview p {
+-  margin: 0;
+-}
+-
+-.tools-pdf-overview h3 {
+-  color: var(--text-strong);
+-  font-size: var(--text-section-title);
+-  line-height: var(--line-height-section-title);
+-}
+-
+-.tools-pdf-overview p {
+-  max-width: 66ch;
+-  margin-top: 6px;
+-  color: var(--muted-strong);
+-  font-size: var(--text-body);
+-  line-height: var(--line-height-body);
+-}
+-
+-.tools-pdf-feature-grid {
+-  display: grid;
+-  grid-column: 1 / -1;
+-  grid-template-columns: repeat(2, minmax(0, 1fr));
+-  gap: var(--space-2);
+-}
+-
+-.tools-pdf-feature-grid > div,
+-.tools-pdf-security-note {
+-  display: grid;
+-  gap: 3px;
+-  padding: 11px 12px;
+-  border: 1px solid var(--line);
+-  border-radius: var(--radius-md);
+-  background: var(--panel-raised);
+-}
+-
+-.tools-pdf-feature-grid strong,
+-.tools-pdf-security-note strong {
+-  color: var(--text-strong);
+-  font-size: var(--text-body);
+-  line-height: var(--line-height-card-title);
+-}
+-
+-.tools-pdf-feature-grid span,
+-.tools-pdf-security-note span {
+-  color: var(--muted);
+-  font-size: var(--text-caption);
+-  line-height: var(--line-height-caption);
+-}
+-
+-.tools-pdf-security-note {
+-  margin-top: var(--space-2);
+-}
+-
+ .tools-spin {
+   animation: tools-spin 900ms linear infinite;
+ }
+@@ -762,149 +514,42 @@
+   }
+ }
+ 
+-@media (min-width: 1181px) {
+-  .tools-page {
+-    grid-template-rows: auto minmax(0, 1fr) auto;
+-    height: var(--workspace-page-height);
+-  }
+-
+-  .tools-workspace {
+-    min-height: 0;
+-  }
+-}
+-
+-@media (max-width: 980px) {
+-  .tools-workspace {
+-    overflow: visible;
+-  }
+-
+-  .tools-split {
+-    grid-template-columns: 1fr;
+-    height: auto;
+-  }
+-
+-  .tools-control-pane {
+-    overflow: visible;
+-    border-right: 0;
+-    border-bottom: 1px solid var(--line-subtle);
+-  }
+-
+-  .tools-result-pane,
+-  .tools-video-result,
+-  .tools-transcript-card {
+-    overflow: visible;
+-  }
+-
+-  .tools-result-pane {
+-    min-height: 420px;
+-  }
+-
+-  .tools-publish-results {
+-    overflow: visible;
+-  }
+-}
+-
+-@media (max-width: 780px) {
+-  .tools-workspace-bar,
+-  .tools-result-heading,
+-  .tools-transcript-head {
+-    align-items: stretch;
+-    flex-direction: column;
+-  }
+-
+-  .tools-workspace-tabs {
+-    width: 100%;
+-  }
+-
+-  .tools-workspace-tabs button {
+-    min-width: 0;
+-    flex: 1;
+-  }
+-
+-  .tools-workspace-state {
+-    display: none;
+-  }
+-
+-  .tools-control-pane,
+-  .tools-result-pane {
+-    padding: var(--space-3);
+-  }
+-
+-  .tools-result-meta,
+-  .tools-result-actions {
+-    justify-content: flex-start;
+-  }
+-
+-  .field .tools-source-textarea {
+-    min-height: 190px;
+-  }
+-
+-  .tools-pdf-feature-grid {
+-    grid-template-columns: 1fr;
+-  }
+-
+-  .tools-source-summary {
+-    grid-template-columns: 104px minmax(0, 1fr) auto;
+-  }
+-
+-  .tools-source-summary img,
+-  .tools-cover-placeholder {
+-    width: 104px;
+-  }
+-
+-  .tools-provenance-strip,
+-  .tools-research-grid,
+-  .tools-candidate-list {
+-    grid-template-columns: 1fr;
+-  }
+-
+-  .tools-provenance-strip strong,
+-  .tools-result-heading .pane-subtitle {
+-    white-space: normal;
+-  }
++@media (max-width: 1100px) {
++  .tools-modules { grid-template-columns: minmax(0, 1fr); max-width: 720px; }
+ }
+-
+-@media (max-width: 520px) {
+-  .tools-workspace-tabs button {
+-    min-height: 52px;
+-    padding: 7px 9px;
+-  }
+-
+-  .tools-workspace-tabs button small {
+-    display: none;
+-  }
+-
+-  .tools-download-actions {
+-    grid-template-columns: 1fr;
+-  }
+-
+-  .tools-source-summary {
+-    grid-template-columns: 84px minmax(0, 1fr) auto;
+-  }
+-
+-  .tools-source-summary img,
+-  .tools-cover-placeholder {
+-    width: 84px;
+-  }
+-
+-  .tools-result-actions .btn.primary {
+-    width: 100%;
+-  }
++@media (max-width: 600px) {
++  .tools-modules { margin-top: 0; gap: var(--space-3); }
++  .tools-utility-column { gap: var(--space-3); }
++  .tools-control-pane { padding: var(--space-4); gap: var(--space-4); }
++  .tools-result-pane { padding: 0 var(--space-4) var(--space-4); }
++  .tools-transcript-head { align-items: start; flex-direction: column; }
++  .tools-source-summary { grid-template-columns: 64px minmax(0, 1fr) auto; }
++  .tools-source-summary img, .tools-cover-placeholder { width: 64px; }
++  .tools-provenance-strip, .tools-research-grid, .tools-candidate-list { grid-template-columns: minmax(0, 1fr); }
++  .tools-provenance-strip strong { white-space: normal; }
++  .tools-input-shell input, .field .tools-source-textarea { font-size: 16px; }
+ }
+-
+ @media (prefers-reduced-motion: reduce) {
+-  .tools-workspace-tabs button,
+-  .tools-input-shell,
+-  .tools-source-textarea,
+-  .tools-candidate-card {
+-    transition: none;
+-  }
+-
+-  .tools-candidate-card:hover {
+-    transform: none;
+-  }
+-
+-  .tools-spin {
+-    animation: none;
+-  }
++  .tools-module, .tools-module .btn, .tools-input-shell, .tools-source-textarea, .tools-candidate-card { transition: none; }
++  .tools-candidate-card:hover, .tools-module .btn:active:not(:disabled) { transform: none; }
++  .tools-spin, .tools-result-pane { animation: none; }
++}
++
++/* Studio composition: expressive framing around the existing tool controls. */
++.tools-section-label { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 3px 2px; }
++.tools-section-label > span:first-child { font-size: 16px; font-weight: 700; }
++.tools-section-label > span:last-child { font: 11px var(--font-mono); color: var(--muted-strong); }
++.tools-module .tools-pane-heading { position: relative; margin: calc(-1 * var(--space-6)) calc(-1 * var(--space-6)) 0; padding: 22px var(--space-6); border-bottom: 1px solid var(--line); }
++.tools-video-workspace .tools-pane-heading { background: var(--studio-lime); }
++.tools-publish-workspace .tools-pane-heading { background: var(--studio-violet); }
++.tools-pdf-workspace .tools-pane-heading { background: var(--studio-paper); }
++.tools-module .tools-pane-heading h2 { color: var(--studio-ink); }
++.tools-module .tools-pane-heading p { color: var(--studio-ink); font-size: 12px; }
++.tools-module .tools-module-icon { color: var(--studio-ink); background: transparent; box-shadow: none; border: 1px solid currentColor; border-radius: 50%; }
++.tools-module-number { margin-left: auto; align-self: start; font: 13px var(--font-mono); color: var(--studio-ink); }
++.tools-publish-workspace { border-color: color-mix(in oklch, var(--studio-violet-ink) 25%, var(--line)); }
++.tools-module { scroll-margin-top: 20px; }
++@media (max-width: 600px) {
++  .tools-section-label > span:last-child { font-size: 10px; }
++  .tools-module .tools-pane-heading { margin: -16px -16px 0; padding: 20px 16px; }
+ }
+diff --git a/src/app/writer/_components/WriterDialogModal.tsx b/src/app/writer/_components/WriterDialogModal.tsx
+index 0793d32..7f2704b 100644
+--- a/src/app/writer/_components/WriterDialogModal.tsx
++++ b/src/app/writer/_components/WriterDialogModal.tsx
+@@ -1,6 +1,6 @@
+ "use client";
+ 
+-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
++import type { ReactNode } from "react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+ 
+ type WriterDialogModalProps = {
+@@ -16,27 +16,12 @@ export function WriterDialogModal({
+   onClose,
+   panelClassName = ""
+ }: WriterDialogModalProps) {
+-  const panelRef = useRef<HTMLDivElement>(null);
+-
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    const previousOverflow = document.body.style.overflow;
+-    document.body.style.overflow = "hidden";
+-    panelRef.current?.focus();
+-    return () => {
+-      document.body.style.overflow = previousOverflow;
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   return (
+     <ModalBackdrop onClose={onClose}>
+       <div
+         aria-labelledby={labelledBy}
+         aria-modal="true"
+         className={`modal-panel ${panelClassName}`}
+-        onKeyDown={(event) => handleWriterDialogKeyDown(event, onClose)}
+-        ref={panelRef}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -45,39 +30,3 @@ export function WriterDialogModal({
+     </ModalBackdrop>
+   );
+ }
+-
+-export function handleWriterDialogKeyDown(event: KeyboardEvent<HTMLElement>, onClose: () => void) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    onClose();
+-    return;
+-  }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+-}
+diff --git a/src/app/writer/_components/WriterHistoryPanel.tsx b/src/app/writer/_components/WriterHistoryPanel.tsx
+index d3fb5fb..7120c19 100644
+--- a/src/app/writer/_components/WriterHistoryPanel.tsx
++++ b/src/app/writer/_components/WriterHistoryPanel.tsx
+@@ -2,7 +2,7 @@
+ 
+ import { memo, useEffect, useMemo, useRef, useState } from "react";
+ import { Check, ChevronDown, ChevronRight, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
+-import { handleWriterDialogKeyDown } from "./WriterDialogModal";
++import { useDialogInteraction } from "@/components/useDialogInteraction";
+ import { ConfirmDialog } from "@/components/ConfirmDialog";
+ import { formatDate, formatPlatform } from "@/components/Formatters";
+ import type { DraftSummary } from "@/lib/types";
+@@ -102,26 +102,7 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
+     wasOpenRef.current = open;
+   }, [open, selectedSessionId]);
+ 
+-  useEffect(() => {
+-    if (!open) return;
+-    const previousOverflow = document.body.style.overflow;
+-    document.body.style.overflow = "hidden";
+-    const handleKeyDown = (event: KeyboardEvent) => {
+-      if (event.key === "Escape" && !deleteTarget && !bulkDeleteOpen) onClose();
+-    };
+-    window.addEventListener("keydown", handleKeyDown);
+-    return () => {
+-      document.body.style.overflow = previousOverflow;
+-      window.removeEventListener("keydown", handleKeyDown);
+-    };
+-  }, [bulkDeleteOpen, deleteTarget, onClose, open]);
+-
+-  useEffect(() => {
+-    if (!open) return;
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    panelRef.current?.focus();
+-    return () => { previouslyFocused?.focus(); };
+-  }, [open]);
++  const closeDialog = useDialogInteraction(panelRef, { active: open, onClose, branchRefs: [contextMenuRef] });
+ 
+   useEffect(() => {
+     if (!editingDraftId) return;
+@@ -416,7 +397,7 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
+         <div
+           className="writer-history-backdrop"
+           onMouseDown={(event) => {
+-            if (event.target === event.currentTarget) onClose();
++            if (event.target === event.currentTarget) closeDialog();
+           }}
+           role="presentation"
+         >
+@@ -424,7 +405,10 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
+             ref={panelRef}
+             tabIndex={-1}
+             onKeyDown={(event) => {
+-              if (event.key === "Tab" && !deleteTarget && !bulkDeleteOpen) handleWriterDialogKeyDown(event, onClose);
++              if (event.key === "Escape" && contextMenu) {
++                event.preventDefault();
++                setContextMenu(null);
++              }
+             }}
+             aria-labelledby="writer-history-title"
+             aria-modal="true"
+@@ -568,7 +552,15 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
+       ) : null}
+ 
+       {contextMenu ? (
+-        <div className="history-context-menu" ref={contextMenuRef} role="menu" style={contextMenuStyle}>
++        <div className="history-context-menu" ref={contextMenuRef} role="menu" style={contextMenuStyle}
++          onKeyDown={(event) => {
++            if (event.key === "Escape") {
++              event.preventDefault();
++              setContextMenu(null);
++              panelRef.current?.focus();
++            }
++          }}
++        >
+           <button
+             className="history-context-menu-item"
+             onClick={() => handleStartRename(contextMenu.draft)}
+diff --git a/src/app/writer/_components/WriterReferencePicker.tsx b/src/app/writer/_components/WriterReferencePicker.tsx
+index bad3b99..3410582 100644
+--- a/src/app/writer/_components/WriterReferencePicker.tsx
++++ b/src/app/writer/_components/WriterReferencePicker.tsx
+@@ -1,8 +1,9 @@
+ "use client";
+ 
+-import { useMemo, useState } from "react";
+-import { Check, ChevronDown, Search } from "lucide-react";
+-import { WriterDialogModal } from "./WriterDialogModal";
++import { useMemo, useRef, useState } from "react";
++import * as Popover from "@radix-ui/react-popover";
++import { Command } from "cmdk";
++import { Check, ChevronsUpDown, Folder, Search, UserRound, X } from "lucide-react";
+ import { formatPlatform } from "@/components/Formatters";
+ import { writeStyleReferenceKey } from "@/lib/write-references";
+ import type { AccountListItem, ProjectListItem, WriteStyleReferenceInput } from "@/lib/types";
+@@ -15,115 +16,106 @@ type WriterReferencePickerProps = {
+   references: WriteStyleReferenceInput[];
+ };
+ 
+-type ReferenceOption = {
+-  key: string;
+-  label: string;
+-  meta: string;
+-  reference: WriteStyleReferenceInput;
+-};
+-
+ const MAX_CONCURRENT_STYLES = 8;
+ 
+-export function WriterReferencePicker({
+-  accounts,
+-  disabled,
+-  onChange,
+-  projects,
+-  references
+-}: WriterReferencePickerProps) {
++export function WriterReferencePicker({ accounts, disabled, onChange, projects, references }: WriterReferencePickerProps) {
+   const [open, setOpen] = useState(false);
+   const [query, setQuery] = useState("");
+-  const options = useMemo<ReferenceOption[]>(() => [
+-    ...projects.map((project) => ({
+-      key: writeStyleReferenceKey({ targetType: "project", projectId: project.id }),
+-      label: project.name,
+-      meta: `项目 · ${project.sourceAccounts.length} 个参考账号`,
+-      reference: { targetType: "project" as const, projectId: project.id }
+-    })),
++  const [category, setCategory] = useState<"account" | "project">("account");
++  const [multi, setMulti] = useState(false);
++  const searchRef = useRef<HTMLInputElement>(null);
++  const multiple = multi || references.length > 1;
++  const options = useMemo(() => [
+     ...accounts.map((account) => ({
+       key: writeStyleReferenceKey({ targetType: "account", platform: account.platform, accountId: account.id }),
+       label: account.name,
+-      meta: `${formatPlatform(account.platform)}账号`,
++      meta: formatPlatform(account.platform),
+       reference: { targetType: "account" as const, platform: account.platform, accountId: account.id }
++    })),
++    ...projects.map((project) => ({
++      key: writeStyleReferenceKey({ targetType: "project", projectId: project.id }),
++      label: project.name,
++      meta: `${project.sourceAccounts.length} 个参考账号`,
++      reference: { targetType: "project" as const, projectId: project.id }
+     }))
+   ], [accounts, projects]);
+-  const selectedKeys = useMemo(() => references.map(writeStyleReferenceKey), [references]);
+-  const selectedOptions = selectedKeys.flatMap((key) => {
+-    const option = options.find((item) => item.key === key);
+-    return option ? [option] : [];
+-  });
+-  const summary = selectedOptions.length > 1
+-    ? `已选 ${selectedOptions.length} 个风格 · 分别生成`
+-    : selectedOptions[0]?.label || "选择参考风格";
+-
+-  const toggleReference = (option: ReferenceOption) => {
+-    const selected = selectedKeys.includes(option.key);
+-    if (selected && references.length === 1) return;
+-    if (!selected && references.length >= MAX_CONCURRENT_STYLES) return;
+-    onChange(selected
+-      ? references.filter((reference) => writeStyleReferenceKey(reference) !== option.key)
+-      : [...references, option.reference]);
+-  };
+-
+-  const renderGroup = (label: string, group: ReferenceOption[]) => group.length ? (
+-    <section className="writer-reference-picker-group">
+-      <strong>{label}</strong>
+-      {group.map((option) => {
+-        const selected = selectedKeys.includes(option.key);
+-        return (
+-          <div className="writer-picker-option-row" key={option.key}>
+-          <button
+-            aria-checked={selected}
+-            className="writer-reference-option"
+-            disabled={(selected && references.length === 1) || (!selected && references.length >= MAX_CONCURRENT_STYLES)}
+-            onClick={() => toggleReference(option)}
+-            role="checkbox"
+-            type="button"
+-          >
+-            <span className={`writer-reference-check ${selected ? "selected" : ""}`} aria-hidden="true">
+-              {selected ? <Check size={13} /> : null}
+-            </span>
+-            <span className="writer-reference-option-copy">
+-              <span>{option.label}</span>
+-              <small>{option.meta}</small>
+-            </span>
+-            {selected ? <em>独立成稿</em> : null}
+-          </button>
+-          <button className="btn small ghost" type="button" aria-label={`仅用${option.label}风格`} onClick={() => { onChange([option.reference]); setOpen(false); }}>仅用</button>
+-          </div>
+-        );
+-      })}
+-    </section>
+-  ) : null;
++  const selectedKeys = new Set(references.map(writeStyleReferenceKey));
++  const selected = options.filter((option) => selectedKeys.has(option.key));
++  const visible = options.filter((option) => option.reference.targetType === category
++    && `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase()));
+ 
+   return (
+-    <div className="writer-reference-picker">
+-      <button
+-        aria-expanded={open}
+-        aria-haspopup="dialog"
+-        className="writer-reference-picker-trigger"
+-        disabled={disabled}
+-        onClick={() => { setQuery(""); setOpen(true); }}
+-        type="button"
+-      >
+-        <span className="writer-account-avatar" aria-hidden="true">{selectedOptions[0]?.label.slice(0, 1) || "选"}</span>
+-        <span className="writer-account-trigger-copy"><strong>{summary}</strong><small>{selectedOptions.length > 1 ? "每个风格独立成稿" : selectedOptions[0]?.meta || "账号或项目风格"}</small></span>
+-        {selectedOptions.length > 1 ? <small>{selectedOptions.length}</small> : null}
+-        <ChevronDown aria-hidden="true" size={15} />
+-      </button>
+-      {open ? (
+-        <WriterDialogModal labelledBy="writer-picker-title" onClose={() => setOpen(false)} panelClassName="writer-picker-dialog">
+-          <div className="modal-header"><div><h2 id="writer-picker-title">选择写作风格</h2><p className="pane-subtitle">可多选，每个账号或项目分别生成一篇稿件。</p></div><button className="btn compact" onClick={() => setOpen(false)} type="button">完成 · {selectedOptions.length}</button></div>
+-          <div className="writer-picker-body">
+-            <label className="writer-picker-search"><Search size={16} aria-hidden="true" /><span className="sr-only">搜索账号或项目</span><input type="search" aria-label="搜索账号或项目" placeholder="搜索账号、项目或平台" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+-            <div className="writer-picker-selected">已选：{selectedOptions.map((option) => <span key={option.key}>{option.label}</span>)}</div>
+-            {renderGroup("项目风格", options.filter((option) => option.reference.targetType === "project" && `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase())))}
+-            {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account" && `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase())))}
+-            {!options.some((option) => `${option.label} ${option.meta}`.toLowerCase().includes(query.trim().toLowerCase())) ? <p className="subtle" role="status">没有匹配的账号或项目，试试其他名称。</p> : null}
+-            <p className="subtle">点“仅用”直接切换；勾选多个风格分别成稿，最多 8 个。</p>
+-          </div>
+-        </WriterDialogModal>
+-      ) : null}
++    <div className="writer-style-select">
++      <Popover.Root open={open && !disabled} onOpenChange={(next) => {
++        setOpen(next);
++        if (next) {
++          setQuery("");
++          setCategory(references[0]?.targetType === "project" ? "project" : "account");
++        }
++      }}>
++        <Popover.Trigger asChild>
++          <button className="btn writer-style-select-trigger" disabled={disabled} type="button" aria-label="选择风格卡">
++            {references[0]?.targetType === "project" ? <Folder size={16} aria-hidden="true" /> : <UserRound size={16} aria-hidden="true" />}
++            <span>{disabled ? "载入风格…" : selected.length > 1 ? `${selected.length} 张风格卡` : selected[0]?.label || "选择风格卡"}</span>
++            {selected.length === 1 ? <small>{selected[0].meta}</small> : null}
++            <ChevronsUpDown size={14} aria-hidden="true" />
++          </button>
++        </Popover.Trigger>
++        <Popover.Portal>
++          <Popover.Content className="writer-style-popover" align="start" sideOffset={8} collisionPadding={16} aria-label="选择写作风格" onOpenAutoFocus={(event) => { event.preventDefault(); searchRef.current?.focus(); }}>
++            <div className="writer-style-popover-head">
++              <div className="segmented" role="group" aria-label="风格来源">
++                {(["account", "project"] as const).map((kind) => (
++                  <button className={category === kind ? "active" : ""} aria-pressed={category === kind} key={kind} type="button" onClick={() => { setCategory(kind); setQuery(""); }}>
++                    {kind === "account" ? <UserRound size={14} aria-hidden="true" /> : <Folder size={14} aria-hidden="true" />}
++                    {kind === "account" ? "账号" : "项目"}
++                  </button>
++                ))}
++              </div>
++              <label className="writer-style-multiple"><input type="checkbox" checked={multiple} onChange={(event) => {
++                setMulti(event.target.checked);
++                if (!event.target.checked && references.length > 1) onChange(references.slice(0, 1));
++              }} />多选</label>
++            </div>
++            <Command shouldFilter={false} loop label="搜索风格卡">
++              <div className="writer-style-search">
++                <Search size={16} aria-hidden="true" />
++                <Command.Input ref={searchRef} aria-label="搜索风格卡" placeholder={category === "account" ? "搜索账号或平台…" : "搜索项目…"} value={query} onValueChange={setQuery} />
++              </div>
++              <Command.List className="writer-style-list">
++                <Command.Empty className="writer-style-no-results">没有匹配的{category === "account" ? "账号" : "项目"}</Command.Empty>
++                {visible.map((option) => {
++                  const checked = selectedKeys.has(option.key);
++                  return (
++                    <Command.Item key={option.key} value={option.key} disabled={multiple && !checked && references.length >= MAX_CONCURRENT_STYLES} onSelect={() => {
++                      if (!multiple) {
++                        onChange([option.reference]);
++                        setOpen(false);
++                      } else if (checked) {
++                        if (references.length > 1) onChange(references.filter((reference) => writeStyleReferenceKey(reference) !== option.key));
++                      } else if (references.length < MAX_CONCURRENT_STYLES) {
++                        onChange([...references, option.reference]);
++                      }
++                    }}>
++                      <span className="writer-style-initial" data-kind={category} aria-hidden="true">{option.label.slice(0, 1)}</span>
++                      <span className="writer-style-option-copy"><strong>{option.label}</strong><small>{option.meta}</small></span>
++                      <span className="writer-style-check" data-checked={checked} aria-label={checked ? "已选" : undefined}>{checked ? <Check size={15} /> : null}</span>
++                    </Command.Item>
++                  );
++                })}
++              </Command.List>
++            </Command>
++            {multiple ? <div className="writer-style-popover-footer"><span role="status">已选 {references.length} / {MAX_CONCURRENT_STYLES}</span><Popover.Close asChild><button className="btn small" type="button">完成</button></Popover.Close></div> : null}
++          </Popover.Content>
++        </Popover.Portal>
++      </Popover.Root>
++      {selected.length > 1 ? <div className="writer-style-chips" aria-label="已选风格卡">
++        {selected.map((option) => <span className="writer-style-chip" key={option.key}>
++          {option.reference.targetType === "project" ? <Folder size={12} aria-hidden="true" /> : <UserRound size={12} aria-hidden="true" />}
++          <span>{option.label}</span>
++          <button type="button" disabled={disabled} title={`移除${option.label}`} aria-label={`移除${option.label}风格`} onClick={() => onChange(references.filter((reference) => writeStyleReferenceKey(reference) !== option.key))}><X size={12} aria-hidden="true" /></button>
++        </span>)}
++      </div> : null}
+     </div>
+   );
+ }
+diff --git a/src/app/writer/_components/WriterSourcePanel.tsx b/src/app/writer/_components/WriterSourcePanel.tsx
+index 4ea9659..4161937 100644
+--- a/src/app/writer/_components/WriterSourcePanel.tsx
++++ b/src/app/writer/_components/WriterSourcePanel.tsx
+@@ -8,18 +8,19 @@ import { splitWriterSourceItems } from "../_lib/source-items";
+ type Props = {
+   value: string;
+   onChange: Dispatch<SetStateAction<string>>;
++  pendingText: string;
++  onPendingTextChange: (text: string) => void;
+   importing: boolean;
+   onFiles: (files: File[]) => Promise<void>;
+ };
+ 
+-export function WriterSourcePanel({ value, onChange, importing, onFiles }: Props) {
++export function WriterSourcePanel({ value, onChange, pendingText: text, onPendingTextChange: setText, importing, onFiles }: Props) {
+   const items = useMemo(() => splitWriterSourceItems(value), [value]);
+   const inputRef = useRef<HTMLInputElement>(null);
+   const textRef = useRef<HTMLTextAreaElement>(null);
+   const dragDepth = useRef(0);
+   const [dragging, setDragging] = useState(false);
+-  const [composing, setComposing] = useState(false);
+-  const [text, setText] = useState("");
++  const [composing, setComposing] = useState(Boolean(text));
+ 
+   const openComposer = () => {
+     setComposing(true);
+@@ -53,20 +54,21 @@ export function WriterSourcePanel({ value, onChange, importing, onFiles }: Props
+       }}>
+       <div className="writer-section-heading">
+         <h3 id="writer-materials-title">参考素材 <span>{items.length ? `${items.length} 项` : "可选"}</span></h3>
+-        <Paperclip aria-hidden="true" size={16} />
++        <div className="writer-material-actions">
++          <button className="btn small ghost icon-only" aria-label="添加文件" title="添加文件" disabled={importing} onClick={() => inputRef.current?.click()} type="button"><Paperclip size={16} aria-hidden="true" /></button>
++          <button className="btn small ghost" onClick={openComposer} type="button"><Link2 size={15} aria-hidden="true" />文本 / 链接</button>
++        </div>
+       </div>
+-      <div className="writer-material-actions">
+-        <button className="btn compact" disabled={importing} onClick={() => inputRef.current?.click()} type="button"><Upload size={15} aria-hidden="true" />{importing ? "正在读取文件…" : "添加文件"}</button>
+-        <button className="btn compact ghost" onClick={openComposer} type="button"><Plus size={15} aria-hidden="true" />文本 / 链接</button>
+         <input className="writer-source-file-input" type="file" ref={inputRef} accept={WRITER_SOURCE_FILE_ACCEPT} multiple aria-label="选择素材文件" disabled={importing} onChange={(event) => {
+           const files = Array.from(event.currentTarget.files || []);
+           event.currentTarget.value = "";
+           void onFiles(files);
+         }} />
+-      </div>
+       {!items.length && !composing ? (
+         <button className="writer-material-drop" type="button" disabled={importing} onClick={() => inputRef.current?.click()}>
+-          <Upload size={22} aria-hidden="true" /><strong>拖入文件，或点击上传</strong><span>Word、TXT、Markdown、字幕等</span>
++          <span className="writer-upload-symbol"><Upload size={18} aria-hidden="true" /></span>
++          <span className="writer-upload-copy"><strong>{importing ? "正在读取文件…" : "添加参考文件"}</strong><small>Word、TXT、Markdown</small></span>
++          <Plus size={17} aria-hidden="true" />
+         </button>
+       ) : null}
+       <div className="writer-material-list">
+@@ -107,7 +109,7 @@ export function WriterSourcePanel({ value, onChange, importing, onFiles }: Props
+           </div>
+         </div>
+       ) : null}
+-      <p className="writer-material-hint" role="status">{dragging ? importing ? "正在读取，请稍候再添加" : "松开即可添加文件" : importing ? "正在提取正文，读取成功后会出现在素材列表中。" : "文件、文本和链接可混合添加；拖入此区域继续补充。"}</p>
++      <p className="writer-material-hint" role="status">{dragging ? importing ? "正在读取，请稍候再添加" : "松开即可添加文件" : importing ? "正在读取图文与表格…" : ""}</p>
+     </section>
+   );
+ }
+diff --git a/src/app/writer/_hooks/useWriterGeneration.ts b/src/app/writer/_hooks/useWriterGeneration.ts
+index 475a75a..15336a5 100644
+--- a/src/app/writer/_hooks/useWriterGeneration.ts
++++ b/src/app/writer/_hooks/useWriterGeneration.ts
+@@ -541,6 +541,19 @@ export function useWriterGeneration({
+     setGenerateProgress(100);
+   }, [applyVariantState]);
+ 
++  // Keep an in-page undo snapshot, including edits in all generated variants.
++  const captureDraftResult = () => () => {
++    setLastContent(lastContent);
++    setLastResearch(lastResearch);
++    setLastSavedContent(lastSavedContent);
++    setLastDraftBase(lastDraftBase);
++    setLastDraftId(lastDraftId);
++    setGeneratedVariants(generatedVariants);
++    setActiveVariantKey(activeVariantKey);
++    setGenerateStage(generateStage);
++    setGenerateProgress(generateProgress);
++  };
++
+   const clearDraftResult = useCallback(() => {
+     generationBaseContentRef.current = "";
+     setLastContent("");
+@@ -561,6 +574,7 @@ export function useWriterGeneration({
+     canRevise,
+     canStopGenerate,
+     clearDraftResult,
++    captureDraftResult,
+     copyLast,
+     generateProgress,
+     generateStage,
+diff --git a/src/app/writer/layout.tsx b/src/app/writer/layout.tsx
+index 5b56607..5385496 100644
+--- a/src/app/writer/layout.tsx
++++ b/src/app/writer/layout.tsx
+@@ -1,4 +1,5 @@
+ import "./writer.css";
++import "./writer-studio.css";
+ 
+ export default function WriterLayout({ children }: { children: React.ReactNode }) {
+   return children;
+diff --git a/src/app/writer/page.tsx b/src/app/writer/page.tsx
+index 081b96c..25fab7a 100644
+--- a/src/app/writer/page.tsx
++++ b/src/app/writer/page.tsx
+@@ -50,14 +50,13 @@ import {
+   writeStyleReferenceKey
+ } from "@/lib/write-references";
+ import {
+-  DEFAULT_REWRITE_PROMPT,
+   extractRewriteSourceMaterial,
+   mergeWriterSourceInput,
+   normalizeRewritePrompt,
+   restoreWriterSourceInput,
+   splitWriterSourceInput
+ } from "@/lib/source-extraction";
+-import { appendWriterSourceFiles, countWriterSourceFiles } from "@/lib/source-file-import";
++import { appendWriterSourceFiles } from "@/lib/source-file-import";
+ import type {
+   AccountListItem,
+   Draft,
+@@ -104,8 +103,10 @@ function WriterPageContent() {
+   const [historyOpen, setHistoryOpen] = useState(false);
+   const closeHistory = useCallback(() => setHistoryOpen(false), []);
+   const [versionsOpen, setVersionsOpen] = useState(false);
+-  const [taskContextOpen, setTaskContextOpen] = useState(true);
+   const [sourcePanelKey, setSourcePanelKey] = useState(0);
++  const [pendingSourceText, setPendingSourceText] = useState("");
++  const [switchUndo, setSwitchUndo] = useState<Array<() => void>>([]);
++  const switchingDraftRef = useRef(false);
+   const [sourceImporting, setSourceImporting] = useState(false);
+   const [sessionDraftHydrated, setSessionDraftHydrated] = useState(false);
+   const loadedDraftParamRef = useRef("");
+@@ -225,6 +226,7 @@ function WriterPageContent() {
+     canStopGenerate,
+     activeVariantKey,
+     clearDraftResult,
++    captureDraftResult,
+     copyLast,
+     generatedVariants,
+     generateStage,
+@@ -286,8 +288,6 @@ function WriterPageContent() {
+     setResearchOpen(false);
+   }, [lastDraftId]);
+ 
+-  const sourceFileCount = useMemo(() => countWriterSourceFiles(sourceText), [sourceText]);
+-  const nonFileTextMaterialCount = Math.max(0, sourceExtraction.textMaterialCount - sourceFileCount);
+   const sourceItemCount = sourceExtraction.materials.length + separatedSourceInput.supportDocumentCount;
+   const materialStatusLabel = sourceItemCount
+     ? `${sourceItemCount} 项资料`
+@@ -330,8 +330,8 @@ function WriterPageContent() {
+     clearDraftResult();
+     setPrompt("");
+     setSourceText("");
+-    setTaskContextOpen(true);
+     setSourcePanelKey((key) => key + 1);
++    setPendingSourceText("");
+     setVersionsOpen(false);
+     setUseWebResearch(false);
+     setRevisionInstruction("");
+@@ -367,8 +367,8 @@ function WriterPageContent() {
+   }, [notice, noticeIsError, notify]);
+ 
+   const applyLoadedDraft = useCallback((draft: Draft) => {
+-    setTaskContextOpen(false);
+     setSourcePanelKey((key) => key + 1);
++    setPendingSourceText("");
+     setStyleRefs(draftWriteStyleReferenceInputs(draft));
+     setPrompt(draft.prompt);
+     setSourceText(restoreWriterSourceInput({
+@@ -456,8 +456,8 @@ function WriterPageContent() {
+     clearDraftResult();
+     setPrompt("");
+     setSourceText("");
+-    setTaskContextOpen(true);
+     setSourcePanelKey((key) => key + 1);
++    setPendingSourceText("");
+     setVersionsOpen(false);
+     setUseWebResearch(false);
+     setRevisionInstruction("");
+@@ -479,11 +479,38 @@ function WriterPageContent() {
+   }, [historyDrafts, lastDraftId, lastDraftVersion?.sessionId]);
+ 
+   const continueFromVersion = async (draft: DraftSummary) => {
+-    if (busy || sourceImporting) return false;
++    if (busy || sourceImporting || switchingDraftRef.current) return false;
++    if (draft.id === lastDraftId) {
++      return true;
++    }
+     const hasChangedInput = hasTaskInput && (!lastDraftBase || prompt !== lastDraftBase.prompt || sourceText !== restoreWriterSourceInput({ originalSourceInput: lastDraftBase.originalSourceInput, sourceText: lastDraftBase.input, supportDocLinks: lastDraftBase.supportDocLinks }));
+-    if ((hasAnyUnsavedChanges || hasChangedInput || revisionInstruction.trim() || document.querySelector('[data-writer-pending-source="true"]')) && !window.confirm("切换稿件会放弃当前未保存的编辑、写作要求及素材输入，是否继续？")) return false;
+-    await handleSelectHistoryDraft(draft);
+-    return true;
++    const shouldKeep = switchUndo.length > 0 || hasAnyUnsavedChanges || hasChangedInput || Boolean(revisionInstruction.trim() || pendingSourceText.trim());
++    const restoreResult = captureDraftResult();
++    const previousSearch = searchParams.toString();
++    const restore = () => {
++      loadedDraftParamRef.current = lastDraftId;
++      appliedSearchParamRef.current = previousSearch;
++      restoreResult();
++      setStyleRefs(styleRefs);
++      setPrompt(prompt);
++      setSourceText(sourceText);
++      setPendingSourceText(pendingSourceText);
++      setUseWebResearch(useWebResearch);
++      setRevisionInstruction(revisionInstruction);
++      setRevisionMode(revisionMode);
++      setRevisionScope(revisionScope);
++      setSelectedDraftText(selectedDraftText);
++      setSourcePanelKey((key) => key + 1);
++      router.replace(`/writer${previousSearch ? `?${previousSearch}` : ""}`, { scroll: false });
++    };
++    switchingDraftRef.current = true;
++    try {
++      await handleSelectHistoryDraft(draft);
++      if (shouldKeep) setSwitchUndo((current) => [...current, restore]);
++      return true;
++    } finally {
++      switchingDraftRef.current = false;
++    }
+   };
+ 
+   if (!loading && !library?.accounts.length && !library?.projects.length) {
+@@ -510,8 +537,9 @@ function WriterPageContent() {
+ 
+   return (
+     <div
+-      className="page writer-page"
+-      data-unsaved-changes={hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()) ? "true" : undefined}
++      className="page writer-page writer-studio"
++      data-phase={lastContent || busy === "generate" ? "editing" : "compose"}
++      data-unsaved-changes={hasAnyUnsavedChanges || switchUndo.length > 0 || hasTaskInput || Boolean(revisionInstruction.trim()) ? "true" : undefined}
+     >
+       <header className="page-header writer-page-header">
+         <div className="page-title-group">
+@@ -522,7 +550,6 @@ function WriterPageContent() {
+             <div className="page-title-copy">
+               <h1>对话写作</h1>
+               <div className="writer-title-meta">
+-                <p className="subtle">选风格，写需求，生成。</p>
+                 {sessionDraftHydrated && hasTaskInput ? (
+                   <span className="writer-autosave-status" role="status">
+                     <CheckCircle2 aria-hidden="true" size={13} />
+@@ -533,32 +560,36 @@ function WriterPageContent() {
+             </div>
+           </div>
+         </div>
++        {switchUndo.length ? <button className="btn compact" disabled={Boolean(busy) || sourceImporting} type="button" onClick={() => {
++          switchUndo.at(-1)?.();
++          setSwitchUndo((current) => current.slice(0, -1));
++        }}>撤销切换</button> : null}
+         <button className="btn compact writer-task-history-trigger" onClick={() => setHistoryOpen(true)} type="button"><History size={16} aria-hidden="true" />历史任务</button>
+ 
+       </header>
+ 
+       <section className="writer-workbench">
+-        <section className="panel writer-main">
++        <section className="writer-main">
+ 
+           <div className="writer-content-grid">
+             <div className="writer-task">
+               <div className="section-title-row">
+                 <div>
+-                  <h2>写作任务</h2>
+-                  <p className="pane-subtitle">告诉我想写什么，素材可以随时补充。</p>
++                  <span className="writer-studio-eyebrow">{lastContent ? "NEW DRAFT" : "YOUR NEXT STORY"}</span>
++                  <h2>{lastContent ? "创作新稿" : "今天，想写点什么？"}</h2>
+                 </div>
+                 <div className="writer-task-heading-actions">
+-                  <span className={`status-pill ${hasTaskInput ? "done" : "pending"}`}>{materialStatusLabel}</span>
+-                  <button className="btn compact" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
++                  <button className="btn compact ghost" title="新建任务" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
+                     <Plus aria-hidden="true" size={15} />
+                     新建任务
+                   </button>
+                 </div>
+               </div>
+ 
++              <div className="writer-composer">
+               <section className="writer-refbar" aria-label="写作风格">
+                 <div className="writer-reference-control">
+-                  <span>{lastContent ? "新稿参考风格" : "本次写作风格"}</span>
++                  <span>{lastContent ? "新稿风格" : "风格卡"}</span>
+                   <WriterReferencePicker
+                     accounts={library?.accounts || EMPTY_ACCOUNTS}
+                     disabled={loading}
+@@ -568,7 +599,7 @@ function WriterPageContent() {
+                   />
+                 </div>
+ 
+-                <div className="writer-reference-status" aria-label="当前风格卡状态">
++                <div className="writer-reference-status" aria-label="当前风格卡状态" data-state={activeStyleLoading ? "loading" : activeStyleError ? "error" : activeStyle?.trim() ? "ready" : "empty"}>
+                   <span className="writer-reference-icon" aria-hidden="true">
+                     <FileText aria-hidden="true" size={14} />
+                   </span>
+@@ -587,108 +618,45 @@ function WriterPageContent() {
+                     title="查看风格卡"
+                     type="button"
+                   >
+-                    <Eye aria-hidden="true" size={16} />查看风格卡
++                    <Eye aria-hidden="true" size={16} /><span>预览风格</span>
+                   </button>
+                 </div>
+               </section>
+ 
+-              {lastContent ? (
+-                <section className="writer-revision-composer" aria-labelledby="writer-revision-title">
+-                  <div className="writer-revision-head">
+-                    <div>
+-                      <h3 id="writer-revision-title">继续修改</h3>
+-                      <p>{selectedDraftText ? `已选中 ${selectedDraftText.length} 字` : `基于 V${lastDraftVersion?.revision || 1} · ${lastDraftBase?.targetType === "project" ? lastDraftBase.projectName : lastDraftBase?.accountName || "当前稿件"}`}</p>
+-                    </div>
+-                    {selectedDraftText ? (
+-                      <button className="writer-selection-chip" onClick={handleClearDraftSelection} type="button">
+-                        只改选中内容
+-                        <X aria-hidden="true" size={13} />
+-                      </button>
+-                    ) : null}
+-                  </div>
+-                  <details className="writer-bound-style"><summary>本稿风格与资料</summary><p>续改沿用本稿已保存的风格与资料；上方选择用于另起新稿。</p>{lastDraftBase?.writerContext?.styleText ? <pre>{lastDraftBase.writerContext.styleText}</pre> : <p>此稿没有可展示的风格快照，续改按现有兼容逻辑读取。</p>}</details>
+-                  <label className="writer-field">
+-                    <span>修改方式</span>
+-                    <select className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
+-                      onChange={(event) => setRevisionMode(event.target.value as "edit" | "recalibrate")}>
+-                      <option value="edit">按要求微调</option>
+-                      <option value="recalibrate">重新校准风格</option>
+-                    </select>
+-                    <span id="writer-revision-mode-help">{revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达；选中段落时只调整选中范围。" : "处理本轮点名的问题，尽量保留其余表达。"}</span>
+-                  </label>
+-                  <div className="writer-revision-shortcuts" aria-label="快捷修改要求">
+-                    {["更口语一些", "精简表达", "强化开头"].map((instruction) => (
+-                      <button className="btn small" disabled={Boolean(busy)} key={instruction} type="button" onClick={() => setRevisionInstruction((current) => current.trim() ? `${current}；${instruction}` : instruction)}>{instruction}</button>
+-                    ))}
+-                  </div>
+-                  <label className="writer-field">
+-                    <span>本轮修改要求</span>
+-                    <textarea
+-                      aria-label="本轮修改要求"
+-                      className="writer-textarea revision"
+-                      disabled={busy === "generate"}
+-                      onChange={(event) => setRevisionInstruction(event.target.value)}
+-                      onKeyDown={(event) => {
+-                        if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRevise) {
+-                          event.preventDefault();
+-                          void handleRevise();
+-                        }
+-                      }}
+-                      placeholder="例如：压缩第 2 段，产品参数和原有表达方式保持不变。"
+-                      value={revisionInstruction}
+-                    />
+-                  </label>
+-                  <div className="writer-revision-actions">
+-                    <span>{selectedDraftText ? "会只调整选中内容，并返回完整新稿。" : "在稿件里选中文字，可直接切换为局部修改。"}</span>
+-                    <button
+-                      aria-busy={busy === "generate"}
+-                      className="btn primary"
+-                      disabled={!canRevise}
+-                      onClick={() => void handleRevise()}
+-                      type="button"
+-                    >
+-                      <Send aria-hidden="true" size={16} />
+-                      {busy === "generate" ? "生成中" : `生成 V${(lastDraftVersion?.revision || 1) + 1}`}
+-                    </button>
+-                  </div>
+-                </section>
+-              ) : null}
+ 
+-              <details className="writer-task-context" open={taskContextOpen} onToggle={(event) => setTaskContextOpen(event.currentTarget.open)}>
+-                <summary><span>起稿要求与素材</span><small>{materialStatusLabel}</small><ChevronDown size={15} aria-hidden="true" /></summary>
++              <section className="writer-task-context" aria-label="需求与素材">
+                 <div className="writer-task-context-body">
+               <label className="writer-field">
+-                <span>这次想怎么写</span>
++                <span>生成需求</span>
+                 <textarea
+                   aria-label="写作要求"
+                   autoComplete="off"
+                   className="writer-textarea main"
+                   name="prompt"
+-                  placeholder={DEFAULT_REWRITE_PROMPT}
++                  placeholder="写下这次的主题、想表达的观点，或需要改写的方向…"
+                   value={prompt}
+                   onChange={(event) => setPrompt(event.target.value)}
+                 />
+               </label>
+ 
+-              <WriterSourcePanel key={sourcePanelKey} value={sourceText} onChange={setSourceText} importing={sourceImporting} onFiles={handleSourceFiles} />
++              <WriterSourcePanel key={sourcePanelKey} pendingText={pendingSourceText} onPendingTextChange={setPendingSourceText} value={sourceText} onChange={setSourceText} importing={sourceImporting} onFiles={handleSourceFiles} />
+               {sourceText.trim() ? (
+                 <div className="source-detect-row" aria-live="polite">
+-                  {sourceFileCount ? <span className="status-pill done">{sourceFileCount} 个本地文件</span> : null}
+                   {separatedSourceInput.supportDocumentCount ? <span className="status-pill done">{separatedSourceInput.supportDocumentCount} 份支持文档</span> : null}
+                   {sourceExtraction.pendingLinkCount ? <span className="status-pill pending">{sourceExtraction.pendingLinkCount} 个视频链接待转写</span> : null}
+                   {sourceExtraction.reusedTextLinkCount ? <span className="status-pill done">{sourceExtraction.reusedTextLinkCount} 个链接复用已有文案</span> : null}
+-                  {nonFileTextMaterialCount ? <span className="status-pill">{nonFileTextMaterialCount} 条文案</span> : null}
+                   {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
+                 </div>
+               ) : null}
+ 
+                 </div>
+-              </details>
++              </section>
+               <div className="writer-actionbar">
+                 <div className="writer-action-controls">
+                   <button
+                     aria-label={useWebResearch ? "关闭联网补充资料" : "开启联网补充资料"}
+-                    aria-pressed={useWebResearch}
++                    role="switch"
++                    aria-checked={useWebResearch}
+                     className={`btn icon-toggle writer-web-toggle ${useWebResearch ? "active" : ""}`}
+                     disabled={!webResearchAvailable}
+                     onClick={() => setUseWebResearch((enabled) => !enabled)}
+@@ -700,13 +668,14 @@ function WriterPageContent() {
+                     type="button"
+                   >
+                     <Globe2 aria-hidden="true" size={16} />
+-                    {useWebResearch ? "已联网" : webResearchAvailable ? "联网" : "联网不可用"}
++                    <span>{webResearchAvailable ? "联网补充" : "联网不可用"}</span>
++                    <span className="writer-switch-track" aria-hidden="true"><span /></span>
+                   </button>
+                   <button
+                     className="btn primary writer-generate-button"
+-                    disabled={!canGenerate}
++                    disabled={!canGenerate || sourceImporting}
+                     onClick={() => void handleGenerate()}
+-                    title={canGenerate
++                    title={sourceImporting ? "正在读取素材，请稍候" : canGenerate
+                       ? selectedStyleRefs.length > 1 ? `并发生成 ${selectedStyleRefs.length} 篇独立文案` : "生成文案"
+                       : "先填写素材或写作要求"}
+                     type="button"
+@@ -724,6 +693,7 @@ function WriterPageContent() {
+                   ) : null}
+                 </div>
+               </div>
++              </div>
+             </div>
+ 
+             <div className="writer-result" id="writer-result">
+@@ -847,18 +817,80 @@ function WriterPageContent() {
+               ) : (
+                 <div className="writer-result-empty">
+                   <span aria-hidden="true"><Sparkles size={20} /></span>
+-                  <strong>{busy === "generate" ? "正在准备第一版" : "把想法，写成你的表达"}</strong>
+-                  <p>{busy === "generate" ? "正在整理素材、风格和写作要求。" : "在左侧交代写作目标，这里将成为你的稿件。"}</p>
++                  <strong>{busy === "generate" ? "正在准备第一版" : "新稿件"}</strong>
++                  <p>{busy === "generate" ? "正在整理素材、风格和写作要求。" : "暂无内容"}</p>
+                   <dl className="writer-start-brief">
+                     <div><dt>参考风格</dt><dd>{activeTitle || "请先选择风格"}</dd></div>
+                     <div><dt>写作准备</dt><dd>{hasTaskInput ? materialStatusLabel : "填写要求或添加素材"}</dd></div>
+-                    <div><dt>接下来</dt><dd>生成初稿 → 编辑打磨 → 保存版本</dd></div>
+                   </dl>
+-                  <span className="writer-empty-note">每一版都能继续修改，找到最合适的表达。</span>
+                 </div>
+               )}
+-              {lastContent ? <div className="writer-document-footer"><span>{lastContent.length.toLocaleString()} 字</span><span>可直接编辑 · 选中文字后在左侧提出修改</span></div> : null}
+-              {lastDraftId ? <WriterPreference key={lastDraftId} draftId={lastDraftId} disabled={Boolean(busy)} onSaved={refresh} /> : null}
++              {lastContent ? <div className="writer-document-footer"><span>{lastContent.length.toLocaleString()} 字</span><span>可直接编辑 · 选中文字后在下方提出修改</span></div> : null}
++              {lastContent ? (
++                <section className="writer-revision-composer" aria-labelledby="writer-revision-title">
++                  <div className="writer-revision-head">
++                    <div>
++                      <h3 id="writer-revision-title">继续修改</h3>
++                      <p>{selectedDraftText ? `已选中 ${selectedDraftText.length} 字` : `基于 V${lastDraftVersion?.revision || 1} · ${lastDraftBase?.targetType === "project" ? lastDraftBase.projectName : lastDraftBase?.accountName || "当前稿件"}`}</p>
++                    </div>
++                    {selectedDraftText ? (
++                      <button className="writer-selection-chip" onClick={handleClearDraftSelection} type="button">
++                        只改选中内容
++                        <X aria-hidden="true" size={13} />
++                      </button>
++                    ) : null}
++                  </div>
++                  <details className="writer-revision-options"><summary>修改设置 · {revisionMode === "edit" ? "按要求微调" : "重新校准风格"}</summary>
++                  <details className="writer-bound-style"><summary>本稿风格与资料</summary><p>续改沿用本稿已保存的风格与资料；写作任务中的风格选择用于另起新稿。</p>{lastDraftBase?.writerContext?.styleText ? <pre>{lastDraftBase.writerContext.styleText}</pre> : <p>此稿没有可展示的风格快照，续改按现有兼容逻辑读取。</p>}</details>
++                  <label className="writer-field">
++                    <span>修改方式</span>
++                    <select className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
++                      onChange={(event) => setRevisionMode(event.target.value as "edit" | "recalibrate")}>
++                      <option value="edit">按要求微调</option>
++                      <option value="recalibrate">重新校准风格</option>
++                    </select>
++                    <span id="writer-revision-mode-help">{revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达；选中段落时只调整选中范围。" : "处理本轮点名的问题，尽量保留其余表达。"}</span>
++                  </label>
++                  </details>
++                  <div className="writer-revision-shortcuts" aria-label="快捷修改要求">
++                    {["更口语一些", "精简表达", "强化开头"].map((instruction) => (
++                      <button className="btn small" disabled={Boolean(busy)} key={instruction} type="button" onClick={() => setRevisionInstruction((current) => current.trim() ? `${current}；${instruction}` : instruction)}>{instruction}</button>
++                    ))}
++                  </div>
++                  <label className="writer-field">
++                    <span>本轮修改要求</span>
++                    <textarea
++                      aria-label="本轮修改要求"
++                      className="writer-textarea revision"
++                      disabled={busy === "generate"}
++                      onChange={(event) => setRevisionInstruction(event.target.value)}
++                      onKeyDown={(event) => {
++                        if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRevise) {
++                          event.preventDefault();
++                          void handleRevise();
++                        }
++                      }}
++                      placeholder="例如：压缩第 2 段，产品参数和原有表达方式保持不变。"
++                      value={revisionInstruction}
++                    />
++                  </label>
++                  <div className="writer-revision-actions">
++                    <span>{selectedDraftText ? "会只调整选中内容，并返回完整新稿。" : "在稿件里选中文字，可直接切换为局部修改。"}</span>
++                    <button
++                      aria-busy={busy === "generate"}
++                      className="btn primary"
++                      disabled={!canRevise}
++                      onClick={() => void handleRevise()}
++                      type="button"
++                    >
++                      <Send aria-hidden="true" size={16} />
++                      {busy === "generate" ? "生成中" : `生成 V${(lastDraftVersion?.revision || 1) + 1}`}
++                    </button>
++                  </div>
++                </section>
++              ) : null}
++
++              {lastDraftId ? <details className="writer-preference-disclosure"><summary>长期写作偏好 · 以后新稿生效</summary><WriterPreference key={lastDraftId} draftId={lastDraftId} disabled={Boolean(busy)} onSaved={refresh} /></details> : null}
+ 
+             </div>
+           </div>
+diff --git a/src/app/writer/writer.css b/src/app/writer/writer.css
+index 5c5c09a..891559f 100644
+--- a/src/app/writer/writer.css
++++ b/src/app/writer/writer.css
+@@ -1961,11 +1961,10 @@
+ .writer-picker-body .writer-reference-option-copy > small { font-size: var(--text-meta); }
+ .writer-picker-body .writer-reference-option:disabled { opacity: 0.75; }
+ .writer-task-context { min-width: 0; flex-shrink: 0; border-top: 1px solid var(--line); padding-top: var(--space-4); }
+-.writer-task-context > summary { display: flex; align-items: center; gap: var(--space-2); color: var(--text-strong); font-size: var(--text-body); font-weight: var(--font-weight-heading); cursor: pointer; list-style: none; }
+-.writer-task-context > summary::-webkit-details-marker,
++.writer-task-context-heading { display: flex; align-items: center; gap: var(--space-2); color: var(--text-strong); font-size: var(--text-body); font-weight: var(--font-weight-heading); }
++.writer-task-context-heading h3 { margin: 0; font: inherit; }
+ .writer-material-item summary::-webkit-details-marker { display: none; }
+-.writer-task-context > summary small { margin-left: auto; color: var(--muted); font-size: var(--text-meta); font-weight: var(--font-weight-regular); }
+-.writer-task-context[open] > summary > svg,
++.writer-task-context-heading small { margin-left: auto; color: var(--muted); font-size: var(--text-meta); font-weight: var(--font-weight-regular); }
+ .writer-material-item details[open] summary > svg { transform: rotate(180deg); }
+ .writer-task-context-body { display: grid; gap: var(--space-5); padding-top: var(--space-4); }
+ .writer-task-context .writer-textarea.main { min-height: 96px; }
+@@ -2048,3 +2047,34 @@
+   .writer-task > .section-title-row { flex-direction: row; justify-content: space-between; }
+   .writer-task-history-trigger { align-self: flex-start; }
+ }
++
++/* Lightweight, in-place style selection and document-side revision. */
++.writer-picker-dropdown {
++  margin-top: var(--space-2);
++  border: 1px solid var(--line);
++  border-radius: var(--radius-md);
++  background: var(--panel-raised);
++}
++.writer-picker-dropdown .writer-picker-body {
++  max-height: 320px;
++  padding: var(--space-2);
++  gap: var(--space-2);
++  overscroll-behavior: contain;
++}
++.writer-picker-dropdown .writer-reference-option { padding: var(--space-2); }
++.writer-picker-dropdown .writer-reference-option em { display: none; }
++.writer-result > .writer-revision-composer { flex-shrink: 0; gap: var(--space-2); }
++.writer-revision-options,
++.writer-preference-disclosure { min-width: 0; color: var(--muted); font-size: var(--text-meta); }
++.writer-revision-options > summary,
++.writer-preference-disclosure > summary { cursor: pointer; padding-block: var(--space-1); }
++.writer-revision-options[open] > .writer-field,
++.writer-preference-disclosure[open] > section { margin-top: var(--space-2); }
++.writer-preference-disclosure { flex-shrink: 0; }
++@media (min-width: 1181px) {
++  .writer-result:has(> .writer-revision-composer) { gap: var(--space-3); }
++  .writer-result:has(> .writer-revision-composer) > .writer-draft-editor {
++    flex: 1 0 160px;
++    min-height: 160px;
++  }
++}
+diff --git a/src/components/AppNav.tsx b/src/components/AppNav.tsx
+index c1de8a2..29565db 100644
+--- a/src/components/AppNav.tsx
++++ b/src/components/AppNav.tsx
+@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ import type { MouseEvent } from "react";
+ import {
+   ImagePlus,
++  Settings2,
+   Activity,
+   Calculator,
+   FileText,
+@@ -37,6 +38,7 @@ const navItems: NavItem[] = [
+   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban, group: "创作工作区" },
+   { href: "/writer", label: "对话写作", icon: PenLine, group: "创作工作区" },
+   { href: "/assets", label: "评论生成", icon: MessageSquarePlus, group: "创作工作区" },
++  { href: "/ai-settings", label: "AI 模型配置", icon: Settings2, group: "数据与工具" },
+   { href: "/tools", label: "工具台", icon: Wrench, group: "数据与工具" },
+   { href: "/gross-margin", label: "数据维护", icon: Calculator, group: "数据与工具" },
+   { href: "/gross-margin/monitor", label: "数据监控", icon: Activity, group: "数据与工具" }
+diff --git a/src/components/ConfirmDialog.tsx b/src/components/ConfirmDialog.tsx
+index 65f8aae..c1af4b8 100644
+--- a/src/components/ConfirmDialog.tsx
++++ b/src/components/ConfirmDialog.tsx
+@@ -1,6 +1,6 @@
+ "use client";
+ 
+-import { useEffect, useRef } from "react";
++import { useRef } from "react";
+ import type { KeyboardEvent, ReactNode } from "react";
+ import { AlertTriangle } from "lucide-react";
+ import { ModalBackdrop } from "@/components/ModalBackdrop";
+@@ -22,25 +22,15 @@ export function ConfirmDialog({
+   onCancel: () => void;
+   onConfirm: () => void;
+ }) {
+-  const panelRef = useRef<HTMLDivElement>(null);
+   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+ 
+-  useEffect(() => {
+-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+-    confirmButtonRef.current?.focus();
+-    return () => {
+-      previouslyFocused?.focus();
+-    };
+-  }, []);
+-
+   return (
+-    <ModalBackdrop disabled={busy} onClose={onCancel}>
++    <ModalBackdrop disabled={busy} onClose={onCancel} initialFocusRef={confirmButtonRef}>
+       <div
+         aria-labelledby="confirm-dialog-title"
+         aria-modal="true"
+         className="modal-panel confirm-panel"
+-        onKeyDown={(event) => handleDialogKeyDown(event, busy, onCancel, onConfirm)}
+-        ref={panelRef}
++        onKeyDown={(event) => handleConfirmKeyDown(event, busy, onConfirm)}
+         role="dialog"
+         tabIndex={-1}
+       >
+@@ -66,47 +56,12 @@ export function ConfirmDialog({
+   );
+ }
+ 
+-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onClose: () => void, onConfirm: () => void) {
+-  if (event.key === "Escape") {
+-    event.preventDefault();
+-    if (!busy) onClose();
+-    return;
+-  }
+-
+-  if (event.key === "Enter" && !busy) {
++function handleConfirmKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onConfirm: () => void) {
++  if (event.key === "Enter" && !busy && !event.nativeEvent.isComposing) {
+     const target = event.target;
+     if (!(target instanceof HTMLButtonElement) || target.type !== "button") {
+       event.preventDefault();
+       onConfirm();
+-      return;
+     }
+   }
+-
+-  if (event.key !== "Tab") return;
+-
+-  const focusable = Array.from(
+-    event.currentTarget.querySelectorAll<HTMLElement>(
+-      'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+-    )
+-  );
+-
+-  if (!focusable.length) {
+-    event.preventDefault();
+-    event.currentTarget.focus();
+-    return;
+-  }
+-
+-  const first = focusable[0];
+-  const last = focusable[focusable.length - 1];
+-
+-  if (document.activeElement === event.currentTarget) {
+-    event.preventDefault();
+-    (event.shiftKey ? last : first).focus();
+-  } else if (event.shiftKey && document.activeElement === first) {
+-    event.preventDefault();
+-    last.focus();
+-  } else if (!event.shiftKey && document.activeElement === last) {
+-    event.preventDefault();
+-    first.focus();
+-  }
+ }
+diff --git a/src/components/MobileAppChrome.tsx b/src/components/MobileAppChrome.tsx
+index 1ae40e8..02c4cee 100644
+--- a/src/components/MobileAppChrome.tsx
++++ b/src/components/MobileAppChrome.tsx
+@@ -16,7 +16,7 @@ const primaryItems = [
+   { href: "/mobile/more", label: "更多", icon: Menu, more: true }
+ ];
+ 
+-const secondaryPrefixes = ["/hotspots", "/project-workbench", "/assets", "/tools", "/gross-margin"];
++const secondaryPrefixes = ["/ai-settings", "/hotspots", "/project-workbench", "/assets", "/tools", "/gross-margin"];
+ 
+ export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
+   const pathname = usePathname();
+diff --git a/src/components/ModalBackdrop.tsx b/src/components/ModalBackdrop.tsx
+index b603d0f..ec5f9a9 100644
+--- a/src/components/ModalBackdrop.tsx
++++ b/src/components/ModalBackdrop.tsx
+@@ -1,13 +1,15 @@
+ "use client";
+ 
+-import type { KeyboardEventHandler, ReactNode } from "react";
++import { useRef, type ReactNode, type RefObject } from "react";
++import { useDialogInteraction } from "./useDialogInteraction";
+ 
+ type ModalBackdropProps = {
+   children: ReactNode;
+   closeLabel?: string;
+   disabled?: boolean;
+   onClose: () => void;
+-  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
++  initialFocusRef?: RefObject<HTMLElement | null>;
++  returnFocusRef?: RefObject<HTMLElement | null>;
+ };
+ 
+ export function ModalBackdrop({
+@@ -15,15 +17,19 @@ export function ModalBackdrop({
+   closeLabel = "关闭弹窗",
+   disabled = false,
+   onClose,
+-  onKeyDown
++  initialFocusRef,
++  returnFocusRef
+ }: ModalBackdropProps) {
++  const rootRef = useRef<HTMLDivElement>(null);
++  const close = useDialogInteraction(rootRef, { onClose, disabled, initialFocusRef, returnFocusRef });
+   return (
+-    <div className="modal-backdrop" onKeyDown={onKeyDown}>
++    <div className="modal-backdrop" ref={rootRef}>
+       <button
+         aria-label={closeLabel}
+         className="modal-backdrop-dismiss"
+         disabled={disabled}
+-        onClick={onClose}
++        onClick={close}
++        tabIndex={-1}
+         type="button"
+       />
+       {children}
+diff --git a/src/components/TaskCenter.tsx b/src/components/TaskCenter.tsx
+index 1b66f69..c765399 100644
+--- a/src/components/TaskCenter.tsx
++++ b/src/components/TaskCenter.tsx
+@@ -8,6 +8,7 @@ import { formatJobErrorMessage } from "@/lib/job-messages";
+ import { getJobResultHref } from "@/lib/job-links";
+ import type { JobRecord } from "@/lib/types";
+ import { useOptionalTasks } from "./TaskProvider";
++import { useDialogInteraction } from "./useDialogInteraction";
+ 
+ const RECENT_COLLAPSED_COUNT = 4;
+ 
+@@ -22,6 +23,8 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
+   const drawerId = useId();
+   const triggerRef = useRef<HTMLButtonElement>(null);
+   const [open, setOpen] = useState(false);
++  const panelRef = useRef<HTMLElement>(null);
++  const closeDialog = useDialogInteraction(panelRef, { active: open && Boolean(tasks), onClose: () => setOpen(false) });
+   const [recentExpanded, setRecentExpanded] = useState(false);
+   const [drawerPosition, setDrawerPosition] = useState<TaskDrawerPosition>();
+   const [stoppingJobId, setStoppingJobId] = useState("");
+@@ -68,16 +71,11 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
+ 
+   useEffect(() => {
+     if (!open) return;
+-    const onKeyDown = (event: KeyboardEvent) => {
+-      if (event.key === "Escape") setOpen(false);
+-    };
+     const onViewportChange = () => updateDrawerPosition();
+ 
+     updateDrawerPosition();
+-    window.addEventListener("keydown", onKeyDown);
+     window.addEventListener("resize", onViewportChange);
+     return () => {
+-      window.removeEventListener("keydown", onKeyDown);
+       window.removeEventListener("resize", onViewportChange);
+     };
+   }, [open, updateDrawerPosition]);
+@@ -132,8 +130,11 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
+ 
+       {open && typeof document !== "undefined" ? createPortal((
+         <>
+-          <button className="task-center-backdrop" aria-label="关闭任务中心" onClick={() => setOpen(false)} type="button" />
++          <button className="task-center-backdrop" aria-label="关闭任务中心" onClick={closeDialog} tabIndex={-1} type="button" />
+           <aside
++            ref={panelRef}
++            tabIndex={-1}
++            aria-modal="true"
+             aria-label="任务中心"
+             className="task-center-drawer"
+             id={drawerId}

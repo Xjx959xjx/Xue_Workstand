@@ -1,3 +1,4 @@
+import { resolveAiPolicy } from "./ai-policy-runtime";
 import { callImageApi, imageConfig } from "./image-runtime";
 import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
 import { getBilibiliVideoReference } from "./opencli";
@@ -104,7 +105,9 @@ export async function generateDraftCover(input: {
   onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
 }) {
   throwIfAborted(input.signal);
-  const config = imageConfig();
+  const baseConfig = imageConfig();
+  const policy = await resolveAiPolicy("image_cover");
+  const config = { ...baseConfig, model: policy.model || baseConfig.model };
   if (!config.apiKey) {
     throw new Error("未配置 IMAGE_API_KEY，无法生成封面图片。");
   }

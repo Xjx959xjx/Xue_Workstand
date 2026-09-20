@@ -4,24 +4,24 @@ import { shortHash } from "./utils";
 export { STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION, styleAnalysisInstruction } from "./writer-prompts";
 export const WRITER_REFERENCE_BUDGET = 14_000;
 const text = z.string().trim().min(1);
-const evidence = z.object({ quote: text.max(500), action: text.max(400), when: text.max(300), avoid: z.string().max(300) });
+const evidence = z.object({ quote: text, action: text, when: text, avoid: z.string() });
 const narrativeSchema = z.object({
-  forms: z.array(text.max(100)).min(1).max(5),
-  beats: z.array(z.object({ purpose: text.max(200), quote: text.max(500) })).min(1).max(6),
+  forms: z.array(text).min(1),
+  beats: z.array(z.object({ purpose: text, quote: text })).min(1),
   bridges: z.array(z.object({
-    before: text.max(500), after: text.max(500), action: text.max(400), requires: text.max(400)
-  })).max(3)
+    before: text, after: text, action: text, requires: text
+  }))
 });
 
 export const styleEvidenceSchema = z.object({
-  genre: text.max(160),
-  purposes: z.array(text.max(100)).min(1).max(6),
-  unsuitable: z.array(text.max(150)).max(6),
-  structure: text.max(700),
+  genre: text,
+  purposes: z.array(text).min(1),
+  unsuitable: z.array(text),
+  structure: text,
   // Older stored analyses remain readable; newly generated analyses must include this field.
   narrative: narrativeSchema.optional(),
-  moves: z.array(evidence).min(1).max(8),
-  limitations: z.array(text.max(200)).max(6)
+  moves: z.array(evidence).min(1),
+  limitations: z.array(text)
 });
 export type StyleEvidence = z.infer<typeof styleEvidenceSchema>;
 
@@ -40,7 +40,7 @@ export type WriterTask = z.infer<typeof writerTaskSchema>;
 
 export const writerPlanSchema = z.object({
   task: writerTaskSchema,
-  selected: z.array(z.object({ id: text, reason: text.max(500) })),
+  selected: z.array(z.object({ id: text, reason: text })),
   applicableStyle: z.array(text.max(700)).max(10),
   notes: z.array(text.max(500)).max(12)
 });
@@ -125,24 +125,18 @@ export function referenceSelectionInstruction() {
 }
 
 export type StyleCardEvidence = { sourceId: string; quote: string; workHash?: string };
-type StyleCardCitation = { sourceId: string; start: number; end: number };
 
 export function validateStyleCardCitations(
   style: string,
-  evidenceQuotes?: StyleCardEvidence[],
-  options: { requireRules?: boolean } = {}
+  evidenceQuotes?: StyleCardEvidence[]
 ) {
-  if (!evidenceQuotes) {
-    if (options.requireRules) throw new Error("风格卡缺少本轮核验原文，原卡已保留，请重新归纳。");
-    return;
-  }
-  const invalidCitation = () => new Error("风格卡缺少有效原文引用或改写了证据，原卡已保留，请重新归纳。");
-  const citations: StyleCardCitation[] = [];
+  if (!style.trim()) throw new Error("风格卡内容为空，原卡已保留，请重新归纳。");
+  const invalidCitation = () => new Error("风格卡原文引用无效或改写了证据，原卡已保留，请重新归纳。");
   const marker = /\[\[([^\]\n]+)\]\]/g;
   let match: RegExpExecArray | null;
   while ((match = marker.exec(style))) {
     const sourceId = match[1];
-    const quotes = evidenceQuotes.filter(item => item.sourceId === sourceId).map(item => item.quote);
+    const quotes = (evidenceQuotes || []).filter(item => item.sourceId === sourceId).map(item => item.quote);
     if (!quotes.length) throw invalidCitation();
     // A known bare source ID is a bibliography pointer, not supporting evidence for a rule.
     if (style[marker.lastIndex] !== "「") continue;
@@ -157,63 +151,8 @@ export function validateStyleCardCitations(
       end = style.indexOf("」", end + 1);
     }
     if (verifiedEnd < 0) throw invalidCitation();
-    citations.push({ sourceId: match[1], start: match.index, end: verifiedEnd + 1 });
     marker.lastIndex = verifiedEnd + 1;
   }
-  if (!citations.length) throw invalidCitation();
-  if (options.requireRules) validateStyleCardRules(style, citations, evidenceQuotes);
-}
-
-function validateStyleCardRules(style: string, citations: StyleCardCitation[], evidence: StyleCardEvidence[]) {
-  // Mask source text before reading Markdown so a heading inside an original quote is not a rule.
-  let markdown = "";
-  let cursor = 0;
-  for (const citation of citations) {
-    markdown += style.slice(cursor, citation.start) + style.slice(citation.start, citation.end).replace(/[^\n\r]/g, " ");
-    cursor = citation.end;
-  }
-  markdown += style.slice(cursor);
-  const fail = (reason: string): never => { throw new Error(`风格卡${reason}，原卡已保留，请重新归纳。`); };
-  if (/^\s*```/m.test(markdown)) fail("应直接输出 Markdown，不能用代码围栏包裹规则");
-  const headings = [...markdown.matchAll(/^(#{1,6})[ \t]+(.+?)[ \t]*\r?$/gm)];
-  const sectionNames = ["风格概览", "跨样本表达倾向", "场景写法与单篇观察", "连续表达示例", "使用边界与证据范围"];
-  const sections = headings.filter(heading => heading[1] === "##");
-  for (const name of sectionNames.filter(name => name !== "连续表达示例")) {
-    if (sections.filter(section => section[2] === name).length !== 1) fail(`缺少或重复“${name}”章节`);
-  }
-  if (sections.some(section => !sectionNames.includes(section[2]))) fail("包含未约定章节，请将规则放入对应的分层章节");
-  const ids = new Set<string>();
-  for (const [index, section] of sections.entries()) {
-    if (section[2] !== "跨样本表达倾向" && section[2] !== "场景写法与单篇观察") continue;
-    const start = section.index! + section[0].length;
-    const end = sections[index + 1]?.index ?? markdown.length;
-    const rules = headings.filter(heading => heading.index! >= start && heading.index! < end);
-    if (!rules.length) {
-      if (!/^本轮不足以确认[。.]?$/.test(markdown.slice(start, end).trim())) fail(`“${section[2]}”缺少编号规则或证据不足说明`);
-      continue;
-    }
-    if (markdown.slice(start, rules[0].index).trim()) fail("包含未编号规则，请按 S/C/O 分层");
-    for (const [ruleIndex, heading] of rules.entries()) {
-      const rule = /^([SCO]\d{2,})[｜|：:、.\s-]+\S/.exec(heading[2]);
-      if (heading[1] !== "###" || !rule) fail("规则标题须使用三级标题及 S/C/O 编号");
-      const id = rule![1];
-      if (ids.has(id)) fail(`规则编号 ${id} 重复`);
-      ids.add(id);
-      if ((id.startsWith("S")) !== (section[2] === "跨样本表达倾向")) fail(`规则 ${id} 所在章节与层级不一致`);
-      const ruleEnd = rules[ruleIndex + 1]?.index ?? end;
-      const body = markdown.slice(heading.index! + heading[0].length, ruleEnd);
-      const lines = body.split(/\r?\n/).map(line => line.replace(/^\s*[-*]\s+/, "").replace(/\*\*/g, "").trim());
-      const fields = id.startsWith("O") ? ["支持范围", "观察", "尚不能确定"] : ["支持范围", "触发条件", "表达动作", "停止与例外"];
-      for (const field of fields) {
-        if (!lines.some(line => new RegExp(`^${field}[:：]\\s*\\S`).test(line))) fail(`规则 ${id} 缺少“${field}”`);
-      }
-      const references = citations.filter(citation => citation.start >= heading.index! && citation.end <= ruleEnd);
-      if (!references.length) fail(`规则 ${id} 缺少原文引用`);
-      const works = new Set(references.map(citation => evidence.find(item => item.sourceId === citation.sourceId)?.workHash || citation.sourceId));
-      if (id.startsWith("S") && works.size < 2) fail(`规则 ${id} 至少需要两个不同作品的原文引用，同文转载不能重复计数`);
-    }
-  }
-  if (!ids.size) fail("没有可核验的分层规则");
 }
 
 export function candidateIndex(candidate: WriterCandidate) {

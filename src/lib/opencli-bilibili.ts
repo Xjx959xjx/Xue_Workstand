@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from "./concurrency";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -198,7 +199,7 @@ export async function getBilibiliRelatedTopicComments(
   }
 
   const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 50));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 100));
   const replyLimit = Math.max(0, Math.min(options.replyLimit ?? 8, 20));
   const stdout = await runPersistentOpenCliBrowserAdapter([
     "bilibili",
@@ -921,26 +922,6 @@ function hasBilibiliStatFields(metadata: Record<string, unknown>) {
     "shares",
     "danmaku"
   ].some((key) => metadata[key] !== undefined && metadata[key] !== null && metadata[key] !== "");
-}
-
-export async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  run: (item: T, index: number) => Promise<R>
-) {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        results[currentIndex] = await run(items[currentIndex], currentIndex);
-      }
-    })
-  );
-  return results;
 }
 
 function formatBilibiliStatsFetchError(

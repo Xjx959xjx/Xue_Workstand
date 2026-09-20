@@ -27,17 +27,17 @@
 }
 
 .pane-subtitle {
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: var(--text-caption);
-  line-height: var(--line-height-caption);
+  font-size: var(--text-meta);
+  line-height: var(--line-height-meta);
 }
 
 .pane-body {
   display: grid;
   align-content: start;
   gap: var(--pane-body-gap);
-  max-height: calc(100vh - 216px);
+  max-height: calc(calc(var(--app-vh) * 100) - 216px);
   overscroll-behavior: contain;
   overflow: auto;
   padding: var(--pane-body-pad);

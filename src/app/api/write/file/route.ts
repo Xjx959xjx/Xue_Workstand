@@ -1,4 +1,5 @@
-import mammoth from "mammoth";
+import { readWordSource } from "@/lib/word-source-import";
+import { readDocumentImages } from "@/lib/ai";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api-route";
 import type { WriterSourceFileImport } from "@/lib/types";
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
 
     const importedFiles: WriterSourceFileImport[] = [];
     for (const file of files) {
-      importedFiles.push(await extractSourceFile(file));
+      importedFiles.push(await extractSourceFile(file, request.signal));
     }
     return NextResponse.json({ files: importedFiles });
   } catch (error) {
@@ -54,16 +55,15 @@ export async function POST(request: Request) {
   }
 }
 
-async function extractSourceFile(file: File): Promise<WriterSourceFileImport> {
+async function extractSourceFile(file: File, signal?: AbortSignal): Promise<WriterSourceFileImport> {
   const extension = getExtension(file.name);
   let text = "";
 
   if (extension === "docx") {
     try {
-      const result = await mammoth.extractRawText({ buffer: Buffer.from(await file.arrayBuffer()) });
-      text = result.value;
-    } catch {
-      throw new WriterFileInputError(`无法读取 DOCX 文件，请确认文件没有损坏：${file.name || "未命名文件"}`);
+      text = await readWordSource(Buffer.from(await file.arrayBuffer()), readDocumentImages, signal);
+    } catch (error) {
+      throw new WriterFileInputError(`无法完整读取 Word「${file.name || "未命名文件"}」：${error instanceof Error ? error.message : "请确认文件没有损坏"}`);
     }
   } else if (TEXT_EXTENSIONS.has(extension)) {
     text = await file.text();
@@ -77,9 +77,9 @@ async function extractSourceFile(file: File): Promise<WriterSourceFileImport> {
   return {
     name: file.name || `未命名.${extension}`,
     mimeType: file.type || (extension === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/plain"),
-    text: normalized.slice(0, MAX_TEXT_CHARACTERS),
+    text: extension === "docx" ? normalized : normalized.slice(0, MAX_TEXT_CHARACTERS),
     originalCharacters: normalized.length,
-    truncated: normalized.length > MAX_TEXT_CHARACTERS
+    truncated: extension !== "docx" && normalized.length > MAX_TEXT_CHARACTERS
   };
 }
 

@@ -8,6 +8,7 @@ import { formatJobErrorMessage } from "@/lib/job-messages";
 import { getJobResultHref } from "@/lib/job-links";
 import type { JobRecord } from "@/lib/types";
 import { useOptionalTasks } from "./TaskProvider";
+import { useDialogInteraction } from "./useDialogInteraction";
 
 const RECENT_COLLAPSED_COUNT = 4;
 
@@ -22,6 +23,8 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
   const drawerId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const closeDialog = useDialogInteraction(panelRef, { active: open && Boolean(tasks), onClose: () => setOpen(false) });
   const [recentExpanded, setRecentExpanded] = useState(false);
   const [drawerPosition, setDrawerPosition] = useState<TaskDrawerPosition>();
   const [stoppingJobId, setStoppingJobId] = useState("");
@@ -68,16 +71,11 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
 
   useEffect(() => {
     if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
     const onViewportChange = () => updateDrawerPosition();
 
     updateDrawerPosition();
-    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("resize", onViewportChange);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("resize", onViewportChange);
     };
   }, [open, updateDrawerPosition]);
@@ -132,8 +130,11 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
 
       {open && typeof document !== "undefined" ? createPortal((
         <>
-          <button className="task-center-backdrop" aria-label="关闭任务中心" onClick={() => setOpen(false)} type="button" />
+          <button className="task-center-backdrop" aria-label="关闭任务中心" onClick={closeDialog} tabIndex={-1} type="button" />
           <aside
+            ref={panelRef}
+            tabIndex={-1}
+            aria-modal="true"
             aria-label="任务中心"
             className="task-center-drawer"
             id={drawerId}

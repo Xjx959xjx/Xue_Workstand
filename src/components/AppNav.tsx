@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
   ImagePlus,
+  Settings2,
   Activity,
   Calculator,
   FileText,
@@ -37,6 +38,7 @@ const navItems: NavItem[] = [
   { href: "/project-workbench", label: "项目工作台", icon: FolderKanban, group: "创作工作区" },
   { href: "/writer", label: "对话写作", icon: PenLine, group: "创作工作区" },
   { href: "/assets", label: "评论生成", icon: MessageSquarePlus, group: "创作工作区" },
+  { href: "/ai-settings", label: "AI 模型配置", icon: Settings2, group: "数据与工具" },
   { href: "/tools", label: "工具台", icon: Wrench, group: "数据与工具" },
   { href: "/gross-margin", label: "数据维护", icon: Calculator, group: "数据与工具" },
   { href: "/gross-margin/monitor", label: "数据监控", icon: Activity, group: "数据与工具" }

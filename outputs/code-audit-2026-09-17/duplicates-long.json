@@ -1,0 +1,1159 @@
+{
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 16,
+        "endLoc": {
+          "column": 46,
+          "line": 16,
+          "position": 530
+        },
+        "name": "app/api/batch-transcribe/route.ts",
+        "start": 3,
+        "startLoc": {
+          "column": 59,
+          "line": 3,
+          "position": 142
+        }
+      },
+      "format": "typescript",
+      "fragment": "import { runBatchTranscribe } from \"@/lib/batch-transcribe\";\nimport { platforms } from \"@/lib/types\";\n\nexport const runtime = \"nodejs\";\n\nconst schema = z.object({\n  platform: z.enum(platforms),\n  accountId: z.string().min(1),\n  limit: z.union([z.number().int().min(1), z.literal(\"all\")]).default(5),\n  videoIds: z.array(z.string().min(1)).min(1).optional(),\n  updateStyle: z.boolean().optional()\n});\n\nexport async function POST(request: Request) {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 14,
+      "secondFile": {
+        "end": 17,
+        "endLoc": {
+          "column": 46,
+          "line": 17,
+          "position": 585
+        },
+        "name": "app/api/batch-transcribe/stream/route.ts",
+        "start": 4,
+        "startLoc": {
+          "column": 52,
+          "line": 4,
+          "position": 197
+        }
+      },
+      "tokens": 131
+    },
+    {
+      "firstFile": {
+        "end": 30,
+        "endLoc": {
+          "column": 5,
+          "line": 30,
+          "position": 1003
+        },
+        "name": "app/api/drafts/route.ts",
+        "start": 16,
+        "startLoc": {
+          "column": 31,
+          "line": 16,
+          "position": 636
+        }
+      },
+      "format": "typescript",
+      "fragment": "    platform: z.enum(platforms),\n    accountId: z.string().min(1),\n    accountName: z.string().min(1),\n    videoIds: z.array(z.string()).optional()\n  }),\n  z.object({\n    targetType: z.literal(\"project\"),\n    projectId: z.string().min(1),\n    projectName: z.string().min(1),\n    sourceAccountIds: z.array(z.string()).optional(),\n    sourceMaterialIds: z.array(z.string()).optional()\n  })\n]);\n\nconst draftContextFields = {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 15,
+      "secondFile": {
+        "end": 70,
+        "endLoc": {
+          "column": 5,
+          "line": 70,
+          "position": 2118
+        },
+        "name": "lib/storage/schemas.ts",
+        "start": 56,
+        "startLoc": {
+          "column": 28,
+          "line": 56,
+          "position": 1751
+        }
+      },
+      "tokens": 125
+    },
+    {
+      "firstFile": {
+        "end": 69,
+        "endLoc": {
+          "column": 22,
+          "line": 69,
+          "position": 2471
+        },
+        "name": "app/api/drafts/route.ts",
+        "start": 59,
+        "startLoc": {
+          "column": 13,
+          "line": 59,
+          "position": 2119
+        }
+      },
+      "format": "typescript",
+      "fragment": "  accountName: z.string().min(1),\n  title: z.string().min(1),\n  mode: z.enum([\"topic\", \"rewrite\"]),\n  prompt: z.string().min(1),\n  originalSourceInput: z.string().optional(),\n  input: z.string().optional(),\n  supportDocLinks: z.string().optional(),\n  ...draftContextFields,\n  content: z.string().min(1),\n  assets: disallowedDraftAssetsSchema,\n  styleRef: z.object({",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 11,
+      "secondFile": {
+        "end": 90,
+        "endLoc": {
+          "column": 22,
+          "line": 90,
+          "position": 3087
+        },
+        "name": "app/api/drafts/route.ts",
+        "start": 80,
+        "startLoc": {
+          "column": 13,
+          "line": 80,
+          "position": 2735
+        }
+      },
+      "tokens": 114
+    },
+    {
+      "firstFile": {
+        "end": 80,
+        "endLoc": {
+          "column": 7,
+          "line": 80,
+          "position": 2845
+        },
+        "name": "app/assets/_components/EngagementHistoryPane.tsx",
+        "start": 43,
+        "startLoc": {
+          "column": 38,
+          "line": 43,
+          "position": 1473
+        }
+      },
+      "format": "tsx",
+      "fragment": "  }, [records.length, resultRecord?.id]);\n\n  useEffect(() => {\n    if (!contextMenu) return;\n\n    const handlePointerDown = (event: PointerEvent) => {\n      if (contextMenuRef.current?.contains(event.target as Node)) return;\n      setContextMenu(null);\n    };\n\n    const handleScroll = () => setContextMenu(null);\n    const handleKeyDown = (event: KeyboardEvent) => {\n      if (event.key === \"Escape\") setContextMenu(null);\n    };\n\n    window.addEventListener(\"pointerdown\", handlePointerDown);\n    window.addEventListener(\"scroll\", handleScroll, true);\n    window.addEventListener(\"keydown\", handleKeyDown);\n    return () => {\n      window.removeEventListener(\"pointerdown\", handlePointerDown);\n      window.removeEventListener(\"scroll\", handleScroll, true);\n      window.removeEventListener(\"keydown\", handleKeyDown);\n    };\n  }, [contextMenu]);\n\n  const contextMenuStyle = useMemo(() => {\n    if (!contextMenu) return undefined;\n    const menuWidth = 172;\n    const menuHeight = 96;\n    const viewportWidth = typeof window === \"undefined\" ? contextMenu.x + menuWidth : window.innerWidth;\n    const viewportHeight = typeof window === \"undefined\" ? contextMenu.y + menuHeight : window.innerHeight;\n    return {\n      left: Math.max(8, Math.min(contextMenu.x, viewportWidth - menuWidth - 8)),\n      top: Math.max(8, Math.min(contextMenu.y, viewportHeight - menuHeight - 8))\n    };\n  }, [contextMenu]);\n\n  const handleConfirmDelete = async () => {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 38,
+      "secondFile": {
+        "end": 190,
+        "endLoc": {
+          "column": 7,
+          "line": 190,
+          "position": 7272
+        },
+        "name": "app/writer/_components/WriterHistoryPanel.tsx",
+        "start": 154,
+        "startLoc": {
+          "column": 23,
+          "line": 154,
+          "position": 5901
+        }
+      },
+      "tokens": 280
+    },
+    {
+      "firstFile": {
+        "end": 292,
+        "endLoc": {
+          "column": 1,
+          "line": 292,
+          "position": 9757
+        },
+        "name": "app/douyin-hotlist/_components/AccountManagementDrawer.tsx",
+        "start": 271,
+        "startLoc": {
+          "column": 4,
+          "line": 271,
+          "position": 9205
+        }
+      },
+      "format": "tsx",
+      "fragment": "    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 22,
+      "secondFile": {
+        "end": 230,
+        "endLoc": {
+          "column": 1,
+          "line": 230,
+          "position": 8616
+        },
+        "name": "app/gross-margin/_components/GrossMarginBulkMonitorModal.tsx",
+        "start": 208,
+        "startLoc": {
+          "column": 4,
+          "line": 208,
+          "position": 8063
+        }
+      },
+      "tokens": 136
+    },
+    {
+      "firstFile": {
+        "end": 292,
+        "endLoc": {
+          "column": 1,
+          "line": 292,
+          "position": 9757
+        },
+        "name": "app/douyin-hotlist/_components/AccountManagementDrawer.tsx",
+        "start": 271,
+        "startLoc": {
+          "column": 4,
+          "line": 271,
+          "position": 9205
+        }
+      },
+      "format": "tsx",
+      "fragment": "    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 22,
+      "secondFile": {
+        "end": 112,
+        "endLoc": {
+          "column": 1,
+          "line": 112,
+          "position": 3208
+        },
+        "name": "components/ConfirmDialog.tsx",
+        "start": 90,
+        "startLoc": {
+          "column": 4,
+          "line": 90,
+          "position": 2655
+        }
+      },
+      "tokens": 136
+    },
+    {
+      "firstFile": {
+        "end": 230,
+        "endLoc": {
+          "column": 1,
+          "line": 230,
+          "position": 8616
+        },
+        "name": "app/gross-margin/_components/GrossMarginBulkMonitorModal.tsx",
+        "start": 199,
+        "startLoc": {
+          "column": 15,
+          "line": 199,
+          "position": 7762
+        }
+      },
+      "format": "tsx",
+      "fragment": "    if (!busy) onClose();\n    return;\n  }\n\n  if (event.key !== \"Tab\") return;\n\n  const focusable = Array.from(\n    event.currentTarget.querySelectorAll<HTMLElement>(\n      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex=\"-1\"])'\n    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 32,
+      "secondFile": {
+        "end": 245,
+        "endLoc": {
+          "column": 1,
+          "line": 245,
+          "position": 9133
+        },
+        "name": "app/gross-margin/_components/GrossMarginImportModal.tsx",
+        "start": 214,
+        "startLoc": {
+          "column": 4,
+          "line": 214,
+          "position": 8279
+        }
+      },
+      "tokens": 170
+    },
+    {
+      "firstFile": {
+        "end": 245,
+        "endLoc": {
+          "column": 1,
+          "line": 245,
+          "position": 9133
+        },
+        "name": "app/gross-margin/_components/GrossMarginImportModal.tsx",
+        "start": 208,
+        "startLoc": {
+          "column": 53,
+          "line": 208,
+          "position": 8120
+        }
+      },
+      "format": "tsx",
+      "fragment": "  return value.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n}\n\nfunction handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {\n  if (event.key === \"Escape\") {\n    event.preventDefault();\n    onClose();\n    return;\n  }\n\n  if (event.key !== \"Tab\") return;\n\n  const focusable = Array.from(\n    event.currentTarget.querySelectorAll<HTMLElement>(\n      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex=\"-1\"])'\n    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 38,
+      "secondFile": {
+        "end": 336,
+        "endLoc": {
+          "column": 1,
+          "line": 336,
+          "position": 11482
+        },
+        "name": "app/gross-margin/_components/GrossMarginPriceTableEditorModal.tsx",
+        "start": 299,
+        "startLoc": {
+          "column": 39,
+          "line": 299,
+          "position": 10469
+        }
+      },
+      "tokens": 205
+    },
+    {
+      "firstFile": {
+        "end": 245,
+        "endLoc": {
+          "column": 1,
+          "line": 245,
+          "position": 9133
+        },
+        "name": "app/gross-margin/_components/GrossMarginImportModal.tsx",
+        "start": 208,
+        "startLoc": {
+          "column": 53,
+          "line": 208,
+          "position": 8120
+        }
+      },
+      "format": "tsx",
+      "fragment": "  return value.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n}\n\nfunction handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {\n  if (event.key === \"Escape\") {\n    event.preventDefault();\n    onClose();\n    return;\n  }\n\n  if (event.key !== \"Tab\") return;\n\n  const focusable = Array.from(\n    event.currentTarget.querySelectorAll<HTMLElement>(\n      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex=\"-1\"])'\n    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 38,
+      "secondFile": {
+        "end": 196,
+        "endLoc": {
+          "column": 1,
+          "line": 196,
+          "position": 6797
+        },
+        "name": "app/gross-margin/_components/GrossMarginTemplateModal.tsx",
+        "start": 159,
+        "startLoc": {
+          "column": 63,
+          "line": 159,
+          "position": 5784
+        }
+      },
+      "tokens": 205
+    },
+    {
+      "firstFile": {
+        "end": 245,
+        "endLoc": {
+          "column": 1,
+          "line": 245,
+          "position": 9133
+        },
+        "name": "app/gross-margin/_components/GrossMarginImportModal.tsx",
+        "start": 211,
+        "startLoc": {
+          "column": 0,
+          "line": 211,
+          "position": 8125
+        }
+      },
+      "format": "tsx",
+      "fragment": "function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {\n  if (event.key === \"Escape\") {\n    event.preventDefault();\n    onClose();\n    return;\n  }\n\n  if (event.key !== \"Tab\") return;\n\n  const focusable = Array.from(\n    event.currentTarget.querySelectorAll<HTMLElement>(\n      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex=\"-1\"])'\n    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 35,
+      "secondFile": {
+        "end": 75,
+        "endLoc": {
+          "column": 1,
+          "line": 75,
+          "position": 2015
+        },
+        "name": "app/library/_components/LibraryEditorModal.tsx",
+        "start": 41,
+        "startLoc": {
+          "column": 0,
+          "line": 41,
+          "position": 1007
+        }
+      },
+      "tokens": 203
+    },
+    {
+      "firstFile": {
+        "end": 245,
+        "endLoc": {
+          "column": 1,
+          "line": 245,
+          "position": 9133
+        },
+        "name": "app/gross-margin/_components/GrossMarginImportModal.tsx",
+        "start": 211,
+        "startLoc": {
+          "column": 64,
+          "line": 211,
+          "position": 8189
+        }
+      },
+      "format": "tsx",
+      "fragment": "function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {\n  if (event.key === \"Escape\") {\n    event.preventDefault();\n    onClose();\n    return;\n  }\n\n  if (event.key !== \"Tab\") return;\n\n  const focusable = Array.from(\n    event.currentTarget.querySelectorAll<HTMLElement>(\n      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex=\"-1\"])'\n    )\n  );\n\n  if (!focusable.length) {\n    event.preventDefault();\n    event.currentTarget.focus();\n    return;\n  }\n\n  const first = focusable[0];\n  const last = focusable[focusable.length - 1];\n\n  if (document.activeElement === event.currentTarget) {\n    event.preventDefault();\n    (event.shiftKey ? last : first).focus();\n  } else if (event.shiftKey && document.activeElement === first) {\n    event.preventDefault();\n    last.focus();\n  } else if (!event.shiftKey && document.activeElement === last) {\n    event.preventDefault();\n    first.focus();\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 35,
+      "secondFile": {
+        "end": 83,
+        "endLoc": {
+          "column": 1,
+          "line": 83,
+          "position": 2252
+        },
+        "name": "app/writer/_components/WriterDialogModal.tsx",
+        "start": 49,
+        "startLoc": {
+          "column": 74,
+          "line": 49,
+          "position": 1308
+        }
+      },
+      "tokens": 195
+    },
+    {
+      "firstFile": {
+        "end": 2218,
+        "endLoc": {
+          "column": 20,
+          "line": 2218,
+          "position": 44968
+        },
+        "name": "app/gross-margin/gross-margin.css",
+        "start": 2198,
+        "startLoc": {
+          "column": 30,
+          "line": 2198,
+          "position": 44537
+        }
+      },
+      "format": "css",
+      "fragment": "  .gross-monitor-search-field {\n    width: 100%;\n    min-width: 0;\n  }\n\n  .gross-monitor-filter-group {\n    display: grid;\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\n  }\n\n  .gross-monitor-date-range {\n    display: grid;\n    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);\n  }\n\n  .gross-monitor-inline-input,\n  .gross-monitor-inline-select,\n  .gross-monitor-inline-date {\n    width: 100%;\n    min-width: 0;\n    max-width: none;",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 21,
+      "secondFile": {
+        "end": 2307,
+        "endLoc": {
+          "column": 20,
+          "line": 2307,
+          "position": 46646
+        },
+        "name": "app/gross-margin/gross-margin.css",
+        "start": 2287,
+        "startLoc": {
+          "column": 28,
+          "line": 2287,
+          "position": 46215
+        }
+      },
+      "tokens": 129
+    },
+    {
+      "firstFile": {
+        "end": 50,
+        "endLoc": {
+          "column": 9,
+          "line": 50,
+          "position": 2195
+        },
+        "name": "app/library/_hooks/useLibrarySelection.ts",
+        "start": 37,
+        "startLoc": {
+          "column": 3,
+          "line": 37,
+          "position": 1720
+        }
+      },
+      "format": "typescript",
+      "fragment": "  );\n\n  const replaceParams = useCallback((updates: Record<string, string | null>) => {\n    const params = new URLSearchParams(searchParams.toString());\n    for (const [key, value] of Object.entries(updates)) {\n      if (value) params.set(key, value);\n      else params.delete(key);\n    }\n    const query = params.toString();\n    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });\n  }, [pathname, router, searchParams]);\n\n  useEffect(() => {\n    if (!accounts.length && requestedAccountId) return;",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 14,
+      "secondFile": {
+        "end": 145,
+        "endLoc": {
+          "column": 9,
+          "line": 145,
+          "position": 6498
+        },
+        "name": "app/library/_hooks/useLibrarySelection.ts",
+        "start": 132,
+        "startLoc": {
+          "column": 59,
+          "line": 132,
+          "position": 6023
+        }
+      },
+      "tokens": 122
+    },
+    {
+      "firstFile": {
+        "end": 193,
+        "endLoc": {
+          "column": 1,
+          "line": 193,
+          "position": 8659
+        },
+        "name": "app/project-workbench/_components/ProjectCaseDrawer.tsx",
+        "start": 175,
+        "startLoc": {
+          "column": 11,
+          "line": 175,
+          "position": 8123
+        }
+      },
+      "format": "tsx",
+      "fragment": "          )}\n        </div>\n      </div>\n    </ModalBackdrop>\n  );\n}\n\nfunction ProjectLinkJobList({ jobs }: { jobs: LinkJob[] }) {\n  return (\n    <div className=\"project-workbench-job-list\">\n      {jobs.map((job) => (\n        <div className={`project-workbench-job ${job.status}`} key={job.url}>\n          <span className={`status-pill ${job.status === \"completed\" ? \"done\" : job.status === \"failed\" ? \"failed\" : \"pending\"}`}>{formatJob(job.status)}</span>\n          <span>{job.message || job.url}</span>\n        </div>\n      ))}\n    </div>\n  );\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 19,
+      "secondFile": {
+        "end": 98,
+        "endLoc": {
+          "column": 1,
+          "line": 98,
+          "position": 3657
+        },
+        "name": "app/project-workbench/_components/SourceAddModal.tsx",
+        "start": 80,
+        "startLoc": {
+          "column": 66,
+          "line": 80,
+          "position": 3121
+        }
+      },
+      "tokens": 145
+    },
+    {
+      "firstFile": {
+        "end": 184,
+        "endLoc": {
+          "column": 8,
+          "line": 184,
+          "position": 7368
+        },
+        "name": "lib/account-collection.ts",
+        "start": 162,
+        "startLoc": {
+          "column": 36,
+          "line": 162,
+          "position": 6735
+        }
+      },
+      "format": "typescript",
+      "fragment": "function isPlatformAccountProfileUrl(platform: Platform, input: string) {\n  try {\n    const parsed = new URL(addHttpScheme(input));\n    const host = parsed.hostname.toLowerCase();\n    const pathname = parsed.pathname;\n\n    if (platform === \"bilibili\") {\n      return host.endsWith(\"bilibili.com\") && /^\\/\\d+/.test(pathname);\n    }\n\n    return (\n      /(^|\\.)douyin\\.com$/.test(host) || /(^|\\.)iesdouyin\\.com$/.test(host)\n    ) && (/\\/(?:user|share\\/user)\\//i.test(pathname) || parsed.searchParams.has(\"sec_uid\"));\n  } catch {\n    return false;\n  }\n}\n\nfunction addHttpScheme(input: string) {\n  return /^https?:\\/\\//i.test(input) ? input : `https://${input}`;\n}\n\nfunction removeInlineReferenceLabel(input: string) {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 23,
+      "secondFile": {
+        "end": 531,
+        "endLoc": {
+          "column": 8,
+          "line": 531,
+          "position": 17865
+        },
+        "name": "lib/douyin-hotlist.ts",
+        "start": 509,
+        "startLoc": {
+          "column": 30,
+          "line": 509,
+          "position": 17232
+        }
+      },
+      "tokens": 132
+    },
+    {
+      "firstFile": {
+        "end": 894,
+        "endLoc": {
+          "column": 5,
+          "line": 894,
+          "position": 30205
+        },
+        "name": "lib/ai.ts",
+        "start": 878,
+        "startLoc": {
+          "column": 2,
+          "line": 878,
+          "position": 29789
+        }
+      },
+      "format": "typescript",
+      "fragment": "  const lines = rawEvent\n    .split(\"\\n\")\n    .map((line) => line.trim())\n    .filter(Boolean);\n  const dataLines = lines\n    .filter((line) => line.startsWith(\"data:\"))\n    .map((line) => line.replace(/^data:\\s*/, \"\"));\n\n  for (const payload of dataLines) {\n    if (!payload || payload === \"[DONE]\") continue;\n\n    let parsed: unknown;\n    try {\n      parsed = JSON.parse(payload);\n    } catch {\n      continue;\n    }",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 17,
+      "secondFile": {
+        "end": 912,
+        "endLoc": {
+          "column": 5,
+          "line": 912,
+          "position": 33788
+        },
+        "name": "lib/model-runtime.ts",
+        "start": 896,
+        "startLoc": {
+          "column": 2,
+          "line": 896,
+          "position": 33372
+        }
+      },
+      "tokens": 104
+    },
+    {
+      "firstFile": {
+        "end": 1006,
+        "endLoc": {
+          "column": 1,
+          "line": 1006,
+          "position": 34655
+        },
+        "name": "lib/ai.ts",
+        "start": 953,
+        "startLoc": {
+          "column": 3,
+          "line": 953,
+          "position": 32660
+        }
+      },
+      "format": "typescript",
+      "fragment": "  };\n}\n\nfunction extractChatCompletionDelta(data: unknown) {\n  if (!data || typeof data !== \"object\") return \"\";\n  const object = data as Record<string, unknown>;\n  const choices = Array.isArray(object.choices) ? object.choices : [];\n  return choices\n    .map((choice) => {\n      if (!choice || typeof choice !== \"object\") return \"\";\n      const choiceObject = choice as Record<string, unknown>;\n      const delta = choiceObject.delta && typeof choiceObject.delta === \"object\"\n        ? (choiceObject.delta as Record<string, unknown>)\n        : {};\n      const message = choiceObject.message && typeof choiceObject.message === \"object\"\n        ? (choiceObject.message as Record<string, unknown>)\n        : {};\n      return stringFromChatContent(delta.content) || stringFromChatContent(message.content) || \"\";\n    })\n    .filter(Boolean)\n    .join(\"\");\n}\n\nfunction extractChatCompletionText(data: unknown) {\n  if (!data || typeof data !== \"object\") return \"\";\n  const object = data as Record<string, unknown>;\n  const choices = Array.isArray(object.choices) ? object.choices : [];\n\n  return choices\n    .map((choice) => {\n      if (!choice || typeof choice !== \"object\") return \"\";\n      const choiceObject = choice as Record<string, unknown>;\n      const message = choiceObject.message && typeof choiceObject.message === \"object\"\n        ? (choiceObject.message as Record<string, unknown>)\n        : {};\n      return stringFromChatContent(message.content) || extractChatCompletionDelta(choiceObject);\n    })\n    .filter(Boolean)\n    .join(\"\\n\")\n    .trim();\n}\n\nfunction stringFromChatContent(content: unknown): string {\n  if (typeof content === \"string\") return content;\n  if (!Array.isArray(content)) return \"\";\n  return content\n    .map((part) => {\n      if (typeof part === \"string\") return part;\n      if (!part || typeof part !== \"object\") return \"\";\n      const object = part as Record<string, unknown>;\n      return typeof object.text === \"string\" ? object.text : \"\";\n    })\n    .join(\"\");\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 54,
+      "secondFile": {
+        "end": 971,
+        "endLoc": {
+          "column": 1,
+          "line": 971,
+          "position": 35884
+        },
+        "name": "lib/model-runtime.ts",
+        "start": 918,
+        "startLoc": {
+          "column": 11,
+          "line": 918,
+          "position": 33889
+        }
+      },
+      "tokens": 429
+    },
+    {
+      "firstFile": {
+        "end": 1300,
+        "endLoc": {
+          "column": 7,
+          "line": 1300,
+          "position": 44502
+        },
+        "name": "lib/ai.ts",
+        "start": 1281,
+        "startLoc": {
+          "column": 37,
+          "line": 1281,
+          "position": 43961
+        }
+      },
+      "format": "typescript",
+      "fragment": "  const usedTools = new Set<string>();\n\n  for (const rawEvent of body.split(\"\\n\\n\")) {\n    const lines = rawEvent\n      .split(\"\\n\")\n      .map((line) => line.trim())\n      .filter(Boolean);\n    const dataLines = lines\n      .filter((line) => line.startsWith(\"data:\"))\n      .map((line) => line.replace(/^data:\\s*/, \"\"));\n\n    for (const payload of dataLines) {\n      if (!payload || payload === \"[DONE]\") continue;\n\n      let parsed: Record<string, unknown>;\n      try {\n        parsed = JSON.parse(payload) as Record<string, unknown>;\n      } catch {\n        continue;\n      }",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 20,
+      "secondFile": {
+        "end": 789,
+        "endLoc": {
+          "column": 7,
+          "line": 789,
+          "position": 29619
+        },
+        "name": "lib/model-runtime.ts",
+        "start": 770,
+        "startLoc": {
+          "column": 25,
+          "line": 770,
+          "position": 29078
+        }
+      },
+      "tokens": 130
+    },
+    {
+      "firstFile": {
+        "end": 1431,
+        "endLoc": {
+          "column": 8,
+          "line": 1431,
+          "position": 49472
+        },
+        "name": "lib/ai.ts",
+        "start": 1392,
+        "startLoc": {
+          "column": 18,
+          "line": 1392,
+          "position": 48130
+        }
+      },
+      "format": "typescript",
+      "fragment": "  return undefined;\n}\n\nfunction extractResponseTextValue(data: unknown): string {\n  if (!data || typeof data !== \"object\") return \"\";\n  const object = data as Record<string, unknown>;\n\n  if (typeof object.output_text === \"string\") return object.output_text;\n  if (typeof object.text === \"string\") return object.text;\n  if (object.response) return extractResponseTextValue(object.response);\n  if (object.item) return extractResponseTextValue(object.item);\n  if (object.part) return extractResponseTextValue(object.part);\n  if (Array.isArray(object.content)) return extractResponseContentText(object.content);\n  if (!Array.isArray(object.output)) return \"\";\n\n  return object.output\n    .map((item) => extractResponseTextValue(item))\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\nfunction extractResponseContentText(content: unknown[]) {\n  return content\n    .map((item) => {\n      if (typeof item === \"string\") return item;\n      return extractResponseTextValue(item);\n    })\n    .filter(Boolean)\n    .join(\"\\n\");\n}\n\nfunction mergeResponseText(current: string, candidate: string) {\n  if (!candidate.trim()) return current;\n  if (!current) return candidate;\n  if (candidate === current || current.startsWith(candidate)) return current;\n  if (candidate.startsWith(current)) return candidate;\n  return candidate.length > current.length ? candidate : current;\n}\n\nfunction syncResponseText(current: string, candidate: string, onDelta: (delta: string) => void) {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 40,
+      "secondFile": {
+        "end": 881,
+        "endLoc": {
+          "column": 8,
+          "line": 881,
+          "position": 32786
+        },
+        "name": "lib/model-runtime.ts",
+        "start": 842,
+        "startLoc": {
+          "column": 46,
+          "line": 842,
+          "position": 31444
+        }
+      },
+      "tokens": 294
+    },
+    {
+      "firstFile": {
+        "end": 1460,
+        "endLoc": {
+          "column": 1,
+          "line": 1460,
+          "position": 50380
+        },
+        "name": "lib/ai.ts",
+        "start": 1445,
+        "startLoc": {
+          "column": 13,
+          "line": 1445,
+          "position": 49845
+        }
+      },
+      "format": "typescript",
+      "fragment": "  return next;\n}\n\nfunction extractResponseErrorMessage(data: unknown) {\n  if (!data || typeof data !== \"object\") return \"\";\n  const object = data as Record<string, unknown>;\n  const error = object.error;\n  if (typeof error === \"string\") return error;\n  if (error && typeof error === \"object\") {\n    const errorObject = error as Record<string, unknown>;\n    return [errorObject.message, errorObject.code, errorObject.type]\n      .filter((part): part is string => typeof part === \"string\" && Boolean(part.trim()))\n      .join(\" \");\n  }\n  return \"\";\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 16,
+      "secondFile": {
+        "end": 893,
+        "endLoc": {
+          "column": 1,
+          "line": 893,
+          "position": 33308
+        },
+        "name": "lib/model-runtime.ts",
+        "start": 878,
+        "startLoc": {
+          "column": 64,
+          "line": 878,
+          "position": 32773
+        }
+      },
+      "tokens": 124
+    },
+    {
+      "firstFile": {
+        "end": 1944,
+        "endLoc": {
+          "column": 8,
+          "line": 1944,
+          "position": 67609
+        },
+        "name": "lib/ai.ts",
+        "start": 1932,
+        "startLoc": {
+          "column": 2,
+          "line": 1932,
+          "position": 66803
+        }
+      },
+      "format": "typescript",
+      "fragment": "  const materialAnalysis = source.materialAnalysis\n    ? [\n        `素材底稿：${source.materialAnalysis.mode === \"multimodal\" ? \"转写 + 画面描述\" : \"标题/转写线索\"}`,\n        `状态：${source.materialAnalysis.status}`,\n        source.materialAnalysis.visualNotes ? `画面描述：${source.materialAnalysis.visualNotes}` : \"\",\n        source.materialAnalysis.structureNotes ? `镜头顺序：${source.materialAnalysis.structureNotes}` : \"\",\n        source.materialAnalysis.titleNotes ? `标题/封面线索：${source.materialAnalysis.titleNotes}` : \"\",\n        source.materialAnalysis.fallbackReason ? `说明：${source.materialAnalysis.fallbackReason}` : \"\"\n      ]\n        .filter(Boolean)\n        .join(\"\\n\")\n    : \"素材底稿：只有转写，未做原视频画面描述\";\n  return [",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 13,
+      "secondFile": {
+        "end": 2403,
+        "endLoc": {
+          "column": 12,
+          "line": 2403,
+          "position": 86432
+        },
+        "name": "lib/ai.ts",
+        "start": 2391,
+        "startLoc": {
+          "column": 6,
+          "line": 2391,
+          "position": 85578
+        }
+      },
+      "tokens": 108
+    },
+    {
+      "firstFile": {
+        "end": 427,
+        "endLoc": {
+          "column": 8,
+          "line": 427,
+          "position": 15504
+        },
+        "name": "lib/capability-bridge.ts",
+        "start": 414,
+        "startLoc": {
+          "column": 52,
+          "line": 414,
+          "position": 15103
+        }
+      },
+      "format": "typescript",
+      "fragment": "    const [a, b] = normalized.split(\".\").map(Number);\n    return a === 0 || a === 10 || a === 127 || a >= 224 ||\n      (a === 100 && b >= 64 && b <= 127) ||\n      (a === 169 && b === 254) ||\n      (a === 172 && b >= 16 && b <= 31) ||\n      (a === 192 && b === 168);\n  }\n  if (isIP(normalized) === 6) {\n    return normalized === \"::\" || normalized === \"::1\" || /^(?:fc|fd)/.test(normalized) || /^fe[89ab]/.test(normalized);\n  }\n  return true;\n}\n\nfunction sanitizeBridgeError(value: string) {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 14,
+      "secondFile": {
+        "end": 606,
+        "endLoc": {
+          "column": 8,
+          "line": 606,
+          "position": 21387
+        },
+        "name": "lib/support-documents.ts",
+        "start": 593,
+        "startLoc": {
+          "column": 24,
+          "line": 593,
+          "position": 20986
+        }
+      },
+      "tokens": 106
+    },
+    {
+      "firstFile": {
+        "end": 403,
+        "endLoc": {
+          "column": 1,
+          "line": 403,
+          "position": 13717
+        },
+        "name": "lib/client.ts",
+        "start": 387,
+        "startLoc": {
+          "column": 43,
+          "line": 387,
+          "position": 13179
+        }
+      },
+      "format": "typescript",
+      "fragment": "export function engagementSummaryFromRecord(record: EngagementRecord): EngagementRecordSummary {\n  return {\n    id: record.id,\n    sourceType: record.sourceType,\n    title: record.title,\n    sourceAccountName: record.sourceAccountName,\n    sourceUrl: record.sourceUrl,\n    platform: record.platform,\n    draftId: record.draftId,\n    fallback: record.fallback,\n    fallbackReason: record.fallbackReason,\n    commentCount: record.comments?.items.length || 0,\n    danmakuCount: record.danmaku?.items.length || 0,\n    createdAt: record.createdAt,\n    updatedAt: record.updatedAt\n  };\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 17,
+      "secondFile": {
+        "end": 887,
+        "endLoc": {
+          "column": 1,
+          "line": 887,
+          "position": 28691
+        },
+        "name": "lib/storage.ts",
+        "start": 871,
+        "startLoc": {
+          "column": 41,
+          "line": 871,
+          "position": 28153
+        }
+      },
+      "tokens": 102
+    },
+    {
+      "firstFile": {
+        "end": 662,
+        "endLoc": {
+          "column": 97,
+          "line": 662,
+          "position": 23151
+        },
+        "name": "lib/client.ts",
+        "start": 647,
+        "startLoc": {
+          "column": 67,
+          "line": 647,
+          "position": 22500
+        }
+      },
+      "format": "typescript",
+      "fragment": "  const response = await fetch(`/api/accounts/transcripts-export?${params.toString()}`, {\n    cache: \"no-store\"\n  }).catch((error) => {\n    throw new Error(describeRequestError(error));\n  });\n\n  if (!response.ok) {\n    const fallbackResponse = response.clone();\n    const data = (await response.json().catch(async () => {\n      const text = await fallbackResponse.text().catch(() => \"\");\n      return { error: summarizeHttpError(response.status, text, response.headers.get(\"content-type\")) };\n    })) as { error?: unknown };\n    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));\n  }\n\n  const fileName = fileNameFromContentDisposition(response.headers.get(\"content-disposition\")) || \"账号转写稿.docx\";",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 16,
+      "secondFile": {
+        "end": 1481,
+        "endLoc": {
+          "column": 97,
+          "line": 1481,
+          "position": 48535
+        },
+        "name": "lib/client.ts",
+        "start": 1466,
+        "startLoc": {
+          "column": 57,
+          "line": 1466,
+          "position": 47884
+        }
+      },
+      "tokens": 156
+    },
+    {
+      "firstFile": {
+        "end": 662,
+        "endLoc": {
+          "column": 7,
+          "line": 662,
+          "position": 23061
+        },
+        "name": "lib/client.ts",
+        "start": 648,
+        "startLoc": {
+          "column": 4,
+          "line": 648,
+          "position": 22527
+        }
+      },
+      "format": "typescript",
+      "fragment": "    cache: \"no-store\"\n  }).catch((error) => {\n    throw new Error(describeRequestError(error));\n  });\n\n  if (!response.ok) {\n    const fallbackResponse = response.clone();\n    const data = (await response.json().catch(async () => {\n      const text = await fallbackResponse.text().catch(() => \"\");\n      return { error: summarizeHttpError(response.status, text, response.headers.get(\"content-type\")) };\n    })) as { error?: unknown };\n    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));\n  }\n\n  const fileName = fileNameFromContentDisposition(response.headers.get(\"content-disposition\")) || \"账号转写稿.docx\";",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 15,
+      "secondFile": {
+        "end": 1102,
+        "endLoc": {
+          "column": 7,
+          "line": 1102,
+          "position": 36752
+        },
+        "name": "lib/client.ts",
+        "start": 1088,
+        "startLoc": {
+          "column": 4,
+          "line": 1088,
+          "position": 36218
+        }
+      },
+      "tokens": 134
+    },
+    {
+      "firstFile": {
+        "end": 901,
+        "endLoc": {
+          "column": 8,
+          "line": 901,
+          "position": 29029
+        },
+        "name": "lib/douyin-hotlist.ts",
+        "start": 881,
+        "startLoc": {
+          "column": 0,
+          "line": 881,
+          "position": 28455
+        }
+      },
+      "format": "typescript",
+      "fragment": "async function mapWithConcurrency<T, R>(\n  items: T[],\n  concurrency: number,\n  run: (item: T, index: number) => Promise<R>\n) {\n  const results = new Array<R>(items.length);\n  let nextIndex = 0;\n  const workerCount = Math.min(Math.max(concurrency, 1), items.length);\n  await Promise.all(\n    Array.from({ length: workerCount }, async () => {\n      while (nextIndex < items.length) {\n        const currentIndex = nextIndex;\n        nextIndex += 1;\n        results[currentIndex] = await run(items[currentIndex], currentIndex);\n      }\n    })\n  );\n  return results;\n}\n\nfunction resolveRefreshConcurrency(accountCount: number) {",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 21,
+      "secondFile": {
+        "end": 946,
+        "endLoc": {
+          "column": 8,
+          "line": 946,
+          "position": 34372
+        },
+        "name": "lib/opencli-bilibili.ts",
+        "start": 926,
+        "startLoc": {
+          "column": 7,
+          "line": 926,
+          "position": 33798
+        }
+      },
+      "tokens": 141
+    },
+    {
+      "firstFile": {
+        "end": 983,
+        "endLoc": {
+          "column": 72,
+          "line": 983,
+          "position": 32583
+        },
+        "name": "lib/storage.ts",
+        "start": 967,
+        "startLoc": {
+          "column": 53,
+          "line": 967,
+          "position": 31833
+        }
+      },
+      "format": "typescript",
+      "fragment": "  return saved.sort((a, b) => b.hotScore - a.hotScore);\n}\n\nfunction mergeVideoStats(existing: Video | null, incoming: Video) {\n  if (!existing) return incoming.stats;\n  return {\n    views: pickPreferredMetric(existing.stats.views, incoming.stats.views),\n    likes: pickPreferredMetric(existing.stats.likes, incoming.stats.likes),\n    comments: pickPreferredMetric(existing.stats.comments, incoming.stats.comments),\n    favorites: pickPreferredMetric(existing.stats.favorites, incoming.stats.favorites),\n    shares: pickPreferredMetric(existing.stats.shares, incoming.stats.shares)\n  };\n}\n\nfunction pickPreferredMetric(existing?: number, incoming?: number) {\n  const safeExisting = Number.isFinite(existing) ? Number(existing) : 0;\n  const safeIncoming = Number.isFinite(incoming) ? Number(incoming) : 0;",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 17,
+      "secondFile": {
+        "end": 348,
+        "endLoc": {
+          "column": 72,
+          "line": 348,
+          "position": 12762
+        },
+        "name": "lib/storage/douyin-hotlist.ts",
+        "start": 332,
+        "startLoc": {
+          "column": 108,
+          "line": 332,
+          "position": 12012
+        }
+      },
+      "tokens": 164
+    },
+    {
+      "firstFile": {
+        "end": 1679,
+        "endLoc": {
+          "column": 15,
+          "line": 1679,
+          "position": 59467
+        },
+        "name": "lib/storage.ts",
+        "start": 1655,
+        "startLoc": {
+          "column": 87,
+          "line": 1655,
+          "position": 58806
+        }
+      },
+      "format": "typescript",
+      "fragment": "    readTextOrDefaultIfMissing(stylePath(account.platform, account.slug), DEFAULT_STYLE)\n  ]);\n\n  const videos = (\n    await Promise.all(\n      videoFiles\n        .filter((file) => file.endsWith(\".json\"))\n        .map((file) => readJson<Video>(path.join(videosPath(account.platform, account.slug), file)))\n    )\n  )\n    .filter(Boolean)\n    .sort((a, b) => b!.hotScore - a!.hotScore) as Video[];\n\n  const drafts = (\n    await Promise.all(\n      draftFiles\n        .filter((file) => file.endsWith(\".json\"))\n        .map((file) => readJson<Draft>(path.join(draftsPath(account.platform, account.slug), file)))\n    )\n  )\n    .filter(Boolean)\n    .sort((a, b) => +new Date(b!.createdAt) - +new Date(a!.createdAt)) as Draft[];\n\n  return {\n    ...account,",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 25,
+      "secondFile": {
+        "end": 1726,
+        "endLoc": {
+          "column": 15,
+          "line": 1726,
+          "position": 60947
+        },
+        "name": "lib/storage.ts",
+        "start": 1702,
+        "startLoc": {
+          "column": 53,
+          "line": 1702,
+          "position": 60286
+        }
+      },
+      "tokens": 191
+    },
+    {
+      "firstFile": {
+        "end": 2169,
+        "endLoc": {
+          "column": 1,
+          "line": 2169,
+          "position": 78301
+        },
+        "name": "lib/transcription.ts",
+        "start": 2140,
+        "startLoc": {
+          "column": 7,
+          "line": 2140,
+          "position": 77628
+        }
+      },
+      "format": "typescript",
+      "fragment": "    url,\n    \"-vn\",\n    \"-map\",\n    \"a:0\",\n    \"-ac\",\n    \"1\",\n    \"-ar\",\n    \"16000\",\n    \"-c:a\",\n    \"libmp3lame\",\n    \"-b:a\",\n    \"32k\",\n    target\n  ];\n\n  try {\n    throwIfAborted(options.signal);\n    const startedAt = Date.now();\n    await execFileAbortable(ffmpegBin(), args, {\n      ...HIDDEN_CHILD_PROCESS_OPTIONS,\n      maxBuffer: 1024 * 1024 * 4,\n      timeout: 10 * 60 * 1000\n    }, options.signal);\n    return { mediaPath: target, ms: Date.now() - startedAt };\n  } catch (error) {\n    await fs.rm(target, { force: true }).catch(() => undefined);\n    if (isAbortError(error)) throw error;\n    throw new Error(`音频提取失败：${describeFfmpegError(error)}`);\n  }\n}",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 30,
+      "secondFile": {
+        "end": 2209,
+        "endLoc": {
+          "column": 1,
+          "line": 2209,
+          "position": 79280
+        },
+        "name": "lib/transcription.ts",
+        "start": 2180,
+        "startLoc": {
+          "column": 13,
+          "line": 2180,
+          "position": 78607
+        }
+      },
+      "tokens": 148
+    }
+  ],
+  "statistics": {
+    "detectionDate": "2026-09-17T10:29:53.233Z",
+    "formats": {
+      "css": {
+        "clones": 1,
+        "duplicatedLines": 20,
+        "duplicatedTokens": 129,
+        "lines": 18587,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.10760208748049713,
+        "percentageTokens": 0.0810622293998253,
+        "sources": 25,
+        "tokens": 159137
+      },
+      "tsx": {
+        "clones": 9,
+        "duplicatedLines": 270,
+        "duplicatedTokens": 1675,
+        "lines": 16257,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 1.6608230300793503,
+        "percentageTokens": 1.274723936651928,
+        "sources": 85,
+        "tokens": 131401
+      },
+      "typescript": {
+        "clones": 19,
+        "duplicatedLines": 373,
+        "duplicatedTokens": 2955,
+        "lines": 46407,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.8037580537418925,
+        "percentageTokens": 0.9440532631336818,
+        "sources": 156,
+        "tokens": 313012
+      }
+    },
+    "total": {
+      "clones": 29,
+      "duplicatedLines": 663,
+      "duplicatedTokens": 4759,
+      "lines": 81251,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 0.8159899570466824,
+      "percentageTokens": 0.7885013669124348,
+      "sources": 266,
+      "tokens": 603550
+    }
+  }
+}

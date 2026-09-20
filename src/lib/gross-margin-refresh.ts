@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from "./concurrency";
 import {
   getBilibiliVideoStatsByUrl,
   getDouyinVideoAuthorNameByUrl,
@@ -269,7 +270,7 @@ export async function refreshGrossMarginMonitorRecords(recordIds?: string[], opt
     refreshed = await timeMonitorOperation(
       logger.onTiming,
       "monitor.records.process",
-      () => runWithConcurrency(records, concurrency, async (record) => {
+      () => mapWithConcurrency(records, concurrency, async (record) => {
         throwIfAborted(options.signal);
         const fetched = douyinFetchedById.get(record.id);
         const refreshedRecord = fetched
@@ -301,25 +302,6 @@ function monitorRefreshConcurrency() {
   const parsed = Number.parseInt(process.env.GROSS_MARGIN_MONITOR_REFRESH_CONCURRENCY || "", 10);
   if (!Number.isFinite(parsed)) return DEFAULT_MONITOR_REFRESH_CONCURRENCY;
   return Math.max(1, Math.min(parsed, MAX_MONITOR_REFRESH_CONCURRENCY));
-}
-
-async function runWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<R>
-) {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await worker(items[index], index);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
 }
 
 function normalizeFetchedStatsForMonitor(

@@ -32,6 +32,13 @@ html {
   scrollbar-width: thin;
 }
 
+/* Scale the document and its viewport-based layout from the same value. */
+html { zoom: var(--app-ui-scale); }
+
+@media (min-width: 901px) {
+  :root { --app-ui-scale: 0.9; }
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -160,7 +167,7 @@ h2 {
   font-size: var(--text-section-title);
   font-weight: var(--font-weight-heading);
   line-height: var(--line-height-section-title);
-  letter-spacing: -0.012em;
+  letter-spacing: -0.025em;
   text-wrap: balance;
 }
 

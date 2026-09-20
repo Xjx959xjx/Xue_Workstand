@@ -1,3 +1,5 @@
+import { mapWithConcurrency } from "./concurrency";
+import { withMutationLock } from "./storage/mutation-lock";
 import { type Dirent } from "fs";
 import { createHash, randomUUID } from "crypto";
 import path from "path";
@@ -391,28 +393,6 @@ async function withIdentityMutationLock<T>(key: string, run: () => Promise<T>) {
 
 async function withVideoMutationLock<T>(key: string, run: () => Promise<T>) {
   return withMutationLock(videoMutationQueues, key, run);
-}
-
-async function withMutationLock<T>(
-  queues: Map<string, Promise<unknown>>,
-  key: string,
-  run: () => Promise<T>
-) {
-  const previous = queues.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const next = previous.then(() => current, () => current);
-  queues.set(key, next);
-
-  try {
-    await previous.catch(() => undefined);
-    return await run();
-  } finally {
-    release();
-    if (queues.get(key) === next) queues.delete(key);
-  }
 }
 
 async function exists(target: string) {
@@ -1871,22 +1851,6 @@ async function getAllAccountListItems() {
   ).flat().filter(Boolean) as Account[];
   const accounts = await mapWithConcurrency(accountRecords, 6, getAccountListItem);
   return accounts.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
-}
-
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>) {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return results;
 }
 
 async function getAllProjectListItems(accounts?: AccountListItem[]): Promise<ProjectListItem[]> {

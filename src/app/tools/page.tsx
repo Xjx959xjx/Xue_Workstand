@@ -29,22 +29,10 @@ import {
 import type { PublishCopyCandidate, PublishCopyResult, PublishCopyTargetPlatform } from "@/lib/publish-copy-types";
 import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
 
-type WorkspaceMode = "video" | "publish-copy" | "stirling-pdf";
 type BusyState = "" | "transcribe" | "download" | "publish-copy";
 type NoticeTone = "success" | "info" | "error";
 
 const defaultStirlingPdfUrl = process.env.NEXT_PUBLIC_STIRLING_PDF_URL || "http://localhost:8080";
-
-const workspaceModes: Array<{
-  id: WorkspaceMode;
-  label: string;
-  meta: string;
-  icon: LucideIcon;
-}> = [
-  { id: "video", label: "视频处理", meta: "文案 + 素材", icon: Video },
-  { id: "publish-copy", label: "标题与发布", meta: "检索 + 生成", icon: Sparkles },
-  { id: "stirling-pdf", label: "Stirling-PDF", meta: "PDF 工具箱", icon: FileText }
-];
 
 const downloadOptions: Array<{
   kind: SingleVideoAssetKind;
@@ -71,7 +59,6 @@ export default function ToolsPage() {
     href: "/tools",
     kinds: ["single-video-transcribe", "publish-copy"]
   });
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>("video");
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<SingleVideoTranscribeResult | null>(null);
   const [downloadingKind, setDownloadingKind] = useState<SingleVideoAssetKind | "">("");
@@ -250,7 +237,7 @@ export default function ToolsPage() {
     if (!result?.text.trim()) return;
     setPublishSourceText(result.text);
     setPublishResult(null);
-    setActiveWorkspace("publish-copy");
+    document.getElementById("tools-publish-source-text")?.focus();
     setNotice("");
   }
 
@@ -306,45 +293,15 @@ export default function ToolsPage() {
           <span className="stat-pill">B站 / 抖音 / PDF</span>
         </div>
       </header>
+      <div className="tools-section-label"><span>你的创作装备</span><span>03 TOOLS / 随时开工</span></div>
 
-      <section className="panel tools-workspace" aria-busy={Boolean(busy)}>
-        <div className="tools-workspace-bar">
-          <div className="tools-workspace-tabs" role="tablist" aria-label="工具台工作区">
-            {workspaceModes.map((mode) => {
-              const Icon = mode.icon;
-              const active = mode.id === activeWorkspace;
-              return (
-                <button
-                  className={active ? "active" : ""}
-                  key={mode.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setActiveWorkspace(mode.id)}
-                >
-                  <Icon size={17} aria-hidden="true" />
-                  <span>
-                    <strong>{mode.label}</strong>
-                    <small>{mode.meta}</small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <span className="tools-workspace-state">
-            {busy ? <Loader2 className="tools-spin" size={14} aria-hidden="true" /> : null}
-            {busy ? busyLabel(busy) : "就绪"}
-          </span>
+      <div className="tools-modules">
+        <div className="tools-utility-column">
+          {renderVideoWorkspace()}
+          {renderStirlingPdfWorkspace()}
         </div>
-
-        <div className="tools-workspace-body">
-          {activeWorkspace === "video"
-            ? renderVideoWorkspace()
-            : activeWorkspace === "publish-copy"
-              ? renderPublishWorkspace()
-              : renderStirlingPdfWorkspace()}
-        </div>
-      </section>
+        {renderPublishWorkspace()}
+      </div>
 
       {notice ? (
         <div className={noticeIsError ? "error" : "notice"} role={noticeIsError ? "alert" : "status"}>
@@ -356,9 +313,9 @@ export default function ToolsPage() {
 
   function renderVideoWorkspace() {
     return (
-      <div className="tools-split tools-video-workspace">
+      <section id="tools-video" className="panel tools-module tools-video-workspace" aria-label="视频提取与下载" aria-busy={busy === "transcribe" || busy === "download"}>
         <div className="tools-control-pane">
-          <PaneHeading eyebrow="单条视频" title="提取与下载" />
+          <PaneHeading index="01" icon={Video} title="视频提取" description="一个链接，提取文案与素材。" />
 
           <VideoLinkField url={url} setUrl={handleUrlChange} />
 
@@ -400,15 +357,8 @@ export default function ToolsPage() {
           </div>
         </div>
 
-        <div className="tools-result-pane" aria-live="polite">
-          <div className="tools-result-heading">
-            <div>
-              <h2>视频结果</h2>
-              <p className="pane-subtitle">{result ? result.title || "已完成内容识别" : "等待处理"}</p>
-            </div>
-            <MetaPills items={videoMeta(result, Boolean(cleanUrl))} />
-          </div>
-
+        {result ? <div className="tools-result-pane" aria-live="polite">
+          {result.fallback ? <p className="notice">{result.fallbackReason || "使用了备用提取结果，请检查文稿。"}</p> : null}
           {result ? (
             <div className="tools-video-result">
               <VideoSourceSummary result={result} />
@@ -430,6 +380,9 @@ export default function ToolsPage() {
                     </button>
                   </div>
                 </div>
+                <p className="tools-transcript-preview">{result.text}</p>
+                <details className="tools-transcript-details">
+                  <summary>查看完整文稿</summary>
                 <textarea
                   aria-label="提取结果文案"
                   autoComplete="off"
@@ -438,25 +391,20 @@ export default function ToolsPage() {
                   value={result.text}
                   readOnly
                 />
+                </details>
               </div>
             </div>
-          ) : (
-            <ToolEmptyState
-              icon={Video}
-              title={cleanUrl ? "链接已就绪" : "等待视频链接"}
-              text={cleanUrl ? "可以提取文案，或直接下载需要的素材。" : "支持 B站和抖音单条视频。"}
-            />
-          )}
-        </div>
-      </div>
+          ) : null}
+        </div> : null}
+      </section>
     );
   }
 
   function renderPublishWorkspace() {
     return (
-      <div className="tools-split tools-publish-workspace">
+      <section id="tools-publish" className="panel tools-module tools-publish-workspace" aria-label="标题与发布文案" aria-busy={busy === "publish-copy"}>
         <div className="tools-control-pane">
-          <PaneHeading eyebrow="发布包装" title="标题与发布文案" />
+          <PaneHeading index="02" icon={Sparkles} title="标题与发布" description="把内容，变成让人想点开的表达。" />
 
           <div className="tools-inline-group">
             <span className="tools-label">发布平台</span>
@@ -563,15 +511,8 @@ export default function ToolsPage() {
           </button>
         </div>
 
-        <div className="tools-result-pane" aria-live="polite">
-          <div className="tools-result-heading">
-            <div>
-              <h2>生成结果</h2>
-              <p className="pane-subtitle">{publishResult?.sourceSummary || "标题与发布文案"}</p>
-            </div>
-            <MetaPills items={publishMeta(publishResult)} />
-          </div>
-
+        {publishResult ? <div className="tools-result-pane" aria-live="polite">
+          {publishResult.fallback ? <p className="notice">{publishResult.fallbackReason || "使用了备用生成结果，请检查生成依据。"}</p> : null}
           {publishResult?.candidates.length ? (
             <div className="tools-publish-results">
               <div className="tools-provenance-strip">
@@ -614,95 +555,50 @@ export default function ToolsPage() {
 
               <GenerationBasis result={publishResult} />
             </div>
-          ) : (
-            <ToolEmptyState icon={Sparkles} title="等待内容原稿" text="生成结果与实际参考依据会显示在这里。" />
-          )}
-        </div>
-      </div>
+          ) : null}
+        </div> : null}
+      </section>
     );
   }
 
   function renderStirlingPdfWorkspace() {
     return (
-      <div className="tools-split tools-pdf-workspace">
+      <section className="panel tools-module tools-pdf-workspace" aria-label="PDF 工具">
         <div className="tools-control-pane">
-          <PaneHeading eyebrow="PDF 工作区" title="Stirling-PDF" />
-
-          <label className="field">
-            <span>Stirling-PDF 地址</span>
-            <div className={`tools-input-shell ${stirlingPdfUrlValid ? "" : "invalid"}`}>
-              <LinkIcon size={16} aria-hidden="true" />
-              <input
-                autoComplete="url"
-                name="stirlingPdfUrl"
-                type="url"
-                value={stirlingPdfUrl}
-                onChange={(event) => setStirlingPdfUrl(event.target.value)}
-                placeholder="http://localhost:8080"
-                aria-invalid={Boolean(cleanStirlingPdfUrl) && !stirlingPdfUrlValid}
-              />
-            </div>
-            <small className="subtle">默认是本机 Docker 的 8080 端口，也可以填写局域网地址。</small>
-          </label>
-
-          <button
-            className="btn primary tools-primary-action"
-            disabled={!stirlingPdfUrlValid}
-            type="button"
-            onClick={handleOpenStirlingPdf}
-          >
-            <ExternalLink size={16} aria-hidden="true" />
-            打开 Stirling-PDF
-          </button>
-
-          <div className="tools-pdf-security-note">
-            <strong>本地处理</strong>
-            <span>文件直接交给 Stirling-PDF 实例，不经过内容运营工作台。</span>
+          <PaneHeading index="03" icon={FileText} title="PDF 工具" description="压缩、转换、合并，交给 Stirling-PDF。" />
+          <div className="tools-pdf-launch">
+            <span className="tools-pdf-caption">连接你的 PDF 工作区</span>
+            <button className="btn tools-pdf-open" disabled={!stirlingPdfUrlValid} type="button" onClick={handleOpenStirlingPdf}>
+              打开工具 <ExternalLink size={15} aria-hidden="true" />
+            </button>
           </div>
+          <details className="tools-pdf-settings">
+            <summary>服务地址</summary>
+            <label className="field">
+              <span>Stirling-PDF 地址</span>
+              <div className={`tools-input-shell ${stirlingPdfUrlValid ? "" : "invalid"}`}>
+                <LinkIcon size={16} aria-hidden="true" />
+                <input autoComplete="url" name="stirlingPdfUrl" type="url" value={stirlingPdfUrl}
+                  onChange={(event) => setStirlingPdfUrl(event.target.value)} placeholder="http://localhost:8080"
+                  aria-invalid={Boolean(cleanStirlingPdfUrl) && !stirlingPdfUrlValid} />
+              </div>
+              {!stirlingPdfUrlValid ? <small className="error">请输入以 http:// 或 https:// 开头的有效地址。</small> : null}
+              <small className="subtle">文件由该服务处理，不经过本工作台。</small>
+            </label>
+          </details>
         </div>
-
-        <div className="tools-result-pane" aria-live="polite">
-          <div className="tools-result-heading">
-            <div>
-              <h2>PDF 工具箱</h2>
-              <p className="pane-subtitle">合并、拆分、压缩、转换、OCR、签名和更多 PDF 操作</p>
-            </div>
-            <MetaPills items={[stirlingPdfUrlValid ? "服务地址就绪" : "需要配置地址", "Docker"]} />
-          </div>
-
-          <div className="tools-pdf-overview">
-            <div className="tools-pdf-overview-mark" aria-hidden="true">
-              <FileText size={26} />
-            </div>
-            <div>
-              <h3>在 Stirling-PDF 中处理 PDF</h3>
-              <p>点击左侧按钮打开完整工作区。首次登录默认账号通常是 <code>admin</code>，请立即修改初始密码。</p>
-            </div>
-            <div className="tools-pdf-feature-grid">
-              {[
-                ["文件整理", "合并 / 拆分 / 旋转"],
-                ["格式处理", "压缩 / 转换 / 修复"],
-                ["内容识别", "OCR / 加水印 / 脱敏"],
-                ["安全操作", "签名 / 加密 / 元数据"]
-              ].map(([title, detail]) => (
-                <div key={title}>
-                  <strong>{title}</strong>
-                  <span>{detail}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      </section>
     );
   }
 }
 
-function PaneHeading(input: { eyebrow: string; title: string }) {
+function PaneHeading(input: { index: string; icon: LucideIcon; title: string; description: string }) {
+  const Icon = input.icon;
   return (
     <div className="tools-pane-heading">
-      <span>{input.eyebrow}</span>
-      <h2>{input.title}</h2>
+      <span className="tools-module-icon"><Icon size={22} strokeWidth={1.7} aria-hidden="true" /></span>
+      <div><h2>{input.title}</h2><p>{input.description}</p></div>
+      <span className="tools-module-number" aria-hidden="true">{input.index}</span>
     </div>
   );
 }
@@ -792,50 +688,6 @@ function GenerationBasis(input: { result: PublishCopyResult }) {
       </div>
     </details>
   );
-}
-
-function MetaPills(input: { items: string[] }) {
-  return (
-    <div className="tools-result-meta">
-      {input.items.map((item) => (
-        <span className="status-pill" key={item}>{item}</span>
-      ))}
-    </div>
-  );
-}
-
-function ToolEmptyState(input: { icon: LucideIcon; title: string; text: string }) {
-  const Icon = input.icon;
-  return (
-    <div className="tools-empty-result">
-      <span className="empty-state-mark" aria-hidden="true">
-        <Icon aria-hidden="true" size={18} />
-      </span>
-      <h3>{input.title}</h3>
-      <p className="subtle">{input.text}</p>
-    </div>
-  );
-}
-
-function videoMeta(result: SingleVideoTranscribeResult | null, hasUrl: boolean) {
-  if (!result) return [hasUrl ? "链接就绪" : "待链接"];
-  return [platformLabel(result.platform), transcriptionSourceLabel(result.source), result.fallback ? "需检查" : "已提取"];
-}
-
-function publishMeta(result: PublishCopyResult | null) {
-  if (!result) return ["6 组候选"];
-  return [
-    formatTargetPlatformLabel(result.platform),
-    `${result.research.referenceCount} 条参考`,
-    result.fallback ? "需检查" : "已生成"
-  ];
-}
-
-function busyLabel(busy: BusyState) {
-  if (busy === "transcribe") return "正在提取文案";
-  if (busy === "download") return "正在下载素材";
-  if (busy === "publish-copy") return "正在检索生成";
-  return "就绪";
 }
 
 function formatTargetPlatformLabel(platform: PublishCopyTargetPlatform) {

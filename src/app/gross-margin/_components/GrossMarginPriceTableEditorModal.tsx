@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import type {
@@ -49,19 +48,10 @@ export function GrossMarginPriceTableEditorModal({
   onClose: () => void;
   onSave: (items: GrossMarginPriceTableSaveItem[]) => Promise<void>;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
   const [rows, setRows] = useState<DraftPriceOption[]>(() => table.items.map(makeDraftRow));
   const [error, setError] = useState("");
   const activeCount = useMemo(() => rows.filter((row) => row.active).length, [rows]);
   const inactiveCount = rows.length - activeCount;
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, []);
 
   function updateRow(rowId: string, patch: Partial<DraftPriceOption>) {
     setError("");
@@ -106,8 +96,6 @@ export function GrossMarginPriceTableEditorModal({
         aria-labelledby="gross-price-editor-title"
         aria-modal="true"
         className="modal-panel gross-price-editor-modal"
-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
-        ref={panelRef}
         role="dialog"
         tabIndex={-1}
       >
@@ -297,40 +285,4 @@ function createDraftOptionId(platform: GrossMarginPriceTable["platform"]) {
       ? crypto.randomUUID().slice(0, 8)
       : `${Date.now().toString(36)}`;
   return `${platform}-custom-${suffix}`;
-}
-
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    onClose();
-    return;
-  }
-
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }

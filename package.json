@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "next dev --turbopack",
+    "dev:sandbox": "node scripts/dev-sandbox.mjs",
     "dev:sites": "vinext dev -p 3001",
     "dev:daemon": "node scripts/dev-server.mjs start",
     "dev:status": "node scripts/dev-server.mjs status",
@@ -42,12 +43,14 @@
     "engagement:refresh-style": "node scripts/refresh-engagement-comment-benchmarks.mjs"
   },
   "dependencies": {
+    "@radix-ui/react-popover": "^1.1.23",
     "@tiptap/extension-mention": "^3.31.3",
     "@tiptap/pm": "^3.31.3",
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
     "@tiptap/suggestion": "^3.31.3",
     "@xyflow/react": "^12.11.6",
+    "cmdk": "^1.1.1",
     "docx": "^9.7.1",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^0.468.0",

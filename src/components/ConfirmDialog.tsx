@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
@@ -22,25 +22,15 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    confirmButtonRef.current?.focus();
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, []);
-
   return (
-    <ModalBackdrop disabled={busy} onClose={onCancel}>
+    <ModalBackdrop disabled={busy} onClose={onCancel} initialFocusRef={confirmButtonRef}>
       <div
         aria-labelledby="confirm-dialog-title"
         aria-modal="true"
         className="modal-panel confirm-panel"
-        onKeyDown={(event) => handleDialogKeyDown(event, busy, onCancel, onConfirm)}
-        ref={panelRef}
+        onKeyDown={(event) => handleConfirmKeyDown(event, busy, onConfirm)}
         role="dialog"
         tabIndex={-1}
       >
@@ -66,47 +56,12 @@ export function ConfirmDialog({
   );
 }
 
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onClose: () => void, onConfirm: () => void) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    if (!busy) onClose();
-    return;
-  }
-
-  if (event.key === "Enter" && !busy) {
+function handleConfirmKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onConfirm: () => void) {
+  if (event.key === "Enter" && !busy && !event.nativeEvent.isComposing) {
     const target = event.target;
     if (!(target instanceof HTMLButtonElement) || target.type !== "button") {
       event.preventDefault();
       onConfirm();
-      return;
     }
-  }
-
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
   }
 }

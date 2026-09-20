@@ -1,6 +1,5 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import type { ProjectListItem } from "@/lib/types";
@@ -36,12 +35,8 @@ export function ProjectPickerModal({
 }: ProjectPickerModalProps) {
   const formTitle = selectedProjectId ? "编辑当前项目" : "新建项目";
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") onClose();
-  }
-
   return (
-    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
+    <ModalBackdrop onClose={onClose}>
       <div aria-labelledby="project-picker-title" aria-modal="true" className="modal-panel project-picker-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>

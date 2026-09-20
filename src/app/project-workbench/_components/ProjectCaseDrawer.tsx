@@ -1,6 +1,5 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
 import { Check, LinkIcon, Search, UsersRound, X } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
@@ -71,12 +70,8 @@ export function ProjectCaseDrawer({
         ? "粘贴 B站或抖音链接，转写完成后自动加入项目"
         : "只在需要补充长期口吻时选择账号";
 
-  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape" && !locked) onClose();
-  }
-
   return (
-    <ModalBackdrop disabled={locked} onClose={onClose} onKeyDown={handleKeyDown}>
+    <ModalBackdrop disabled={locked} onClose={onClose}>
       <div aria-labelledby="project-case-dialog-title" aria-modal="true" className="modal-panel project-case-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>

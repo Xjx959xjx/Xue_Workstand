@@ -1,4 +1,7 @@
 :root {
+  --app-ui-scale: 1;
+  --app-vh: calc(1vh / var(--app-ui-scale));
+  --app-dvh: calc(1dvh / var(--app-ui-scale));
   color-scheme: light;
   --bg: oklch(0.965 0.003 264);
   --bg-elevated: oklch(0.982 0.002 264);
@@ -127,7 +130,7 @@
   --text-meta: 12px;
   --text-body: 14px;
   --text-card-title: 14px;
-  --text-section-title: 16px;
+  --text-section-title: 20px;
   --text-page-title: 30px;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -150,8 +153,8 @@
   --card-pad-sm: 12px;
   --card-pad-md: 16px;
   --card-pad-lg: 20px;
-  --pane-header-pad: 12px 14px;
-  --pane-body-pad: 12px;
+  --pane-header-pad: 16px;
+  --pane-body-pad: 16px;
   --pane-body-gap: 12px;
   --section-pad: 18px;
   --section-gap: 12px;
@@ -178,8 +181,8 @@
   --sidebar-width: 224px;
   --sidebar-width-compact: 214px;
   --page-pad: 22px;
-  --workspace-page-height: calc(100vh - (var(--page-pad) * 2));
-  --workspace-default-height: clamp(520px, calc(100vh - 165px), 850px);
+  --workspace-page-height: calc(calc(var(--app-vh) * 100) - (var(--page-pad) * 2));
+  --workspace-default-height: clamp(520px, calc(calc(var(--app-vh) * 100) - 165px), 850px);
   --library-quick-start-height: var(--workbench-leading-panel-height);
   --library-workspace-height: calc(var(--workspace-default-height) - var(--library-quick-start-height) - var(--workbench-page-gap));
   --font-ui: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, Inter, "PingFang SC",
@@ -262,4 +265,14 @@ html[data-skin="shinigami"] {
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 12px;
+}
+
+/* Expressive tools sample; consumed only by the tools route. */
+:root {
+  --studio-ink: #202128;
+  --studio-paper: #f8f7f2;
+  --studio-lime: #d9f86a;
+  --studio-violet: #e8e1fc;
+  --studio-violet-ink: #49307c;
+  --studio-on-dark: #faf9f5;
 }

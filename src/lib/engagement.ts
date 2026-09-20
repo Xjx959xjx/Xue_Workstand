@@ -952,15 +952,16 @@ async function generateComments(input: {
   const sourceBrief = sourceBriefResult.brief;
   await onProgress?.({
     stage: "research",
-    message: "正在检索相关爆款并做视频级反人机质检",
+    message: "正在让 AI 阅读完整正文，自主规划检索关键词和数量，再搜索相关视频",
     progress: 30
   });
 
   const researchStartedAt = Date.now();
-  const relatedResearch = await buildEngagementCommentResearch(sourceBrief, {
+  const relatedResearch = await buildEngagementCommentResearch({ ...sourceBrief, fullText: generationSource.content }, {
     platform,
     excludedVideoIds: generationSource.excludedVideoIds,
-    signal
+    signal,
+    onProgress: (message) => onProgress?.({ stage: "research", message, progress: 30 })
   });
   const reusableFingerprints = new Set(relatedResearch.reusableComments.map(commentFingerprint));
   const blockedComments = uniqueText(excludedComments);
@@ -1036,8 +1037,9 @@ async function generateComments(input: {
                     })
                   }
                 ],
-                "medium",
+                "low",
                 {
+                  policy: "comment_generate",
                   signal,
                   maxOutputTokens: clampCount(batch.requestedCount * 72, 1800, 9000, 3600)
                 }
@@ -1343,8 +1345,8 @@ async function generateDanmaku(
                 )
               }
             ],
-            "low",
-            { signal, maxOutputTokens: clampCount(slots.length * 52, 1000, 3600, 2400) }
+            "medium",
+            { policy: "danmaku", signal, maxOutputTokens: clampCount(slots.length * 52, 1000, 3600, 2400) }
           );
           throwIfAborted(signal);
           if (result.fallback || !result.text.trim()) {

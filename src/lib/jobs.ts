@@ -18,7 +18,6 @@ import {
   streamStyleResponseTextWithFallback,
   streamResponseTextWithFallback,
   writeVariantFailure,
-  WRITE_COPY_MAX_OUTPUT_TOKENS,
   WRITE_COPY_REASONING_EFFORT
 } from "./ai";
 import { runBatchTranscribe } from "./batch-transcribe";
@@ -756,9 +755,9 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   const outcomes = await Promise.all(batch.variants.map(async (variant) => {
     try {
       const result = await streamResponseTextWithFallback({
+        policy: "writer_generate",
         messages: variant.prepared.messages,
         reasoningEffort: WRITE_COPY_REASONING_EFFORT,
-        maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
         signal: getJobAbortSignal(jobId),
         onDelta(delta) {
           if (variantCount === 1) {
@@ -835,9 +834,9 @@ async function runWriteRevisionJob(jobId: string, start: Extract<JobStartInput, 
     progress: 55
   });
   const result = await streamResponseTextWithFallback({
+    policy: "writer_revise",
     messages: prepared.messages,
     reasoningEffort: WRITE_COPY_REASONING_EFFORT,
-    maxOutputTokens: WRITE_COPY_MAX_OUTPUT_TOKENS,
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {
       partialText += delta;
@@ -1034,6 +1033,7 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
     progress: 45
   });
   const completion = await streamStyleResponseTextWithFallback({
+    policy: "project_style",
     messages: prepared.context.messages,
     signal: getJobAbortSignal(jobId),
     onDelta(delta) {

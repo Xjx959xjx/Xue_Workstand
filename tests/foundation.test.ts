@@ -182,7 +182,7 @@ test("多选风格会拆成互不混合的独立写作上下文", async () => {
     assert.doesNotMatch(prepared.variants[0].prepared.messages[1].content, /项目风格/);
     assert.match(prepared.variants[1].prepared.messages[1].content, /项目风格/);
     assert.doesNotMatch(prepared.variants[1].prepared.messages[1].content, /账号风格/);
-    assert.match(prepared.variants[0].prepared.messages[0].content, /只使用.*这一张风格卡/);
+    assert.match(prepared.variants[0].prepared.messages[0].content, /用指定博主或项目的风格/);
   });
 });
 

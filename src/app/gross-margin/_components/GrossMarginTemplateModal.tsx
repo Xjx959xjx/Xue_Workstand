@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useMemo, useRef, useState } from "react";
 import { RotateCcw, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import {
@@ -28,7 +27,6 @@ export function GrossMarginTemplateModal({
   onReset: () => Promise<void>;
   onSave: (value: string) => Promise<void>;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(template.content);
   const preview = useMemo(() => {
@@ -40,14 +38,6 @@ export function GrossMarginTemplateModal({
   }, [draft, previewValues]);
   const canSave = Boolean(draft.trim()) && !preview.error && !busy;
   const lineCount = useMemo(() => draft.split("\n").filter((line) => line.trim()).length, [draft]);
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, []);
 
   function insertVariable(name: string) {
     const token = `{{${name}}}`;
@@ -73,8 +63,6 @@ export function GrossMarginTemplateModal({
         aria-labelledby="gross-template-modal-title"
         aria-modal="true"
         className="modal-panel gross-template-modal"
-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
-        ref={panelRef}
         role="dialog"
         tabIndex={-1}
       >
@@ -157,40 +145,4 @@ export function GrossMarginTemplateModal({
 
 function countTemplateLines(value: string) {
   return value.split("\n").filter((line) => line.trim()).length;
-}
-
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    onClose();
-    return;
-  }
-
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }

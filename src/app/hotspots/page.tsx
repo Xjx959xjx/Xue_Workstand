@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { CSSProperties } from "react";
 import {
   ArrowUpRight,
   BarChart3,
@@ -544,58 +544,16 @@ function HotspotDetailModal({
   onClose: () => void;
   onAction: (action: DetailAction) => void;
 }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!hotspot) return;
-    const previousOverflow = document.body.style.overflow;
-    const trigger = triggerRef.current;
-    document.body.style.overflow = "hidden";
-    const frame = window.requestAnimationFrame(() => dialogRef.current?.focus());
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.body.style.overflow = previousOverflow;
-      trigger?.focus();
-    };
-  }, [hotspot, triggerRef]);
-
   if (!hotspot) return null;
 
   const StatusIcon = statusMeta[hotspot.status].icon;
 
-  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-      return;
-    }
-
-    if (event.key !== "Tab" || !dialogRef.current) return;
-    const focusable = Array.from(
-      dialogRef.current.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )
-    );
-    if (!focusable.length) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
   return (
-    <ModalBackdrop closeLabel="关闭热点详情" onClose={onClose} onKeyDown={handleKeyDown}>
+    <ModalBackdrop closeLabel="关闭热点详情" onClose={onClose} returnFocusRef={triggerRef}>
       <div
         aria-labelledby="hotspot-detail-title"
         aria-modal="true"
         className={`modal-panel hotspots-detail-modal priority-${hotspot.status}`}
-        ref={dialogRef}
         role="dialog"
         tabIndex={-1}
       >

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { memo, type ReactNode, type RefObject } from "react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 
 type LibraryEditorModalProps = {
@@ -27,7 +27,6 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
         aria-modal="true"
         className={`modal-panel ${panelClassName}`}
         data-unsaved-changes={unsavedChanges ? "true" : undefined}
-        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
         ref={panelRef}
         role="dialog"
         tabIndex={-1}
@@ -37,39 +36,3 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
     </ModalBackdrop>
   );
 });
-
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    onClose();
-    return;
-  }
-
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}

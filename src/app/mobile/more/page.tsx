@@ -13,12 +13,14 @@ import {
   Radar,
   RefreshCw,
   Server,
+  Settings2,
   Wrench
 } from "lucide-react";
 import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import type { RemoteStatusResponse } from "@/lib/types";
 
 const featureItems = [
+  { href: "/ai-settings", label: "AI 模型配置", detail: "按业务调整模型与推理等级", icon: Settings2, mobileReady: true },
   { href: "/hotspots", label: "热点雷达", detail: "查看热点发现和内容机会", icon: Radar, mobileReady: false },
   { href: "/project-workbench", label: "项目工作台", detail: "组合账号、素材和项目风格", icon: FolderKanban, mobileReady: false },
   { href: "/assets", label: "评论生成", detail: "生成评论、弹幕和封面素材", icon: MessageSquarePlus, mobileReady: false },

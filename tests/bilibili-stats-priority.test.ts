@@ -1,7 +1,7 @@
+import { mapWithConcurrency } from "../src/lib/concurrency";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  mapWithConcurrency,
   resolveBilibiliCommentRows,
   resolveBilibiliStatsFieldSources
 } from "../src/lib/opencli-bilibili";

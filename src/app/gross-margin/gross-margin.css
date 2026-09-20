@@ -798,7 +798,7 @@
 
 .gross-import-modal {
   width: min(780px, calc(100vw - 32px));
-  max-height: min(82vh, 680px);
+  max-height: min(calc(var(--app-vh) * 82), 680px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
@@ -930,7 +930,7 @@
 
 .gross-template-modal {
   width: min(1100px, calc(100vw - 32px));
-  max-height: min(86vh, 780px);
+  max-height: min(calc(var(--app-vh) * 86), 780px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
@@ -1051,7 +1051,7 @@
 
 .gross-price-editor-modal {
   width: min(1480px, calc(100vw - 24px));
-  max-height: min(92dvh, 900px);
+  max-height: min(calc(var(--app-dvh) * 92), 900px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 16px;
@@ -1173,7 +1173,7 @@
 
 .gross-bulk-monitor-modal {
   width: min(860px, calc(100vw - 32px));
-  max-height: min(84vh, 740px);
+  max-height: min(calc(var(--app-vh) * 84), 740px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
@@ -2047,8 +2047,8 @@
 @media (max-width: 1100px) {
   .gross-price-editor-modal {
     width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-    max-height: calc(100dvh - 16px);
+    height: calc(calc(var(--app-dvh) * 100) - 16px);
+    max-height: calc(calc(var(--app-dvh) * 100) - 16px);
   }
 
   .gross-price-editor-table-wrap {
@@ -2120,14 +2120,14 @@
 
   .gross-import-modal {
     width: min(100vw - 18px, 780px);
-    max-height: 92vh;
+    max-height: calc(var(--app-vh) * 92);
     gap: 10px;
     padding: 12px;
   }
 
   .gross-template-modal {
     width: min(100vw - 18px, 1100px);
-    max-height: 92vh;
+    max-height: calc(var(--app-vh) * 92);
     gap: 10px;
     padding: 12px;
   }
@@ -2147,15 +2147,15 @@
 
   .gross-price-editor-modal {
     width: calc(100vw - 12px);
-    height: calc(100dvh - 12px);
-    max-height: calc(100dvh - 12px);
+    height: calc(calc(var(--app-dvh) * 100) - 12px);
+    max-height: calc(calc(var(--app-dvh) * 100) - 12px);
     gap: 10px;
     padding: 12px;
   }
 
   .gross-bulk-monitor-modal {
     width: min(100vw - 18px, 860px);
-    max-height: 92vh;
+    max-height: calc(var(--app-vh) * 92);
     gap: 10px;
     padding: 12px;
   }

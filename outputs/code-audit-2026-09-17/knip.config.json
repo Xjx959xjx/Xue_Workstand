@@ -1,0 +1,21 @@
+{
+  "entry": [
+    "src/app/**/{page,layout,route,loading,error,not-found,global-error,template,default}.{ts,tsx}",
+    "src/{middleware,instrumentation,instrumentation-client}.{ts,tsx}",
+    "scripts/**/*.{mjs,js,ts}",
+    "tests/**/*.test.ts",
+    "evals/**/*.{mjs,js,ts}",
+    "*.config.{ts,mjs,js}"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "scripts/**/*.{mjs,js,ts}",
+    "tests/**/*.ts",
+    "evals/**/*.{mjs,js,ts}",
+    "*.config.{ts,mjs,js}"
+  ],
+  "ignore": [
+    "src/**/AGENTS.md"
+  ],
+  "vite": false
+}

@@ -252,3 +252,13 @@ export function versionStoredRecord(value: unknown) {
     schemaVersion: STORAGE_SCHEMA_VERSION
   };
 }
+
+
+export const aiPolicyValueSchema = z.object({
+  model: z.string().trim().max(120, "模型名称不能超过 120 字符").regex(/^[A-Za-z0-9._:/-]*$/, "模型名称只能包含字母、数字及 . _ : / -"),
+  effort: z.enum(["default", "none", "low", "medium", "high", "xhigh"], { errorMap: () => ({ message: "推理等级不受支持" }) })
+}).strict();
+export const aiSettingsSchema = z.object({
+  schemaVersion: z.literal(1), revision: z.number().int().nonnegative(),
+  updatedAt: z.string().datetime().nullable(), overrides: z.record(aiPolicyValueSchema)
+}).strict();

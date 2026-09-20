@@ -20,11 +20,8 @@ export function WriterDialogModal({
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     panelRef.current?.focus();
     return () => {
-      document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus();
     };
   }, []);
@@ -35,7 +32,7 @@ export function WriterDialogModal({
         aria-labelledby={labelledBy}
         aria-modal="true"
         className={`modal-panel ${panelClassName}`}
-        onKeyDown={(event) => handleWriterDialogKeyDown(event, onClose)}
+        onKeyDown={(event) => handleDialogKeyDown(event, onClose)}
         ref={panelRef}
         role="dialog"
         tabIndex={-1}
@@ -46,7 +43,7 @@ export function WriterDialogModal({
   );
 }
 
-export function handleWriterDialogKeyDown(event: KeyboardEvent<HTMLElement>, onClose: () => void) {
+function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void) {
   if (event.key === "Escape") {
     event.preventDefault();
     onClose();

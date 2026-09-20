@@ -18,7 +18,6 @@ import { useLibraryAccountSelection, useLibraryVideoSelection } from "./_hooks/u
 import { useLibraryTaskActions } from "./_hooks/useLibraryTaskActions";
 import { useLibraryTaskEffects } from "./_hooks/useLibraryTaskEffects";
 import { useLibraryTranscriptActions } from "./_hooks/useLibraryTranscriptActions";
-import { useRestoreFocus } from "./_hooks/useRestoreFocus";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { useFeedback, type FeedbackTone } from "@/components/FeedbackProvider";
@@ -258,7 +257,6 @@ function LibraryPageContent() {
   const canCollect = Boolean(collectName.trim()) && !busy;
 
   useVideoStatsHydration({ refresh, reloadSelectedAccountDetail, selectedAccount });
-  useRestoreFocus(Boolean(openModal), editModalRef);
 
   useEffect(() => {
     if (!visibleMessage || isTaskProgressMessage(visibleMessage)) return;

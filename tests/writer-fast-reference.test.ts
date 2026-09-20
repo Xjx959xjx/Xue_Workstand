@@ -13,7 +13,7 @@ test("本地选样考虑低热度原文，去重、保留尾部并限制总预�
   ], "游戏活动推广");
   assert.equal(samples[0].id, "relevant");
   assert.match(samples[0].text, /最后说参与规则/);
-  assert.match(samples[0].text, /中间原文省略/);
+  assert.equal(samples[0].text, "游戏活动开始。".repeat(900) + "最后说参与规则。", "高相关原文优先保留全文");
   assert.ok(samples.reduce((n, s) => n + s.text.length, 0) <= WRITER_REFERENCE_BUDGET);
   assert.ok(!(samples.some(s => s.id === "unrelated") && samples.some(s => s.id === "duplicate")));
   const plan = fastWriterPlan("用户本次要求：\n4—20字，不用联名\n\n原始资料：\n旧案例说1000—2000字", samples);
@@ -62,8 +62,9 @@ test("未限定类型时兼顾游戏和杂谈，明确纯杂谈且不要广告�
       analysis: analysis(game ? "游戏口播" : "生活杂谈", game ? "推广" : "评论", "故事讲述", quote) };
   });
   const mixed = selectFastReferences(candidates, "按博主风格写一篇");
-  assert.ok(mixed.slice(0, 4).filter(s => s.id.startsWith("game")).length === 2);
-  assert.ok(mixed.slice(0, 4).filter(s => s.id.startsWith("chat")).length === 2);
+  assert.ok(mixed.some(s => s.id.startsWith("game")));
+  assert.ok(mixed.some(s => s.id.startsWith("chat")));
+  assert.equal(mixed[0].text, candidates.find(c => c.id === mixed[0].id)!.transcript, "先保留首篇完整叙事，再兼顾其他类型");
   const chat = selectFastReferences(candidates, "写生活杂谈，不要广告，不做游戏推广");
   assert.ok(chat[0].id.startsWith("chat"));
   assert.match(chat[0].reason, /用途匹配/);
@@ -115,4 +116,16 @@ test("同文去重保留有效分析，空库与空稿不产生伪参考", () =>
   ], "写杂谈");
   assert.deepEqual(samples.map(s => s.id), ["verified"]);
   assert.deepEqual(selectFastReferences([], "写稿"), []);
+});
+
+
+test("长分析生成的选样理由可保存为写作快照，不再受500字符限制", () => {
+  const quote = "先说明事件，再讲自己的看法。";
+  const detail = analysis("杂谈", "评论", "故事讲述", quote);
+  detail.narrative!.bridges = [{ before: "先说明事件", after: "再讲自己的看法", action: "衔接方式".repeat(180), requires: "存在相关事实".repeat(120) }];
+  const samples = selectFastReferences([{ id: "long", title: "杂谈", transcript: quote, analysis: detail }], "评论");
+  assert.ok(samples[0].reason.length > 500);
+  const snapshot = { schemaVersion: 1, promptVersion: "test", referenceKey: "test", styleText: "风格", styleHash: "test",
+    samples, plan: fastWriterPlan("评论", samples), notes: [], preparedAt: new Date().toISOString() };
+  assert.deepEqual(writerContextSchema.parse(snapshot).plan?.selected[0].reason, samples[0].reason);
 });

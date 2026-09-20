@@ -11,7 +11,7 @@ type WriterStyleModalProps = {
 
 export function WriterStyleModal({ activeTitle, onClose, styleCards }: WriterStyleModalProps) {
   return (
-    <WriterDialogModal labelledBy="writer-style-dialog-title" onClose={onClose} panelClassName="writer-style-drawer">
+    <WriterDialogModal labelledBy="writer-style-dialog-title" onClose={onClose}>
       <div className="modal-header">
         <h2 id="writer-style-dialog-title">{activeTitle || "风格卡"}</h2>
         <button className="btn" onClick={onClose} type="button">

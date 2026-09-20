@@ -1,6 +1,5 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
 import { ExternalLink, FileText, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { formatDateWithYear, formatPlatform } from "@/components/Formatters";
@@ -14,12 +13,8 @@ type CopySourcePreviewModalProps = {
 export function CopySourcePreviewModal({ source, onClose }: CopySourcePreviewModalProps) {
   const analysis = source.materialAnalysis;
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") onClose();
-  }
-
   return (
-    <ModalBackdrop onClose={onClose} onKeyDown={handleKeyDown}>
+    <ModalBackdrop onClose={onClose}>
       <div aria-labelledby="copy-source-preview-title" aria-modal="true" className="modal-panel copy-source-preview-modal" role="dialog" tabIndex={-1}>
         <div className="modal-header">
           <div>

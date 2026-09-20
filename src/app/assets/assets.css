@@ -41,7 +41,7 @@
   display: grid;
   grid-template-columns: minmax(340px, 0.95fr) minmax(420px, 1.05fr);
   align-items: stretch;
-  min-height: calc(100vh - 244px);
+  min-height: calc(calc(var(--app-vh) * 100) - 244px);
 }
 
 .assets-main-pane .pane-body {
@@ -185,7 +185,7 @@
 .engagement-draft-list {
   display: grid;
   gap: 6px;
-  max-height: min(172px, 25vh);
+  max-height: min(172px, calc(var(--app-vh) * 25));
   overflow: auto;
   padding-right: 2px;
   overscroll-behavior: contain;
@@ -595,7 +595,7 @@
   }
 
   .engagement-history-pane {
-    max-height: min(440px, 60vh);
+    max-height: min(440px, calc(var(--app-vh) * 60));
   }
 }
 
@@ -612,7 +612,7 @@
 
   .engagement-content-grid {
     height: auto;
-    min-height: calc(100vh - 244px);
+    min-height: calc(calc(var(--app-vh) * 100) - 244px);
   }
 }
 

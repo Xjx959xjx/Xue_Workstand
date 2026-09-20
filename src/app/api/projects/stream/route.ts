@@ -60,6 +60,7 @@ export async function POST(request: Request) {
       let firstDeltaMs: number | undefined;
       emit({ type: "stage", stage: "generate", message: "正在生成项目风格卡", progress: 45 });
       const completion = await streamStyleResponseTextWithFallback({
+        policy: "project_style",
         messages: prepared.context.messages,
         signal,
         onDelta(delta) {

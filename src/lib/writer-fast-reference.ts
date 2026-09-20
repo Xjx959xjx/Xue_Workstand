@@ -133,22 +133,10 @@ export function selectFastReferences(candidates: FastReference[], task: string):
     const next = remaining.shift()!;
     const length = next.candidate.transcript.trim().length;
     if (available < Math.min(length, 1200)) break;
-    const budget = Math.min(length, 3000, available);
+    const budget = Math.min(length, available);
     selected.push({ ...next, budget });
     counts.set(next.category, (counts.get(next.category) || 0) + 1);
     available -= budget;
-  }
-  // 3000 is a reservation, not a per-source cap. Share unused space among long
-  // sources so complete works survive whenever the total budget permits.
-  while (available > 0) {
-    const expandable = selected.filter(item => item.budget < item.candidate.transcript.trim().length);
-    if (!expandable.length) break;
-    const share = Math.max(1, Math.floor(available / expandable.length));
-    for (const item of expandable) {
-      const extra = Math.min(share, available, item.candidate.transcript.trim().length - item.budget);
-      item.budget += extra;
-      available -= extra;
-    }
   }
   return selected.map(({ candidate, category, budget, purposeMatch, formMatch }) => {
     const text = excerpt(candidate, budget, instruction);

@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ClipboardPaste, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
@@ -15,7 +14,6 @@ export function GrossMarginBulkMonitorModal({
   onClose: () => void;
   onSubmit: (input: { template: string; createProject: boolean; projectName: string }) => Promise<void>;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
   const [template, setTemplate] = useState("");
   const parsed = useMemo(() => parseGrossMarginBulkMonitorTemplate(template), [template]);
   const defaultProjectName = useMemo(() => makeDefaultProjectName(parsed.items.length), [parsed.items.length]);
@@ -39,22 +37,12 @@ export function GrossMarginBulkMonitorModal({
     if (!createProjectTouched) setCreateProject(true);
   }, [canCreateProject, createProjectTouched]);
 
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, []);
-
   return (
     <ModalBackdrop disabled={busy} onClose={onClose}>
       <div
         aria-labelledby="gross-bulk-monitor-modal-title"
         aria-modal="true"
         className="modal-panel gross-bulk-monitor-modal"
-        onKeyDown={(event) => handleDialogKeyDown(event, onClose, busy)}
-        ref={panelRef}
         role="dialog"
         tabIndex={-1}
       >
@@ -191,40 +179,4 @@ function formatTargets(targetStats: Record<string, number>, platform: "bilibili"
 function formatMetric(value: number) {
   if (value >= 10000) return `${Number((value / 10000).toFixed(2)).toLocaleString("zh-CN")}万`;
   return value.toLocaleString("zh-CN");
-}
-
-function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>, onClose: () => void, busy: boolean) {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    if (!busy) onClose();
-    return;
-  }
-
-  if (event.key !== "Tab") return;
-
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-
-  if (!focusable.length) {
-    event.preventDefault();
-    event.currentTarget.focus();
-    return;
-  }
-
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-
-  if (document.activeElement === event.currentTarget) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus();
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }

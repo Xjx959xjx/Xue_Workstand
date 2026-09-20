@@ -6,7 +6,7 @@
   }
 
   .app-shell {
-    min-height: 100vh;
+    min-height: calc(var(--app-vh) * 100);
   }
 
   .main-content {
@@ -91,7 +91,7 @@
 
   .task-center-drawer {
     width: 100vw;
-    height: 100dvh;
+    height: calc(var(--app-dvh) * 100);
     max-width: none;
     max-height: none;
     left: 0;

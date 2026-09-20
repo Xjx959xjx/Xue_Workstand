@@ -1,13 +1,15 @@
 "use client";
 
-import type { KeyboardEventHandler, ReactNode } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
+import { useDialogInteraction } from "./useDialogInteraction";
 
 type ModalBackdropProps = {
   children: ReactNode;
   closeLabel?: string;
   disabled?: boolean;
   onClose: () => void;
-  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 };
 
 export function ModalBackdrop({
@@ -15,15 +17,19 @@ export function ModalBackdrop({
   closeLabel = "关闭弹窗",
   disabled = false,
   onClose,
-  onKeyDown
+  initialFocusRef,
+  returnFocusRef
 }: ModalBackdropProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const close = useDialogInteraction(rootRef, { onClose, disabled, initialFocusRef, returnFocusRef });
   return (
-    <div className="modal-backdrop" onKeyDown={onKeyDown}>
+    <div className="modal-backdrop" ref={rootRef}>
       <button
         aria-label={closeLabel}
         className="modal-backdrop-dismiss"
         disabled={disabled}
-        onClick={onClose}
+        onClick={close}
+        tabIndex={-1}
         type="button"
       />
       {children}

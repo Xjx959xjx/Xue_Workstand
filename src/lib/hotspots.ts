@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from "./concurrency";
 import path from "path";
 import { getDouyinHotlist } from "./douyin-hotlist";
 import { libraryRoot } from "./storage/core";
@@ -1502,24 +1503,6 @@ function dedupeBy<T>(items: T[], getKey: (item: T) => string) {
     result.push(item);
   }
   return result;
-}
-
-async function mapWithConcurrency<T, TResult>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T) => Promise<TResult>
-) {
-  const results = new Array<TResult>(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await mapper(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function inferBoard(title: string, config: HotspotSourceConfig): HotspotBoard {

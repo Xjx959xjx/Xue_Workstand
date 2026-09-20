@@ -214,7 +214,7 @@
 }
 
 .project-workbench-source-list.source-pool-scroll {
-  max-height: clamp(220px, 38vh, 430px);
+  max-height: clamp(220px, calc(var(--app-vh) * 38), 430px);
   overflow: auto;
   padding: 2px 2px 2px 0;
   overscroll-behavior: contain;
@@ -669,7 +669,7 @@
 }
 
 .project-picker-list {
-  max-height: min(460px, calc(100vh - 180px));
+  max-height: min(460px, calc(calc(var(--app-vh) * 100) - 180px));
   overflow: auto;
 }
 
@@ -891,7 +891,7 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(720px, calc(100vw - 32px));
-  max-height: min(720px, calc(100dvh - 32px));
+  max-height: min(720px, calc(calc(var(--app-dvh) * 100) - 32px));
 }
 
 .project-case-modal-body {
@@ -989,7 +989,7 @@
 .project-picker-body {
   grid-template-columns: 1fr;
   gap: 0;
-  max-height: min(650px, calc(100dvh - 130px));
+  max-height: min(650px, calc(calc(var(--app-dvh) * 100) - 130px));
   overflow: auto;
   padding: 0;
 }

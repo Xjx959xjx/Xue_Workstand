@@ -1,7 +1,7 @@
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  min-height: 100vh;
+  min-height: calc(var(--app-vh) * 100);
   background: var(--bg);
 }
 
@@ -9,7 +9,7 @@
   position: sticky;
   top: 0;
   z-index: 20;
-  height: 100vh;
+  height: calc(var(--app-vh) * 100);
   padding: 18px 14px;
   border-right: 1px solid color-mix(in oklch, var(--line) 90%, white);
 }
@@ -364,7 +364,7 @@
   grid-template-rows: auto auto minmax(0, 1fr);
   width: var(--task-drawer-width, 420px);
   max-width: calc(100vw - var(--task-drawer-left, 250px) - 16px);
-  max-height: calc(100vh - var(--task-drawer-bottom, 16px) - 16px);
+  max-height: calc(calc(var(--app-vh) * 100) - var(--task-drawer-bottom, 16px) - 16px);
   border: 1px solid color-mix(in oklch, var(--accent) 14%, var(--line));
   border-radius: var(--radius-xl);
   background: var(--glass-popover);

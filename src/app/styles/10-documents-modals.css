@@ -55,7 +55,7 @@
   z-index: 1;
   display: grid;
   width: min(860px, 100%);
-  max-height: calc(100vh - 48px);
+  max-height: calc(calc(var(--app-vh) * 100) - 48px);
   overflow: hidden;
   border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
   border-radius: var(--radius-xl);
@@ -99,7 +99,7 @@
 
 .source-preview-body .draft-document {
   max-width: none;
-  max-height: calc(100vh - 210px);
+  max-height: calc(calc(var(--app-vh) * 100) - 210px);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-color: var(--line-strong) transparent;
@@ -200,7 +200,7 @@
 }
 
 .copy-source-preview-text {
-  max-height: calc(100vh - 240px);
+  max-height: calc(calc(var(--app-vh) * 100) - 240px);
   overflow: auto;
   overscroll-behavior: contain;
   padding: 12px;
@@ -256,7 +256,7 @@
 
 .account-picker-list {
   display: grid;
-  max-height: min(430px, calc(100vh - 260px));
+  max-height: min(430px, calc(calc(var(--app-vh) * 100) - 260px));
   gap: 8px;
   overflow: auto;
   overscroll-behavior: contain;
@@ -392,7 +392,7 @@
 }
 
 .modal-content {
-  max-height: calc(100vh - 150px);
+  max-height: calc(calc(var(--app-vh) * 100) - 150px);
   overflow: auto;
   margin: 14px;
 }
