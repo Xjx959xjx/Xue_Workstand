@@ -1,0 +1,11 @@
+{
+  "model": "gpt-5.5",
+  "effort": "medium",
+  "status": "complete",
+  "usedModel": "gpt-5.5",
+  "durationMs": 20025,
+  "library": "/tmp/website-writer-UiSo8k",
+  "jobId": "job-write-copy-1789921600321-bb5193779e",
+  "draftId": "2026-09-20T16-26-59-680Z-f628810fcf",
+  "prompt": "按当前所选参考风格改写，保留素材核心信息和话题角度。"
+}

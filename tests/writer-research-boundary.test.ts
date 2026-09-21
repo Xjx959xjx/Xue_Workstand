@@ -4,9 +4,100 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { completePreparedWriteCopy, prepareWriteCopyContext } from "../src/lib/ai";
+import { buildOpenCliSearchQuery, buildWriterWebResearchMessages, completePreparedWriteCopy, prepareWriteCopyContext, webSearchCompleteStrict } from "../src/lib/ai";
 import { saveStyle, upsertAccount } from "../src/lib/storage";
 import { writerResearchBoundaryInstruction } from "../src/lib/writer-prompts";
+
+test("备用搜索优先使用明确作品名，避免搜索写作指令", () => {
+  assert.equal(buildOpenCliSearchQuery({ mode: "rewrite", prompt:
+    "按当前所选参考风格改写，保留素材核心信息和话题角度。写一期游戏《篮球少女》的杂谈，自来水一点，然后要有内容" }), "篮球少女 游戏");
+  assert.equal(buildOpenCliSearchQuery({ mode: "topic", prompt: "杭州秋季活动" }), "杭州秋季活动");
+});
+
+test("主题检索保留素材中的对象和时间条件，支持资料与要求分开传递", () => {
+  const input = { mode: "topic" as const, prompt: "写一期游戏杂谈", sourceText: "《篮球少女》2026年5月测试的玩家讨论",
+    supportDocContext: "官方说明：本次是测试版本" };
+  const messages = buildWriterWebResearchMessages(input);
+  assert.equal(messages.length, 2);
+  for (const content of [input.prompt, input.sourceText, input.supportDocContext]) {
+    assert.ok(messages[1].content.includes(content));
+  }
+  assert.ok(buildOpenCliSearchQuery(input).includes("篮球少女"));
+  const withoutMaterials = buildWriterWebResearchMessages({ mode: "topic", prompt: "杭州活动" });
+  assert.ok(!withoutMaterials[1].content.includes("undefined"));
+});
+
+test("搜索断流丢弃半截资料并非流式重试；取消和鉴权失败不重试", async () => {
+  const originalEnv = { ...process.env };
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-research-recovery-"));
+  let scenario = "disconnect";
+  const requests: Record<string, unknown>[] = [];
+  let controller = new AbortController();
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const payload = JSON.parse(body);
+    requests.push(payload);
+    if (scenario === "auth") {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "unauthorized" } }));
+      return;
+    }
+    if (payload.stream) {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "不完整资料" })}\n\n`);
+      if (scenario === "cancel") controller.abort();
+      if (scenario === "disconnect") setTimeout(() => res.destroy(), 20);
+      else res.end(); // A clean EOF without response.completed is also incomplete.
+      return;
+    }
+    if (scenario === "retry-eof") {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('data: {"type":"response.output_item.done","item":{"type":"web_search_call","status":"completed"}}\n\ndata: {"type":"response.output_text.delta","delta":"半截资料"}\n\n');
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "completed", output: [
+      { type: "web_search_call", status: "completed" },
+      { type: "message", content: [{ type: "output_text", text: "完整资料 https://example.com/source" }] }
+    ] }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  for (const key of Object.keys(process.env)) {
+    if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_)/.test(key)) delete process.env[key];
+  }
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, WEB_RESEARCH_ENABLED: "1",
+    WEB_RESEARCH_API_KEY: "fixture-key", WEB_RESEARCH_MODEL: "fixture",
+    WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
+    CHAT_FALLBACK_ENABLED: "0" });
+  try {
+    for (scenario of ["disconnect", "eof", "retry-eof", "auth", "cancel"]) {
+      requests.length = 0;
+      controller = new AbortController();
+      const run = () => webSearchCompleteStrict([{ role: "user", content: "搜索篮球少女" }], "low", { signal: controller.signal });
+      if (scenario === "retry-eof") {
+        await assert.rejects(run, /联网搜索连接中断/);
+        assert.equal(requests.length, 2, "重试仍不完整时明确失败，不继续无限重试");
+      } else if (scenario === "auth" || scenario === "cancel") {
+        await assert.rejects(run);
+        assert.equal(requests.length, 1);
+      } else {
+        const result = await run();
+        assert.equal(result.text, "完整资料 https://example.com/source");
+        assert.deepEqual(result.usedTools, ["web_search"]);
+        assert.deepEqual(requests.map(request => request.stream), [true, false]);
+        assert.deepEqual(requests[1].tools, [{ type: "web_search" }]);
+        for (const request of requests) assert.equal("max_output_tokens" in request, false, "首次和重试均不注入固定输出上限");
+      }
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
+    Object.assign(process.env, originalEnv);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("联网无结果与部分命中：首稿和续改区分检索状态与事实，状态仍可查看", async () => {
   const originalEnv = { ...process.env };
@@ -53,6 +144,7 @@ test("联网无结果与部分命中：首稿和续改区分检索状态与事�
       const prepared = await prepareWriteCopyContext(input);
       assert.equal(requests.length, count + 1, "准备首稿只请求一次联网研究");
       assert.deepEqual(requests.at(-1)?.tools, [{ type: "web_search" }]);
+      assert.equal("max_output_tokens" in requests.at(-1)!, false);
       assert.ok(prepared.messages[0].content.includes(writerResearchBoundaryInstruction()));
       assert.match(prepared.messages[1].content, /含内部检索状态，仅有依据的相关事实可用于成稿/);
       assert.ok(prepared.messages[1].content.includes(source), "素材本身的不确定性不被删词过滤");

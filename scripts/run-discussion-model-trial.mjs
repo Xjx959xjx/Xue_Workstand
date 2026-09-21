@@ -71,7 +71,7 @@ try {
       requestStarted = performance.now();
       const result = await streamResponseText({
         messages: buildDiscussionSimulationMessages(record.segments), reasoningEffort: trialReasoningEffort,
-        signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(120_000)]), maxOutputTokens: 1400,
+        signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(120_000)]),
         onDelta(delta) {
           if (!delta) return;
           if (record.firstTextMs === null) {

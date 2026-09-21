@@ -15,6 +15,7 @@ import { upsertAccount, saveStyle, readStyle, saveVideos, saveTranscript, saveDr
 import { addWriterPreference } from "../src/lib/writer-preference";
 import { POST as preferenceRoute } from "../src/app/api/write/preference/route";
 import { POST as saveDraftRoute } from "../src/app/api/drafts/route";
+import { shortHash } from "../src/lib/utils";
 import type { Account, Video, Draft } from "../src/lib/types";
 import { streamStyleResponseTextWithFallback } from "../src/lib/ai";
 
@@ -128,15 +129,15 @@ test("长文优先保留衔接两端之间的原文，片段有分隔且不超�
   for (const budget of [0, 20, 70, 150, 300]) assert.ok(referenceText(sample, budget).length <= budget);
 });
 
-test("吃瓜推广的衔接进入选样、首稿和风格卡引用，纯评论也允许没有推广段", async () => {
+test("原作衔接用于风格学习，默认首稿不自动附带原作", async () => {
   await fixture(async ({ account, requests, setReply }) => {
     await saveVideos(account, [video(account, "mixed", "景区奇怪现象", 10)]);
     await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "mixed", text: mixedEventText, source: "manual" });
     setReply(() => JSON.stringify(mixedEventEvidence));
     const prepared = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "rewrite", prompt: inputText, sourceText: inputText });
     assert.equal(requests.length, 0, "直接写作准备不调用模型");
-    assert.ok(prepared.messages[1].content.includes(mixedEventText), "成稿阶段仍有完整原文上下文");
-    assert.equal(prepared.draftBase?.writerContext?.samples[0].id, `douyin:${account.id}:mixed`);
+    assert.ok(!prepared.messages[1].content.includes(mixedEventText), "成稿只使用风格卡，不自动附带学习原文");
+    assert.deepEqual(prepared.draftBase?.writerContext?.samples, []);
     assert.deepEqual(prepared.draftBase?.writerContext?.plan?.task.facts, [], "范文旧活动不变成本次事实");
     const context = await prepareAccountStyleContext(account.platform, account.id);
     const style = styleCard("mixed", eventBefore).replace("## 使用边界", `[[mixed]]「${eventAfter}」\n## 使用边界`);
@@ -147,7 +148,7 @@ test("吃瓜推广的衔接进入选样、首稿和风格卡引用，纯评论�
   });
 });
 
-test("真实准备链路读取低热度全文、复用分析；快照经过保存API与续改仍保持原风格", async () => {
+test("默认写作不读取原作；风格快照经过保存API与续改仍保持原风格", async () => {
   await fixture(async ({ account, requests, setReply, root }) => {
     const samples = [
       { id: "hot", title: "争议周报", transcript: "本周争议发生反转，这类说法必须先核实。", views: 100000 },
@@ -169,8 +170,10 @@ test("真实准备链路读取低热度全文、复用分析；快照经过保�
     const input = { platform: account.platform, accountId: account.id, mode: "rewrite" as const, prompt: inputText, sourceText: inputText };
     const prepared = await prepareWriteCopyContext(input);
     assert.equal(requests.length, 0);
-    assert.ok(prepared.messages[1].content.includes(quote));
-    assert.ok(prepared.draftBase?.styleRefs?.[0].targetType === "account" && prepared.draftBase.styleRefs[0].videoIds?.includes("event"), "低热度原文仍能进入参考");
+    assert.ok(!prepared.messages[1].content.includes(quote));
+    assert.doesNotMatch(prepared.messages[1].content, /未启用联网|未提供支持文档|代表样本|交付前只做/);
+    assert.ok(prepared.draftBase?.styleRefs?.[0].targetType === "account" && !prepared.draftBase.styleRefs[0].videoIds?.length, "不将未使用的原文记录为引用");
+    assert.deepEqual(prepared.writerContext?.samples, []);
     await prepareWriteCopyContext(input);
     assert.equal(requests.length, 0, "重复写作准备也不调用模型");
     const shortResult = await completePreparedWriteCopy({ prepared, save: false, result: { text: "联名", model: "test", ok: true, fallback: false } });
@@ -196,6 +199,26 @@ test("真实准备链路读取低热度全文、复用分析；快照经过保�
     assert.ok((await fs.readdir(path.join(root, "douyin", account.slug, ".style-history"))).length > 0);
     const invalid = { ...manual, writerContext: { ...before, samples: "损坏" } };
     assert.throws(() => parseStoredRecord("draft", invalid, "draft"), /结构无效/);
+  });
+});
+
+test("旧稿普通续改不附带原作，显式校准仅复用保存的原作", async () => {
+  await fixture(async ({ account, requests }) => {
+    const prepared = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id, mode: "topic", prompt: "介绍活动", sourceText: "周六可免费试驾。" });
+    assert.ok(prepared.messages[1].content.includes("周六可免费试驾。"), "主题写作也传入实际素材");
+    const snapshot = prepared.writerContext!;
+    const original = "旧稿保存的独特原作段落，仅供显式校准。";
+    snapshot.samples = [{ id: `douyin:${account.id}:legacy`, title: "历史参考", text: original, hash: shortHash(original), reason: "历史选样" }];
+    const result = await completePreparedWriteCopy({ prepared, save: true, result: { text: "活动正文", model: "fixture", ok: true, fallback: false } });
+    const draft = result.draft!;
+    for (const revisionMode of ["edit", "recalibrate"] as const) {
+      const revised = await prepareWriteCopyContext({ action: "revise", mode: "topic", prompt: draft.prompt, parentDraftId: draft.id,
+        currentContent: draft.content, revisionInstruction: "开头更自然", revisionMode, revisionScope: "selection", selectedText: "活动正文" });
+      assert.equal(revised.messages[1].content.includes(original), revisionMode === "recalibrate");
+      assert.match(revised.messages[1].content, /其他段落保持不变/);
+      assert.deepEqual(revised.draftBase?.writerContext, draft.writerContext, "参考输入变化不重写历史快照");
+    }
+    assert.equal(requests.length, 0, "准备与校准不额外调用模型读取或筛选原作");
   });
 });
 

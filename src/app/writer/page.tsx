@@ -15,6 +15,8 @@ import {
   History,
   MessageSquarePlus,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Paperclip,
   PenLine,
   Plus,
@@ -26,6 +28,8 @@ import {
 import { splitWriterSourceItems } from "./_lib/source-items";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterPreference } from "./_components/WriterPreference";
+import { WriterPromptField } from "./_components/WriterPromptField";
+import { WriterDialogModal } from "./_components/WriterDialogModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterReferencePicker } from "./_components/WriterReferencePicker";
 import { WriterStyleModal } from "./_components/WriterStyleModal";
@@ -50,7 +54,6 @@ import {
   writeStyleReferenceKey
 } from "@/lib/write-references";
 import {
-  DEFAULT_REWRITE_PROMPT,
   extractRewriteSourceMaterial,
   mergeWriterSourceInput,
   normalizeRewritePrompt,
@@ -101,6 +104,8 @@ function WriterPageContent() {
   const [styleOpen, setStyleOpen] = useState(false);
   const [researchOpen, setResearchOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [sourceExpansion, setSourceExpansion] = useState<{ draftId: string; open: boolean } | null>(null);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
   const [sourceDragActive, setSourceDragActive] = useState(false);
   const [sourceImporting, setSourceImporting] = useState(false);
@@ -108,6 +113,7 @@ function WriterPageContent() {
   const loadedDraftParamRef = useRef("");
   const appliedSearchParamRef = useRef("");
   const draftEditorRef = useRef<HTMLTextAreaElement>(null);
+  const revisionInputRef = useRef<HTMLTextAreaElement>(null);
   const sourceDragDepthRef = useRef(0);
   const sourceFileInputRef = useRef<HTMLInputElement>(null);
   const webResearchCapability = remoteStatus.status?.capabilities.webResearch;
@@ -280,6 +286,8 @@ function WriterPageContent() {
     setNotice
   });
   const displayResearch = lastResearch;
+  const sourceExpanded = sourceExpansion?.draftId === lastDraftId ? sourceExpansion.open : !lastDraftId;
+  const draftCharacterCount = lastContent.replace(/\s/g, "").length;
 
   useEffect(() => {
     setResearchOpen(false);
@@ -343,6 +351,8 @@ function WriterPageContent() {
     setRevisionScope("full");
     setSelectedDraftText("");
     setHistoryOpen(false);
+    setFocusMode(false);
+    setSourceExpansion(null);
 
     const params = createWriterReferenceParams(selectedStyleRefs, "topic");
     router.replace(`/writer?${params.toString()}`, { scroll: false });
@@ -519,7 +529,7 @@ function WriterPageContent() {
 
   return (
     <div
-      className="page writer-page"
+      className={`page writer-page${focusMode ? " writer-focus-mode" : ""}`}
       data-unsaved-changes={hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()) ? "true" : undefined}
     >
       <header className="page-header writer-page-header">
@@ -542,166 +552,189 @@ function WriterPageContent() {
             </div>
           </div>
         </div>
+        <div className="page-header-meta writer-page-actions">
+          <button
+            aria-controls="writer-task-panel"
+            aria-expanded={!focusMode}
+            className="btn"
+            onClick={() => setFocusMode((focused) => !focused)}
+            type="button"
+          >
+            {focusMode ? <PanelLeftOpen aria-hidden="true" size={16} /> : <PanelLeftClose aria-hidden="true" size={16} />}
+            {focusMode ? "展开任务资料" : "专注写稿"}
+          </button>
+          <button className="btn" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
+            <Plus aria-hidden="true" size={16} />
+            新建任务
+          </button>
+        </div>
       </header>
 
       <section className="writer-workbench">
         <section className="panel writer-main">
-          <div className="writer-refbar">
-            <div className="writer-reference-control">
-              <span>参考风格</span>
-              <WriterReferencePicker
-                accounts={library?.accounts || EMPTY_ACCOUNTS}
-                disabled={loading}
-                onChange={setStyleRefs}
-                projects={library?.projects || EMPTY_PROJECTS}
-                references={selectedStyleRefs}
-              />
-            </div>
-
-            <div className="writer-reference-status" aria-label="当前风格卡状态">
-              <span className="writer-reference-icon" aria-hidden="true">
-                <FileText aria-hidden="true" size={14} />
-              </span>
-              <span className="writer-reference-copy">
-                <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyleError ? "风格卡读取失败" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
-                <small>
-                  {activeSubtitle || "参考风格"}
-                  {activeStyleLoading ? "" : activeStyleError ? " · 查看详情" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
-                </small>
-              </span>
-              <button
-                aria-label={styleCards.length > 1 ? `查看${activeTitle}` : `查看${activeTitle || "当前参考"}风格卡`}
-                className="btn ghost icon-only writer-style-trigger"
-                disabled={!styleCards.length}
-                onClick={() => setStyleOpen(true)}
-                title="查看风格卡"
-                type="button"
-              >
-                <Eye aria-hidden="true" size={16} />
-              </button>
-            </div>
-          </div>
-
           <div className="writer-content-grid">
-            <div className="writer-task">
+            <div className="writer-task" id="writer-task-panel" hidden={focusMode}>
               <div className="section-title-row">
                 <div>
-                  <h2>写作任务</h2>
-                  <p className="pane-subtitle">说清目标，有素材就贴；其余交给系统处理。</p>
+                  <h2>本次任务</h2>
+                  <p className="pane-subtitle">选好风格，把想法交给这篇稿件。</p>
                 </div>
                 <div className="writer-task-heading-actions">
                   <span className={`status-pill ${hasTaskInput ? "done" : "pending"}`}>{materialStatusLabel}</span>
-                  <button className="btn compact" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
-                    <Plus aria-hidden="true" size={15} />
-                    新建任务
-                  </button>
                 </div>
               </div>
 
-              <label className="writer-field">
-                <span>这次想怎么写</span>
-                <textarea
-                  aria-label="写作要求"
-                  autoComplete="off"
-                  className="writer-textarea main"
-                  name="prompt"
-                  placeholder={DEFAULT_REWRITE_PROMPT}
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                />
-              </label>
+              <div className="writer-refbar">
+                <div className="writer-reference-control">
+                  <span>参考风格</span>
+                  <WriterReferencePicker
+                    accounts={library?.accounts || EMPTY_ACCOUNTS}
+                    disabled={loading}
+                    onChange={setStyleRefs}
+                    projects={library?.projects || EMPTY_PROJECTS}
+                    references={selectedStyleRefs}
+                  />
+                </div>
 
-              <div className="writer-field writer-source-field">
-                <div className="writer-source-label-row">
-                  <label htmlFor="writer-source-text">素材 / 原文 / 支持文档</label>
+                <div className="writer-reference-status" aria-label="当前风格卡状态">
+                  <span className="writer-reference-icon" aria-hidden="true">
+                    <FileText aria-hidden="true" size={14} />
+                  </span>
+                  <span className="writer-reference-copy">
+                    <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyleError ? "风格卡读取失败" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
+                    <small>
+                      {activeSubtitle || "参考风格"}
+                      {activeStyleLoading ? "" : activeStyleError ? " · 查看详情" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
+                    </small>
+                  </span>
                   <button
-                    aria-busy={sourceImporting}
-                    className="btn small ghost writer-source-file-button"
-                    disabled={sourceImporting}
-                    onClick={() => sourceFileInputRef.current?.click()}
-                    title="支持 TXT、Markdown、CSV、JSON、HTML、字幕和 DOCX"
+                    aria-label={styleCards.length > 1 ? `查看${activeTitle}` : `查看${activeTitle || "当前参考"}风格卡`}
+                    className="btn ghost icon-only writer-style-trigger"
+                    disabled={!styleCards.length}
+                    onClick={() => setStyleOpen(true)}
+                    title="查看风格卡"
                     type="button"
                   >
-                    <Paperclip aria-hidden="true" size={14} />
-                    {sourceImporting ? "导入中" : "添加文件"}
+                    <Eye aria-hidden="true" size={16} />
                   </button>
-                  <input
-                    accept={WRITER_SOURCE_FILE_ACCEPT}
-                    aria-label="选择素材文件"
-                    className="writer-source-file-input"
-                    disabled={sourceImporting}
-                    multiple
-                    onChange={(event) => void handleSourceFiles(Array.from(event.target.files || []))}
-                    ref={sourceFileInputRef}
-                    type="file"
-                  />
-                </div>
-                <div
-                  className={`writer-source-dropzone ${sourceDragActive ? "drag-active" : ""}`}
-                  onDragEnter={handleSourceDragEnter}
-                  onDragLeave={handleSourceDragLeave}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "copy";
-                  }}
-                  onDrop={handleSourceDrop}
-                >
-                  <textarea
-                    aria-label="素材、原文、视频链接或支持文档"
-                    autoComplete="off"
-                    className="writer-textarea source"
-                    id="writer-source-text"
-                    name="sourceText"
-                    placeholder="可选：粘贴原文、抖音/B站视频链接、飞书/企业微信/腾讯文档或公开网页链接；多条资料换行即可。"
-                    value={sourceEditorText}
-                    onChange={(event) => {
-                      const text = event.target.value;
-                      setSourceText((current) => {
-                        const files = splitWriterSourceItems(current).filter((item) => item.kind === "file");
-                        return [text, ...files.map((file) => file.raw)].filter(Boolean).join("\n\n");
-                      });
-                    }}
-                  />
-                  {sourceDragActive ? (
-                    <div className="writer-source-drop-overlay" aria-hidden="true">
-                      <Paperclip size={20} />
-                      <strong>松开即可导入</strong>
-                    </div>
-                  ) : null}
                 </div>
               </div>
-              {sourceFiles.length ? (
-                <div className="writer-attachments" aria-label="参考附件" aria-live="polite">
-                  {sourceFiles.map((file, index) => (
-                    <div className="source-detect-row" key={`${index}:${file.title}`}>
-                      <FileText size={14} aria-hidden="true" />
-                      <span>{file.title}</span>
-                      <small>{file.content.length.toLocaleString()} 字 · 已作为参考资料</small>
+
+              <WriterPromptField prompt={prompt} onChange={setPrompt} />
+
+              <section className={`writer-source-section${sourceExpanded ? " is-expanded" : ""}`}>
+                <button
+                  aria-controls="writer-source-content"
+                  aria-expanded={sourceExpanded}
+                  className="writer-source-toggle"
+                  onClick={() => setSourceExpansion({ draftId: lastDraftId, open: !sourceExpanded })}
+                  type="button"
+                >
+                  <Paperclip aria-hidden="true" size={16} />
+                  <span><strong>素材与原文</strong><small>{materialStatusLabel} · {sourceExpanded ? "收起资料" : "展开查看或编辑"}</small></span>
+                  <ChevronDown aria-hidden="true" size={15} />
+                </button>
+                <div id="writer-source-content" className="writer-source-content" hidden={!sourceExpanded}>
+                  <div className="writer-field writer-source-field">
+                    <div className="writer-source-label-row">
+                      <label htmlFor="writer-source-text">素材 / 原文 / 支持文档</label>
                       <button
-                        className="btn small ghost icon-only"
+                        aria-busy={sourceImporting}
+                        className="btn small ghost writer-source-file-button"
+                        disabled={sourceImporting}
+                        onClick={() => sourceFileInputRef.current?.click()}
+                        title="支持 TXT、Markdown、CSV、JSON、HTML、字幕和 DOCX"
                         type="button"
-                        aria-label={`移除附件 ${file.title}`}
-                        disabled={Boolean(busy) || sourceImporting}
-                        onClick={() => setSourceText((current) => {
-                          const target = splitWriterSourceItems(current).filter((item) => item.kind === "file")[index];
-                          return target ? current.slice(0, target.start) + current.slice(target.end) : current;
-                        })}
                       >
-                        <X size={14} aria-hidden="true" />
+                        <Paperclip aria-hidden="true" size={14} />
+                        {sourceImporting ? "导入中" : "添加文件"}
                       </button>
+                      <input
+                        accept={WRITER_SOURCE_FILE_ACCEPT}
+                        aria-label="选择素材文件"
+                        className="writer-source-file-input"
+                        disabled={sourceImporting}
+                        multiple
+                        onChange={(event) => void handleSourceFiles(Array.from(event.target.files || []))}
+                        ref={sourceFileInputRef}
+                        type="file"
+                      />
                     </div>
-                  ))}
+                    <div
+                      className={`writer-source-dropzone ${sourceDragActive ? "drag-active" : ""}`}
+                      onDragEnter={handleSourceDragEnter}
+                      onDragLeave={handleSourceDragLeave}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "copy";
+                      }}
+                      onDrop={handleSourceDrop}
+                    >
+                      <textarea
+                        aria-label="素材、原文、视频链接或支持文档"
+                        autoComplete="off"
+                        className="writer-textarea source"
+                        id="writer-source-text"
+                        name="sourceText"
+                        placeholder="可选：粘贴原文、抖音/B站视频链接、飞书/企业微信/腾讯文档或公开网页链接；多条资料换行即可。"
+                        value={sourceEditorText}
+                        onChange={(event) => {
+                          const text = event.target.value;
+                          setSourceText((current) => {
+                            const files = splitWriterSourceItems(current).filter((item) => item.kind === "file");
+                            return [text, ...files.map((file) => file.raw)].filter(Boolean).join("\n\n");
+                          });
+                        }}
+                      />
+                      {sourceDragActive ? (
+                        <div className="writer-source-drop-overlay" aria-hidden="true">
+                          <Paperclip size={20} />
+                          <strong>松开即可导入</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                  {sourceFiles.length ? (
+                    <div className="writer-attachments" aria-label="参考附件" aria-live="polite">
+                      {sourceFiles.map((file, index) => (
+                        <div className="source-detect-row" key={`${index}:${file.title}`}>
+                          <FileText size={14} aria-hidden="true" />
+                          <span>{file.title}</span>
+                          <small>{file.content.length.toLocaleString()} 字 · 已作为参考资料</small>
+                          <button
+                            className="btn small ghost icon-only"
+                            type="button"
+                            aria-label={`移除附件 ${file.title}`}
+                            disabled={Boolean(busy) || sourceImporting}
+                            onClick={() => setSourceText((current) => {
+                              const target = splitWriterSourceItems(current).filter((item) => item.kind === "file")[index];
+                              return target ? current.slice(0, target.start) + current.slice(target.end) : current;
+                            })}
+                          >
+                            <X size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {sourceText.trim() ? (
+                    <div className="source-detect-row" aria-live="polite">
+                      {sourceFileCount ? <span className="status-pill done">{sourceFileCount} 个本地文件</span> : null}
+                      {separatedSourceInput.supportDocumentCount ? <span className="status-pill done">{separatedSourceInput.supportDocumentCount} 份支持文档</span> : null}
+                      {sourceExtraction.pendingLinkCount ? <span className="status-pill pending">{sourceExtraction.pendingLinkCount} 个视频链接待转写</span> : null}
+                      {sourceExtraction.reusedTextLinkCount ? <span className="status-pill done">{sourceExtraction.reusedTextLinkCount} 个链接复用已有文案</span> : null}
+                      {nonFileTextMaterialCount ? <span className="status-pill">{nonFileTextMaterialCount} 条文案</span> : null}
+                      {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
+                    </div>
+                  ) : null}
+
                 </div>
-              ) : null}
-              {sourceText.trim() ? (
-                <div className="source-detect-row" aria-live="polite">
-                  {sourceFileCount ? <span className="status-pill done">{sourceFileCount} 个本地文件</span> : null}
-                  {separatedSourceInput.supportDocumentCount ? <span className="status-pill done">{separatedSourceInput.supportDocumentCount} 份支持文档</span> : null}
-                  {sourceExtraction.pendingLinkCount ? <span className="status-pill pending">{sourceExtraction.pendingLinkCount} 个视频链接待转写</span> : null}
-                  {sourceExtraction.reusedTextLinkCount ? <span className="status-pill done">{sourceExtraction.reusedTextLinkCount} 个链接复用已有文案</span> : null}
-                  {nonFileTextMaterialCount ? <span className="status-pill">{nonFileTextMaterialCount} 条文案</span> : null}
-                  {sourceExtraction.onlyLinkCount ? <span className="status-pill pending">{sourceExtraction.onlyLinkCount} 条仅链接</span> : null}
-                </div>
+              </section>
+              {lastDraftId ? (
+                <details className="writer-preference-disclosure" key={lastDraftId}>
+                  <summary><PenLine aria-hidden="true" size={15} /><span>长期写作偏好</span><ChevronDown aria-hidden="true" size={14} /></summary>
+                  <WriterPreference draftId={lastDraftId} disabled={Boolean(busy)} onSaved={refresh} />
+                </details>
               ) : null}
 
               <div className="writer-actionbar">
@@ -723,7 +756,7 @@ function WriterPageContent() {
                     {useWebResearch ? "已联网" : webResearchAvailable ? "联网" : "联网不可用"}
                   </button>
                   <button
-                    className="btn primary writer-generate-button"
+                    className={`btn ${lastContent ? "secondary" : "primary"} writer-generate-button`}
                     disabled={!canGenerate}
                     onClick={() => void handleGenerate()}
                     title={canGenerate
@@ -734,7 +767,7 @@ function WriterPageContent() {
                     <Sparkles aria-hidden="true" size={16} />
                     {busy === "generate"
                       ? "生成中"
-                      : selectedStyleRefs.length > 1 ? `并发生成 ${selectedStyleRefs.length} 篇` : "生成文案"}
+                      : selectedStyleRefs.length > 1 ? `并发生成 ${selectedStyleRefs.length} 篇` : lastContent ? "重新生成文案" : "生成文案"}
                   </button>
                   {canStopGenerate ? (
                     <button className="btn ghost" onClick={() => void handleStopGenerate()} type="button">
@@ -747,23 +780,29 @@ function WriterPageContent() {
             </div>
 
             <div className="writer-result" id="writer-result">
-              <div className="section-title-row">
+              <div className="section-title-row writer-document-toolbar">
                 <div className="writer-result-title">
                   <h2>当前稿件</h2>
                   {lastDraftId ? <span className="status-pill done">V{lastDraftVersion?.revision || 1}</span> : null}
-                  {hasUnsavedChanges ? <span className="status-pill pending">有未保存编辑</span> : null}
+                  {lastContent ? <span className="writer-document-count" title="不含空白字符">{draftCharacterCount.toLocaleString()} 字</span> : null}
+                  {hasUnsavedChanges ? <span className="status-pill pending">未保存</span> : null}
                 </div>
                 <div className="writer-result-actions">
                   <button
-                    aria-label={`打开版本历史，共 ${historyDrafts.length} 个版本`}
+                    aria-label="打开稿件历史，查看当前稿件版本或全部历史"
                     className="btn compact writer-history-trigger"
                     onClick={() => setHistoryOpen(true)}
                     type="button"
                   >
                     <History aria-hidden="true" size={15} />
-                    版本历史
-                    <span className="writer-history-count">{historyLoading ? "…" : historyDrafts.length}</span>
+                    稿件历史
                   </button>
+                  {displayResearch ? (
+                    <button className="btn compact" onClick={() => setResearchOpen(true)} type="button" aria-haspopup="dialog">
+                      <BookOpenText aria-hidden="true" size={15} />
+                      {displayResearch.includes("成稿检查（需修改）") ? "参考资料 · 待检查" : "参考资料"}
+                    </button>
+                  ) : null}
                   {lastContent ? (
                     <>
                     <button className="btn compact" onClick={copyLast} type="button">
@@ -836,27 +875,6 @@ function WriterPageContent() {
                   ))}
                 </div>
               ) : null}
-              {displayResearch ? (
-                <section className={`style-reference ${researchOpen ? "is-open" : ""}`}>
-                  <button
-                    aria-controls="writer-research-reference"
-                    aria-expanded={researchOpen}
-                    className="style-reference-summary"
-                    onClick={() => setResearchOpen((open) => !open)}
-                    type="button"
-                  >
-                    <span className="style-reference-icon" aria-hidden="true">
-                      <BookOpenText size={16} />
-                    </span>
-                    <span className="style-reference-heading">
-                      <span className="style-reference-title">参考资料</span>
-                      <small>{displayResearch.includes("成稿检查（需修改）") ? "有未满足的要求，请展开检查" : "本稿选用的写法、原文与资料"}</small>
-                    </span>
-                    <ChevronDown className="style-reference-chevron" aria-hidden="true" size={16} />
-                  </button>
-                  {researchOpen ? <ResearchReferenceBody id="writer-research-reference" text={displayResearch} /> : null}
-                </section>
-              ) : null}
               {lastContent ? (
                 <textarea
                   aria-label="当前稿件"
@@ -880,34 +898,34 @@ function WriterPageContent() {
                   <p>{busy === "generate" ? "正在整理素材、风格和写作要求。" : `${activeTitle || "当前参考"} · ${materialStatusLabel}`}</p>
                 </div>
               )}
-              {lastDraftId ? <WriterPreference key={lastDraftId} draftId={lastDraftId} disabled={Boolean(busy)} onSaved={refresh} /> : null}
               {lastContent ? (
                 <section className="writer-revision-composer" aria-labelledby="writer-revision-title">
                   <div className="writer-revision-head">
                     <div>
-                      <h3 id="writer-revision-title">继续修改</h3>
-                      <p>{selectedDraftText ? `已选中 ${selectedDraftText.length} 字` : "基于当前版本生成下一版"}</p>
+                      <h3 id="writer-revision-title">继续修改 <span>基于 V{lastDraftVersion?.revision || 1}</span></h3>
                     </div>
                     {selectedDraftText ? (
                       <button className="writer-selection-chip" onClick={handleClearDraftSelection} type="button">
-                        只改选中内容
+                        只改选中 {selectedDraftText.length} 字
                         <X aria-hidden="true" size={13} />
                       </button>
                     ) : null}
+                    <label className="writer-revision-mode">
+                      <span>修改方式</span>
+                      <select className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
+                        onChange={(event) => setRevisionMode(event.target.value as "edit" | "recalibrate")}>
+                        <option value="edit">按要求微调</option>
+                        <option value="recalibrate">重新校准风格</option>
+                      </select>
+                    </label>
                   </div>
-                  <label className="writer-field">
-                    <span>修改方式</span>
-                    <select className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
-                      onChange={(event) => setRevisionMode(event.target.value as "edit" | "recalibrate")}>
-                      <option value="edit">按要求微调</option>
-                      <option value="recalibrate">重新校准风格</option>
-                    </select>
-                    <span id="writer-revision-mode-help">{revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达；选中段落时只调整选中范围。" : "处理本轮点名的问题，尽量保留其余表达。"}</span>
-                  </label>
                   <label className="writer-field">
                     <span>本轮修改要求</span>
                     <textarea
                       aria-label="本轮修改要求"
+                      aria-describedby="writer-revision-mode-help"
+                      ref={revisionInputRef}
+                      rows={2}
                       className="writer-textarea revision"
                       disabled={busy === "generate"}
                       onChange={(event) => setRevisionInstruction(event.target.value)}
@@ -922,7 +940,17 @@ function WriterPageContent() {
                     />
                   </label>
                   <div className="writer-revision-actions">
-                    <span>{selectedDraftText ? "会只调整选中内容，并返回完整新稿。" : "在稿件里选中文字，可直接切换为局部修改。"}</span>
+                    <div className="writer-revision-shortcuts" aria-label="快捷修改要求">
+                      {[
+                        ["精简篇幅", "精简篇幅，保留核心信息和原有表达风格。"],
+                        ["加强开头", "加强开头的吸引力，其余内容尽量保持不变。"]
+                      ].map(([label, instruction]) => (
+                        <button className="btn small ghost" disabled={Boolean(busy)} key={label} type="button" onClick={() => {
+                          setRevisionInstruction((current) => current.trim() ? `${current.trim()}\n${instruction}` : instruction);
+                          revisionInputRef.current?.focus();
+                        }}>{label}</button>
+                      ))}
+                    </div>
                     <button
                       aria-busy={busy === "generate"}
                       className="btn primary"
@@ -934,6 +962,10 @@ function WriterPageContent() {
                       {busy === "generate" ? "生成中" : `生成 V${(lastDraftVersion?.revision || 1) + 1}`}
                     </button>
                   </div>
+                  <p className="writer-revision-help" id="writer-revision-mode-help">
+                    {selectedDraftText ? "仅修改选中内容，生成完整新版本。" : revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达。" : "选中文字可局部修改；其余表达尽量保留。"}
+                    <span>⌘ / Ctrl + Enter</span>
+                  </p>
                 </section>
               ) : null}
             </div>
@@ -952,6 +984,16 @@ function WriterPageContent() {
           onSelectDraft={handleSelectHistoryDraft}
         />
       </section>
+
+      {researchOpen && displayResearch ? (
+        <WriterDialogModal labelledBy="writer-reference-dialog-title" onClose={() => setResearchOpen(false)} panelClassName="writer-reference-dialog">
+          <div className="modal-header">
+            <div><h2 id="writer-reference-dialog-title">本稿参考资料</h2><p className="subtle">生成当前稿件时使用的写法、原文与资料</p></div>
+            <button className="btn ghost icon-only" aria-label="关闭参考资料" onClick={() => setResearchOpen(false)} type="button"><X aria-hidden="true" size={18} /></button>
+          </div>
+          <ResearchReferenceBody text={displayResearch} />
+        </WriterDialogModal>
+      ) : null}
 
       {styleOpen ? (
         <WriterStyleModal activeTitle={activeTitle} onClose={() => setStyleOpen(false)} styleCards={styleCards} />

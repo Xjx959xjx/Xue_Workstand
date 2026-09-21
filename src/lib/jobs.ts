@@ -698,7 +698,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   const sourceExtraction = extractRewriteSourceMaterial(separatedSourceInput.sourceText);
   await patchJob(jobId, {
     stage: "prepare",
-    message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡、代表样本和共享资料",
+    message: isRevision ? "正在读取当前稿件和版本上下文" : "正在读取风格卡和共享资料",
     progress: 10
   });
 

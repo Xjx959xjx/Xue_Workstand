@@ -1,4 +1,11 @@
 import type { ImageFile, ImageGenerationConfig, ImageGenerationList, ImageGenerationRecord } from "./image-generation-types";
+import type { WriterPromptAssistResult } from "./writer-prompt-assist";
+
+export function polishWriterPrompt(prompt: string, signal: AbortSignal) {
+  return requestJson<WriterPromptAssistResult>("/api/write/prompt-assist", {
+    method: "POST", body: JSON.stringify({ prompt }), signal
+  });
+}
 import {
   AccountDraftInput,
   AccountDetail,

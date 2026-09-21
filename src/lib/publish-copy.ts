@@ -123,7 +123,7 @@ ${clampText(input.sourceText, 1800)}`
       }
     ],
     "medium",
-    { policy: "publish_plan", signal: options.signal, maxOutputTokens: 520 }
+    { policy: "publish_plan", signal: options.signal }
   );
   throwIfAborted(options.signal);
 
@@ -338,7 +338,7 @@ ${formatReferenceSamples(input.references)}
       }
     ],
     "medium",
-    { policy: "publish_generate", signal: input.signal, maxOutputTokens: 2400 }
+    { policy: "publish_generate", signal: input.signal }
   );
   throwIfAborted(input.signal);
 

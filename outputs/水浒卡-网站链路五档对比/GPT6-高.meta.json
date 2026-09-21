@@ -1,0 +1,11 @@
+{
+  "model": "gpt-6-astra",
+  "effort": "high",
+  "status": "complete",
+  "usedModel": "gpt-6-astra",
+  "durationMs": 34042,
+  "library": "/tmp/website-writer-yGJyr9",
+  "jobId": "job-write-copy-1789921643830-3fe68c2db5",
+  "draftId": "2026-09-20T16-27-57-801Z-810668af51",
+  "prompt": "按当前所选参考风格改写，保留素材核心信息和话题角度。"
+}

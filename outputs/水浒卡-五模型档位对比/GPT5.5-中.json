@@ -1,0 +1,15 @@
+{
+  "model": "gpt-5.5",
+  "effort": "medium",
+  "status": "complete",
+  "returnedModel": "gpt-5.5",
+  "reasoningEffort": "medium",
+  "attempts": [
+    {
+      "attempt": 1,
+      "ok": true,
+      "durationMs": 15397
+    }
+  ],
+  "promptHash": "06ba331afa925c59c03131b21c3c1c382735ef926491dda39029578f18d302aa"
+}
