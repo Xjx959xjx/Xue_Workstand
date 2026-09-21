@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
+import { createJob } from "@/lib/jobs";
 import { getHotspotRadar } from "@/lib/hotspots";
 
 export const runtime = "nodejs";
 
 const postSchema = z.object({
-  action: z.enum(["refresh"]).default("refresh")
+  action: z.enum(["refresh", "retry-report"]).default("refresh")
 });
 
 export async function GET(request: Request) {
@@ -16,8 +17,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   return apiJson(async () => {
-    await parseJsonBody(request, postSchema);
-    return getHotspotRadar({ refresh: true, signal: request.signal });
+    const body = await parseJsonBody(request, postSchema);
+    return createJob({ kind: "hotspot-refresh", href: "/hotspots", input: { retryReport: body.action === "retry-report" } });
   }, {
     fallbackMessage: "刷新热点雷达失败"
   });

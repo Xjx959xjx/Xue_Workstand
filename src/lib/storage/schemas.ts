@@ -262,3 +262,44 @@ export const aiSettingsSchema = z.object({
   schemaVersion: z.literal(1), revision: z.number().int().nonnegative(),
   updatedAt: z.string().datetime().nullable(), overrides: z.record(aiPolicyValueSchema)
 }).strict();
+
+const radarGradeSchema = z.enum(["吊爆了", "有点东西", "能做", "还行", "先看看"]);
+const radarRatingSchema = z.enum(["吊爆了", "还行", "不行"]);
+const radarBoardSchema = z.enum(["entertainment", "game", "esports", "ai"]);
+const radarMonitorSchema = z.enum(["operations", "official", "esports", "breakout"]);
+const strings = z.array(z.string());
+const radarSignalSchema = z.object({
+  id: z.string(), sourceId: z.string(), sourceName: z.string(), sourceType: z.enum(["official", "news", "video", "community", "social"]),
+  board: radarBoardSchema, title: z.string(), url: z.string().optional(), game: z.string(), category: z.string(), capturedAt: z.string(), publishedAt: z.string().optional(), heat: z.number(), trend: z.string(), tags: strings, summary: z.string().optional()
+});
+const radarEventSchema = z.object({
+  id: z.string(), board: radarBoardSchema, monitorType: radarMonitorSchema, monitorLabel: z.string(), triggerMode: z.string(), thresholdHint: z.string(), actionWindow: z.string(), priorityLabel: z.string(), scopeMatches: strings,
+  title: z.string(), game: z.string(), category: z.string(), status: z.enum(["ready", "watch", "risk"]), score: z.number(), freshness: z.string(), sources: z.number(), summary: z.string(), whyNow: z.string(), playerFocus: strings, angles: strings, evidence: strings, research: strings, risks: strings, accounts: strings, signalIds: strings,
+  gradeLabel: radarGradeSchema.optional(), userRating: radarRatingSchema.optional(), entryPoint: z.string().optional(), commentDirection: z.string().optional(), publishedAt: z.string().optional(), retainedUntil: z.string().optional(),
+  displayInfo: z.object({ kind: radarMonitorSchema, subject: z.string(), headline: z.string(), statusLine: z.string(), timeLabel: z.string(), sourceLine: z.string(), facts: strings, primaryAction: z.string() })
+});
+const radarCounts = { sourceCount: z.number(), completedSourceCount: z.number(), failedSourceCount: z.number(), signalCount: z.number(), hotspotCount: z.number(), readyCount: z.number(), averageScore: z.number() };
+export const hotspotSnapshotSchema = z.object({
+  // 兼容现有规则版快照，后续写入统一添加版本号，不批量改写旧资产。
+  schemaVersion: z.literal(1).optional(), generatedAt: z.string(),
+  scouts: z.array(z.object({ id: z.string(), board: radarBoardSchema, name: z.string(), scope: z.string(), cadence: z.string(), sources: strings, status: z.enum(["running", "queued", "paused", "failed"]), coverage: z.number(), itemCount: z.number(), lastCheckedAt: z.string().optional(), error: z.string().optional() })),
+  signals: z.array(radarSignalSchema), hotspots: z.array(radarEventSchema),
+  summary: z.object({ ...radarCounts, generatedAt: z.string(), boardStats: z.array(z.object({ ...radarCounts, board: radarBoardSchema, topScore: z.number() })) }),
+  refresh: z.object({ requested: z.number(), completed: z.number(), failed: z.number(), sources: z.array(z.object({ id: z.string(), board: radarBoardSchema, name: z.string(), status: z.enum(["completed", "failed"]), itemCount: z.number(), error: z.string().optional() })) }),
+  analysis: z.object({ method: z.literal("ai-two-pass"), candidateCount: z.number(), coarseCount: z.number(), analyzedCount: z.number(), coverage: z.number(), fallback: z.boolean(), fallbackReason: z.string().optional() }).optional(),
+  dailyReport: z.object({ headline: z.string(), overview: z.string(), signals: strings, communityMood: z.string(), tomorrowWatch: strings }).optional()
+});
+export const hotspotFeedbackSchema = z.object({
+  schemaVersion: z.literal(1),
+  ratings: z.array(z.object({ hotspotId: z.string(), title: z.string(), summary: z.string(), rating: radarRatingSchema, updatedAt: z.string() })).max(1000),
+  history: z.array(z.object({ hotspotId: z.string(), rating: radarRatingSchema, updatedAt: z.string() })).max(1000)
+});
+
+export const hotspotCollectionSchema = z.object({
+  schemaVersion: z.literal(1), generatedAt: z.string(),
+  signals: z.array(radarSignalSchema), scouts: hotspotSnapshotSchema.shape.scouts,
+  status: z.enum(["collected", "analyzing", "completed", "failed", "cancelled"]),
+  analysis: hotspotSnapshotSchema.shape.analysis,
+  error: z.string().optional(), partialHotspots: z.array(radarEventSchema),
+  analyzedCount: z.number().nonnegative(), candidateCount: z.number().nonnegative()
+});

@@ -131,8 +131,8 @@
   top: calc(100% + 6px);
   left: 0;
   display: grid;
-  width: min(430px, calc(100vw - 40px));
-  max-height: min(520px, calc(calc(var(--app-vh) * 100) - 160px));
+  width: 100%;
+  max-height: min(420px, calc(var(--app-vh) * 50));
   gap: 10px;
   padding: 10px;
   overflow: auto;
@@ -1451,6 +1451,15 @@
     scrollbar-color: var(--line-strong) transparent;
   }
 
+  .writer-task .writer-actionbar {
+    position: sticky;
+    bottom: -22px;
+    flex-shrink: 0;
+    margin: auto -22px -22px;
+    padding: 12px 22px 16px;
+    background: var(--surface-soft);
+  }
+
   .writer-result {
     overflow: hidden;
   }
@@ -1602,6 +1611,8 @@
 /* Continuous document workspace; route-owned layout over shared primitives. */
 .writer-main {
   overflow: hidden;
+  container-type: inline-size;
+  container-name: writer-workspace;
 }
 
 .writer-page-header {
@@ -1905,5 +1916,38 @@
 @media (prefers-reduced-motion: reduce) {
   .writer-activity-dot {
     animation: none;
+  }
+}
+
+@container writer-workspace (max-width: 700px) {
+  .writer-content-grid {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+
+  .writer-task {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-subtle);
+  }
+
+  .writer-result {
+    overflow: visible;
+  }
+
+  .writer-page .result-box {
+    height: 460px;
+    min-height: 460px;
+    flex: none;
+    padding: 22px;
+  }
+
+  .writer-revision-head,
+  .writer-revision-actions {
+    flex-wrap: wrap;
+  }
+
+  .writer-revision-mode {
+    margin-left: 0;
   }
 }

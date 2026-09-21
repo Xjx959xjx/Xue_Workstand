@@ -194,7 +194,8 @@ async function copyProjectSources() {
     "package-lock.json",
     "next.config.mjs",
     "tsconfig.json",
-    "next-env.d.ts"
+    "next-env.d.ts",
+    "scripts/collect-xiaoheihe-hotspots.mjs"
   ];
 
   for (const entry of entries) {
@@ -218,6 +219,10 @@ async function createRuntimePackage() {
     await fs.promises.cp(path.join(stagingRoot, "public"), path.join(releaseRoot, "public"), { recursive: true });
   }
 
+  if (presetConfig.appMode !== "gross-margin") {
+    await fs.promises.mkdir(path.join(releaseRoot, "scripts"), { recursive: true });
+    await fs.promises.copyFile(path.join(stagingRoot, "scripts", "collect-xiaoheihe-hotspots.mjs"), path.join(releaseRoot, "scripts", "collect-xiaoheihe-hotspots.mjs"));
+  }
   await copyReleaseLibrary();
   await bundleWindowsNode();
   await patchWindowsRuntimeNativePackages();

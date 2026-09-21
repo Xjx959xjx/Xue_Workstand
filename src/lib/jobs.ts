@@ -1338,14 +1338,17 @@ async function runHotspotRefreshJob(jobId: string, start: Extract<JobStartInput,
   });
   const result = await getHotspotRadar({
     refresh: true,
+    retryReport: start.input.retryReport,
     signal: getJobAbortSignal(jobId),
     async onProgress(progress) {
-      throwIfCancelled(jobId);
-      await patchTransientJob(jobId, {
-        stage: "collect",
-        message: `已处理 ${progress.completed}/${progress.total}：${progress.sourceName}${progress.failed ? "（失败）" : ""}`,
-        progress: Math.min(92, 8 + Math.round((progress.completed / Math.max(1, progress.total)) * 84))
-      });
+      if (!progress.dataChanged) throwIfCancelled(jobId);
+      const patch = {
+        stage: progress.stage || "collect",
+        message: `${progress.sourceName}${progress.failed ? "（失败）" : ""} · ${progress.completed}/${progress.total}`,
+        progress: progress.stage === "AI 粗筛" ? 55 + Math.round(progress.completed / Math.max(1, progress.total) * 15) : progress.stage === "AI 精筛" ? 70 + Math.round(progress.completed / Math.max(1, progress.total) * 20) : progress.stage === "日报" ? 94 : Math.min(54, 8 + Math.round(progress.completed / Math.max(1, progress.total) * 46))
+      };
+      if (progress.dataChanged) await patchJobWithDataChange(jobId, patch, { resource: "hotspots" });
+      else await patchTransientJob(jobId, patch);
     }
   });
   throwIfCancelled(jobId);

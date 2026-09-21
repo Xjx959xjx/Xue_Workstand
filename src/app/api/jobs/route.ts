@@ -173,7 +173,7 @@ const hotspotRefreshSchema = z.object({
   title: z.string().optional(),
   inputSummary: z.string().optional(),
   href: z.string().optional(),
-  input: z.object({})
+  input: z.object({ retryReport: z.boolean().optional() })
 });
 
 const grossMarginRefreshSchema = z.object({

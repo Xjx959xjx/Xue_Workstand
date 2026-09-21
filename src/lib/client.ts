@@ -27,7 +27,6 @@ import {
   GrossMarginPriceTableSaveItem,
   GrossMarginReviewTemplate,
   GrossMarginServiceKind,
-  HotspotRadarRefreshResult,
   HotspotRadarResponse,
   JobListResponse,
   JobRecord,
@@ -836,13 +835,17 @@ export function invalidateHotspotRadarCache() {
 }
 
 export function refreshHotspotRadar() {
-  return requestJson<HotspotRadarRefreshResult>("/api/hotspots", {
-    method: "POST",
-    body: JSON.stringify({ action: "refresh" })
-  }).then((result) => {
-    hotspotRadarCache = result;
-    return result;
-  });
+  return requestJson<JobRecord>("/api/hotspots", { method: "POST", body: JSON.stringify({ action: "refresh" }) });
+}
+
+export function getHotspotDetail(id: string) {
+  return requestJson<{ hotspot: import("./types").HotspotEvent; signals: import("./types").HotspotSignal[] }>(`/api/hotspots/${encodeURIComponent(id)}`);
+}
+
+export async function saveHotspotFeedback(hotspotId: string, rating: import("./hotspot-radar/types").RadarRating) {
+  const result = await requestJson<HotspotRadarResponse>("/api/hotspots/feedback", { method: "POST", body: JSON.stringify({ hotspotId, rating }) });
+  invalidateHotspotRadarCache();
+  return result;
 }
 
 export function deleteAccounts(accountIds: string[]) {
@@ -1800,4 +1803,10 @@ export function saveAiModelSettings(value: import("./ai-policy-catalog").AiSetti
   return requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings", {
     method: "PUT", body: JSON.stringify(value)
   });
+}
+
+export function getRadarSignals(query: { page?: number; search?: string; source?: string; id?: string } = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") params.set(key, String(value));
+  return requestJson<{ items: import("./types").HotspotSignal[]; total: number; page: number; generatedAt: string }>(`/api/hotspots/signals?${params}`);
 }

@@ -60,6 +60,7 @@
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "react-server-dom-webpack": "19.2.6",
+    "rss-parser": "^3.13.0",
     "undici": "^8.10.0",
     "vinext": "1.0.0-beta.8",
     "yet-another-react-lightbox": "^3.32.2",

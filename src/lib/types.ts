@@ -1,3 +1,4 @@
+import type { RadarAnalysis, RadarDailyReport, RadarGrade, RadarRating } from "./hotspot-radar/types";
 import type { ImagePromptAssistInput } from "./image-prompt-assist-types";
 import type { ImageGenerationInput } from "./image-generation-types";
 export const platforms = ["bilibili", "douyin"] as const;
@@ -1028,6 +1029,12 @@ export type HotspotDisplayInfo = {
 };
 
 export type HotspotEvent = {
+  gradeLabel?: RadarGrade;
+  userRating?: RadarRating;
+  entryPoint?: string;
+  commentDirection?: string;
+  publishedAt?: string;
+  retainedUntil?: string;
   id: string;
   board: HotspotBoard;
   monitorType: HotspotMonitorType;
@@ -1081,6 +1088,11 @@ export type HotspotRadarSummary = {
 };
 
 export type HotspotRadarResponse = {
+  collection?: { generatedAt: string; signalCount: number; status: "collected" | "analyzing" | "completed" | "failed" | "cancelled"; error?: string; analyzedCount: number; candidateCount: number };
+  provisionalHotspots?: HotspotEvent[];
+  schemaVersion?: number;
+  analysis?: RadarAnalysis;
+  dailyReport?: RadarDailyReport;
   generatedAt: string;
   scouts: HotspotScout[];
   signals: HotspotSignal[];
@@ -1211,7 +1223,7 @@ export type JobEvent = {
 };
 
 export type JobDataChange = {
-  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin";
+  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin" | "hotspots";
   at: string;
   accountId?: string;
   videoId?: string;
@@ -1424,7 +1436,7 @@ export type JobStartInput =
       title?: string;
       inputSummary?: string;
       href?: string;
-      input: Record<string, never>;
+      input: { retryReport?: boolean };
     }
   | {
       kind: "gross-margin-refresh";

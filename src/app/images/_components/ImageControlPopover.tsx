@@ -14,13 +14,25 @@ export function ImageControlPopover({ label, trigger, children, width = 280, pla
     const anchor = button.current;
     const surface = panel.current;
     if (!anchor || !surface) return;
-    const rect = (width === "composer" ? anchor.closest("form") : anchor)?.getBoundingClientRect();
-    if (!rect) return;
-    const available = placement === "above" ? rect.top - 20 : window.innerHeight - rect.bottom - 20;
-    surface.style.width = `${Math.min(width === "composer" ? rect.width : width, window.innerWidth - 24)}px`;
+    const measured = (width === "composer" ? anchor.closest("form") : anchor)?.getBoundingClientRect();
+    if (!measured) return;
+    // Fixed top-layer popovers still inherit the root zoom, while DOMRect and
+    // viewport measurements are already expressed in visual pixels. Convert
+    // them back to the page coordinate space before assigning CSS positions.
+    const rootZoom = Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const rect = {
+      top: measured.top / rootZoom,
+      bottom: measured.bottom / rootZoom,
+      left: measured.left / rootZoom,
+      width: measured.width / rootZoom
+    };
+    const viewportWidth = window.innerWidth / rootZoom;
+    const viewportHeight = window.innerHeight / rootZoom;
+    const available = placement === "above" ? rect.top - 20 : viewportHeight - rect.bottom - 20;
+    surface.style.width = `${Math.min(width === "composer" ? rect.width : width, viewportWidth - 24)}px`;
     surface.style.maxHeight = `${Math.min(560, Math.max(140, available))}px`;
     const size = { width: surface.offsetWidth, height: surface.offsetHeight };
-    surface.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - size.width - 12))}px`;
+    surface.style.left = `${Math.max(12, Math.min(rect.left, viewportWidth - size.width - 12))}px`;
     surface.style.top = `${placement === "above" ? Math.max(12, rect.top - size.height - 10) : rect.bottom + 10}px`;
   }, [width, placement]);
   useEffect(() => {
