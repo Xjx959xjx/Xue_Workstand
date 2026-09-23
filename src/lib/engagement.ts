@@ -956,13 +956,32 @@ async function generateComments(input: {
     progress: 30
   });
 
+  const publishReviewedComments = async (values: string[]) => {
+    const fingerprints = new Set(values.map(commentFingerprint));
+    const preview = selectCommentSamples(values, sourceBrief, entityGuard, transportGuard, count, excludedComments, fingerprints);
+    if (!preview.items.length) return;
+    await onProgress?.({
+      stage: "research",
+      message: `已筛出 ${preview.items.length}/${count} 条可用原评，正在完成评论调研`,
+      progress: 30,
+      previewComments: preview.items.map((text, index) => makeCommentItem(text, platform, index, "reused_hot_comment"))
+    });
+  };
   const researchStartedAt = Date.now();
   const relatedResearch = await buildEngagementCommentResearch({ ...sourceBrief, fullText: generationSource.content }, {
     platform,
     excludedVideoIds: generationSource.excludedVideoIds,
     signal,
+    selectionKey: JSON.stringify({ count, excludedComments }),
+    enoughSamples: (samples) => {
+      const values = samples.filter((sample) => sample.platform === platform).map((sample) => sample.text);
+      return selectCommentSamples(values, sourceBrief, entityGuard, transportGuard, count, excludedComments,
+        new Set(values.map(commentFingerprint))).items.length >= count;
+    },
+    onReviewedSamples: (samples) => publishReviewedComments(samples.filter((sample) => sample.platform === platform).map((sample) => sample.text)),
     onProgress: (message) => onProgress?.({ stage: "research", message, progress: 30 })
   });
+  await publishReviewedComments(relatedResearch.reusableComments);
   const reusableFingerprints = new Set(relatedResearch.reusableComments.map(commentFingerprint));
   const blockedComments = uniqueText(excludedComments);
   parsed.push(...relatedResearch.reusableComments);

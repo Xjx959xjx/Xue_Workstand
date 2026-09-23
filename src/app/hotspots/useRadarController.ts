@@ -83,9 +83,9 @@ export function useRadarController() {
       .finally(() => { if (sequence === detailSequence.current) setDetailLoading(false); });
     return () => { detailSequence.current += 1; };
   }, [selectedId, view]);
-  async function refresh(retryReport = false) {
+  async function refresh(retryReport = false, continueAnalysis = false, trendRadarIds?: string[]) {
     setStarting(true); setError("");
-    try { await tasks.startTask({ kind: "hotspot-refresh", href: "/hotspots", input: { retryReport } }); }
+    try { await tasks.startTask({ kind: "hotspot-refresh", href: "/hotspots?view=topics", input: { retryReport, continueAnalysis, trendRadarIds } }); }
     catch (error) { setError(message(error)); }
     finally { setStarting(false); }
   }
@@ -104,7 +104,7 @@ export function useRadarController() {
   function write() {
     if (!detail) return;
     const topic = detail.topic;
-    const text = [topic?.title || detail.signals[0]?.title, topic?.summary || detail.signals[0]?.summary, topic ? `编辑判断：${topic.whyNow}\n视频切入点：${topic.entryPoint || ""}` : "以下为采集资讯，尚未经 AI 筛选，请核实原文。", ...detail.signals.map(item => `${item.sourceName}：${item.url || item.title}`)].filter(Boolean).join("\n\n");
+    const text = [topic?.title || detail.signals[0]?.title, topic?.summary || detail.signals[0]?.summary, topic ? `编辑判断：${topic.whyNow}\n视频切入点：${topic.entryPoint || ""}` : "以下为采集资讯，尚未经 AI 筛选，请核实原文。", topic?.risks.length ? `待核实事项：${topic.risks.join("；")}` : "", topic?.evidence.length ? `采集材料（未经独立核实）：${topic.evidence.slice(0, 2).join("\n").slice(0, 2600)}` : "", ...detail.signals.map(item => `${item.sourceName}：${item.url || item.title}`)].filter(Boolean).join("\n\n");
     router.push(`/writer?${new URLSearchParams({ sourceText: text, prompt: "基于原始来源创作，区分已核实事实与编辑推断。" })}`);
   }
   const provisional = snapshot?.provisionalHotspots || [];

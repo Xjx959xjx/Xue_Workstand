@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  wrapOpenCliError,
   resolveOpenCliCommand,
   sharedOpenCliBrowserSession,
   withPersistentBrowserAdapterOptions,
@@ -86,4 +87,36 @@ test("shared browser operations do not interleave", async () => {
     if (previous === undefined) delete process.env.OPENCLI_BROWSER_SESSION;
     else process.env.OPENCLI_BROWSER_SESSION = previous;
   }
+});
+
+test("OpenCLI 失败展示 stderr 原因而非长脚本，并保留取消语义", () => {
+  const failure = Object.assign(new Error("Command failed: opencli eval " + "x".repeat(1000)), {
+    stderr: "Execution context was destroyed.\nPlease reopen the page."
+  });
+  const wrapped = wrapOpenCliError(failure);
+  assert.match(wrapped.message, /页面被跳转或重载/);
+  assert.doesNotMatch(wrapped.message, /x{100}/);
+  const aborted = Object.assign(new Error("取消"), { name: "AbortError" });
+  assert.equal(wrapOpenCliError(aborted), aborted);
+});
+
+test("路由模块重新加载仍共享浏览器串行队列", async () => {
+  const reloaded = await import("../src/lib/opencli-runtime.ts" + "?queue-reload");
+  const events: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const first = withSharedOpenCliBrowserSession(async () => {
+    events.push("collect");
+    await gate;
+    events.push("collected");
+  });
+  const second = reloaded.withSharedOpenCliBrowserSession(async () => { events.push("hydrate"); });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, ["collect"]);
+  } finally {
+    release();
+    await Promise.all([first, second]);
+  }
+  assert.deepEqual(events, ["collect", "collected", "hydrate"]);
 });

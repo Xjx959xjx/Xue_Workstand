@@ -358,6 +358,9 @@ export function buildDouyinVideoPageDomExtractJs(fallback: {
 }
 
 export function buildDouyinBatchPostExtractJs(options: {
+  ranking?: "likes" | "comments";
+  pageCursor?: number;
+  pageBudget?: number;
   accounts: DouyinBatchPostExtractAccount[];
   concurrency: number;
   limit: number;
@@ -365,6 +368,9 @@ export function buildDouyinBatchPostExtractJs(options: {
   toDate?: string;
 }) {
   return buildDouyinPostExtractRuntimeJs({
+    ranking: options.ranking,
+    pageCursor: options.pageCursor,
+    pageBudget: options.pageBudget,
     accounts: options.accounts,
     concurrency: options.concurrency,
     fromDate: options.fromDate,
@@ -375,6 +381,9 @@ export function buildDouyinBatchPostExtractJs(options: {
 }
 
 function buildDouyinPostExtractRuntimeJs(options: {
+  ranking?: "likes" | "comments";
+  pageCursor?: number;
+  pageBudget?: number;
   accounts: DouyinBatchPostExtractAccount[];
   concurrency: number;
   limit: number;
@@ -413,6 +422,9 @@ function buildDouyinPostExtractRuntimeJs(options: {
 (async () => {
   const accounts = ${JSON.stringify(accounts)};
   const limit = ${limit};
+  const ranking = ${JSON.stringify(options.ranking || "")};
+  const resumable = ${Boolean(options.pageBudget)};
+  const maxPages = ${options.pageBudget ? clampPositiveInteger(options.pageBudget, 1) : 0} || (ranking ? 500 : 80);
   const concurrency = ${concurrency};
   const fromEpoch = ${fromEpoch ?? "null"};
   const toEpoch = ${toEpoch ?? "null"};
@@ -514,13 +526,13 @@ function buildDouyinPostExtractRuntimeJs(options: {
   const fetchAccount = async (account) => {
     const rows = [];
     const seen = new Set();
-    let cursor = 0;
+    let cursor = ${Number(options.pageCursor) || 0};
     let hasMore = true;
     let page = 0;
     let reachedBeforeFrom = false;
 
     try {
-      while (hasMore && !reachedBeforeFrom && rows.length < limit && page < 80) {
+      while (hasMore && !reachedBeforeFrom && (ranking || rows.length < limit) && page < maxPages) {
         const url = new URL("https://www.douyin.com/aweme/v1/web/aweme/post/");
         url.searchParams.set("sec_user_id", account.uid);
         url.searchParams.set("max_cursor", String(cursor));
@@ -528,7 +540,11 @@ function buildDouyinPostExtractRuntimeJs(options: {
         url.searchParams.set("aid", "6383");
         const data = await fetchPage(url.toString());
         const list = Array.isArray(data.aweme_list) ? data.aweme_list : [];
-        if (!list.length) break;
+        if (!list.length) {
+          if (ranking && (data.has_more || data.hasMore)) throw new Error("抖音历史分页返回空页但仍有后续作品，无法完成排序，请重试");
+          hasMore = false;
+          break;
+        }
 
         for (const item of list) {
           const createTime = toNumber(item.create_time || item.createTime);
@@ -542,22 +558,32 @@ function buildDouyinPostExtractRuntimeJs(options: {
           if (!row.aweme_id || seen.has(row.aweme_id)) continue;
           seen.add(row.aweme_id);
           rows.push(row);
-          if (rows.length >= limit) break;
+          if (!ranking && rows.length >= limit) break;
         }
 
-        cursor = data.max_cursor || data.maxCursor || 0;
+        const nextCursor = data.max_cursor || data.maxCursor || 0;
+        if (ranking && !reachedBeforeFrom && (data.has_more || data.hasMore) && (!nextCursor || String(nextCursor) === String(cursor))) {
+          throw new Error("抖音历史分页游标未推进，无法完成排序，请重试");
+        }
+        cursor = nextCursor;
         hasMore = !reachedBeforeFrom && Boolean(data.has_more || data.hasMore) && Boolean(cursor);
         page += 1;
-        if (hasMore && rows.length < limit) await sleep(250);
+        if (hasMore && (ranking || rows.length < limit)) await sleep(250);
       }
 
+      if (!resumable && ranking && hasMore && !reachedBeforeFrom) throw new Error("抖音历史作品超过 500 页采集上限，请缩小采集时间范围后重试");
+      if (ranking) {
+        const key = ranking === "likes" ? "digg_count" : "comment_count";
+        rows.sort((a, b) => b[key] - a[key] || b.create_time - a.create_time);
+      }
       return {
         accountId: account.id,
         name: account.name,
         uid: account.uid,
         status: "completed",
         rawCount: rows.length,
-        rows
+        nextCursor: hasMore && !reachedBeforeFrom ? cursor : null,
+        rows: rows.slice(0, limit)
       };
     } catch (error) {
       return {
@@ -690,7 +716,9 @@ export function buildDouyinStatsExtractJs(awemeId: string) {
       accept: "application/json, text/plain, */*"
     }
   });
-  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error("抖音详情接口请求失败（HTTP " + response.status + "），请在浏览器中打开抖音并确认登录或验证状态。");
+  const payload = await response.json().catch(() => { throw new Error("抖音详情接口返回非 JSON 内容，请检查抖音网页会话。"); });
+  if (payload?.status_code) throw new Error("抖音详情接口返回错误 " + payload.status_code + "：" + (payload.status_msg || "请检查抖音网页会话"));
   const awemeDetail = payload && typeof payload === "object" ? payload.aweme_detail || {} : {};
   const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
   const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
@@ -723,7 +751,9 @@ export function buildDouyinBatchStatsExtractJs(awemeIds: string[]) {
         accept: "application/json, text/plain, */*"
       }
     });
-    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error("抖音详情接口请求失败（HTTP " + response.status + "），请在浏览器中打开抖音并确认登录或验证状态。");
+    const payload = await response.json().catch(() => { throw new Error("抖音详情接口返回非 JSON 内容，请检查抖音网页会话。"); });
+    if (payload?.status_code) throw new Error("抖音详情接口返回错误 " + payload.status_code + "：" + (payload.status_msg || "请检查抖音网页会话"));
     const awemeDetail = payload && typeof payload === "object" ? payload.aweme_detail || {} : {};
     const statistics = awemeDetail && typeof awemeDetail === "object" ? awemeDetail.statistics || {} : {};
     const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
@@ -748,8 +778,8 @@ export function buildDouyinBatchStatsExtractJs(awemeIds: string[]) {
       const index = cursor++;
       try {
         results[index] = await fetchOne(awemeIds[index]);
-      } catch {
-        results[index] = { awemeId: awemeIds[index], hasStats: false };
+      } catch (error) {
+        results[index] = { awemeId: awemeIds[index], hasStats: false, error: "抖音详情补全失败：" + String(error?.message || error) };
       }
     }
   }));

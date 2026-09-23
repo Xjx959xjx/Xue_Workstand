@@ -147,7 +147,8 @@ type DouyinVideoStatsResult = {
   };
 };
 
-const DOUYIN_STATS_HOME_URL = "https://www.douyin.com/robots.txt";
+// 详情接口依赖网页安全 SDK 和 UIFID；robots.txt 不加载 SDK，会返回 403。
+const DOUYIN_STATS_HOME_URL = "https://www.douyin.com/";
 
 export function normalizeAccountInput(platform: Platform, uidOrUrl: string) {
   return platform === "bilibili" ? extractBilibiliUid(uidOrUrl) : extractDouyinSecUid(uidOrUrl);
@@ -443,8 +444,8 @@ export async function collectVideos(input: {
     });
   }
 
-  if (input.fromDate || input.toDate) {
-    const [result] = await collectDouyinPostVideosBatch({ ...input, accounts: [input.account], concurrency: 1 });
+  if (input.fromDate || input.toDate || input.order === "likes" || input.order === "comments" || input.order === "pubdate") {
+    const [result] = await collectDouyinPostVideosBatch({ ...input, ranking: input.order === "likes" || input.order === "comments" ? input.order : undefined, accounts: [input.account], concurrency: 1 });
     if (result.status === "failed") throw new Error(result.error);
     return { command: `${opencliBin()} browser shared-post eval`, raw: result.raw, rawCount: result.rawCount, videos: result.videos };
   }
@@ -468,6 +469,7 @@ export async function collectVideos(input: {
 }
 
 export async function collectDouyinPostVideosBatch(input: {
+  ranking?: "likes" | "comments";
   accounts: Account[];
   concurrency: number;
   limit: number;
@@ -504,10 +506,11 @@ export async function collectDouyinPostVideosBatch(input: {
 
       let chunkResults: DouyinBatchVideoCollectResult[];
       try {
-        const stdout = await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
-          accounts, concurrency, limit: Math.min(input.limit, 500), fromDate: input.fromDate, toDate: input.toDate
-        })]), { timeout: 180_000, signal: input.signal });
-        const parsed = parseJsonish(stdout);
+        const parsed = input.ranking
+          ? await collectRankedDouyinPages(workspace, accounts, input)
+          : parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
+            accounts, concurrency, limit: Math.min(input.limit, 500), fromDate: input.fromDate, toDate: input.toDate
+          })]), { timeout: 180_000, signal: input.signal }));
         if (!Array.isArray(parsed)) throw new Error("抖音批量接口返回无效结果");
         chunkResults = accounts.map((account) => {
           const raw = parsed.find((row) => row?.accountId === account.id);
@@ -517,7 +520,7 @@ export async function collectDouyinPostVideosBatch(input: {
             account,
             status: "completed" as const,
             raw: rows,
-            rawCount: rows.length,
+            rawCount: typeof raw.rawCount === "number" ? raw.rawCount : rows.length,
             videos: rows.map((row) => normalizeDouyinVideo(row, account))
           };
         });
@@ -536,6 +539,44 @@ export async function collectDouyinPostVideosBatch(input: {
 
     return results;
   }, { signal: input.signal });
+}
+
+async function collectRankedDouyinPages(
+  workspace: string,
+  accounts: Account[],
+  input: { ranking?: "likes" | "comments"; limit: number; fromDate?: string; toDate?: string; signal?: AbortSignal }
+) {
+  const results = [];
+  for (const account of accounts) {
+    const candidates = new Map<string, Record<string, unknown>>();
+    let cursor = 0;
+    let rawCount = 0;
+    let completed = false;
+    const visited = new Set<number>();
+    for (let batch = 0; batch < 100; batch++) {
+      if (input.signal?.aborted) throw createAbortError();
+      if (visited.has(cursor)) throw new Error("抖音历史分页游标重复，请重试采集。");
+      visited.add(cursor);
+      const parsed = parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
+        accounts: [account], concurrency: 1, limit: Math.min(input.limit, 500), ranking: input.ranking,
+        fromDate: input.fromDate, toDate: input.toDate, pageCursor: cursor, pageBudget: 5
+      })]), { timeout: 110_000, signal: input.signal }));
+      const result = Array.isArray(parsed) ? parsed[0] : null;
+      if (result?.status !== "completed" || !Array.isArray(result.rows)) {
+        throw new Error(result?.error || "抖音历史分页返回无效结果，请重试采集。");
+      }
+      rawCount += Number(result.rawCount) || 0;
+      for (const row of result.rows) candidates.set(String(row.aweme_id), row);
+      if (result.nextCursor === null) { completed = true; break; }
+      cursor = Number(result.nextCursor);
+      if (!Number.isFinite(cursor) || cursor <= 0) throw new Error("抖音历史分页缺少有效游标，请重试采集。");
+    }
+    if (!completed) throw new Error("抖音历史作品超过 500 页采集上限，请缩小采集时间范围后重试。");
+    const key = input.ranking === "likes" ? "digg_count" : "comment_count";
+    const rows = [...candidates.values()].sort((a, b) => Number(b[key]) - Number(a[key]) || Number(b.create_time) - Number(a.create_time)).slice(0, input.limit);
+    results.push({ accountId: account.id, status: "completed", rawCount, rows });
+  }
+  return results;
 }
 
 async function ensureDouyinBatchSession(workspace: string, secUid: string, signal?: AbortSignal) {
@@ -826,7 +867,8 @@ export async function hydrateDouyinVideoStatsBatch(
 
   return withDouyinStatsBrowser(async (workspace) => {
     const awemeIds = videos.map((video) => extractDouyinAwemeId(video.id) || extractDouyinAwemeId(video.url));
-    const details = await getDouyinVideoDetailSnapshots(workspace, awemeIds.filter(Boolean), options);
+    const errors = new Map<string, string>();
+    const details = await getDouyinVideoDetailSnapshots(workspace, awemeIds.filter(Boolean), options, errors);
     const checkedAt = nowIso();
 
     return videos.map((video, index) => {
@@ -841,7 +883,7 @@ export async function hydrateDouyinVideoStatsBatch(
             checkedAt,
             missingFields: missingDouyinDetailFields(video),
             error: awemeId
-              ? "抖音详情接口没有返回统计数据。"
+              ? errors.get(awemeId) || "抖音详情接口没有返回统计数据。"
               : "没有从视频记录中解析到抖音视频 ID。"
           }
         };
@@ -1430,7 +1472,8 @@ async function getDouyinVideoDetailSnapshot(
 async function getDouyinVideoDetailSnapshots(
   workspace: string,
   awemeIds: string[],
-  options: VideoStatsTimingOptions = {}
+  options: VideoStatsTimingOptions = {},
+  errors = new Map<string, string>()
 ) {
   const uniqueAwemeIds = [...new Set(awemeIds.filter(Boolean))];
   const details = new Map<string, DouyinVideoStatsSnapshot>();
@@ -1450,7 +1493,11 @@ async function getDouyinVideoDetailSnapshots(
     if (!row || typeof row !== "object") continue;
     const object = row as Record<string, unknown>;
     const awemeId = extractDouyinAwemeId(stringField(object.awemeId));
-    if (!awemeId || !object.hasStats) continue;
+    if (!awemeId) continue;
+    if (!object.hasStats) {
+      errors.set(awemeId, stringField(object.error) || "抖音详情接口没有返回统计数据。");
+      continue;
+    }
     details.set(awemeId, {
       title: stringField(object.title),
       likeCount: toNumber(object.likeCount),

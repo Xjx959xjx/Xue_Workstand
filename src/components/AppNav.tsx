@@ -9,13 +9,12 @@ import {
   Settings2,
   Activity,
   Calculator,
-  FileText,
+  LibraryBig,
   Flame,
-  FolderKanban,
+  Layers2,
   MessageSquarePlus,
   PenLine,
   Radar,
-  Sparkles,
   Sword,
   Wrench
 } from "lucide-react";
@@ -34,14 +33,13 @@ const navItems: NavItem[] = [
   { href: "/images", label: "生图工作台", icon: ImagePlus, group: "数据与工具" },
   { href: "/hotspots", label: "热点雷达", icon: Radar, group: "内容发现" },
   { href: "/douyin-hotlist", label: "视频热榜", icon: Flame, group: "内容发现" },
-  { href: "/library", label: "账号库", icon: FileText, group: "创作工作区" },
-  { href: "/project-workbench", label: "项目工作台", icon: FolderKanban, group: "创作工作区" },
+  { href: "/library", label: "账号库", icon: LibraryBig, group: "创作工作区" },
   { href: "/writer", label: "对话写作", icon: PenLine, group: "创作工作区" },
   { href: "/assets", label: "评论生成", icon: MessageSquarePlus, group: "创作工作区" },
-  { href: "/ai-settings", label: "AI 模型配置", icon: Settings2, group: "数据与工具" },
   { href: "/tools", label: "工具台", icon: Wrench, group: "数据与工具" },
   { href: "/gross-margin", label: "数据维护", icon: Calculator, group: "数据与工具" },
-  { href: "/gross-margin/monitor", label: "数据监控", icon: Activity, group: "数据与工具" }
+  { href: "/gross-margin/monitor", label: "数据监控", icon: Activity, group: "数据与工具" },
+  { href: "/ai-settings", label: "AI 模型配置", icon: Settings2, group: "数据与工具" }
 ];
 
 const navGroupOrder: NavItem["group"][] = ["内容发现", "创作工作区", "数据与工具"];
@@ -78,7 +76,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   const grossMarginMode = appMode === "gross-margin";
   const visibleNavItems = useMemo(() => grossMarginMode ? grossMarginNavItems : navItems, [grossMarginMode]);
   const visibleNavGroups = useMemo(() => navGroupOrder
-    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label) }))
+    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label && item.href !== "/ai-settings") }))
     .filter((group) => group.items.length), [visibleNavItems]);
   const brandHref = grossMarginMode ? "/gross-margin" : "/douyin-hotlist";
   const activeHref = visibleNavItems
@@ -186,12 +184,12 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         onPointerEnter={() => void prewarmRoute(brandHref)}
       >
         <span className="brand-mark" aria-hidden="true">
-          <Sparkles className="brand-mark-default" size={18} strokeWidth={2.1} />
+          <Layers2 className="brand-mark-default" size={23} strokeWidth={1.8} />
           <Sword className="brand-mark-shinigami" size={20} strokeWidth={1.9} />
         </span>
         <span className="brand-copy brand-copy-default">
           <strong>{grossMarginMode ? "数据维护监控" : "风格库"}</strong>
-          <small>{grossMarginMode ? "Windows 便携版" : "本地"}</small>
+          <small>{grossMarginMode ? "Windows 便携版" : "创作工作台"}</small>
         </span>
         <span className="brand-copy brand-copy-shinigami">
           <strong>BLEACH</strong>
@@ -222,7 +220,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                         onPointerEnter={() => void prewarmRoute(item.href)}
                       >
                         <span className="nav-emoji" aria-hidden="true">
-                          <Icon size={17} strokeWidth={2.1} />
+                          <Icon size={18} strokeWidth={1.75} />
                         </span>
                         <span>{item.label}</span>
                         <span className="nav-soul-mark" aria-hidden="true">魂</span>
@@ -238,6 +236,10 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
       <div className="sidebar-bottom">
         <SkinToggle />
         <TaskCenter />
+        {!grossMarginMode ? <Link href="/ai-settings" className={`nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""}`} aria-current={activeHref === "/ai-settings" ? "page" : undefined}
+          onClick={(event) => handleNavClick(event, "/ai-settings")} onFocus={() => void prewarmRoute("/ai-settings")} onPointerEnter={() => void prewarmRoute("/ai-settings")}>
+          <Settings2 size={18} strokeWidth={1.75} aria-hidden="true" /><span>AI 模型配置</span>
+        </Link> : null}
       </div>
     </aside>
   );

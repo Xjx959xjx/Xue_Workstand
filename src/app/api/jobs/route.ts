@@ -173,7 +173,7 @@ const hotspotRefreshSchema = z.object({
   title: z.string().optional(),
   inputSummary: z.string().optional(),
   href: z.string().optional(),
-  input: z.object({ retryReport: z.boolean().optional() })
+  input: z.object({ retryReport: z.boolean().optional(), continueAnalysis: z.boolean().optional(), trendRadarIds: z.array(z.string().regex(/^trend:(hotlist|rss):[a-f0-9]{24}$/)).min(1).max(24).optional() }).refine(value => [value.retryReport, value.continueAnalysis, Boolean(value.trendRadarIds)].filter(Boolean).length <= 1, "重试日报、继续分析和选择候选不能同时执行")
 });
 
 const grossMarginRefreshSchema = z.object({

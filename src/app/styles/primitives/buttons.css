@@ -8,11 +8,11 @@
   justify-content: center;
   gap: var(--space-2);
   padding: 0 var(--control-padding-x);
-  border: 1px solid color-mix(in oklch, var(--line-strong) 44%, var(--line));
+  border: 1px solid var(--line);
   border-radius: var(--button-radius);
   color: var(--text);
-  background: color-mix(in oklch, var(--panel-raised) 74%, var(--control-bg));
-  box-shadow: var(--surface-inset-highlight), 0 1px 2px color-mix(in oklch, var(--text-strong) 4%, transparent);
+  background: var(--panel-raised);
+  box-shadow: none;
   font-size: var(--text-meta);
   font-weight: var(--font-weight-label);
   line-height: var(--line-height-meta);
@@ -27,6 +27,7 @@
 
 .btn svg {
   flex: 0 0 auto;
+  stroke-width: 1.75;
 }
 
 .btn:hover {
@@ -68,9 +69,9 @@
 }
 
 .btn.ghost:hover {
-  border-color: color-mix(in oklch, var(--line) 72%, transparent);
+  border-color: transparent;
   color: var(--text-strong);
-  background: color-mix(in oklch, var(--panel-raised) 64%, transparent);
+  background: var(--surface-hover);
   box-shadow: none;
 }
 

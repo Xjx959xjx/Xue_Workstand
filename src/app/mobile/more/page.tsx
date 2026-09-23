@@ -7,7 +7,6 @@ import {
   ArrowRight,
   Calculator,
   CheckCircle2,
-  FolderKanban,
   Gauge,
   MessageSquarePlus,
   Radar,
@@ -20,13 +19,12 @@ import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import type { RemoteStatusResponse } from "@/lib/types";
 
 const featureItems = [
-  { href: "/ai-settings", label: "AI 模型配置", detail: "按业务调整模型与推理等级", icon: Settings2, mobileReady: true },
   { href: "/hotspots", label: "热点雷达", detail: "查看热点发现和内容机会", icon: Radar, mobileReady: false },
-  { href: "/project-workbench", label: "项目工作台", detail: "组合账号、素材和项目风格", icon: FolderKanban, mobileReady: false },
   { href: "/assets", label: "评论生成", detail: "生成评论、弹幕和封面素材", icon: MessageSquarePlus, mobileReady: false },
   { href: "/tools", label: "工具台", detail: "单条视频转写、下载和发布", icon: Wrench, mobileReady: false },
   { href: "/gross-margin", label: "数据维护", detail: "维护账号报价和毛利数据", icon: Calculator, mobileReady: false },
-  { href: "/gross-margin/monitor", label: "数据监控", detail: "跟踪发布后的执行数据", icon: Activity, mobileReady: false }
+  { href: "/gross-margin/monitor", label: "数据监控", detail: "跟踪发布后的执行数据", icon: Activity, mobileReady: false },
+  { href: "/ai-settings", label: "AI 模型配置", detail: "按业务调整模型与推理等级", icon: Settings2, mobileReady: true }
 ];
 
 const serviceLabels: Record<keyof RemoteStatusResponse["services"], string> = {

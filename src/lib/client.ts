@@ -51,6 +51,7 @@ import {
 import type { LinkTranscriptionResult } from "./transcription";
 import type { PublishCopyInput, PublishCopyResult } from "./publish-copy-types";
 import type { DouyinHotlistRefreshLogResponse } from "./douyin-hotlist-refresh-log";
+import type { TrendRadarFeed } from "./trendradar-types";
 
 let draftsCache: { drafts: DraftSummary[] } | null = null;
 let draftsRequest: Promise<{ drafts: DraftSummary[] }> | null = null;
@@ -811,6 +812,14 @@ export function refreshDouyinHotlist(input: {
   });
 }
 
+export function getNewsNowStatus(signal?: AbortSignal) {
+  return requestJson<import("./newsnow").NewsNowStatus>("/api/hotspots/newsnow", { signal, cache: "no-store" });
+}
+
+export function getTrendRadarFeed(signal?: AbortSignal) {
+  return requestJson<TrendRadarFeed>("/api/hotspots/trendradar", { signal, cache: "no-store" });
+}
+
 export function getHotspotRadar() {
   if (hotspotRadarCache) return Promise.resolve(hotspotRadarCache);
   if (hotspotRadarRequest) return hotspotRadarRequest;
@@ -834,8 +843,8 @@ export function invalidateHotspotRadarCache() {
   hotspotRadarRequest = null;
 }
 
-export function refreshHotspotRadar() {
-  return requestJson<JobRecord>("/api/hotspots", { method: "POST", body: JSON.stringify({ action: "refresh" }) });
+export function refreshHotspotRadar(action: "refresh" | "retry-report" | "continue-analysis" = "refresh") {
+  return requestJson<JobRecord>("/api/hotspots", { method: "POST", body: JSON.stringify({ action }) });
 }
 
 export function getHotspotDetail(id: string) {
@@ -1418,6 +1427,14 @@ export function getDraft(draftId: string, options: { fresh?: boolean } = {}) {
     .then(({ draft }) => {
       rememberDrafts([draft]);
       return draft;
+    });
+}
+
+export function getWriterHistoryDraft(draftId: string) {
+  return requestJson<{ draft: Draft; batch: Draft[] }>(`/api/drafts?draftId=${encodeURIComponent(draftId)}&includeBatch=1`)
+    .then((result) => {
+      rememberDrafts(result.batch);
+      return result;
     });
 }
 

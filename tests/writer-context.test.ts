@@ -253,6 +253,13 @@ test("多风格准备失败单独返回，不阻断其他风格；取消后不�
       styleRefs: [{ targetType: "account", platform: account.platform, accountId: "douyin:missing" },
         { targetType: "account", platform: account.platform, accountId: account.id }] });
     assert.equal(batch.variants.length, 1);
+    const preparedBase = batch.variants[0].prepared.draftBase!;
+    assert.ok(preparedBase.version?.batchId, "部分风格失败仍保存本次并发批次标识");
+    const saved = await saveDraft({ ...preparedBase, content: "批次恢复测试" });
+    assert.equal((await resolveDraft(saved.id)).draft.version?.batchId, preparedBase.version.batchId);
+    const revision = await prepareWriteCopyContext({ action: "revise", mode: "topic", prompt: "活动",
+      parentDraftId: saved.id, currentContent: saved.content, revisionInstruction: "精简" });
+    assert.equal(revision.draftBase?.version?.batchId, preparedBase.version.batchId, "续改保留批次关系");
     assert.equal(batch.preparationFailures?.length, 1);
     assert.equal(batch.variants[0].prepared.draftBase?.styleRefs?.[0].targetType === "account" && batch.variants[0].prepared.draftBase.styleRefs[0].accountId, account.id);
     const result = resolveWriteBatchOutcome(batch, [{ result: { content: "可用稿", usedModel: "fixture", fallback: false,
@@ -413,6 +420,35 @@ function video(account: Account, id: string, title: string, views: number): Vide
 }
 
 type ModelReply = string | { status: number; body: string; contentType?: string } | { disconnect: true };
+test("多稿续改任务分别保存版本，部分失败保留原稿与已完成结果", async () => {
+  await fixture(async ({ account, setReply }) => {
+    const { createJob, getJob } = await import("../src/lib/jobs");
+    const base = { platform: account.platform, accountId: account.id, accountName: account.name,
+      title: "批量续改测试", mode: "topic" as const, prompt: "活动", content: "原始正文",
+      styleRef: { platform: account.platform, accountId: account.id, accountName: account.name } };
+    const first = await saveDraft(base);
+    const second = await saveDraft(base);
+    setReply(messages => messages.join("\n").includes("第二篇失败的正文") ? { status: 401, body: JSON.stringify({ error: { message: "测试第二篇失败" } }) } : "新增片段后的第一篇正文");
+    const job = await createJob({ kind: "write-copy", input: { action: "revise", mode: "topic", prompt: "活动", save: true,
+      parentDraftId: first.id, currentContent: first.content, revisionInstruction: "新增片段", revisionScope: "full",
+      revisionTargets: [{ parentDraftId: first.id, currentContent: "第一篇的手动修改" }, { parentDraftId: second.id, currentContent: "第二篇失败的正文" }] } });
+    let finished = await getJob(job.id);
+    for (let attempt = 0; attempt < 200 && (finished.status === "queued" || finished.status === "running"); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      finished = await getJob(job.id);
+    }
+    assert.equal(finished.status, "completed", finished.error);
+    const result = finished.result as import("../src/lib/types").WriteBatchResult;
+    assert.equal(result.results.length, 1);
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.results[0].draft?.version?.parentDraftId, first.id);
+    assert.equal((await resolveDraft(first.id)).draft.content, "原始正文");
+    assert.equal((await resolveDraft(second.id)).draft.content, "原始正文");
+    assert.equal(finished.dataRevision, 1);
+    assert.equal(finished.dataChange?.resource, "drafts");
+  });
+});
+
 async function fixture(run: (context: { account: Account; root: string; requests: string[][]; requestBodies: Record<string, unknown>[]; setReply: (fn: (messages: string[]) => ModelReply) => void }) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-context-test-"));
   const original = { ...process.env };

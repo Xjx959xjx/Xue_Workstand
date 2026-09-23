@@ -12,6 +12,7 @@ test("调研模型有限重试、阶段进度、取消与批次保留", async ()
   let mode = "recover";
   let requests = 0;
   let progressSaved = false;
+  let recoveredBatchFailed = false;
   const messages: string[] = [];
   const server = createServer(async (req, res) => {
     let raw = "";
@@ -19,7 +20,10 @@ test("调研模型有限重试、阶段进度、取消与批次保留", async ()
     const body = JSON.parse(raw);
     requests += 1;
     if (mode === "unauthorized") { res.writeHead(401); res.end("unauthorized"); return; }
-    if (mode === "recover" && requests === 2) { req.socket.destroy(); return; }
+    if (mode === "recover" && !recoveredBatchFailed && JSON.parse(body.messages[1].content).comments[0].text === "评论60") {
+      recoveredBatchFailed = true;
+      req.socket.destroy(); return;
+    }
     if (mode === "fail" || mode === "cancel") {
       res.writeHead(503); res.end("unavailable"); return;
     }

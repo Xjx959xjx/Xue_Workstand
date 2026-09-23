@@ -6,7 +6,7 @@ import { getHotspotRadar } from "@/lib/hotspots";
 export const runtime = "nodejs";
 
 const postSchema = z.object({
-  action: z.enum(["refresh", "retry-report"]).default("refresh")
+  action: z.enum(["refresh", "retry-report", "continue-analysis"]).default("refresh")
 });
 
 export async function GET(request: Request) {
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return apiJson(async () => {
     const body = await parseJsonBody(request, postSchema);
-    return createJob({ kind: "hotspot-refresh", href: "/hotspots", input: { retryReport: body.action === "retry-report" } });
+    return createJob({ kind: "hotspot-refresh", href: "/hotspots", input: { retryReport: body.action === "retry-report", continueAnalysis: body.action === "continue-analysis" } });
   }, {
     fallbackMessage: "刷新热点雷达失败"
   });

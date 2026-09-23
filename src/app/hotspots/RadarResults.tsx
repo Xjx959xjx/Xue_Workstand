@@ -14,7 +14,7 @@ export function RadarResults({ c }: { c: RadarController }) {
     : (c.snapshot?.scouts || []).map(source => ({ id: source.id, label: source.name, items: c.feed.items.filter(item => item.sourceId === source.id) }));
   const showPagination = c.layout === "cards" || c.view === "news";
   return <section className="radar-results" aria-label={c.view === "topics" ? "AI 选题" : "全部资讯"} aria-busy={c.loading}>
-    <div className="radar-results-heading"><span>{total} {c.view === "topics" ? "个选题" : "条资讯"}{c.view === "news" && c.layout === "overview" ? " · 按来源展示本页资讯" : ""}</span><span className="subtle">{c.view === "topics" ? "优先级为编辑判断，不代表客观热度" : "原始资讯，尚未经事实核验"}</span></div>
+    <div className="radar-results-heading">{c.view === "news" ? <span>{total} 条资讯{c.layout === "overview" ? " · 按来源展示本页资讯" : ""}</span> : null}<span className="subtle">{c.view === "topics" ? "优先级为编辑判断，不代表客观热度" : "原始资讯，尚未经事实核验"}</span></div>
     {c.loading && !total ? <div className="radar-empty" role="status"><Loader2 size={24} /><p>正在读取内容…</p></div> : null}
     {!c.loading && !total ? <div className="radar-empty"><Newspaper size={30} /><h3>{c.search || c.source || c.category || c.grade ? "没有匹配的内容" : "选题尚未就绪"}</h3><p>可以调整筛选，或先查看已经采集的原始资讯。</p><button className="btn" onClick={() => c.setFilter({ view: "news", source: "", category: "", grade: "", q: "", page: "", item: "" })}>查看全部资讯</button></div> : null}
     {c.layout === "cards" ? <div className="radar-card-grid">{items.map(item => <StoryCard key={item.id} item={item} partial={c.provisional.some(p => p.id === item.id)} onOpen={() => c.setFilter({ item: item.id })} />)}</div>
@@ -28,9 +28,10 @@ export function RadarResults({ c }: { c: RadarController }) {
 function StoryCard({ item, partial, onOpen }: { item: RadarItem; partial: boolean; onOpen: () => void }) {
   const topic = isTopic(item);
   return <button className="panel radar-topic-card" onClick={onOpen} aria-label={`查看详情：${item.title}`}>
-    <span className="radar-card-meta"><span className={`status-pill ${topic && item.score >= 80 ? "radar-priority-high" : ""}`}>{topic ? item.gradeLabel || "待复核" : "资讯"}</span><span>{topic ? item.monitorLabel : item.sourceName}</span></span>
+    <span className="radar-card-meta"><span className={`status-pill ${topic && item.score >= 80 ? "radar-priority-high" : ""}`}>{topic ? item.gradeLabel || "待复核" : "资讯"}</span><span>{topic ? item.monitorLabel : item.sourceName}{topic && item.development ? " · 有新进展" : ""}{topic && item.sources > 1 ? ` · ${item.sources} 条来源` : ""}</span></span>
     <strong className="radar-card-title">{item.title}</strong>
-    {topic ? <><span className="radar-card-summary">{item.summary}</span>{item.entryPoint ? <span className="radar-card-angle">{item.entryPoint}</span> : null}</> : <span className="radar-card-summary">点击查看来源摘要与原文</span>}
+    {topic ? <span className="subtle">{item.displayInfo.statusLine.includes("正文") ? item.displayInfo.statusLine : "证据状态待复核"}</span> : null}
+    {topic ? <><span className="radar-card-summary">{item.summary}</span>{item.whyNow ? <span className="radar-card-angle">{item.whyNow}</span> : null}</> : <span className="radar-card-summary">点击查看来源摘要与原文</span>}
     {partial ? <span className="radar-partial">本轮已完成 · 非完整结果</span> : null}
     <span className="radar-card-footer"><span title={radarSource(item)}>{radarSource(item)}<time>{radarDate(item.publishedAt)}</time></span><span>查看详情<ArrowRight size={13} /></span></span>
   </button>;

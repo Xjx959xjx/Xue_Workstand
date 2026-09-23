@@ -3,6 +3,8 @@ import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteDrafts, getDraftSummaries, resolveDraft, saveDraft, updateDraftTitle } from "@/lib/storage";
 import { platforms } from "@/lib/types";
 import { writerContextSchema } from "@/lib/writer-context";
+import { listJobs } from "@/lib/jobs";
+import { savedBatchSessions, selectWriterBatchDrafts } from "@/lib/writer-history-batch";
 
 export const runtime = "nodejs";
 
@@ -43,6 +45,7 @@ const draftContextFields = {
   }).optional(),
   version: z.object({
     sessionId: z.string().min(1),
+    batchId: z.string().min(1).max(100).optional(),
     parentDraftId: z.string().min(1).optional(),
     revision: z.number().int().min(1),
     instruction: z.string().max(4_000).optional(),
@@ -106,8 +109,25 @@ const updateSchema = z.object({
 
 export async function GET(request: Request) {
   return apiJson(async () => {
-    const draftId = new URL(request.url).searchParams.get("draftId")?.trim();
-    if (draftId) return { draft: (await resolveDraft(draftId)).draft };
+    const params = new URL(request.url).searchParams;
+    const draftId = params.get("draftId")?.trim();
+    if (draftId) {
+      const draft = (await resolveDraft(draftId)).draft;
+      if (params.get("includeBatch") !== "1") return { draft };
+      let sessions: string[] = [];
+      if (!draft.version?.batchId) {
+        for (const job of await listJobs()) {
+          if (job.kind !== "write-copy") continue;
+          sessions = savedBatchSessions(job.result, draft);
+          if (sessions.length) break;
+        }
+      }
+      const summaries = selectWriterBatchDrafts(draft, await getDraftSummaries(), sessions);
+      const batch = [];
+      // Keep filesystem reads bounded even for unusually large historical batches.
+      for (const summary of summaries) batch.push(summary.id === draft.id ? draft : (await resolveDraft(summary.id)).draft);
+      return { draft, batch };
+    }
     return { drafts: await getDraftSummaries() };
   }, {
     fallbackMessage: "读取草稿失败",

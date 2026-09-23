@@ -6,18 +6,21 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { SOURCES, parseRss, makeSignal, isRecentVerifiedSignal } from "../src/lib/hotspot-radar/source-rules.mjs";
-import { mergeRadarSignals, safeSourceUrl } from "../src/lib/hotspot-radar/collector";
-import { analyzeRadar, parseRadarModelJson, validateModelIds } from "../src/lib/hotspot-radar/analysis";
-import { assertCollectionCoverage, getRadarSignals, getHotspotRadar, getHotspotDetail, retainPriorityTopics, saveHotspotFeedback } from "../src/lib/hotspots";
+import { canonicalRadarUrl, mergeRadarSignals, safeSourceUrl } from "../src/lib/hotspot-radar/collector";
+import { analyzeRadar, toStoredSignal, parseRadarModelJson, validateModelIds } from "../src/lib/hotspot-radar/analysis";
+import { publishRadarSnapshot, assertCollectionCoverage, getRadarSignals, getHotspotRadar, getHotspotDetail, retainPriorityTopics, saveHotspotFeedback } from "../src/lib/hotspots";
 import type { HotspotEvent, HotspotRadarRefreshResult } from "../src/lib/types";
 
 import { parseRadarFeed } from "../src/lib/hotspot-radar/rss";
+import { writeSupportDocumentCache } from "../src/lib/storage/support-documents";
 import { writeRadarCollection, updateRadarCollection, readRadarCollection } from "../src/lib/hotspot-radar/collection";
 
 const source = SOURCES[1];
 const signal = () => makeSignal(source, "Faker战队回应赛事争议", "https://www.vlr.gg/123", "赛事人物反转，官方回应引发争议", new Date().toISOString());
 
 test("真实来源、RSS 时间过滤、事件聚类保留来源和模型 ID 边界", () => {
+  assert.equal(canonicalRadarUrl("https://example.com/story?id=7&utm_source=feed#top"), "https://example.com/story?id=7");
+  assert.notEqual(canonicalRadarUrl("https://example.com/story?id=7"), canonicalRadarUrl("https://example.com/story?id=8"));
   assert.equal(SOURCES.length, 36);
   assert.ok(SOURCES.every(item => item.url && item.type !== "reference"));
   const items = parseRss(`<rss><item><title>赛事争议</title><link>https://www.vlr.gg/123</link><pubDate>${new Date().toUTCString()}</pubDate><description>摘要</description></item></rss>`, source);
@@ -35,6 +38,7 @@ test("真实来源、RSS 时间过滤、事件聚类保留来源和模型 ID 边
   assert.throws(() => safeSourceUrl("file:///etc/passwd"), /HTTP/);
   assert.throws(() => safeSourceUrl("http://127.0.0.1/private"), /内网/);
   assert.throws(() => assertCollectionCoverage([{ source, items: [], checkedAt: "" }]), /覆盖不足/);
+  assert.doesNotThrow(() => assertCollectionCoverage([{ source, items: [first], checkedAt: "", error: "部分文章日期未确认" }]));
 });
 
 test("模型两轮、合法空选题、部分批次失败、取消与持久化反馈", async () => {
@@ -42,6 +46,8 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
   const root = await mkdtemp(path.join(tmpdir(), "hotspot-radar-test-"));
   let mode = "success";
   let requests = 0;
+  const submitted: string[][] = [];
+  let sawEvidence = false;
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -49,10 +55,13 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
     const payload = JSON.parse(body.messages[1].content);
     const system = body.messages[0].content as string;
     requests++;
+    if (payload.items) submitted.push(payload.items.map((item: {id: string}) => item.id));
+    if (system.includes("资深") && payload.items?.some((item: {evidence?: {content?: string}[]}) => item.evidence?.some(doc => doc.content?.includes("已采集的官方回应正文")))) sawEvidence = true;
     if (mode === "partial" && payload.items?.some((item: {id: string}) => item.id === "s40")) { res.writeHead(401); res.end("unauthorized"); return; }
     if (mode === "fine-partial" && system.includes("资深") && payload.items?.some((item: {id: string}) => item.id === "s6")) { res.writeHead(401); res.end("unauthorized"); return; }
     let result: unknown;
-    if (mode === "empty") result = { items: [] };
+    if (mode === "invalid") result = { items: [{ signalId: "invented", coarseReason: "错误 ID" }] };
+    else if (mode === "empty") result = { items: [] };
     else if (system.includes("第一轮")) result = { items: payload.items.map((item: {id: string}) => ({ signalId: item.id, coarseReason: "人物反转" })) };
     else if (system.includes("资深")) result = { items: payload.items.map((item: {id: string}) => ({ signalId: item.id, subject: "英雄联盟", titleZh: "赛事争议获回应", summaryZh: "赛事争议有了新回应", type: "赛事电竞", grade: "吊爆了", whyHot: "官方回应节点", commentDirection: "讨论责任归属", entryPoint: "这场回应说清了吗" })) };
     else result = { headline: "赛事新进展", overview: "关注回应", signals: ["人物反转"], communityMood: "编辑预测：责任讨论", tomorrowWatch: ["后续回应"] };
@@ -62,7 +71,7 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_|HOTSPOT_RADAR_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "test", CHAT_MODEL: "test", CHAT_BASE_URL: `http://127.0.0.1:${address.port}/v1`, CHAT_WIRE_API: "chat_completions" });
   const feedback = { schemaVersion: 1 as const, ratings: [], history: [] };
   try {
@@ -73,8 +82,82 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
     assert.equal(analyzed.analysis.coverage, 100);
     assert.equal((await analyzed.report(analyzed.hotspots))?.headline, "赛事新进展");
     assert.deepEqual(stages, ["AI 粗筛", "AI 精筛"]);
+    const cachedFirst = await analyzeRadar([first], feedback, { reuseAnalysis: true });
+    assert.equal(cachedFirst.analysis.reusedItemCount, 0);
+    const beforeReuse = requests;
+    const reused = await analyzeRadar([first], feedback, { reuseAnalysis: true });
+    assert.equal(requests, beforeReuse);
+    assert.equal(reused.analysis.reusedItemCount, 2);
+    const extra = { ...first, id: "new-item" };
+    const beforeExtra = submitted.length;
+    await analyzeRadar([extra, first], feedback, { reuseAnalysis: true });
+    assert.deepEqual(submitted.slice(beforeExtra), [[extra.id], [extra.id]], "新增与重排不应重新分析旧资讯");
+    const beforeUnrelated = requests;
+    await analyzeRadar([first], { ...feedback, ratings: [{ hotspotId: "hotspot:unrelated", title: "其他游戏", summary: "", rating: "不行", updatedAt: new Date().toISOString() }] }, { reuseAnalysis: true });
+    assert.equal(requests, beforeUnrelated, "不相关评分不应清空缓存");
+    process.env.CHAT_API_KEY = "rotated-key";
+    await analyzeRadar([first], feedback, { reuseAnalysis: true });
+    assert.equal(requests, beforeUnrelated, "仅轮换密钥不应重算分析");
+    process.env.CHAT_API_KEY = "test";
+    const reportCached = await cachedFirst.report(cachedFirst.hotspots);
+    const beforeReportReuse = requests;
+    assert.deepEqual(await cachedFirst.report(cachedFirst.hotspots), reportCached);
+    assert.equal(requests, beforeReportReuse, "相同选题日报应复用");
+    const beforeChange = requests;
+    await analyzeRadar([{ ...first, summary: "官方公布新的处罚决定，选手回应争议" }], feedback, { reuseAnalysis: true });
+    assert.equal(requests - beforeChange, 2, "输入变化必须重新分析");
+    process.env.HOTSPOT_RADAR_INTERESTS = "选手故事";
+    const beforeInterest = requests;
+    await analyzeRadar([first], feedback, { reuseAnalysis: true });
+    assert.equal(requests - beforeInterest, 2);
+    delete process.env.HOTSPOT_RADAR_INTERESTS;
+    process.env.CHAT_MODEL = "test-new-model";
+    const beforeModel = requests;
+    await analyzeRadar([first], feedback, { reuseAnalysis: true });
+    assert.equal(requests - beforeModel, 2);
+    process.env.CHAT_MODEL = "test";
+    mode = "empty";
+    const rejected = { ...first, id: "negative" };
+    await analyzeRadar([rejected], feedback, { reuseAnalysis: true });
+    const beforeNegative = requests;
+    assert.equal((await analyzeRadar([rejected], feedback, { reuseAnalysis: true })).hotspots.length, 0);
+    assert.equal(requests, beforeNegative, "合法淘汰结果也要复用");
+    mode = "invalid";
+    const invalid = { ...first, id: "invalid-test" };
+    await assert.rejects(analyzeRadar([invalid], feedback, { reuseAnalysis: true }), /未知/);
+    mode = "success";
+    const beforeInvalidRetry = requests;
+    await analyzeRadar([invalid], feedback, { reuseAnalysis: true });
+    assert.equal(requests - beforeInvalidRetry, 2, "非法输出不能缓存");
+    await writeSupportDocumentCache({ url: first.url, provider: "web", content: "已采集的官方回应正文：官方公布赛事判罚。" });
+    const material = await analyzeRadar([first], feedback, { enrichEvidence: true });
+    assert.equal(sawEvidence, true);
+    assert.match(material.hotspots[0].evidence[0], /官方回应正文/);
+    const limited = await analyzeRadar(Array.from({ length: 30 }, (_, i) => ({ ...first, id: `limited-${i}`, url: i === 0 ? first.url : "http://127.0.0.1/private" })), feedback, { enrichEvidence: true });
+    assert.equal(limited.analysis.analyzedCount, 24);
+    assert.equal(limited.analysis.coverage, 80);
+    assert.equal(limited.hotspots.filter(item => item.risks.length).length, 23);
+    assert.equal(limited.hotspots.find(item => item.id === "hotspot:limited-8")?.gradeLabel, "吊爆了");
+    assert.equal(limited.hotspots.find(item => item.id === "hotspot:limited-8")?.status, "watch");
+    assert.match(limited.hotspots.find(item => item.id === "hotspot:limited-9")!.risks.join(""), /预算/);
+    const pendingSignals = Array.from({ length: 30 }, (_, i) => ({ ...first, id: `pending-${i}` }));
+    const initialPass = await analyzeRadar(pendingSignals, feedback, { reuseAnalysis: true });
+    assert.equal(initialPass.completedSignalIds.length, 24);
+    const beforeContinue = submitted.length;
+    const continued = await analyzeRadar(pendingSignals, feedback, { reuseAnalysis: true, completedSignalIds: initialPass.completedSignalIds });
+    assert.equal(continued.analysis.coverage, 100);
+    assert.equal(continued.completedSignalIds.length, 30);
+    assert.deepEqual(submitted.slice(beforeContinue), [pendingSignals.slice(24).map(item => item.id)], "继续只处理后六条精筛");
     const empty = await getHotspotRadar();
     const snapshot: HotspotRadarRefreshResult = { ...empty, generatedAt: new Date().toISOString(), hotspots: analyzed.hotspots, signals: [{ id: first.id, sourceId: first.sourceId, sourceName: first.source, sourceType: "news", board: "game", title: first.title, url: first.url, game: "游戏", category: "赛事", capturedAt: first.collectedAt, publishedAt: first.publishedAt, heat: 0, trend: "", tags: [] }] };
+    let publishedBeforeReport = false;
+    await assert.rejects(publishRadarSnapshot(snapshot, async () => {
+      publishedBeforeReport = (await getHotspotRadar()).hotspots.length === 1;
+      throw new Error("日报节点故障");
+    }, {}), /选题已保存，日报生成失败/);
+    assert.equal(publishedBeforeReport, true);
+    assert.equal((await getHotspotRadar()).hotspots.length, 1);
+    assert.equal((await getHotspotRadar()).dailyReport, undefined);
     const retained = retainPriorityTopics(snapshot, analyzed.hotspots);
     const deadline = retained[0].retainedUntil;
     assert.ok(deadline);
@@ -108,11 +191,28 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
     await assert.rejects(getHotspotRadar({ refresh: true, retryReport: true }), /没有已完成精筛/);
     assert.equal((await readRadarCollection())?.status, "completed", "无效恢复不得改变完成状态");
     await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify(snapshot));
+    const followup = { ...first, id: "followup", url: "https://example.com/new-event", title: "原神官方回应停服争议" };
+    await writeSupportDocumentCache({ url: followup.url, provider: "web", content: "原神官方发布说明，回应相关争议。" });
+    await writeRadarCollection({ schemaVersion: 1, generatedAt: snapshot.generatedAt, signals: [first, followup].map(toStoredSignal), scouts: [{ ...snapshot.scouts[0], id: first.sourceId, name: first.source, itemCount: 2, sources: [source.url] }], status: "completed", partialHotspots: [], completedSignalIds: [first.id], analyzedCount: 1, candidateCount: 1 });
+    const beforeResume = submitted.length;
+    const resumed = await getHotspotRadar({ refresh: true, continueAnalysis: true });
+    assert.equal(resumed.hotspots.length, 2, "继续分析保留已有普通选题");
+    assert.ok(resumed.hotspots.some(item => item.id === "hotspot:followup"));
+    assert.equal((await readRadarCollection())?.generatedAt, snapshot.generatedAt, "继续不能伪装重新采集时间");
+    assert.ok(submitted.slice(beforeResume).filter(ids => ids.includes(first.id)).length <= 1, "已有选题不得重复精筛");
+    const beforeNoop = requests;
+    await getHotspotRadar({ refresh: true, continueAnalysis: true });
+    assert.equal(requests, beforeNoop, "全部完成后继续不再调用模型或日报");
+    await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify(snapshot));
     mode = "fine-partial";
     const completed: HotspotEvent[][] = [];
-    await assert.rejects(analyzeRadar(Array.from({ length: 7 }, (_, i) => ({ ...first, id: `s${i}` })), feedback, { onPartial: async items => { completed.push(items); } }), /精筛.*批失败/);
+    await assert.rejects(analyzeRadar(Array.from({ length: 7 }, (_, i) => ({ ...first, id: `s${i}` })), feedback, { reuseAnalysis: true, onPartial: async items => { completed.push(items); } }), /精筛.*批失败/);
     assert.equal(completed.length, 1);
     assert.equal(completed[0].length, 6);
+    mode = "success";
+    const beforeRetry = submitted.length;
+    await analyzeRadar(Array.from({ length: 7 }, (_, i) => ({ ...first, id: `s${i}` })), feedback, { reuseAnalysis: true });
+    assert.deepEqual(submitted.slice(beforeRetry), [["s6"]], "失败后只重试未完成精筛");
     mode = "empty";
     assert.equal((await analyzeRadar([first], feedback, {})).hotspots.length, 0);
     mode = "partial";

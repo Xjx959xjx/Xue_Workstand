@@ -68,6 +68,7 @@ const draftStyleReferenceSchema = z.discriminatedUnion("targetType", [
 ]);
 
 const draftBaseSchema = versionedObject.extend({
+  version: z.object({ batchId: z.string().min(1).max(100).optional() }).passthrough().optional(),
   id: z.string().min(1),
   title: z.string().min(1),
   mode: z.enum(["topic", "rewrite"]),
@@ -269,10 +270,14 @@ const radarBoardSchema = z.enum(["entertainment", "game", "esports", "ai"]);
 const radarMonitorSchema = z.enum(["operations", "official", "esports", "breakout"]);
 const strings = z.array(z.string());
 const radarSignalSchema = z.object({
+  inputKind: z.enum(["hotlist", "rss", "video"]).optional(), observedAt: z.string().optional(),
+  metrics: z.object({ rank: z.number().optional(), likes: z.number().optional(), comments: z.number().optional(), views: z.number().optional() }).optional(),
   id: z.string(), sourceId: z.string(), sourceName: z.string(), sourceType: z.enum(["official", "news", "video", "community", "social"]),
   board: radarBoardSchema, title: z.string(), url: z.string().optional(), game: z.string(), category: z.string(), capturedAt: z.string(), publishedAt: z.string().optional(), heat: z.number(), trend: z.string(), tags: strings, summary: z.string().optional()
 });
 const radarEventSchema = z.object({
+  eventFingerprint: z.string().optional(), updatedAt: z.string().optional(), development: z.string().optional(),
+  timeline: z.array(z.object({ signalId: z.string(), title: z.string(), source: z.string(), url: z.string(), publishedAt: z.string().optional() })).max(30).optional(),
   id: z.string(), board: radarBoardSchema, monitorType: radarMonitorSchema, monitorLabel: z.string(), triggerMode: z.string(), thresholdHint: z.string(), actionWindow: z.string(), priorityLabel: z.string(), scopeMatches: strings,
   title: z.string(), game: z.string(), category: z.string(), status: z.enum(["ready", "watch", "risk"]), score: z.number(), freshness: z.string(), sources: z.number(), summary: z.string(), whyNow: z.string(), playerFocus: strings, angles: strings, evidence: strings, research: strings, risks: strings, accounts: strings, signalIds: strings,
   gradeLabel: radarGradeSchema.optional(), userRating: radarRatingSchema.optional(), entryPoint: z.string().optional(), commentDirection: z.string().optional(), publishedAt: z.string().optional(), retainedUntil: z.string().optional(),
@@ -282,11 +287,11 @@ const radarCounts = { sourceCount: z.number(), completedSourceCount: z.number(),
 export const hotspotSnapshotSchema = z.object({
   // 兼容现有规则版快照，后续写入统一添加版本号，不批量改写旧资产。
   schemaVersion: z.literal(1).optional(), generatedAt: z.string(),
-  scouts: z.array(z.object({ id: z.string(), board: radarBoardSchema, name: z.string(), scope: z.string(), cadence: z.string(), sources: strings, status: z.enum(["running", "queued", "paused", "failed"]), coverage: z.number(), itemCount: z.number(), lastCheckedAt: z.string().optional(), error: z.string().optional() })),
+  scouts: z.array(z.object({ id: z.string(), board: radarBoardSchema, name: z.string(), scope: z.string(), cadence: z.string(), cacheStatus: z.enum(["fresh", "validated", "network", "stale"]).optional(), sources: strings, status: z.enum(["running", "queued", "paused", "failed"]), coverage: z.number(), itemCount: z.number(), lastCheckedAt: z.string().optional(), error: z.string().optional() })),
   signals: z.array(radarSignalSchema), hotspots: z.array(radarEventSchema),
   summary: z.object({ ...radarCounts, generatedAt: z.string(), boardStats: z.array(z.object({ ...radarCounts, board: radarBoardSchema, topScore: z.number() })) }),
   refresh: z.object({ requested: z.number(), completed: z.number(), failed: z.number(), sources: z.array(z.object({ id: z.string(), board: radarBoardSchema, name: z.string(), status: z.enum(["completed", "failed"]), itemCount: z.number(), error: z.string().optional() })) }),
-  analysis: z.object({ method: z.literal("ai-two-pass"), candidateCount: z.number(), coarseCount: z.number(), analyzedCount: z.number(), coverage: z.number(), fallback: z.boolean(), fallbackReason: z.string().optional() }).optional(),
+  analysis: z.object({ method: z.literal("ai-two-pass"), pipeline: z.literal("unified-events").optional(), eventCount: z.number().optional(), candidateCount: z.number(), coarseCount: z.number(), analyzedCount: z.number(), coverage: z.number(), reusedItemCount: z.number().optional(), fallback: z.boolean(), fallbackReason: z.string().optional() }).optional(),
   dailyReport: z.object({ headline: z.string(), overview: z.string(), signals: strings, communityMood: z.string(), tomorrowWatch: strings }).optional()
 });
 export const hotspotFeedbackSchema = z.object({
@@ -296,10 +301,29 @@ export const hotspotFeedbackSchema = z.object({
 });
 
 export const hotspotCollectionSchema = z.object({
+  pipeline: z.literal("unified-events").optional(),
   schemaVersion: z.literal(1), generatedAt: z.string(),
   signals: z.array(radarSignalSchema), scouts: hotspotSnapshotSchema.shape.scouts,
   status: z.enum(["collected", "analyzing", "completed", "failed", "cancelled"]),
   analysis: hotspotSnapshotSchema.shape.analysis,
+  completedSignalIds: strings.optional(),
   error: z.string().optional(), partialHotspots: z.array(radarEventSchema),
   analyzedCount: z.number().nonnegative(), candidateCount: z.number().nonnegative()
+});
+
+export const hotspotCheckpointSchema = z.object({
+  schemaVersion: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/),
+  createdAt: z.string().datetime(), result: z.unknown(), fallbackReason: z.string().optional()
+});
+
+export const hotspotRequestCacheSchema = z.object({
+  schemaVersion: z.literal(1), url: z.string(), body: z.string().optional(),
+  etag: z.string().optional(), lastModified: z.string().optional(),
+  checkedAt: z.number(), failures: z.number().int().nonnegative(),
+  nextRetryAt: z.number(), error: z.string().optional()
+});
+
+export const engagementReviewCacheSchema = z.object({
+  schemaVersion: z.literal(1), engineVersion: z.string().min(1), cachedAt: z.string().datetime(),
+  decisions: z.array(z.object({ id: z.number().int().nonnegative(), keep: z.boolean() })).max(60)
 });

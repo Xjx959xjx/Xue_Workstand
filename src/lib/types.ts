@@ -402,6 +402,7 @@ export type WriteRevisionScope = "full" | "selection";
 
 export type DraftVersion = {
   sessionId: string;
+  batchId?: string;
   parentDraftId?: string;
   revision: number;
   instruction?: string;
@@ -984,6 +985,7 @@ export type HotspotMonitorType = (typeof hotspotMonitorTypes)[number];
 export type HotspotScoutStatus = "running" | "queued" | "paused" | "failed";
 
 export type HotspotScout = {
+  cacheStatus?: "fresh" | "validated" | "network" | "stale";
   id: string;
   board: HotspotBoard;
   name: string;
@@ -998,6 +1000,9 @@ export type HotspotScout = {
 };
 
 export type HotspotSignal = {
+  inputKind?: "hotlist" | "rss" | "video";
+  observedAt?: string;
+  metrics?: { rank?: number; likes?: number; comments?: number; views?: number };
   id: string;
   sourceId: string;
   sourceName: string;
@@ -1029,6 +1034,10 @@ export type HotspotDisplayInfo = {
 };
 
 export type HotspotEvent = {
+  eventFingerprint?: string;
+  updatedAt?: string;
+  development?: string;
+  timeline?: Array<{ signalId: string; title: string; source: string; url: string; publishedAt?: string }>;
   gradeLabel?: RadarGrade;
   userRating?: RadarRating;
   entryPoint?: string;
@@ -1223,7 +1232,7 @@ export type JobEvent = {
 };
 
 export type JobDataChange = {
-  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin" | "hotspots";
+  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin" | "hotspots" | "drafts";
   at: string;
   accountId?: string;
   videoId?: string;
@@ -1325,6 +1334,7 @@ export type JobStartInput =
         save?: boolean;
         useWebResearch?: boolean;
         parentDraftId?: string;
+        revisionTargets?: Array<{ parentDraftId: string; currentContent: string }>;
         currentContent?: string;
         revisionInstruction?: string;
         revisionScope?: WriteRevisionScope;
@@ -1436,7 +1446,7 @@ export type JobStartInput =
       title?: string;
       inputSummary?: string;
       href?: string;
-      input: { retryReport?: boolean };
+      input: { retryReport?: boolean; continueAnalysis?: boolean; trendRadarIds?: string[] };
     }
   | {
       kind: "gross-margin-refresh";

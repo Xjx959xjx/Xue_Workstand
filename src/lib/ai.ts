@@ -250,7 +250,7 @@ export type AccountStyleGenerationResult = {
 };
 
 const STYLE_REASONING_EFFORT: ChatReasoningEffort = "medium";
-const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 2, 1, 4);
+const STYLE_SAMPLE_ANALYSIS_CONCURRENCY = boundedEnvInteger("STYLE_SAMPLE_ANALYSIS_CONCURRENCY", 2, 1, 6);
 const STYLE_SAMPLE_ANALYSIS_PROMPT_VERSION = STYLE_ANALYSIS_VERSION;
 export const WRITE_COPY_REASONING_EFFORT: ChatReasoningEffort = "medium";
 const WRITE_PROMPT_VERSION = WRITER_PROMPT_VERSION;
@@ -2988,7 +2988,8 @@ export async function prepareWriteCopyBatchContext(
             research: variantResearch,
             sourceDigest,
             contextFingerprint,
-            includeStyleInTitle: styleContexts.length > 1
+            includeStyleInTitle: styleContexts.length > 1,
+            batchId: styleInputs.length > 1 ? traceId : undefined
           })
         }
       };
@@ -3085,6 +3086,7 @@ async function prepareWriteRevisionContext(
   });
   const version = {
     sessionId: parent.version?.sessionId || parent.id,
+    batchId: parent.version?.batchId,
     parentDraftId: parent.id,
     revision: (parent.version?.revision || 1) + 1,
     instruction,
@@ -3213,6 +3215,7 @@ function buildPreparedWriteDraftBase(input: {
   sourceDigest: WriteSourceDigest;
   contextFingerprint: string;
   includeStyleInTitle?: boolean;
+  batchId?: string;
 }): PreparedWriteContext["draftBase"] {
   const reference = input.styleContexts[0].reference;
   const shared = {
@@ -3230,7 +3233,7 @@ function buildPreparedWriteDraftBase(input: {
     sourceDigest: input.sourceDigest,
     writerContext: input.styleContexts[0].snapshot,
     styleRefs: input.styleContexts.map((context) => context.reference),
-    version: createInitialDraftVersion(input.contextFingerprint)
+    version: { ...createInitialDraftVersion(input.contextFingerprint), batchId: input.batchId }
   };
 
   if (reference.targetType === "project") {

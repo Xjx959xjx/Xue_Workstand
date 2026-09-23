@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
 import { useRouter } from "next/navigation";
 import { useFeedback } from "@/components/FeedbackProvider";
-import { deleteDrafts, draftSummaryFromDraft, getCachedDrafts, getDraft, getDrafts, renameDraft } from "@/lib/client";
+import { deleteDrafts, draftSummaryFromDraft, getCachedDrafts, getWriterHistoryDraft, getDrafts, renameDraft } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import type { Draft, DraftSummary } from "@/lib/types";
 
@@ -46,7 +46,7 @@ export function useWriterHistoryActions({ historyDrafts, setDraftSummaries, last
   setDraftSummaries: React.Dispatch<React.SetStateAction<DraftSummary[] | null>>;
   lastDraftId: string;
   loadedDraftParamRef: MutableRefObject<string>;
-  applyLoadedDraft: (draft: Draft) => void;
+  applyLoadedDraft: (draft: Draft, batch?: Draft[]) => void;
   onClearCurrent: () => void;
   setNotice: (message: string) => void;
   refresh: () => Promise<void>;
@@ -56,9 +56,9 @@ export function useWriterHistoryActions({ historyDrafts, setDraftSummaries, last
   const handleSelectHistoryDraft = useCallback(
     async (summary: DraftSummary) => {
       try {
-        const draft = await getDraft(summary.id);
+        const { draft, batch } = await getWriterHistoryDraft(summary.id);
         loadedDraftParamRef.current = draft.id;
-        applyLoadedDraft(draft);
+        applyLoadedDraft(draft, batch);
         router.replace(buildWriterDraftHref(draft), { scroll: false });
       } catch (error) {
         const message = error instanceof Error ? error.message : "读取草稿详情失败";
@@ -203,4 +203,3 @@ function findReplacementDraft(drafts: DraftSummary[], deletedIds: Set<string>, c
 
   return sameSession[0] || remaining[0] || null;
 }
-

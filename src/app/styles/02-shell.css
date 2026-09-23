@@ -773,22 +773,29 @@
 .brand-mark {
   width: 34px;
   height: 34px;
-  border-color: var(--control-primary-border);
-  border-radius: 10px;
-  color: var(--control-primary-text);
-  background: var(--control-primary-bg);
-  box-shadow: var(--surface-inset-highlight);
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  color: var(--panel-raised);
+  background: var(--text-strong);
+  box-shadow: none;
 }
 
 .brand strong {
   font-size: 17px;
-  font-weight: 720;
-  letter-spacing: 0;
+  font-weight: 750;
+  letter-spacing: -0.025em;
 }
 
 .brand small {
   margin-top: 2px;
   font-size: 12px;
+}
+
+.sidebar-settings {
+  min-height: 38px;
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--line-subtle);
+  font-size: var(--text-meta);
 }
 
 .nav-list {
@@ -857,7 +864,7 @@
 .nav-link.active {
   border-color: transparent;
   color: var(--accent-strong);
-  background: color-mix(in oklch, var(--accent) 14%, var(--chrome));
+  background: color-mix(in oklch, var(--text-strong) 7%, var(--chrome));
   box-shadow: none;
   font-weight: 600;
   transform: none;
@@ -876,8 +883,11 @@
   border-radius: 0;
   color: var(--muted-strong);
   background: transparent;
-  transition: color var(--motion-fast) var(--ease-apple);
+  transition: color var(--motion-fast) var(--ease-apple), transform var(--motion-base) var(--ease-apple);
 }
+
+.nav-link:hover .nav-emoji { transform: translateX(2px); }
+.nav-link:active .nav-emoji { transform: scale(.94); }
 
 .nav-link:hover .nav-emoji,
 .nav-link.active .nav-emoji,

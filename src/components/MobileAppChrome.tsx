@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Flame, Home, Menu, PenLine, Sword } from "lucide-react";
+import { LibraryBig, Layers2, Flame, Home, Menu, PenLine, Sword } from "lucide-react";
 import { SkinToggle } from "./SkinToggle";
 import { TaskCenter } from "./TaskCenter";
 import { useRemoteStatus } from "./RemoteStatusProvider";
@@ -11,7 +11,7 @@ import type { AppMode } from "@/lib/app-mode";
 const primaryItems = [
   { href: "/mobile", label: "首页", icon: Home, exact: true },
   { href: "/douyin-hotlist", label: "热榜", icon: Flame },
-  { href: "/library", label: "账号库", icon: BookOpen },
+  { href: "/library", label: "账号库", icon: LibraryBig },
   { href: "/writer", label: "写作", icon: PenLine },
   { href: "/mobile/more", label: "更多", icon: Menu, more: true }
 ];
@@ -28,7 +28,7 @@ export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
       <header className="mobile-top-bar">
         <Link className="mobile-top-brand" href="/mobile">
           <span className="mobile-top-mark" aria-hidden="true">
-            <span className="mobile-top-mark-default">P</span>
+            <Layers2 className="mobile-top-mark-default" size={21} strokeWidth={1.75} />
             <Sword className="mobile-top-mark-shinigami" size={19} strokeWidth={2} />
           </span>
           <span className="mobile-brand-copy mobile-brand-copy-default">
@@ -64,7 +64,7 @@ export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
               href={item.href}
               key={item.href}
             >
-              <Icon aria-hidden="true" size={21} strokeWidth={2} />
+              <Icon aria-hidden="true" size={21} strokeWidth={1.75} />
               <span>{item.label}</span>
             </Link>
           );

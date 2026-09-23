@@ -29,6 +29,10 @@ export const writeCopyInputSchema = z.object({
   save: z.boolean().optional(),
   useWebResearch: z.boolean().optional(),
   parentDraftId: z.string().min(1).optional(),
+  revisionTargets: z.array(z.object({
+    parentDraftId: z.string().min(1),
+    currentContent: z.string().min(1).max(120_000)
+  })).min(1).max(8, "一次最多修改 8 篇稿件").optional(),
   currentContent: z.string().max(120_000).optional(),
   revisionInstruction: z.string().trim().max(4_000).optional(),
   revisionMode: z.enum(["edit", "recalibrate"]).optional().default("edit"),
@@ -36,6 +40,14 @@ export const writeCopyInputSchema = z.object({
   selectedText: z.string().max(30_000).optional()
 }).superRefine((input, ctx) => {
   if (input.action === "revise") {
+    if (input.revisionTargets) {
+      if (new Set(input.revisionTargets.map(item => item.parentDraftId)).size !== input.revisionTargets.length)
+        ctx.addIssue({ code: "custom", message: "不能重复选择同一篇稿件", path: ["revisionTargets"] });
+      if (input.revisionTargets.some(item => !item.currentContent.trim()))
+        ctx.addIssue({ code: "custom", message: "选中的稿件内容不能为空", path: ["revisionTargets"] });
+      if (input.revisionScope === "selection")
+        ctx.addIssue({ code: "custom", message: "多稿修改请使用全文范围，局部选文仅适用于当前稿件", path: ["revisionScope"] });
+    }
     if (!input.parentDraftId) {
       ctx.addIssue({ code: "custom", message: "请选择要继续修改的稿件版本", path: ["parentDraftId"] });
     }
@@ -52,6 +64,7 @@ export const writeCopyInputSchema = z.object({
   }
 
   const mode = input.mode;
+  if (input.revisionTargets) ctx.addIssue({ code: "custom", message: "稿件多选仅用于继续修改", path: ["revisionTargets"] });
   const combinedSourceInput = [input.sourceText?.trim(), input.supportDocLinks?.trim()].filter(Boolean).join("\n\n");
   const separatedInput = splitWriterSourceInput(input.sourceText || "", input.supportDocLinks || "");
   const prompt = normalizeRewritePrompt(input.mode, input.prompt, combinedSourceInput);

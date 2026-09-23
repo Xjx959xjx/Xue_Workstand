@@ -15,6 +15,7 @@ export type WriteCopyScopeInput = {
   supportDocLinks?: string;
   useWebResearch?: boolean;
   parentDraftId?: string;
+  revisionTargets?: Array<{ parentDraftId: string; currentContent: string }>;
   currentContent?: string;
   revisionInstruction?: string;
   revisionScope?: "full" | "selection";
@@ -37,6 +38,7 @@ export function writeCopySourceKey(input: WriteCopyScopeInput) {
     supportDocLinks: normalizeScopeLinks(separatedInput.supportDocLinks),
     useWebResearch: Boolean(input.useWebResearch),
     parentDraftId: input.parentDraftId || "",
+    ...(input.revisionTargets ? { revisionTargets: input.revisionTargets.map(item => ({ parentDraftId: item.parentDraftId, currentContent: normalizeScopeText(item.currentContent) })) } : {}),
     currentContent: normalizeScopeText(input.currentContent),
     revisionInstruction: normalizeScopeText(input.revisionInstruction),
     revisionScope: input.revisionScope || "full",

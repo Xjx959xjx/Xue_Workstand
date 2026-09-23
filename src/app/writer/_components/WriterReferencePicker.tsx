@@ -72,12 +72,13 @@ export function WriterReferencePicker({
   }, [open]);
 
   const toggleReference = (option: ReferenceOption) => {
+    const accountReferences = references.filter((reference) => reference.targetType === "account");
     const selected = selectedKeys.includes(option.key);
-    if (selected && references.length === 1) return;
-    if (!selected && references.length >= MAX_CONCURRENT_STYLES) return;
+    if (selected && accountReferences.length === 1) return;
+    if (!selected && accountReferences.length >= MAX_CONCURRENT_STYLES) return;
     onChange(selected
-      ? references.filter((reference) => writeStyleReferenceKey(reference) !== option.key)
-      : [...references, option.reference]);
+      ? accountReferences.filter((reference) => writeStyleReferenceKey(reference) !== option.key)
+      : [...accountReferences, option.reference]);
   };
 
   const renderGroup = (label: string, group: ReferenceOption[]) => group.length ? (
@@ -89,7 +90,7 @@ export function WriterReferencePicker({
           <button
             aria-selected={selected}
             className="writer-reference-option"
-            disabled={!selected && references.length >= MAX_CONCURRENT_STYLES}
+            disabled={!selected && references.filter((reference) => reference.targetType === "account").length >= MAX_CONCURRENT_STYLES}
             key={option.key}
             onClick={() => toggleReference(option)}
             role="option"
@@ -125,9 +126,8 @@ export function WriterReferencePicker({
       </button>
       {open ? (
         <div aria-label="选择参考风格" aria-multiselectable="true" className="writer-reference-menu" role="listbox">
-          {renderGroup("项目风格", options.filter((option) => option.reference.targetType === "project"))}
           {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account"))}
-          <p>至少保留 1 个，最多 8 个；多选会按每张风格卡并发生成独立文案，不会混合风格。</p>
+          <p>最多选 8 个账号，每个风格单独生成一篇。</p>
         </div>
       ) : null}
     </div>

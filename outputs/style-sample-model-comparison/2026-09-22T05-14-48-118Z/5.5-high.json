@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "5.5-high",
+  "model": "gpt-5.5",
+  "effort": "high",
+  "status": "failed",
+  "attempts": [],
+  "error": "对话模型服务连接异常",
+  "totalMs": 132229
+}

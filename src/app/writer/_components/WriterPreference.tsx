@@ -27,13 +27,13 @@ export function WriterPreference({ draftId, disabled, onSaved }: { draftId: stri
   }
   return <section className="writer-revision-composer" aria-label="写作偏好" aria-busy={pending}>
     <label className="writer-field">
-      <span>以后也这样写</span>
+      <span>长期写作偏好</span>
       <textarea className="writer-textarea revision" value={text} maxLength={600} disabled={disabled || pending}
-        onChange={event => setText(event.target.value)} placeholder="例如：开头先讲具体事件，少用总结式开场。只填写长期表达偏好，本次商单要求放在修改框。" />
+        onChange={event => setText(event.target.value)} placeholder="例如：开头先讲具体事件，少用总结式开场。" />
     </label>
     <div className="writer-revision-actions">
-      <span>只记到当前稿件对应的博主或项目，不把生成稿当成博主原作。</span>
-      <button className="btn secondary" type="button" disabled={!draftId || !text.trim() || disabled || pending} onClick={() => void update(false)}>记住这条偏好</button>
+      <span>用于当前风格的后续新稿</span>
+      <button className="btn compact" type="button" disabled={!draftId || !text.trim() || disabled || pending} onClick={() => void update(false)}>{pending ? "保存中…" : "记住偏好"}</button>
       {saved?.draftId === draftId ? <button className="btn secondary" type="button" disabled={disabled || pending} onClick={() => void update(true)}>撤销上次记住</button> : null}
     </div>
     <p role="status" aria-live="polite">{message}</p>

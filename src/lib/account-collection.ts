@@ -22,6 +22,17 @@ export type CollectAccountInput = {
   toDate?: string;
 };
 
+export function applyDefaultCollectionDateRange(input: CollectAccountInput, today = new Date()): CollectAccountInput {
+  if (input.platform !== "douyin" || input.fromDate || input.toDate) return input;
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const day = today.getDate();
+  // 按日历年回溯；闰日回溯到非闰年时取二月最后一天。
+  const from = new Date(year - 5, month, Math.min(day, new Date(year - 5, month + 1, 0).getDate()));
+  const format = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return { ...input, fromDate: format(from), toDate: format(today) };
+}
+
 export async function collectAccountContent(
   input: CollectAccountInput,
   options: {
@@ -29,6 +40,7 @@ export async function collectAccountContent(
     onProgress?: (progress: { stage: string; message: string; progress: number }) => void | Promise<void>;
   } = {}
 ): Promise<CollectResult> {
+  input = applyDefaultCollectionDateRange(input);
   await options.onProgress?.({ stage: "resolve-account", message: "正在识别账号主页", progress: 10 });
   const target = resolveCollectTarget(input.platform, input.name, input.uidOrUrl);
   const order = normalizeCollectOrder(input.order);
@@ -240,7 +252,7 @@ function makeCollectPlan(
   const needsLocalMetricSort = order === "likes" || order === "comments";
   return {
     limit: needsLocalMetricSort ? localSortCandidateLimit(platform, limit) : limit,
-    order: hasDateFilter ? "pubdate" : getCollectionOrder(order),
+    order: platform === "douyin" ? order : hasDateFilter ? "pubdate" : getCollectionOrder(order),
     pageByPubdate: platform === "bilibili" && hasDateFilter,
     hydrateDetails: false
   };

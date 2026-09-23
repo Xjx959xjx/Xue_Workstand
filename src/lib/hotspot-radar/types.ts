@@ -3,10 +3,13 @@ export type RadarGrade = typeof radarGrades[number];
 export type RadarRating = "吊爆了" | "还行" | "不行";
 export type RadarAnalysis = {
   method: "ai-two-pass";
+  pipeline?: "unified-events";
+  eventCount?: number;
   candidateCount: number;
   coarseCount: number;
   analyzedCount: number;
   coverage: number;
+  reusedItemCount?: number;
   fallback: boolean;
   fallbackReason?: string;
 };

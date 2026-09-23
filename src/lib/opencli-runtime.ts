@@ -9,7 +9,12 @@ const DEFAULT_SHARED_BROWSER_SESSION = "content-workbench-browser";
 
 type OpenCliQueue = Promise<unknown>;
 
-const browserOperationQueues = new Map<string, OpenCliQueue>();
+// Next.js 路由模块和热更新可能加载多个模块实例，但共用同一个浏览器标签页。
+// 队列必须与 jobs runtime 一样存于进程全局，避免详情补全导航打断历史采集。
+const globalOpenCli = globalThis as typeof globalThis & {
+  __styleWorkbenchOpenCliQueues?: Map<string, OpenCliQueue>;
+};
+const browserOperationQueues = globalOpenCli.__styleWorkbenchOpenCliQueues ||= new Map<string, OpenCliQueue>();
 
 type OpenCliBrowserWindowMode = "foreground" | "background";
 
@@ -291,11 +296,21 @@ function formatTimingError(error: unknown) {
   return message.replace(/\s+/g, " ").trim().slice(0, 220);
 }
 
-function wrapOpenCliError(error: unknown) {
+export function wrapOpenCliError(error: unknown) {
   if (isMissingExecutableError(error)) {
     return new Error("未检测到 opencli。数据维护 / 数据监控页面可以继续使用，但实时刷新 B站/抖音数据前请先运行 install-deps.cmd 安装 opencli。");
   }
   if (error instanceof Error) {
+    if (error.name === "AbortError") return error;
+    const failure = error as Error & { stderr?: string; stdout?: string; killed?: boolean; signal?: string };
+    const detail = String(failure.stderr || failure.stdout || "").trim();
+    if (detail) {
+      const reason = /execution context.*destroyed|cannot find context|inspected target.*navigated/i.test(detail)
+        ? "采集使用的浏览器页面被跳转或重载，请重试采集。"
+        : detail.replace(/\s+/g, " ").slice(0, 1500);
+      return new Error(`OpenCLI 执行失败：${reason}`, { cause: error });
+    }
+    if (failure.killed) return new Error("OpenCLI 请求超时或进程被终止，请重试或缩小采集范围。", { cause: error });
     return error;
   }
   return new Error("opencli 执行失败");

@@ -111,6 +111,7 @@ export function useWriterGeneration({
   const [generateProgress, setGenerateProgress] = useState(0);
   const [activeWriteJobId, setActiveWriteJobId] = useState(readPendingWriteJobId);
   const generationBaseContentRef = useRef("");
+  const versionEditsRef = useRef(new Map<string, WriterVariantState>());
   const handledWriteJobsRef = useRef<Set<string>>(new Set());
   const reportedHydrationErrorsRef = useRef<Set<string>>(new Set());
   const writeJobSourceKey = useMemo(
@@ -236,13 +237,20 @@ export function useWriterGeneration({
     setActiveWriteJobId("");
     setBusy("");
 
-    if (activeWriteJob.status === "completed") {
+    if (activeWriteJob.status === "completed" || (result && isWriteBatchResult(result) && result.results.length > 0)) {
       if (result) {
         generationBaseContentRef.current = "";
         if (isWriteBatchResult(result)) {
-          const nextVariants = result.results.map((item) => variantStateFromWriteResult(item));
+          const isRevisionBatch = result.results.every(item => item.draft?.version?.origin === "revision");
+          const nextVariants = isRevisionBatch && generatedVariants.length
+            ? generatedVariants.map(variant => {
+              const item = result.results.find(item => item.draft?.version?.parentDraftId === variant.draftId);
+              return item ? { ...variantStateFromWriteResult(item), key: variant.key, title: variant.title } : variant;
+            })
+            : result.results.map((item) => variantStateFromWriteResult(item));
           setGeneratedVariants(nextVariants);
-          if (nextVariants[0]) applyVariantState(nextVariants[0]);
+          const selected = nextVariants.find(item => item.key === activeVariantKey) || nextVariants[0];
+          if (selected) applyVariantState(selected);
           for (const item of result.results) {
             if (item.draft) onDraftSaved?.(item.draft);
           }
@@ -250,7 +258,7 @@ export function useWriterGeneration({
           const failureNotice = result.failures.length
             ? `；${result.failures.map((failure) => `${failure.styleTitle}失败`).join("、")}`
             : "";
-          setNotice(`已并发生成并分别保存 ${result.results.length} 篇独立文案${failureNotice}。`);
+          setNotice(`已${isRevisionBatch ? "修改" : "生成"}并保存 ${result.results.length} 篇独立文案${failureNotice}${activeWriteJob.status !== "completed" ? "；任务已中止，未完成稿件保留原文" : ""}。`);
         } else {
           const nextVariant = variantStateFromWriteResult(result, activeTitle || "当前稿件", activeVariantKey);
           const isRevision = result.draft?.version?.origin === "revision";
@@ -388,8 +396,13 @@ export function useWriterGeneration({
     useWebResearch
   ]);
 
-  const handleRevise = useCallback(async () => {
+  const handleRevise = useCallback(async (variantKeys?: string[]) => {
     if (!canRevise || !lastDraftBase) return;
+    const targets = variantKeys?.length ? generatedVariants.filter(item => variantKeys.includes(item.key)) : [];
+    if (variantKeys && (!targets.length || targets.some(item => !item.draftId || !item.content.trim()))) {
+      setNotice("请选择有正文的稿件后再修改。");
+      return;
+    }
     generationBaseContentRef.current = lastContent;
     setBusy("generate");
     setNotice("");
@@ -414,9 +427,10 @@ export function useWriterGeneration({
           sourceText: lastDraftBase.input,
           save: true,
           parentDraftId: lastDraftId,
+          revisionTargets: targets.length ? targets.map(item => ({ parentDraftId: item.draftId, currentContent: item.key === activeVariantKey ? lastContent : item.content })) : undefined,
           currentContent: lastContent,
           revisionInstruction: revisionInstruction.trim(),
-          revisionScope,
+          revisionScope: targets.length ? "full" : revisionScope,
           revisionMode,
           selectedText: revisionScope === "selection" ? selectedText : undefined
         }
@@ -436,6 +450,8 @@ export function useWriterGeneration({
     }
   }, [
     canRevise,
+    generatedVariants,
+    activeVariantKey,
     lastContent,
     lastDraftBase,
     lastDraftId,
@@ -532,14 +548,22 @@ export function useWriterGeneration({
     updateActiveVariant({ content });
   }, [updateActiveVariant]);
 
-  const loadDraftResult = useCallback((draft: Draft) => {
+  const loadDraftResult = useCallback((draft: Draft, batch: Draft[] = [draft]) => {
     generationBaseContentRef.current = "";
     const variant = variantStateFromDraft(draft);
-    setGeneratedVariants([variant]);
+    setGeneratedVariants(batch.map(variantStateFromDraft));
     applyVariantState(variant);
     setGenerateStage("");
     setGenerateProgress(100);
   }, [applyVariantState]);
+
+  const loadDraftVersion = useCallback((draft: Draft) => {
+    const current = generatedVariants.find(item => item.key === activeVariantKey);
+    if (current) versionEditsRef.current.set(current.draftId, { ...current, content: lastContent });
+    const variant = { ...(versionEditsRef.current.get(draft.id) || variantStateFromDraft(draft)), key: activeVariantKey || draft.id };
+    setGeneratedVariants(current => current.length ? current.map(item => item.key === activeVariantKey ? variant : item) : [variant]);
+    applyVariantState(variant);
+  }, [activeVariantKey, applyVariantState, generatedVariants, lastContent]);
 
   const clearDraftResult = useCallback(() => {
     generationBaseContentRef.current = "";
@@ -556,7 +580,19 @@ export function useWriterGeneration({
     setActiveWriteJobId("");
   }, [activeWriteJobId]);
 
+  // Preserve every independently edited style variant during history browsing.
+  const captureEditingState = () => () => {
+    setLastContent(lastContent);
+    setLastResearch(lastResearch);
+    setLastSavedContent(lastSavedContent);
+    setLastDraftBase(lastDraftBase);
+    setLastDraftId(lastDraftId);
+    setGeneratedVariants(generatedVariants);
+    setActiveVariantKey(activeVariantKey);
+  };
+
   return {
+    captureEditingState,
     canGenerate,
     canRevise,
     canStopGenerate,
@@ -580,6 +616,7 @@ export function useWriterGeneration({
     lastDraftVersion: lastDraftBase?.version,
     lastResearch,
     loadDraftResult,
+    loadDraftVersion,
     selectGeneratedVariant
   };
 }
@@ -620,6 +657,7 @@ function variantStateFromDraft(draft: Draft): WriterVariantState {
 function nextManualDraftVersion(base: DraftSaveBase, parentDraftId: string): DraftVersion {
   return {
     sessionId: base.version?.sessionId || parentDraftId,
+    batchId: base.version?.batchId,
     parentDraftId,
     revision: (base.version?.revision || 1) + 1,
     instruction: "手动编辑",

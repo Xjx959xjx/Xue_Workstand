@@ -1,0 +1,17 @@
+# 样本分析模型对照
+
+样本：科学修仙，物理飞升！#修行 #科学 #狠人；380字；源稿保存时间：2026-09-22T05:10:59.750Z。
+
+三个请求并发执行，使用相同输入和正式分析提示词。耗时含可能的一次证据纠正；单篇单轮不能代表普遍性能，且共享服务可能受其他任务影响。
+
+| 模型 | 档位 | 总耗时 | 请求次数 | 结果 |
+| --- | --- | --- | --- | --- |
+| gpt-6-astra | medium | 132.2秒 | 0 | failed |
+| gpt-5.5 | high | 132.2秒 | 0 | failed |
+| gpt-5.5 | medium | 63.6秒 | 1 | completed |
+
+- [gpt-6-astra / medium](/Users/xjx/Documents/New project 3/outputs/style-sample-model-comparison/2026-09-22T05-14-48-118Z/astra-medium.md)
+- [gpt-5.5 / high](/Users/xjx/Documents/New project 3/outputs/style-sample-model-comparison/2026-09-22T05-14-48-118Z/5.5-high.md)
+- [gpt-5.5 / medium](/Users/xjx/Documents/New project 3/outputs/style-sample-model-comparison/2026-09-22T05-14-48-118Z/5.5-medium.md)
+
+原始JSON、完整提示词及输入稿均保存在此目录。未修改正式转写、风格卡、样本缓存或AI配置。

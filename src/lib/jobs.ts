@@ -33,7 +33,7 @@ import { extractRewriteSourceMaterial, splitWriterSourceInput } from "./source-e
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
 import { buildEngagementRecordHref } from "./job-links";
 import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES, isResumableJobKind } from "./job-persistence";
-import { libraryRoot } from "./storage";
+import { libraryRoot, resolveDraft } from "./storage";
 import { generatePublishCopy } from "./publish-copy";
 import { isCloudStorageMode, readJsonFile, storageFs as fs, writeJsonFile } from "./storage/fs";
 import {
@@ -719,6 +719,10 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   }
 
   if (isRevision) {
+    if (start.input.revisionTargets?.length) {
+      await runWriteBatchRevisionJob(jobId, start);
+      return;
+    }
     await runWriteRevisionJob(jobId, start);
     return;
   }
@@ -815,6 +819,34 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     partialText: firstWriteResultContent(finalResult),
     resultRef: writeResultRef(finalResult)
   });
+}
+
+async function runWriteBatchRevisionJob(jobId: string, start: Extract<JobStartInput, { kind: "write-copy" }>) {
+  const targets = start.input.revisionTargets || [];
+  const batch: WriteBatchResult = { kind: "write-batch", results: [], failures: [] };
+  for (const [index, target] of targets.entries()) {
+    throwIfCancelled(jobId);
+    const { draft } = await resolveDraft(target.parentDraftId);
+    const styleReference = draft.targetType === "project"
+      ? { targetType: "project" as const, projectId: draft.projectId, projectName: draft.projectName }
+      : { targetType: "account" as const, platform: draft.platform, accountId: draft.accountId, accountName: draft.accountName };
+    const styleTitle = draft.targetType === "project" ? draft.projectName : draft.accountName;
+    await patchJob(jobId, { stage: "generate", message: `正在修改 ${index + 1}/${targets.length} · ${styleTitle}`, progress: 10 + Math.floor(index / targets.length * 80) });
+    try {
+      const prepared = await prepareWriteCopyContext({ ...start.input, ...target, revisionScope: "full", selectedText: undefined }, { signal: getJobAbortSignal(jobId) });
+      const result = await streamResponseTextWithFallback({ policy: "writer_revise", messages: prepared.messages,
+        reasoningEffort: WRITE_COPY_REASONING_EFFORT, signal: getJobAbortSignal(jobId), onDelta() {} });
+      throwIfCancelled(jobId);
+      const completed = await completePreparedWriteCopy({ prepared, result, save: true, signal: getJobAbortSignal(jobId) });
+      batch.results.push({ ...completed, styleKey: target.parentDraftId, styleTitle, styleReference });
+      await patchJobWithDataChange(jobId, { result: { ...batch }, message: `已保存 ${batch.results.length}/${targets.length} 篇新版本` }, { resource: "drafts" });
+    } catch (error) {
+      if (isCancelledJobError(error, getJobAbortSignal(jobId))) throw error;
+      batch.failures.push({ styleKey: target.parentDraftId, styleTitle, styleReference, error: error instanceof Error ? error.message : "修改失败" });
+    }
+  }
+  if (!batch.results.length) throw new Error(batch.failures.map(item => `${item.styleTitle}：${item.error}`).join("；") || "没有可修改的稿件");
+  await completeJob(jobId, { result: batch, message: `已修改 ${batch.results.length} 篇${batch.failures.length ? `，${batch.failures.length} 篇失败` : ""}`, resultRef: writeResultRef(batch) });
 }
 
 async function runWriteRevisionJob(jobId: string, start: Extract<JobStartInput, { kind: "write-copy" }>) {
@@ -1199,12 +1231,12 @@ async function runEngagementJob(jobId: string, start: Extract<JobStartInput, { k
         stage: progress.stage,
         message: progress.message,
         progress: progress.progress,
-        result: progress.previewComments
-          ? {
-              previewComments: progress.previewComments,
-              requestedCount: start.input.commentCount
-            }
-          : undefined
+        ...(progress.previewComments !== undefined ? {
+          result: {
+            previewComments: progress.previewComments,
+            requestedCount: start.input.commentCount
+          }
+        } : {})
       });
     }
   });
@@ -1286,7 +1318,9 @@ async function runCollectAccountJob(jobId: string, start: Extract<JobStartInput,
   });
   throwIfCancelled(jobId);
   await completeJob(jobId, {
-    message: `账号采集完成：写入 ${result.filteredCount} 条视频到「${result.account.name}」`,
+    message: `账号采集完成：写入 ${result.filteredCount} 条视频到「${result.account.name}」${result.videos.some((video) => video.statsHydration?.status === "failed")
+      ? `；${result.videos.filter((video) => video.statsHydration?.status === "failed").length} 条视频详情补全失败，请在账号库重试补全`
+      : ""}`,
     result,
     resultRef: {
       id: result.account.id,
@@ -1333,19 +1367,21 @@ async function runPublishCopyJob(jobId: string, start: Extract<JobStartInput, { 
 async function runHotspotRefreshJob(jobId: string, start: Extract<JobStartInput, { kind: "hotspot-refresh" }>) {
   await patchJob(jobId, {
     stage: "collect",
-    message: "正在刷新热点来源",
+    message: start.input.continueAnalysis ? "正在继续已采集资讯的分析" : start.input.retryReport ? "正在恢复选题日报" : "正在汇入热点榜单、RSS 与视频热榜",
     progress: 8
   });
   const result = await getHotspotRadar({
     refresh: true,
     retryReport: start.input.retryReport,
+    continueAnalysis: start.input.continueAnalysis,
+    trendRadarIds: start.input.trendRadarIds,
     signal: getJobAbortSignal(jobId),
     async onProgress(progress) {
       if (!progress.dataChanged) throwIfCancelled(jobId);
       const patch = {
         stage: progress.stage || "collect",
         message: `${progress.sourceName}${progress.failed ? "（失败）" : ""} · ${progress.completed}/${progress.total}`,
-        progress: progress.stage === "AI 粗筛" ? 55 + Math.round(progress.completed / Math.max(1, progress.total) * 15) : progress.stage === "AI 精筛" ? 70 + Math.round(progress.completed / Math.max(1, progress.total) * 20) : progress.stage === "日报" ? 94 : Math.min(54, 8 + Math.round(progress.completed / Math.max(1, progress.total) * 46))
+        progress: progress.stage === "AI 粗筛" ? 55 + Math.round(progress.completed / Math.max(1, progress.total) * 15) : progress.stage === "事件归并" ? 68 : progress.stage === "正文" ? 70 : progress.stage === "AI 精筛" ? 70 + Math.round(progress.completed / Math.max(1, progress.total) * 20) : progress.stage === "日报" ? 94 : Math.min(54, 8 + Math.round(progress.completed / Math.max(1, progress.total) * 46))
       };
       if (progress.dataChanged) await patchJobWithDataChange(jobId, patch, { resource: "hotspots" });
       else await patchTransientJob(jobId, patch);
@@ -1498,7 +1534,7 @@ function defaultJobTitle(input: JobStartInput) {
   if (input.kind === "collect-account") return "采集账号";
   if (input.kind === "single-video-transcribe") return "提取单条视频文案";
   if (input.kind === "publish-copy") return "生成标题与发布文案";
-  if (input.kind === "hotspot-refresh") return "刷新热点雷达";
+  if (input.kind === "hotspot-refresh") return input.input.trendRadarIds ? "分析 TrendRadar 候选" : input.input.continueAnalysis ? "继续分析热点" : input.input.retryReport ? "重试热点日报" : "刷新热点雷达";
   if (input.kind === "gross-margin-refresh") return "批量刷新数据监控";
   if (input.input.sourceType === "record") return "补齐评论素材";
   return "生成评论素材";
@@ -1527,7 +1563,7 @@ function defaultInputSummary(input: JobStartInput) {
   if (input.kind === "collect-account") return `${input.input.platform === "bilibili" ? "B站" : "抖音"} · ${input.input.name}`;
   if (input.kind === "single-video-transcribe") return input.input.titleHint || input.input.url;
   if (input.kind === "publish-copy") return input.input.topicHint || input.input.sourceText.slice(0, 42);
-  if (input.kind === "hotspot-refresh") return "全量热点来源";
+  if (input.kind === "hotspot-refresh") return input.input.trendRadarIds ? `${input.input.trendRadarIds.length} 条 TrendRadar 候选` : input.input.continueAnalysis ? "已采集资讯中的未完成候选" : input.input.retryReport ? "已完成选题池" : "全量热点来源";
   if (input.kind === "gross-margin-refresh") return input.input.recordIds?.length ? `${input.input.recordIds.length} 条记录` : "全部监控记录";
   if (input.input.sourceType === "draft") return "从草稿生成";
   if (input.input.sourceType === "url") return "从链接生成";
