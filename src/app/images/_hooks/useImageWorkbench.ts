@@ -117,7 +117,7 @@ export function useImageWorkbench() {
     router.replace(`/images?recordId=${encodeURIComponent(nextId)}`, { scroll: false });
   }
   function newRecord() {
-    if (uploadLock.current || submitLock.current || active || !confirmDiscardUnsavedChanges("新建画布会清空当前未生成的输入，是否继续？")) return;
+    if (uploadLock.current || submitLock.current || !confirmDiscardUnsavedChanges("新建画布会清空当前未生成的输入，是否继续？")) return;
     const next = emptyForm(defaultProfileId.current);
     setBatchIds([]); setActiveId(""); setForm(next); setBaseline(JSON.stringify(next)); setReferences([]); setError("");
     setRecord(null); setRecordReferences([]); setCanvasId(crypto.randomUUID()); setBoardRecords([]); setBoardTotal(0);
@@ -150,7 +150,7 @@ export function useImageWorkbench() {
     formTouched.current = true;
   }
   async function generate(input: ImageGenerationInput = form) {
-    if (submitLock.current || uploadLock.current || active || detailLoading) return false;
+    if (submitLock.current || uploadLock.current || detailLoading) return false;
     submitLock.current = true; setBusy(true); setError("");
     try {
       const targetCanvas = canvasId || crypto.randomUUID();
@@ -160,12 +160,11 @@ export function useImageWorkbench() {
       inputs.forEach((item) => resolveImageMentions(item.prompt, item.referenceIds));
       const started: string[] = [];
       const failures: string[] = [];
-      setBatchIds([]);
       for (const item of inputs) {
         try {
           const modelLabel = imageModelLabel(config?.profiles.find((profile) => profile.id === item.profileId)?.model || "图片");
           const next = await startTask({ kind: "image-generation", title: `${modelLabel} · ${item.count} 张`, input: item });
-          started.push(next.id); setBatchIds([...started]);
+          started.push(next.id); setBatchIds((current) => [...current, next.id]);
         } catch (reason) {
           const model = config?.profiles.find((profile) => profile.id === item.profileId)?.model || "模型";
           failures.push(`${imageModelLabel(model)}：${reason instanceof Error ? reason.message : "提交失败"}`);
@@ -221,14 +220,16 @@ export function useImageWorkbench() {
     setForm((current) => ({ ...current, referenceIds: current.referenceIds.filter((ref) => ref !== referenceId), prompt: removeImageMention(current.prompt, referenceId), parentImageId: current.parentImageId === referenceId ? undefined : current.parentImageId }));
     return true;
   }
-  async function cancel() {
+  async function cancel(taskId?: string) {
+    if (submitLock.current) return;
+    submitLock.current = true;
     setBusy(true); setError("");
     try {
       const targets = [...new Map([job, ...batchJobs].filter((entry) => entry && (entry.status === "running" || entry.status === "queued")).map((entry) => [entry!.id, entry!])).values()];
-      const results = await Promise.allSettled(targets.map((entry) => cancelTask(entry.id)));
+      const results = await Promise.allSettled(targets.filter((entry) => !taskId || entry.id === taskId).map((entry) => cancelTask(entry.id)));
       const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason instanceof Error ? result.reason.message : "停止任务失败，请在任务中心重试。"] : []);
       if (errors.length) throw new Error(errors.join("；"));
-    } catch (error) { fail(error); } finally { setBusy(false); }
+    } catch (error) { fail(error); } finally { submitLock.current = false; setBusy(false); }
   }
   async function loadMore(board = false) {
     if (moreLock.current) return;

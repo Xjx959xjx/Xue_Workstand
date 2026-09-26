@@ -460,7 +460,7 @@ async function fixture(run: (context: { account: Account; root: string; requests
     for await (const chunk of req) body += chunk;
     const payload = JSON.parse(body);
     requestBodies.push(payload);
-    const messages = payload.messages.map((m: { content: string }) => m.content);
+    const messages = (payload.messages || payload.input).map((m: { content: string }) => m.content);
     requests.push(messages);
     const reply = respond(messages);
     if (typeof reply !== "string") {
@@ -468,8 +468,17 @@ async function fixture(run: (context: { account: Account; root: string; requests
       else { res.writeHead(reply.status, { "Content-Type": reply.contentType || "application/json" }); res.end(reply.body); }
       return;
     }
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: reply } }] }));
+    if (payload.stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      if (req.url?.endsWith("responses")) {
+        res.end(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: reply })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`);
+        return;
+      }
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: reply }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+    } else {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: reply } }] }));
+    }
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as { port: number };
@@ -503,6 +512,37 @@ test("样本连接中断自动重试一次，恢复后缓存并复用分析", as
     const next = await prepareAccountStyleContext(account.platform, account.id);
     assert.equal(next.analysisStats.analysisCachedCount, 1);
     assert.equal(requests.length, 2);
+    assert.equal(await readStyle(account.platform, account.id), "旧风格：现场乐子\n");
+  });
+});
+
+test("样本分析沿用 Responses 流式，完整 JSON 但缺少结束标记仍丢弃重试", async () => {
+  await fixture(async ({ account, requests, requestBodies, setReply }) => {
+    process.env.CHAT_WIRE_API = "responses";
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => requests.length === 1
+      ? { status: 200, contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(evidence) })}\n\n` }
+      : JSON.stringify(evidence));
+    const context = await prepareAccountStyleContext(account.platform, account.id);
+    assert.equal(requests.length, 2);
+    assert.equal(context.analysisStats.analysisGeneratedCount, 1);
+    for (const body of requestBodies) {
+      assert.equal(body.stream, true);
+      assert.ok(Array.isArray(body.input), "沿用 Responses 配置，不降级到非流式或 Chat");
+    }
+    assert.ok(await readAccountStyleSampleAnalysis(account.platform, account.id, "event"));
+  });
+});
+
+test("样本分析始终缺少结束标记时有界失败，不落盘半截分析", async () => {
+  await fixture(async ({ account, requests, setReply }) => {
+    await saveVideos(account, [video(account, "event", "活动", 1)]);
+    await saveTranscript({ platform: account.platform, accountId: account.id, videoId: "event", text: quote, source: "manual" });
+    setReply(() => ({ status: 200, contentType: "text/event-stream", body: `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(evidence) } }] })}\n\n` }));
+    await assert.rejects(() => prepareAccountStyleContext(account.platform, account.id), /连接异常.*原卡已保留/);
+    assert.equal(requests.length, 2);
+    assert.equal(await readAccountStyleSampleAnalysis(account.platform, account.id, "event"), null);
     assert.equal(await readStyle(account.platform, account.id), "旧风格：现场乐子\n");
   });
 });

@@ -56,7 +56,7 @@
 .image-prompt-editor .tiptap p:only-child:has(> br:only-child)::before { content: "描述画面，输入 @ 选择参考图…"; color: var(--muted); pointer-events: none; }
 .image-prompt-mention { display: inline-flex; align-items: center; gap: 4px; max-width: 240px; vertical-align: middle; border-radius: 5px; color: var(--accent-strong); background: var(--accent-tint); padding: 2px 6px; font-size: var(--text-meta); white-space: normal; cursor: pointer; }
 .image-prompt-mention img { width: 22px; height: 22px; object-fit: contain; border-radius: 3px; }
-.image-mention-menu { position: absolute; z-index: 20; bottom: calc(100% - 34px); left: 0; width: min(330px, 100%); max-height: 260px; overflow: auto; padding: var(--space-2); border: 1px solid var(--line); background: var(--panel-raised); border-radius: var(--radius-md); box-shadow: var(--shadow-float); }
+.image-mention-menu { position: absolute; z-index: 20; bottom: auto; left: 0; width: min(330px, 100%); max-height: 260px; overflow: auto; padding: var(--space-2); border: 1px solid var(--line); background: var(--panel-raised); border-radius: var(--radius-md); box-shadow: var(--shadow-float); }
 .image-mention-menu .btn { width: 100%; display: flex; justify-content: flex-start; white-space: normal; text-align: left; }
 .image-mention-menu .btn[aria-selected="true"] { background: var(--surface-selected); }
 .image-mention-menu img { width: 38px; height: 32px; object-fit: contain; flex-shrink: 0; }
@@ -100,8 +100,6 @@
 .image-gallery-caption > div { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .image-gallery-caption time { color: var(--muted); font-size: var(--text-caption); }
 .image-more-records { padding: var(--space-2); text-align: center; background: var(--panel); }
-.image-job-status { margin: 0; padding: var(--space-2) var(--space-4); background: var(--blue-soft); color: var(--text); display: grid; gap: var(--space-1); font-size: var(--text-meta); overflow-wrap: anywhere; }
-.image-job-status progress { width: 100%; height: 5px; accent-color: var(--accent); }
 .image-compare { width: min(1400px, 94vw); max-width: 94vw; max-height: calc(var(--app-dvh) * 94); padding: var(--space-4); background: var(--panel); color: var(--text); border: 1px solid var(--line); overflow: auto; }
 .image-compare::backdrop { background: var(--overlay); }
 .image-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
@@ -331,7 +329,7 @@
 .image-composer .image-generate-button.btn.primary, .image-edit-toolbar > .btn.primary:last-child { width: 42px; height: 42px; min-height: 42px; padding: 0; border-radius: 50%; border: 0; background: var(--text-strong); color: var(--panel-raised); box-shadow: none; transition: transform 160ms ease, opacity 160ms ease; }
 .image-composer .image-generate-button.btn.primary:hover, .image-edit-toolbar > .btn.primary:last-child:hover { transform: translateY(-1px); opacity: .85; }
 .image-composer .image-generate-button.btn.primary:disabled, .image-edit-toolbar > .btn.primary:last-child:disabled { opacity: .35; transform: none; }
-.image-edit-lightbox .yarl__container { background: color-mix(in oklch, var(--panel) 65%, transparent); backdrop-filter: blur(22px) saturate(1.15); }
+.image-edit-lightbox .yarl__container, .image-composer.is-expanded::backdrop { background: color-mix(in oklch, var(--panel) 65%, transparent); backdrop-filter: blur(22px) saturate(1.15); }
 .image-edit-lightbox { --yarl__color_button: var(--muted-strong); --yarl__color_button_active: var(--text-strong); --yarl__button_filter: none; }
 .image-edit-lightbox .yarl__slide_image { border-radius: 16px; box-shadow: var(--shadow-float); }
 .image-edit-composer { background: var(--glass-panel); backdrop-filter: blur(18px); }
@@ -408,11 +406,11 @@
 .image-composer .image-control-popover .image-assist-preview { position: static; width: auto; margin: 0; padding: 8px; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 
 .image-mention-menu { width: min(640px, calc(100vw - 64px)); max-height: none; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
-.image-mention-choices { min-width: 0; max-height: min(300px, calc(var(--app-dvh) * 36)); overflow-y: auto; overscroll-behavior: contain; }
+.image-mention-choices { min-width: 0; min-height: 0; max-height: min(300px, calc(var(--app-dvh) * 36)); overflow-y: auto; overscroll-behavior: contain; }
 .image-mention-choices .btn { border-radius: 12px; transition: background 160ms ease-out, transform 160ms ease-out; }
 .image-mention-choices .btn img { transition: transform 180ms ease-out; }
 .image-mention-choices .btn[aria-selected="true"] img { transform: scale(1.12); }
-.image-mention-menu .image-mention-preview { order: -1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 10px; border-radius: 12px; background: var(--panel-soft); }
+.image-mention-menu .image-mention-preview { order: -1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 10px; border-radius: 12px; background: var(--panel-soft); }
 .image-mention-menu .image-mention-preview img { width: 100%; height: 180px; max-height: calc(var(--app-dvh) * 23); object-fit: contain; border-radius: 8px; animation: image-mention-reveal 180ms ease-out; }
 .image-mention-preview > span { font-size: var(--text-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-mention-preview > small { font-size: var(--text-caption); color: var(--muted); }
@@ -421,3 +419,38 @@
 @media (prefers-reduced-motion: reduce) { .image-mention-menu .image-mention-preview img { animation: none; } .image-mention-choices .btn, .image-mention-choices .btn img { transition: none; } }
 
 .image-result-group.is-jump-target .image-result-prompt { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+
+/* Expand the same editor in place so its document, selection and references survive. */
+.image-composer .image-composer-expand { position: absolute; top: var(--space-2); right: var(--space-2); z-index: 2; }
+.image-composer .image-field-heading { padding-right: 36px; }
+.image-composer-references { padding-right: 36px; }
+.image-submit { display: flex; align-items: center; gap: var(--space-2); }
+.image-composer.is-expanded::backdrop { pointer-events: auto; }
+.image-composer.is-expanded { display: flex; flex-direction: column; position: fixed; inset: auto; left: var(--expanded-center-x); top: var(--expanded-center-y); transform: translate(-50%, -50%); margin: 0; overflow: visible; width: min(1120px, var(--expanded-width)); height: var(--expanded-height); min-height: 0; max-height: 100%; padding: var(--space-5); box-shadow: var(--shadow-float); }
+.image-composer.is-expanded .image-prompt-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.image-composer.is-expanded .image-prompt-editor > .tiptap { flex: 1; }
+.image-composer.is-expanded .image-prompt-editor > div:has(> .tiptap) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.image-composer.is-expanded .tiptap { flex: 1; min-height: 0; max-height: none; overflow-y: auto; }
+.image-composer.is-expanded .image-composer-bottom { flex-shrink: 0; }
+@media (max-width: 760px) {
+  .image-composer.is-expanded { padding: var(--space-3); }
+  .image-submit small { max-width: 120px; }
+}
+
+
+.image-composer .image-expanded-error { margin: 0; max-height: 100px; overflow-y: auto; flex-shrink: 0; }
+
+.image-job-trigger { color: var(--muted-strong); }
+.image-job-list { display: grid; gap: var(--space-3); }
+.image-job-list > header, .image-job-item-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.image-job-list > header strong { font-size: var(--text-body); }
+.image-job-list-items { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+.image-job-item { padding: var(--space-3) 0; border-top: 1px solid var(--line-subtle); }
+.image-job-item-heading strong { font-size: var(--text-meta); overflow-wrap: anywhere; }
+.image-job-item-heading .btn { flex-shrink: 0; }
+.image-job-item p, .image-job-list > small { margin: var(--space-1) 0; color: var(--muted); font-size: var(--text-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.image-job-item progress { display: block; width: 100%; height: 4px; margin-top: var(--space-2); accent-color: var(--text-strong); }
+
+.image-result-delete { flex-shrink: 0; color: var(--muted); }
+.image-result-delete:not(:disabled):hover { color: var(--danger); }
+.image-assist-direct { min-height: 32px; }

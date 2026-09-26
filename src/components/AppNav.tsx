@@ -50,27 +50,16 @@ const navGroupCodes: Record<NavItem["group"], string> = {
 };
 
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
-const devRouteApiWarmups: Record<string, string[]> = {
-  "/hotspots": ["/api/hotspots"],
-  "/douyin-hotlist": ["/api/douyin-hotlist"],
-  "/library": ["/api/library/overview", "/api/accounts"],
-  "/project-workbench": ["/api/copy-sources", "/api/projects"],
-  "/writer": ["/api/drafts", "/api/accounts", "/api/projects"],
-  "/assets": ["/api/engagement"],
-  "/gross-margin": ["/api/gross-margin"],
-  "/gross-margin/monitor": ["/api/gross-margin"]
-};
-const devSharedApiWarmups = ["/api/jobs/__workbench_warmup__"];
 const ROUTE_BUSY_DELAY_MS = 200;
-const DEV_ROUTE_PREWARM_DELAY_MS = 2500;
-const DEV_ROUTE_PREWARM_STEP_MS = 250;
+const ROUTE_INTENT_DELAY_MS = 180;
 
 export function AppNav({ appMode }: { appMode: AppMode }) {
   const router = useRouter();
   const pathname = usePathname();
   const pendingTimerRef = useRef<number | null>(null);
   const prewarmedRoutesRef = useRef<Set<string>>(new Set());
-  const prewarmedDevTargetsRef = useRef<Set<string>>(new Set());
+  const prewarmTimerRef = useRef<number | null>(null);
+  const prewarmControllerRef = useRef<AbortController | null>(null);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [showRouteBusy, setShowRouteBusy] = useState(false);
   const grossMarginMode = appMode === "gross-margin";
@@ -96,64 +85,47 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
     clearPending();
   }, [clearPending, pathname]);
 
-  const prewarmRoute = useCallback(async (href: string) => {
+  const cancelPrewarm = useCallback(() => {
+    if (prewarmTimerRef.current !== null) window.clearTimeout(prewarmTimerRef.current);
+    prewarmTimerRef.current = null;
+    prewarmControllerRef.current?.abort();
+    prewarmControllerRef.current = null;
+  }, []);
+
+  const prewarmRoute = useCallback((href: string) => {
+    cancelPrewarm();
     if (href === pathname || prewarmedRoutesRef.current.has(href)) return;
-    prewarmedRoutesRef.current.add(href);
-    if (process.env.NODE_ENV !== "development") {
-      router.prefetch(href);
-      return;
-    }
-
-    try {
-      const targets = [href, ...devSharedApiWarmups, ...(devRouteApiWarmups[href] || [])];
-      for (const target of targets) {
-        if (prewarmedDevTargetsRef.current.has(target)) continue;
-        prewarmedDevTargetsRef.current.add(target);
-        try {
-          await fetch(target, {
-            cache: "no-store",
-            headers: { "x-workbench-route-warmup": "1" },
-            method: target.startsWith("/api/") ? "OPTIONS" : "GET"
-          });
-        } catch (error) {
-          prewarmedDevTargetsRef.current.delete(target);
-          throw error;
-        }
+    // 只预热用户停留的目标，不在后台遍历全站或触发业务 API。
+    prewarmTimerRef.current = window.setTimeout(async () => {
+      prewarmTimerRef.current = null;
+      if (process.env.NODE_ENV !== "development") {
+        prewarmedRoutesRef.current.add(href);
+        router.prefetch(href);
+        return;
       }
-    } catch {
-      prewarmedRoutesRef.current.delete(href);
-    }
-  }, [pathname, router]);
-
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-
-    const activeIndex = visibleNavItems.findIndex((item) => item.href === activeHref);
-    const prioritizedItems = activeIndex < 0
-      ? visibleNavItems
-      : [...visibleNavItems.slice(activeIndex + 1), ...visibleNavItems.slice(0, activeIndex)];
-    const pendingRoutes = prioritizedItems
-      .map((item) => item.href)
-      .filter((href) => href !== pathname && !prewarmedRoutesRef.current.has(href));
-    if (!pendingRoutes.length) return;
-
-    let cancelled = false;
-    const startTimerId = window.setTimeout(async () => {
-      for (const href of pendingRoutes) {
-        if (cancelled) return;
-        await prewarmRoute(href);
-        if (cancelled) return;
-        await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, DEV_ROUTE_PREWARM_STEP_MS);
+      const controller = new AbortController();
+      prewarmControllerRef.current = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch(href, {
+          cache: "no-store", signal: controller.signal,
+          headers: { "x-workbench-route-warmup": "1" }
         });
+        if (response.ok) prewarmedRoutesRef.current.add(href);
+        await response.body?.cancel();
+      } catch {
+        // 可选预热失败不影响真实导航，后续停留时可以重新尝试。
+      } finally {
+        window.clearTimeout(timeout);
+        if (prewarmControllerRef.current === controller) prewarmControllerRef.current = null;
       }
-    }, DEV_ROUTE_PREWARM_DELAY_MS);
+    }, ROUTE_INTENT_DELAY_MS);
+  }, [cancelPrewarm, pathname, router]);
 
-    return () => {
-      cancelled = true;
-      window.clearTimeout(startTimerId);
-    };
-  }, [activeHref, pathname, prewarmRoute, visibleNavItems]);
+  useEffect(() => () => {
+    cancelPrewarm();
+    if (pendingTimerRef.current !== null) window.clearTimeout(pendingTimerRef.current);
+  }, [cancelPrewarm, pathname]);
 
   const beginNavigation = useCallback((href: string) => {
     if (href === activeHref || href === pathname) return;
@@ -170,17 +142,22 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
     }
-    beginNavigation(href);
-  }, [beginNavigation]);
+    cancelPrewarm();
+    if (href === activeHref || href === pathname) clearPending();
+    else beginNavigation(href);
+  }, [activeHref, beginNavigation, cancelPrewarm, clearPending, pathname]);
 
   return (
     <aside className="sidebar">
       {showRouteBusy ? <span className="route-progress" aria-hidden="true" /> : null}
       <Link
         href={brandHref}
+        prefetch={false}
         className="brand"
         onFocus={() => void prewarmRoute(brandHref)}
         onClick={(event) => handleNavClick(event, brandHref)}
+        onPointerLeave={cancelPrewarm}
+        onBlur={cancelPrewarm}
         onPointerEnter={() => void prewarmRoute(brandHref)}
       >
         <span className="brand-mark" aria-hidden="true">
@@ -213,10 +190,13 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                     <div className="nav-group" key={item.href}>
                       <Link
                         href={item.href}
+                        prefetch={false}
                         className={`nav-link ${active ? "active" : ""} ${pending ? "pending" : ""}`}
                         aria-current={active ? "page" : undefined}
                         onFocus={() => void prewarmRoute(item.href)}
                         onClick={(event) => handleNavClick(event, item.href)}
+                        onPointerLeave={cancelPrewarm}
+                        onBlur={cancelPrewarm}
                         onPointerEnter={() => void prewarmRoute(item.href)}
                       >
                         <span className="nav-emoji" aria-hidden="true">
@@ -236,8 +216,10 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
       <div className="sidebar-bottom">
         <SkinToggle />
         <TaskCenter />
-        {!grossMarginMode ? <Link href="/ai-settings" className={`nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""}`} aria-current={activeHref === "/ai-settings" ? "page" : undefined}
-          onClick={(event) => handleNavClick(event, "/ai-settings")} onFocus={() => void prewarmRoute("/ai-settings")} onPointerEnter={() => void prewarmRoute("/ai-settings")}>
+        {!grossMarginMode ? <Link prefetch={false} href="/ai-settings" className={`nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""}`} aria-current={activeHref === "/ai-settings" ? "page" : undefined}
+          onClick={(event) => handleNavClick(event, "/ai-settings")} onFocus={() => void prewarmRoute("/ai-settings")} onPointerLeave={cancelPrewarm}
+        onBlur={cancelPrewarm}
+        onPointerEnter={() => void prewarmRoute("/ai-settings")}>
           <Settings2 size={18} strokeWidth={1.75} aria-hidden="true" /><span>AI 模型配置</span>
         </Link> : null}
       </div>

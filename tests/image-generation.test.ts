@@ -18,12 +18,12 @@ const input = { prompt: "一只猫", size: "1024x1024" as const, quality: "low" 
 test("生图使用 JSON 文生图和 multipart 参考图；部分失败保留图片，摘要不携带正文", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "image-generation-test-"));
   const env = { ...process.env };
-  const requests: Array<{ url: string; type: string; body: string }> = [];
+  const requests: Array<{ url: string; type: string; body: string; raw: Buffer }> = [];
   let failAt = 0;
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    requests.push({ url: request.url || "", type: request.headers["content-type"] || "", body: Buffer.concat(chunks).toString() });
+    requests.push({ url: request.url || "", type: request.headers["content-type"] || "", body: Buffer.concat(chunks).toString(), raw: Buffer.concat(chunks) });
     response.setHeader("Content-Type", "application/json");
     if (requests.length === failAt) { response.writeHead(429); response.end(JSON.stringify({ error: "SECRET_MUST_NOT_LEAK" })); return; }
     response.end(JSON.stringify({ data: [{ b64_json: png.toString("base64") }] }));
@@ -66,6 +66,22 @@ test("生图使用 JSON 文生图和 multipart 参考图；部分失败保留图
     assert.equal(await getImageRecord("invalid-branch"), null);
     await assert.rejects(generateImages("missing-mention", { ...input, prompt: branchPrompt }, { onProgress: async () => {} }), /已不在参考图/);
     assert.equal(await getImageRecord("missing-mention"), null);
+    const references = [];
+    for (let index = 0; index < 6; index++) references.push(await saveImageFile(png, `reference-${index + 1}.png`));
+    const ordered = [...references].reverse();
+    const multiPrompt = references.map((image) => imageMentionToken(image.id, image.name)).join("、") + `，再次参考 ${imageMentionToken(references[0].id, references[0].name)}`;
+    await generateImages("image-test-six-references", { ...input, count: 1, referenceIds: ordered.map((image) => image.id), prompt: multiPrompt }, { onProgress: async () => {} });
+    const request = requests.at(-1)!;
+    const multipart = await new Response(new Uint8Array(request.raw), { headers: { "Content-Type": request.type } }).formData();
+    const files = multipart.getAll("image[]") as File[];
+    assert.equal(request.url, "/v1/images/edits");
+    assert.equal(files.length, 6, "六张不同参考图均应发送，重复 @ 不重复上传");
+    for (let index = 0; index < files.length; index++) {
+      assert.equal(files[index].name, `${ordered[index].id}.${ordered[index].format}`);
+      assert.deepEqual(Buffer.from(await files[index].arrayBuffer()), png);
+      assert.ok(String(multipart.get("prompt")).includes(`参考图 ${index + 1}（${ordered[index].name}）`));
+    }
+    assert.equal(multipart.get("prompt"), resolveImageMentions(multiPrompt, ordered.map((image) => image.id)));
     failAt = requests.length + 2;
     await assert.rejects(generateImages("image-test-partial", input, { onProgress: async () => {} }), /返回 429/);
     assert.equal((await getImageRecord("image-test-partial"))?.images.length, 1);

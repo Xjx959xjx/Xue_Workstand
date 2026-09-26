@@ -17,7 +17,7 @@ export const AI_POLICIES = [
   { id: "danmaku", group: "评论与弹幕", title: "B站弹幕", description: "按时间槽生成即时弹幕，包含重试与补齐。", model: "gpt-5.5", effort: "medium" },
   { id: "publish_plan", group: "发布工具", title: "发布检索规划", description: "提取同类选题关键词，搜索平台参考。", model: "", effort: "medium" },
   { id: "publish_generate", group: "发布工具", title: "标题与发布文案", description: "提炼参考框架，生成标题及发布文案。", model: "", effort: "medium" },
-  { id: "image_prompt", group: "图片与素材", title: "图片提示词辅助", description: "将创作想法整理为可执行的生图提示词。", model: "gpt-5.5", effort: "low" },
+  { id: "image_prompt", group: "图片与素材", title: "图片提示词辅助", description: "将创作想法整理为可执行的生图提示词。", model: "gpt-6-sol", effort: "high" },
   { id: "vision", group: "图片与素材", title: "视频画面理解", description: "描述场景、镜头与标题；需要支持图片的模型。", model: "", effort: "default" },
   { id: "transcript_clean", group: "图片与素材", title: "转写稿模型清洗", description: "仅在转写流程启用模型清洗时调用。", model: "", effort: "default" },
   { id: "image_generate", group: "图片与素材", title: "图片生成", description: "默认沿用工作台选中的图片配置；填写模型名可覆盖。", model: "", effort: "none", kind: "image" },

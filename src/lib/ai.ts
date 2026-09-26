@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { preserveWriterPreferences } from "./writer-preference";
 import { WRITER_REVISION_PROMPT_VERSION, revisionWriteInstruction, STYLE_CARD_PROMPT_VERSION, writerWebResearchInstruction, styleCardInstruction, initialWriteInstruction } from "./writer-prompts";
 import { logPipelineEvent } from "./observability";
+import { cachedWriterResearch } from "./storage/writer-research";
 import { fastWriterPlan } from "./writer-fast-reference";
 import {
   STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION,
@@ -355,6 +356,7 @@ export async function chatCompleteStrict(
   options: ChatRequestOptions & {
     model?: string;
     retryTransientFailure?: boolean;
+    stream?: boolean;
     onRetry?: (message: string) => void | Promise<void>;
   } = {}
 ): Promise<ChatCompletionResult> {
@@ -370,6 +372,11 @@ export async function chatCompleteStrict(
     for (let attempt = 0; attempt < (options.retryTransientFailure ? 2 : 1); attempt += 1) {
       throwIfAborted(options.signal);
       try {
+        if (options.stream) return await streamResponseTextForConfig(config, {
+          messages, reasoningEffort, signal: options.signal, maxOutputTokens: options.maxOutputTokens,
+          requireCompleted: true,
+          onDelta() { /* 样本分析只在完整接收并校验后落盘。 */ }
+        });
         return await chatCompleteWithConfig(config, messages, reasoningEffort, undefined, options);
       } catch (error) {
         throwIfAborted(options.signal);
@@ -537,6 +544,7 @@ async function streamResponseTextForConfig(
     tools?: ChatTool[];
     maxOutputTokens?: number;
     signal?: AbortSignal;
+    requireCompleted?: boolean;
     onDelta: (delta: string) => void;
   }
 ) {
@@ -571,6 +579,7 @@ async function streamResponseApi(
     tools?: ChatTool[];
     maxOutputTokens?: number;
     signal?: AbortSignal;
+    requireCompleted?: boolean;
     onDelta: (delta: string) => void;
   }
 ): Promise<ChatCompletionResult> {
@@ -665,8 +674,8 @@ async function streamResponseApi(
     if (streamFinished) {
       await reader.cancel().catch(() => undefined);
     }
-    if (hasWebSearchTool(input.tools) && !streamFinished) {
-      throw new Error("联网搜索连接中断，未收到完成结果");
+    if ((hasWebSearchTool(input.tools) || input.requireCompleted) && !streamFinished) {
+      throw Object.assign(new Error(hasWebSearchTool(input.tools) ? "联网搜索连接中断，未收到完成结果" : "模型连接中断，未收到完成结果"), { code: "ECONNRESET" });
     }
   } catch (error) {
     if (aggregatedText.trim()) {
@@ -701,6 +710,7 @@ async function streamChatCompletion(
     tools?: ChatTool[];
     maxOutputTokens?: number;
     signal?: AbortSignal;
+    requireCompleted?: boolean;
     onDelta: (delta: string) => void;
   }
 ): Promise<ChatCompletionResult> {
@@ -722,6 +732,7 @@ async function streamChatCompletion(
   const decoder = new TextDecoder();
   let buffer = "";
   let aggregatedText = "";
+  let completed = false;
   let actualServiceTier: string | undefined;
   const requestedReasoningEffort = input.reasoningEffort || config.chatCompletionReasoningEffort;
 
@@ -735,6 +746,7 @@ async function streamChatCompletion(
 
       for (const rawEvent of events) {
         const event = parseChatCompletionStreamEvent(rawEvent);
+        completed ||= event.completed;
         actualServiceTier = event.serviceTier || actualServiceTier;
         if (event.delta) {
           aggregatedText += event.delta;
@@ -744,11 +756,13 @@ async function streamChatCompletion(
     }
 
     const remaining = parseChatCompletionStreamEvent(buffer);
+    completed ||= remaining.completed;
     actualServiceTier = remaining.serviceTier || actualServiceTier;
     if (remaining.delta) {
       aggregatedText += remaining.delta;
       input.onDelta(remaining.delta);
     }
+    if (input.requireCompleted && !completed) throw Object.assign(new Error("模型连接中断，未收到完成结果"), { code: "ECONNRESET" });
   } catch (error) {
     if (aggregatedText.trim()) {
       throw new StreamResponseTextError(error, aggregatedText);
@@ -904,6 +918,7 @@ async function createChatCompletion(
 
 function parseChatCompletionStreamEvent(rawEvent: string) {
   let delta = "";
+  let completed = false;
   let serviceTier: string | undefined;
   const lines = rawEvent
     .split("\n")
@@ -932,11 +947,14 @@ function parseChatCompletionStreamEvent(rawEvent: string) {
       throw new Error("对话模型调用失败：流式响应返回错误，请检查模型服务状态。");
     }
     assertCompleteChatOutput(parsed);
+    if (parsed && typeof parsed === "object" && "choices" in parsed && Array.isArray(parsed.choices)) {
+      completed ||= parsed.choices.some((choice: { finish_reason?: string }) => choice.finish_reason === "stop");
+    }
     serviceTier = extractServiceTier(parsed) || serviceTier;
     delta += extractChatCompletionDelta(parsed);
   }
 
-  return { delta, serviceTier };
+  return { delta, serviceTier, completed };
 }
 
 function assertCompleteChatOutput(value: unknown) {
@@ -1507,19 +1525,32 @@ async function buildWebResearchContext(
   input: WebResearchInput,
   options: WritePreparationOptions = {}
 ) {
+  const configs = await applyAiPolicy(getConfiguredWebResearchConfigs(), "web_research");
+  const fingerprint = JSON.stringify({
+    version: 1,
+    messages: buildWriterWebResearchMessages(input),
+    configs: configs.map(({ baseUrl, responsesUrl, model, wireApi, serviceTier }) => ({ baseUrl, responsesUrl, model, wireApi, serviceTier }))
+  });
+  return cachedWriterResearch(fingerprint, () => fetchWebResearchContext(input, options), options);
+}
+
+async function fetchWebResearchContext(
+  input: WebResearchInput,
+  options: WritePreparationOptions
+) {
   throwIfAborted(options.signal);
   try {
-    return await buildNativeWebResearchContext(input, options);
+    return { content: await buildNativeWebResearchContext(input, options), cacheable: true };
   } catch (error) {
     if (options.signal?.aborted) throw error;
     console.warn("[ai] web research failed:", describeErrorForLog(error));
     options.onProgress?.(`${summarizeWebResearchFailure(error) || "原生搜索暂时不可用"}，正在使用备用搜索`);
     try {
-      return await buildOpenCliWebResearchContext(input, error, options);
+      return { content: await buildOpenCliWebResearchContext(input, error, options), cacheable: true };
     } catch (openCliError) {
       if (options.signal?.aborted) throw openCliError;
       console.warn("[ai] opencli web research failed:", describeErrorForLog(openCliError));
-      return `${buildWebResearchFailureContext(openCliError)}\n原生搜索失败原因：${summarizeWebResearchFailure(error) || describeShortError(error)}`;
+      return { content: `${buildWebResearchFailureContext(openCliError)}\n原生搜索失败原因：${summarizeWebResearchFailure(error) || describeShortError(error)}`, cacheable: false };
     }
   }
 }
@@ -2080,6 +2111,7 @@ async function resolveStyleSampleAnalyses(
           policy: task.groupId ? "project_sample" : "account_sample",
           signal: options.signal,
           retryTransientFailure: true,
+          stream: true,
           onRetry: message => emitProgress(task, `样本「${task.title}」：${message}；已完成 ${completedCount}/${tasks.length}`)
         });
       } catch (error) {
@@ -2933,7 +2965,7 @@ export async function prepareWriteCopyBatchContext(
       : `请按所选参考风格改写下面文案。改写要求：${normalizedInput.prompt}\n\n原文素材：\n${normalizedInput.sourceText || ""}`;
   const supportDocContext = await measureWritePreparation(traceId, "support-documents", options, "正在读取支持文档", () => normalizedInput.supportDocLinks?.trim() ? buildSupportDocumentContext(normalizedInput.supportDocLinks, options) : Promise.resolve(""));
   const webContext = normalizedInput.useWebResearch
-    ? await measureWritePreparation(traceId, "web-research", options, "正在联网检索资料", () => buildWebResearchContext({ ...normalizedInput, supportDocContext }, options))
+    ? await measureWritePreparation(traceId, "web-research", options, "正在检查联网检索缓存", () => buildWebResearchContext({ ...normalizedInput, supportDocContext }, options))
     : "";
   const taskContext = `用户本次要求：\n${normalizedInput.prompt}\n\n原始资料：\n${normalizedInput.sourceText || ""}\n\n支持文档：\n${supportDocContext}\n\n检索资料：\n${webContext}`;
   const preparation = await Promise.allSettled(styleInputs.map((reference, index) =>

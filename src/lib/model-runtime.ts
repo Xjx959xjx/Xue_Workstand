@@ -540,7 +540,7 @@ export function classifyModelFailure(error: unknown): {
   if (/401\b|403\b|unauthorized|forbidden/i.test(message)) {
     return { kind: "auth", userMessage: "对话模型服务鉴权异常", rawMessage: compactErrorMessage(message) };
   }
-  if (/ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
+  if (/模型连接中断，未收到完成结果|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
     return { kind: "network", userMessage: "对话模型服务连接异常", rawMessage: compactErrorMessage(message) };
   }
   if (/404\b|405\b|unknown endpoint|not found|unsupported|invalid url|no route|cannot post/i.test(message)) {

@@ -434,7 +434,7 @@ export default function ToolsPage() {
                 className="btn small ghost tools-source-file-button"
                 disabled={publishSourceImporting}
                 onClick={() => publishSourceFileInputRef.current?.click()}
-                title="支持 TXT、Markdown、CSV、JSON、HTML、字幕和 DOCX"
+                title="支持 TXT、Markdown、CSV、JSON、HTML、字幕、DOCX 和 PDF"
                 type="button"
               >
                 <Paperclip aria-hidden="true" size={14} />

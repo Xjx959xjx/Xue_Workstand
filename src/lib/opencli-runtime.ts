@@ -138,6 +138,26 @@ export function withSharedOpenCliBrowserSession<T>(
   return enqueueOpenCliBrowserOperation(`browser:${session}`, () => operation(session), options.signal);
 }
 
+// Only use for browser reads: a detached tab can interrupt an in-flight eval,
+// so callers must be safe to repeat after reopening the session.
+export async function retryDetachedBrowserRead<T>(
+  read: () => Promise<T>,
+  reconnect: () => Promise<void>,
+  signal?: AbortSignal
+): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (signal?.aborted || !/Detached while handling command/i.test(error instanceof Error ? error.message : String(error))) {
+      throw error;
+    }
+    await waitForOpenCliRetry(OPENCLI_BROWSER_CONNECT_RETRY_DELAY_MS, signal);
+    await reconnect();
+    if (signal?.aborted) throw createAbortError();
+    return read();
+  }
+}
+
 export function runPersistentOpenCliBrowserAdapter(args: string[], options: RunOpenCliOptions = {}) {
   const site = args[0]?.trim();
   if (!site || site === "browser") {

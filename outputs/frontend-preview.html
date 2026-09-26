@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="内容创作工作台前端静态预览">
+  <title>内容创作工作台 · 前端预览</title>
+  <style>
+    :root{color-scheme:light;--bg:#f7f7f7;--chrome:#f1f1f1;--panel:#fff;--soft:#f5f5f5;--muted:#747474;--text:#242424;--line:#e4e4e4;--dark:#202020;--green:#3f7e61;--amber:#a26b12;--rose:#b44949;--orange:#dc6e28;--shadow:0 1px 2px #0000000a,0 14px 38px #0000000d}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif}button{font:inherit}button:focus-visible{outline:3px solid #9ab7ff;outline-offset:2px}
+    .shell{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100vh}.side{position:sticky;top:0;height:100vh;padding:18px 14px;border-right:1px solid var(--line);background:#f3f3f3e8;backdrop-filter:blur(24px)}
+    .brand{display:grid;grid-template-columns:42px 1fr;gap:11px;align-items:center;padding:8px 9px;border:1px solid #ddd;border-radius:14px;background:linear-gradient(#fff,#f8f8f8);box-shadow:var(--shadow)}.brand-mark{display:grid;width:40px;height:40px;place-items:center;border:1px solid #d7d7d7;border-radius:12px;background:#f0f0f0;font-size:21px;font-weight:800}.brand strong,.brand small{display:block}.brand strong{font-size:16px}.brand small{margin-top:2px;color:var(--muted);font-size:11px}
+    .nav-section{margin-top:18px}.nav-section h2{display:flex;justify-content:space-between;margin:0 8px 7px;color:#8a8a8a;font-size:10px;letter-spacing:.08em}.nav{display:grid;gap:4px}.nav button{display:flex;width:100%;height:42px;align-items:center;gap:10px;padding:0 11px;border:1px solid transparent;border-radius:12px;background:transparent;color:#555;cursor:pointer;text-align:left;font-weight:650}.nav button:hover{background:#eaeaea}.nav button.active{border-color:#d5d5d5;background:#fff;color:#1f1f1f;box-shadow:0 5px 16px #0000000a}.ico{display:grid;width:26px;height:26px;place-items:center;border-radius:8px;background:#fff;border:1px solid #e3e3e3;font-size:13px}
+    .side-foot{position:absolute;right:14px;bottom:16px;left:14px;padding-top:12px;border-top:1px solid var(--line);color:#8a8a8a;font-size:11px;line-height:1.6}.side-foot b{color:#4d4d4d}
+    main{min-width:0;padding:24px}.view{display:none;animation:enter .2s ease}.view.active{display:block}@keyframes enter{from{opacity:.4;transform:translateY(4px)}to{opacity:1;transform:none}}
+    .top{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:16px}.eyebrow{margin:0 0 4px;color:#8b8b8b;font-size:11px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}.top h1{margin:0;font-size:30px;letter-spacing:-.035em}.sub{margin:5px 0 0;color:var(--muted);font-size:13px}.actions{display:flex;gap:8px}.btn{height:36px;padding:0 13px;border:1px solid #d9d9d9;border-radius:10px;background:#fff;color:#333;cursor:pointer;font-weight:650}.btn:hover{background:#f5f5f5}.btn.primary{border-color:#222;background:#222;color:#fff}.btn.tiny{height:29px;padding:0 10px;font-size:12px}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}.stat,.panel{border:1px solid var(--line);background:var(--panel);box-shadow:0 1px 2px #00000008}.stat{padding:14px 16px;border-radius:14px}.stat span{display:block;color:var(--muted);font-size:11px}.stat strong{display:block;margin-top:7px;font-size:22px;letter-spacing:-.03em}.stat em{font-style:normal;color:var(--green);font-size:11px}.panel{border-radius:16px}.panel-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #ededed}.panel-head h2{margin:0;font-size:15px}.panel-head p{margin:2px 0 0;color:var(--muted);font-size:11px}.workspace{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:565px;overflow:hidden}.pane{min-width:0}.pane+.pane{border-left:1px solid var(--line)}.pane-title{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid var(--line);background:#fafafa}.pane-title strong{font-size:13px}.search{width:100%;height:34px;padding:0 11px;border:1px solid #ddd;border-radius:9px;background:#fff;color:#666}.pane-pad{padding:12px}
+    .list{display:grid;gap:6px}.row{display:grid;grid-template-columns:42px 1fr auto;gap:10px;align-items:center;padding:10px;border:1px solid transparent;border-radius:11px}.row:hover,.row.selected{border-color:#ddd;background:#f7f7f7}.avatar,.thumb{display:grid;place-items:center;border-radius:10px;background:linear-gradient(135deg,#333,#999);color:#fff;font-size:12px;font-weight:800}.avatar{width:42px;height:42px}.thumb{width:68px;height:46px}.row strong,.row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row strong{font-size:13px}.row small{margin-top:3px;color:var(--muted);font-size:11px}.pill{display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid #ddd;border-radius:99px;background:#fff;color:#666;font-size:10px;font-weight:700}.pill.green{border-color:#bfdbc9;background:#eff8f2;color:#347554}.pill.amber{border-color:#ead7ae;background:#fff8e8;color:#926014}.pill.rose{border-color:#ecc7c7;background:#fff2f2;color:#a44242}
+    .hero-list{display:grid;gap:9px;padding:12px}.hero{display:grid;grid-template-columns:42px 112px 1fr auto;gap:12px;align-items:center;padding:11px;border:1px solid var(--line);border-radius:13px;background:#fff}.hero.video{grid-template-columns:68px minmax(0,1fr) auto}.rank{font-size:24px;font-weight:850;text-align:center;color:#aaa}.rank.hot{color:var(--orange)}.hero h3{margin:0 0 5px;font-size:14px}.meta{display:flex;flex-wrap:wrap;gap:12px;color:var(--muted);font-size:11px}
+    .writer{display:grid;grid-template-columns:250px minmax(0,1fr) 280px;min-height:600px;overflow:hidden}.card{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fff}.card+.card{margin-top:8px}.card.selected{border-color:#9f9f9f;box-shadow:inset 3px 0 #333}.card h3{margin:0;font-size:13px}.card p{margin:7px 0 0;color:var(--muted);font-size:11px;line-height:1.6}.editor{padding:24px 34px}.editor-label{display:flex;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--line);color:#777;font-size:11px}.editor h2{margin:25px 0 13px;font-size:23px}.editor p{font-family:"Songti SC",serif;font-size:15px;line-height:2;color:#373737}.notes{display:grid;gap:9px;padding:12px}.note{padding:11px;border:1px solid var(--line);border-radius:11px;background:#fafafa}.note b{display:block;font-size:12px}.note span{display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.55}
+    .monitor-list{display:grid;gap:10px;padding:12px}.monitor{padding:14px;border:1px solid var(--line);border-radius:13px}.monitor-top{display:flex;justify-content:space-between;gap:12px}.monitor h3{margin:0;font-size:14px}.monitor p{margin:4px 0 0;color:var(--muted);font-size:11px}.meters{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:13px}.meter{padding:9px;border-radius:10px;background:#f6f6f6}.meter-head{display:flex;justify-content:space-between;font-size:10px;font-weight:700}.bar{height:5px;margin:7px 0;border-radius:99px;background:#ddd;overflow:hidden}.bar i{display:block;height:100%;background:#555;border-radius:inherit}.meter.warn .bar i{background:var(--orange)}.meter small{color:#777;font-size:10px}
+    .tool-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.tool{min-height:150px;padding:18px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 1px 2px #00000008}.tool-icon{display:grid;width:38px;height:38px;place-items:center;border-radius:11px;background:#eee;font-size:18px}.tool h3{margin:18px 0 6px;font-size:15px}.tool p{margin:0;color:var(--muted);font-size:12px;line-height:1.65}
+    .demo-banner{display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:12px;padding:8px 12px;border:1px solid #ead9b5;border-radius:11px;background:#fff9eb;color:#7e5a17;font-size:11px}.dot{width:7px;height:7px;border-radius:99px;background:#d89b31}
+    .mobile-nav{display:none}
+    @media(max-width:850px){.shell{display:block}.side{display:none}main{padding:16px 14px 82px}.mobile-nav{position:fixed;z-index:20;right:10px;bottom:10px;left:10px;display:flex;justify-content:space-around;padding:7px;border:1px solid #ddd;border-radius:16px;background:#fffffff2;box-shadow:0 14px 35px #0002;backdrop-filter:blur(20px)}.mobile-nav button{display:grid;gap:3px;place-items:center;border:0;background:transparent;color:#777;font-size:10px}.mobile-nav button.active{color:#111;font-weight:750}.top{align-items:flex-start}.top h1{font-size:25px}.actions .btn:not(.primary){display:none}.stats{grid-template-columns:repeat(2,1fr)}.workspace,.writer{grid-template-columns:1fr}.pane+.pane{border-left:0;border-top:1px solid var(--line)}.writer>.pane:first-child,.writer>.pane:last-child{display:none}.hero{grid-template-columns:30px 74px 1fr}.hero>.pill{display:none}.tool-grid{grid-template-columns:1fr}.meters{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="brand"><div class="brand-mark">层</div><div><strong>内容工作台</strong><small>创作与数据中枢</small></div></div>
+      <section class="nav-section"><h2><span>内容发现</span><span>RECON</span></h2><div class="nav">
+        <button data-view="hot"><span class="ico">热</span>视频热榜</button>
+      </div></section>
+      <section class="nav-section"><h2><span>创作工作区</span><span>CREATE</span></h2><div class="nav">
+        <button class="active" data-view="library"><span class="ico">库</span>账号库</button>
+        <button data-view="writer"><span class="ico">写</span>对话写作</button>
+      </div></section>
+      <section class="nav-section"><h2><span>数据与工具</span><span>TOOLS</span></h2><div class="nav">
+        <button data-view="monitor"><span class="ico">数</span>数据监控</button>
+        <button data-view="tools"><span class="ico">具</span>工具台</button>
+      </div></section>
+      <div class="side-foot"><b>静态前端预览</b><br>单文件 · 无后端 · 演示数据</div>
+    </aside>
+    <main>
+      <div class="demo-banner"><span class="dot"></span>展示内容均为演示数据，不包含真实账号、素材、文案或业务数据</div>
+
+      <section class="view active" id="library">
+        <header class="top"><div><p class="eyebrow">Creation workspace</p><h1>账号库</h1><p class="sub">集中管理账号、视频、转写与风格沉淀</p></div><div class="actions"><button class="btn">批量管理</button><button class="btn primary">＋ 添加账号</button></div></header>
+        <div class="stats"><div class="stat"><span>账号总数</span><strong>12</strong><em>已完成 9 个</em></div><div class="stat"><span>视频样本</span><strong>186</strong><em>本周 +24</em></div><div class="stat"><span>可用转写</span><strong>143</strong><em>完成率 76.9%</em></div><div class="stat"><span>风格卡</span><strong>9</strong><em>3 个待更新</em></div></div>
+        <div class="panel workspace"><div class="pane"><div class="pane-title"><strong>账号列表</strong><span class="pill">12</span></div><div class="pane-pad"><input class="search" value="" placeholder="搜索账号"><div class="list" style="margin-top:9px">
+          <div class="row selected"><div class="avatar">游</div><div><strong>游戏观察室</strong><small>抖音 · 28 个样本</small></div><span class="pill green">已学习</span></div>
+          <div class="row"><div class="avatar" style="background:linear-gradient(135deg,#9c6635,#e3b780)">影</div><div><strong>电影放映厅</strong><small>B站 · 19 个样本</small></div><span class="pill amber">待更新</span></div>
+          <div class="row"><div class="avatar" style="background:linear-gradient(135deg,#385f78,#83b7cd)">数</div><div><strong>数码研究所</strong><small>抖音 · 32 个样本</small></div><span class="pill green">已学习</span></div>
+          <div class="row"><div class="avatar" style="background:linear-gradient(135deg,#704f80,#b99bc8)">生</div><div><strong>生活方式指南</strong><small>B站 · 14 个样本</small></div><span class="pill rose">缺少转写</span></div>
+        </div></div></div><div class="pane"><div class="panel-head"><div><h2>游戏观察室</h2><p>账号作品、转写状态与风格证据</p></div><button class="btn tiny primary">更新风格卡</button></div><div class="hero-list">
+          <div class="hero video"><div class="thumb">封面</div><div><h3>开放世界的新赛季，玩家到底在期待什么？</h3><div class="meta"><span>播放 86.4万</span><span>点赞 5.8万</span><span>评论 3,214</span></div></div><span class="pill green">转写完成</span></div>
+          <div class="hero video"><div class="thumb" style="background:linear-gradient(135deg,#75502e,#d59b54)">封面</div><div><h3>一场更新，为什么让老玩家重新回来？</h3><div class="meta"><span>播放 52.7万</span><span>点赞 3.1万</span><span>评论 1,862</span></div></div><span class="pill green">转写完成</span></div>
+          <div class="hero video"><div class="thumb" style="background:linear-gradient(135deg,#3e6671,#65b2b7)">封面</div><div><h3>这次联动真正做对了哪三件事</h3><div class="meta"><span>播放 31.2万</span><span>点赞 1.9万</span><span>评论 987</span></div></div><span class="pill amber">待转写</span></div>
+        </div></div></div>
+      </section>
+
+      <section class="view" id="hot">
+        <header class="top"><div><p class="eyebrow">Content discovery</p><h1>视频热榜</h1><p class="sub">捕捉值得继续追踪的内容信号</p></div><div class="actions"><button class="btn">近 7 天</button><button class="btn primary">刷新热榜</button></div></header>
+        <div class="stats"><div class="stat"><span>监控账号</span><strong>24</strong><em>全部在线</em></div><div class="stat"><span>入榜视频</span><strong>68</strong><em>今日 +11</em></div><div class="stat"><span>高增长</span><strong>17</strong><em>增速 ≥ 40%</em></div><div class="stat"><span>待分析</span><strong>8</strong><em>建议优先查看</em></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>增长榜</h2><p>按近期播放增速与互动质量综合排序</p></div><span class="pill">演示数据</span></div><div class="hero-list">
+          <div class="hero"><div class="rank hot">01</div><div class="thumb">趋势</div><div><h3>新版本隐藏改动，真正影响体验的是这一项</h3><div class="meta"><span>游戏观察室</span><span>播放 126万</span><span>增速 +186%</span></div></div><span class="pill green">持续上升</span></div>
+          <div class="hero"><div class="rank hot">02</div><div class="thumb" style="background:linear-gradient(135deg,#84612c,#efc975)">趋势</div><div><h3>这部小成本作品，为什么口碑突然反转？</h3><div class="meta"><span>电影放映厅</span><span>播放 89万</span><span>增速 +132%</span></div></div><span class="pill green">持续上升</span></div>
+          <div class="hero"><div class="rank">03</div><div class="thumb" style="background:linear-gradient(135deg,#375e77,#8ec7df)">趋势</div><div><h3>用了两周后，我重新评价这款新品</h3><div class="meta"><span>数码研究所</span><span>播放 74万</span><span>增速 +98%</span></div></div><span class="pill amber">增速放缓</span></div>
+        </div></div>
+      </section>
+
+      <section class="view" id="writer">
+        <header class="top"><div><p class="eyebrow">Writing studio</p><h1>对话写作</h1><p class="sub">素材、风格和版本集中在同一个写作空间</p></div><div class="actions"><button class="btn">历史版本</button><button class="btn primary">生成文案</button></div></header>
+        <div class="panel writer"><div class="pane"><div class="pane-title"><strong>参考风格</strong><span class="pill">已选 2</span></div><div class="pane-pad"><div class="card selected"><h3>游戏观察室</h3><p>自然口语、先抛冲突，再用具体体验推进判断。</p></div><div class="card selected"><h3>数码研究所</h3><p>强调真实使用过程，结论克制，保留细节。</p></div><div class="card"><h3>电影放映厅</h3><p>故事感开场，关注人物动机与情绪变化。</p></div></div></div>
+          <div class="pane editor"><div class="editor-label"><span>草稿 02 · 已保存</span><span>1,086 字</span></div><h2>真正让玩家回来的，从来不只是一张新地图</h2><p>如果只看更新列表，这次版本似乎还是熟悉的配方：新区域、新角色、新活动。但真正上手之后，你会发现它把重点放在了另一个地方——让玩家重新愿意留在这个世界里。</p><p>过去的问题并不是内容太少，而是每一项内容之间缺少联系。探索结束后，任务就像被从清单里划掉，很难留下继续讨论的空间。这次改动先从节奏入手，让探索、养成和剧情不再各自为战。</p><p>这也解释了为什么不少老玩家会回来。吸引他们的并非单一奖励，而是那种“下一步还有东西值得看”的感觉。</p></div>
+          <div class="pane"><div class="pane-title"><strong>资料与检查</strong><span class="pill green">已联网</span></div><div class="notes"><div class="note"><b>来源资料</b><span>已读取 2 份素材，联网资料在 30 分钟内可复用。</span></div><div class="note"><b>风格一致性</b><span>开场、叙事推进和结尾语气符合所选风格卡。</span></div><div class="note"><b>事实边界</b><span>未发现无来源的具体数字或未经确认的结论。</span></div></div></div>
+        </div>
+      </section>
+
+      <section class="view" id="monitor">
+        <header class="top"><div><p class="eyebrow">Data operations</p><h1>数据监控</h1><p class="sub">跟踪目标进度、缺口与异常状态</p></div><div class="actions"><button class="btn">筛选</button><button class="btn primary">刷新全部</button></div></header>
+        <div class="stats"><div class="stat"><span>监控项目</span><strong>21</strong><em>今日已更新</em></div><div class="stat"><span>正常推进</span><strong>16</strong><em>76.2%</em></div><div class="stat"><span>存在缺口</span><strong>4</strong><em style="color:var(--amber)">建议跟进</em></div><div class="stat"><span>异常</span><strong>1</strong><em style="color:var(--rose)">需要处理</em></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>项目进度</h2><p>播放、互动和转化指标统一查看</p></div><span class="pill">最近更新 2 分钟前</span></div><div class="monitor-list">
+          <div class="monitor"><div class="monitor-top"><div><h3>新品发布 · 第一阶段</h3><p>游戏观察室 · 2026-09-22 发布</p></div><span class="pill green">正常</span></div><div class="meters"><div class="meter"><div class="meter-head"><span>播放</span><span>82%</span></div><div class="bar"><i style="width:82%"></i></div><small>82万 / 100万</small></div><div class="meter"><div class="meter-head"><span>点赞</span><span>91%</span></div><div class="bar"><i style="width:91%"></i></div><small>4.55万 / 5万</small></div><div class="meter warn"><div class="meter-head"><span>评论</span><span>63%</span></div><div class="bar"><i style="width:63%"></i></div><small>1,260 / 2,000</small></div><div class="meter"><div class="meter-head"><span>收藏</span><span>106%</span></div><div class="bar"><i style="width:100%"></i></div><small>已超目标</small></div></div></div>
+          <div class="monitor"><div class="monitor-top"><div><h3>品牌联动 · 内容复盘</h3><p>数码研究所 · 2026-09-20 发布</p></div><span class="pill amber">关注</span></div><div class="meters"><div class="meter warn"><div class="meter-head"><span>播放</span><span>58%</span></div><div class="bar"><i style="width:58%"></i></div><small>34.8万 / 60万</small></div><div class="meter"><div class="meter-head"><span>点赞</span><span>77%</span></div><div class="bar"><i style="width:77%"></i></div><small>2.31万 / 3万</small></div><div class="meter"><div class="meter-head"><span>评论</span><span>88%</span></div><div class="bar"><i style="width:88%"></i></div><small>880 / 1,000</small></div><div class="meter"><div class="meter-head"><span>收藏</span><span>94%</span></div><div class="bar"><i style="width:94%"></i></div><small>1.88万 / 2万</small></div></div></div>
+        </div></div>
+      </section>
+
+      <section class="view" id="tools">
+        <header class="top"><div><p class="eyebrow">Utility center</p><h1>工具台</h1><p class="sub">常用内容处理能力集中入口</p></div><div class="actions"><button class="btn primary">查看运行状态</button></div></header>
+        <div class="tool-grid"><div class="tool"><div class="tool-icon">文</div><h3>文件转写</h3><p>导入音视频或文档，生成可编辑文本，并保留来源和处理状态。</p></div><div class="tool"><div class="tool-icon">图</div><h3>封面生成</h3><p>根据草稿主题生成横版封面，支持尺寸、质量和风格选择。</p></div><div class="tool"><div class="tool-icon">评</div><h3>评论素材</h3><p>基于正文和真实语料生成评论、弹幕与互动方向建议。</p></div><div class="tool"><div class="tool-icon">检</div><h3>联网检索</h3><p>为写作补充最新资料；相同输入在有效期内自动复用结果。</p></div><div class="tool"><div class="tool-icon">档</div><h3>文档支持</h3><p>读取飞书、企业微信及公开文档，作为写作和分析资料。</p></div><div class="tool"><div class="tool-icon">任</div><h3>任务中心</h3><p>统一查看长任务进度、失败原因、取消状态和可恢复结果。</p></div></div>
+      </section>
+    </main>
+  </div>
+  <nav class="mobile-nav" aria-label="移动端导航"><button class="active" data-view="library">⌂<span>账号库</span></button><button data-view="hot">↗<span>热榜</span></button><button data-view="writer">✎<span>写作</span></button><button data-view="monitor">▥<span>监控</span></button><button data-view="tools">⋯<span>更多</span></button></nav>
+  <script>
+    const buttons=[...document.querySelectorAll('[data-view]')];
+    function openView(id){document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===id));buttons.forEach(b=>b.classList.toggle('active',b.dataset.view===id));history.replaceState(null,'','#'+id);window.scrollTo({top:0,behavior:'smooth'})}
+    buttons.forEach(button=>button.addEventListener('click',()=>openView(button.dataset.view)));
+    const initial=location.hash.slice(1);if(document.getElementById(initial))openView(initial);
+    document.querySelectorAll('.btn').forEach(button=>button.addEventListener('click',()=>{button.animate([{transform:'scale(.97)'},{transform:'scale(1)'}],{duration:160});}));
+  </script>
+</body>
+</html>

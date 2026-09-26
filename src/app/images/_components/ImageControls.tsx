@@ -4,15 +4,63 @@ import { imageFileUrl, type ImageFile } from "@/lib/image-generation-types";
 import { ImageControlPopover } from "./ImageControlPopover";
 import { ImageLibraryPicker } from "./ImageLibraryPicker";
 import { ImagePromptAssist } from "./ImagePromptAssist";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { ArrowUp, SlidersHorizontal, Square, Plus, Upload, Images, ChevronDown, Check, RectangleHorizontal, Layers, X } from "lucide-react";
+import { useDialogInteraction } from "@/components/useDialogInteraction";
+import { ArrowUp, SlidersHorizontal, Maximize2, Minimize2, Plus, Upload, Images, ChevronDown, Check, RectangleHorizontal, Layers, X } from "lucide-react";
 import { imageModelLabel, imageProfileForModel, imageRatioForSize, imageRatios, imageSizeForProfile, resolutionLabels, type ImageProfile } from "@/lib/image-profile-options";
 import type { useImageWorkbench } from "../_hooks/useImageWorkbench";
 const ImagePromptEditor = dynamic(() => import("./ImagePromptEditor"), { ssr: false, loading: () => <p role="status">正在加载提示词编辑器…</p> });
 const qualities = [{ value: "auto", label: "自动" }, { value: "high", label: "高" }, { value: "medium", label: "中" }, { value: "low", label: "低" }] as const;
 type Workbench = ReturnType<typeof useImageWorkbench>;
 export function ImageControls({ workbench: w, onLocate, onUpload, draggedImage }: { draggedImage: ImageFile | null; workbench: Workbench; onUpload: () => void; onLocate: (id: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const composer = useRef<HTMLFormElement>(null);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const panel = composer.current;
+    const workspace = panel?.closest<HTMLElement>(".image-workbench");
+    if (!expanded || !panel || !workspace) return;
+    const position = () => {
+      const rect = workspace.getBoundingClientRect();
+      const zoom = Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+      const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+      const width = Math.max(0, Math.min(window.innerWidth, rect.right) - left);
+      const height = Math.max(0, Math.min(window.innerHeight, rect.bottom) - top);
+      panel.style.setProperty("--expanded-center-x", `${(left + width / 2) / zoom}px`);
+      panel.style.setProperty("--expanded-center-y", `${(top + height / 2) / zoom}px`);
+      panel.style.setProperty("--expanded-width", `${Math.max(0, width / zoom - 32)}px`);
+      panel.style.setProperty("--expanded-height", `${height / zoom * .9}px`);
+    };
+    // A popover backdrop retargets pointer events to the panel itself.
+    const outside = (event: MouseEvent) => {
+      if (event.target !== panel) return event.target instanceof Node && !panel.contains(event.target);
+      const rect = panel.getBoundingClientRect();
+      return event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+    };
+    let pressedOutside = false;
+    const pointerDown = (event: PointerEvent) => { pressedOutside = event.button === 0 && outside(event); };
+    const click = (event: MouseEvent) => {
+      if (!pressedOutside || !outside(event)) return;
+      event.preventDefault(); event.stopPropagation(); setExpanded(false);
+    };
+    position(); panel.showPopover();
+    const observer = new ResizeObserver(position);
+    observer.observe(workspace);
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    document.addEventListener("pointerdown", pointerDown, true);
+    document.addEventListener("click", click, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+      window.removeEventListener("scroll", position, true);
+      document.removeEventListener("pointerdown", pointerDown, true);
+      document.removeEventListener("click", click, true);
+      if (panel.matches(":popover-open")) panel.hidePopover();
+    };
+  }, [expanded]);
+  useDialogInteraction(composer, { active: expanded, onClose: () => setExpanded(false), returnFocusRef: expandButton });
   const disabled = w.busy || w.uploading;
   const [dragOver, setDragOver] = useState(false);
   const [source, setSource] = useState<"menu" | "library">("menu");
@@ -21,16 +69,18 @@ export function ImageControls({ workbench: w, onLocate, onUpload, draggedImage }
   const profiles = w.config?.profiles || [];
   const variants = profiles.filter((profile) => profile.model === selectedProfile?.model);
   const ratio = imageRatioForSize(w.form.size);
+  function previewReference(id: string) { setExpanded(false); onLocate(id); }
   function chooseProfile(profile: ImageProfile | undefined) {
     if (profile) w.setForm((current) => ({ ...current, profileId: profile.id, size: imageSizeForProfile(profile, imageRatioForSize(current.size)) }));
   }
   const candidates = [...new Map([...w.availableReferences, ...w.recordReferences, ...(w.record?.images || []), ...w.boardRecords.flatMap((record) => record.thumbnail ? [record.thumbnail] : [])].map((image) => [image.id, image])).values()];
-  return <form className={`image-composer ${dragOver ? "is-reference-drop" : ""}`} onDragOver={(event) => { if (!disabled && (event.dataTransfer.types.includes("Files") || event.dataTransfer.types.includes("application/x-workbench-image"))) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragOver(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOver(false); }} onDrop={(event) => { event.preventDefault(); setDragOver(false); if (disabled) return; const id = event.dataTransfer.getData("application/x-workbench-image"); if (id && draggedImage?.id === id) w.addReference(draggedImage); else if (event.dataTransfer.files.length) void w.upload(Array.from(event.dataTransfer.files)); }} onSubmit={(event) => { event.preventDefault(); void w.generate(); }} onPaste={(event) => {
+  return <form ref={composer} popover={expanded ? "manual" : undefined} role={expanded ? "dialog" : undefined} aria-modal={expanded || undefined} aria-label={expanded ? "展开创作指令" : undefined} tabIndex={expanded ? -1 : undefined} className={`image-composer ${expanded ? "is-expanded" : ""} ${dragOver ? "is-reference-drop" : ""}`} onDragOver={(event) => { if (!disabled && (event.dataTransfer.types.includes("Files") || event.dataTransfer.types.includes("application/x-workbench-image"))) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragOver(true); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOver(false); }} onDropCapture={() => setDragOver(false)} onDrop={(event) => { event.preventDefault(); setDragOver(false); if (disabled) return; const id = event.dataTransfer.getData("application/x-workbench-image"); if (id && draggedImage?.id === id) w.addReference(draggedImage); else if (event.dataTransfer.files.length) void w.upload(Array.from(event.dataTransfer.files)); }} onSubmit={async (event) => { event.preventDefault(); if (await w.generate()) setExpanded(false); }} onPaste={(event) => {
     const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); void w.upload(files); }
   }}>
-    {w.references.length ? <div className="image-composer-references" aria-label="本次参考图">{w.references.map((image) => <div className="image-composer-reference" key={image.id}><button type="button" aria-label={`预览参考图 ${image.name}`} onClick={() => onLocate(image.id)}><img src={imageFileUrl(image.id)} alt={image.name} /></button><button className="btn icon small" type="button" aria-label={`移除参考图 ${image.name}`} disabled={disabled} onClick={() => w.removeReference(image.id)}><X size={14} /></button></div>)}</div> : null}
+    <button ref={expandButton} className="btn icon small image-composer-expand" type="button" aria-label={expanded ? "收起输入框" : "展开输入框"} aria-expanded={expanded} title={expanded ? "收起输入框（Esc）" : "展开输入框"} onClick={() => setExpanded((current) => !current)}>{expanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
+    {w.references.length ? <div className="image-composer-references" aria-label="本次参考图">{w.references.map((image) => <div className="image-composer-reference" key={image.id}><button type="button" aria-label={`预览参考图 ${image.name}`} onClick={() => previewReference(image.id)}><img src={imageFileUrl(image.id)} alt={image.name} /></button><button className="btn icon small" type="button" aria-label={`移除参考图 ${image.name}`} disabled={disabled} onClick={() => w.removeReference(image.id)}><X size={14} /></button></div>)}</div> : null}
     {dragOver ? <div className="image-reference-drop-hint">松开，添加为参考图</div> : null}
-    <ImagePromptEditor onPasteFiles={(files) => w.upload(files, false)} onError={w.fail} value={w.form.prompt} references={candidates} disabled={disabled} onLocate={onLocate} onReference={(image) => w.addReference(image, false)} onChange={(prompt) => w.setForm((current) => ({ ...current, prompt }))} />
+    <ImagePromptEditor draggedImage={draggedImage} onPasteFiles={(files) => w.upload(files, false)} onError={w.fail} value={w.form.prompt} references={candidates} disabled={disabled} onLocate={previewReference} onReference={(image) => w.addReference(image, false)} onChange={(prompt) => w.setForm((current) => ({ ...current, prompt }))} />
     <div className="image-composer-bottom">
       <fieldset className="image-quick-settings" disabled={disabled}>
         <ImageModelPicker workbench={w} placement="above" />
@@ -47,9 +97,10 @@ export function ImageControls({ workbench: w, onLocate, onUpload, draggedImage }
         </div>}</ImageControlPopover>
       </fieldset>
       <ImagePromptAssist prompt={w.form.prompt} referenceIds={w.form.referenceIds} disabled={disabled} onApply={(prompt) => w.setForm((current) => ({ ...current, prompt }))} />
-      <div className="image-submit">{w.active ? <button className="btn image-generate-button" type="button" disabled={w.busy} onClick={() => void w.cancel()}><Square size={15} />停止</button> : <button className="btn primary image-generate-button" type="submit" aria-label="开始生成" title={w.form.parentRecordId ? "基于当前设置生成新分支" : "开始生成"} disabled={disabled || w.detailLoading || !selectedProfile?.configured || !w.form.prompt.trim()}><ArrowUp size={19} /><span className="sr-only">{w.busy ? "提交中" : "生成"}</span></button>}</div>
+      <div className="image-submit">{w.active ? <small role="status">生成中，可继续提交</small> : null}<button className="btn primary image-generate-button" type="submit" aria-label="开始生成" aria-busy={w.busy} title={w.active ? "继续提交新的生成任务" : "开始生成"} disabled={disabled || w.detailLoading || !selectedProfile?.configured || !w.form.prompt.trim()}><ArrowUp size={19} /><span className="sr-only">{w.busy ? "提交中" : "生成"}</span></button></div>
     </div>
     {w.multiModels.length > 1 ? <small className="image-batch-hint">{w.multiModels.length} 个模型 × {w.form.count} 张，共 {w.multiModels.length * w.form.count} 张</small> : null}
+    {expanded && w.error ? <p className="error image-expanded-error" role="alert">{w.error}</p> : null}
     {w.uploading ? <small role="status">正在保存参考图…</small> : null}
     {selectedProfile && !selectedProfile.configured ? <p className="error" role="alert">所选图片服务未配置，请检查对应模型的 API 配置。</p> : null}
   </form>;

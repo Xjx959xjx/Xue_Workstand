@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   wrapOpenCliError,
+  retryDetachedBrowserRead,
   resolveOpenCliCommand,
   sharedOpenCliBrowserSession,
   withPersistentBrowserAdapterOptions,
@@ -98,6 +99,29 @@ test("OpenCLI 失败展示 stderr 原因而非长脚本，并保留取消语义"
   assert.doesNotMatch(wrapped.message, /x{100}/);
   const aborted = Object.assign(new Error("取消"), { name: "AbortError" });
   assert.equal(wrapOpenCliError(aborted), aborted);
+});
+
+test("detached browser read reconnects and retries once", async () => {
+  const events: string[] = [];
+  const result = await retryDetachedBrowserRead(
+    async () => {
+      events.push("read");
+      if (events.length === 1) throw new Error("OpenCLI 执行失败：Detached while handling command.");
+      return "ok";
+    },
+    async () => { events.push("reconnect"); }
+  );
+  assert.equal(result, "ok");
+  assert.deepEqual(events, ["read", "reconnect", "read"]);
+});
+
+test("other browser errors are not retried", async () => {
+  let reconnects = 0;
+  await assert.rejects(() => retryDetachedBrowserRead(
+    async () => { throw new Error("抖音接口 403"); },
+    async () => { reconnects += 1; }
+  ), /403/);
+  assert.equal(reconnects, 0);
 });
 
 test("路由模块重新加载仍共享浏览器串行队列", async () => {

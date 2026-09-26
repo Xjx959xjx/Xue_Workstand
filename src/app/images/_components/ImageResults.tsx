@@ -1,14 +1,14 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- Saved local image results. */
 import { useEffect, useRef, useState } from "react";
-import { Download, Copy, Check, RotateCcw, Pencil, ImagePlus, LoaderCircle } from "lucide-react";
+import { Download, Copy, Check, RotateCcw, Pencil, ImagePlus, LoaderCircle, Trash2 } from "lucide-react";
 import { getImageGenerationRecord } from "@/lib/client";
 import { imagePromptLabel } from "@/lib/image-mentions";
 import { imageModelLabel } from "@/lib/image-profile-options";
 import type { JobListItem } from "@/lib/types";
 import { imageFileUrl, type ImageFile, type ImageGenerationRecord, type ImageGenerationSummary } from "@/lib/image-generation-types";
 
-type ResultProps = { record: ImageGenerationRecord | null; onPreview: (image: ImageFile) => void; onReproduce: (id: string) => void; onReference: (images: ImageFile[]) => void; disabled: boolean; onDragImage: (image: ImageFile | null) => void; previewOpen: boolean };
+type ResultProps = { deleting: boolean; onDelete: (id: string) => void; onImagesAvailable: (id: string, images: ImageFile[]) => void; record: ImageGenerationRecord | null; onPreview: (image: ImageFile) => void; onReproduce: (id: string) => void; onReference: (images: ImageFile[]) => void; disabled: boolean; onDragImage: (image: ImageFile | null) => void; previewOpen: boolean };
 function ResultImage({ image, onPreview, onDragImage, previewOpen }: Pick<ResultProps, "onPreview" | "onDragImage" | "previewOpen"> & { image: ImageFile }) {
   const [dismissed, setDismissed] = useState(false);
   function open() { setDismissed(true); onPreview(image); }
@@ -34,7 +34,7 @@ function CopyPrompt({ prompt, fallback }: { prompt?: string; fallback: string })
   }
   return <><button type="button" className={`image-result-prompt image-copy-prompt ${copied ? "is-copied" : ""}`} disabled={!prompt} aria-label="复制完整提示词" onClick={() => void copy()}><span>{imagePromptLabel(prompt || fallback)}</span><span className="image-copy-feedback" aria-live="polite">{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "已复制" : prompt ? "点击复制" : "读取中…"}</span></button>{error ? <p className="error" role="alert">{error}</p> : null}</>;
 }
-function ResultGroup({ summary, record, task, ...props }: ResultProps & { summary: ImageGenerationSummary; task?: JobListItem }) {
+function ResultGroup({ summary, record, task, onImagesAvailable, ...props }: ResultProps & { summary: ImageGenerationSummary; task?: JobListItem }) {
   const container = useRef<HTMLElement>(null);
   const [detail, setDetail] = useState<ImageGenerationRecord | null>(null);
   const [error, setError] = useState("");
@@ -51,12 +51,15 @@ function ResultGroup({ summary, record, task, ...props }: ResultProps & { summar
   }, [record?.id, summary.id, summary.updatedAt]);
   const full = record?.id === summary.id ? record : detail;
   const visible = full?.images || (summary.thumbnail ? [summary.thumbnail] : []);
+  useEffect(() => {
+    if (full?.images) onImagesAvailable(summary.id, full.images);
+  }, [full?.images, onImagesAvailable, summary.id]);
   const pending = task?.status === "running" || task?.status === "queued";
   const remaining = pending ? Math.max(0, summary.count - visible.length) : Math.max(0, summary.imageCount - visible.length);
   const [width, height] = summary.size.split("x").map(Number);
   const ratio = width > 0 && height > 0 ? `${width} / ${height}` : "1 / 1";
   return <section ref={container} className="image-result-group" data-record-id={summary.id} aria-label={summary.title}>
-    <div className="image-result-context"><CopyPrompt prompt={full?.prompt} fallback={summary.title} /><div className="image-result-meta"><span>{imageModelLabel(summary.model)}</span></div><div className="image-result-actions"><button className="btn small" type="button" disabled={props.disabled} title="将本次提示词、参数和参考图填入输入框" onClick={() => props.onReproduce(summary.id)}><RotateCcw size={14} />复现</button><button className="btn small" type="button" disabled={props.disabled || !visible.length || visible.length < summary.imageCount} title="将本组生成图片加入参考" onClick={() => props.onReference(visible)}><ImagePlus size={14} />加入参考</button></div>{error ? <p className="error" role="alert">{error}</p> : null}{task?.error ? <p className="error" role="alert">{task.error}</p> : null}</div>
+    <div className="image-result-context"><CopyPrompt prompt={full?.prompt} fallback={summary.title} /><div className="image-result-meta"><span>{imageModelLabel(summary.model)}</span></div><div className="image-result-actions"><button className="btn small" type="button" disabled={props.disabled} title="将本次提示词、参数和参考图填入输入框" onClick={() => props.onReproduce(summary.id)}><RotateCcw size={14} />复现</button><button className="btn small" type="button" disabled={props.disabled || !visible.length || visible.length < summary.imageCount} title="将本组生成图片加入参考" onClick={() => props.onReference(visible)}><ImagePlus size={14} />加入参考</button><button className="btn small image-result-delete" type="button" aria-label={`删除生成记录 ${summary.title}`} title={pending ? "生成中，请先停止任务" : "删除本组生成记录，可撤销；原图保留"} disabled={props.deleting || pending} onClick={() => props.onDelete(summary.id)}><Trash2 size={14} />删除</button></div>{error ? <p className="error" role="alert">{error}</p> : null}{task?.error ? <p className="error" role="alert">{task.error}</p> : null}</div>
     <div className="image-result-pictures" style={{ "--result-ratio": ratio } as React.CSSProperties}>
       {visible.map((image) => <ResultImage key={image.id} image={image} {...props} />)}
       {Array.from({ length: remaining }, (_, index) => <div key={`pending-${visible.length + index}`} className="image-result-pending" role="status"><LoaderCircle size={20} /><span>{pending ? task.status === "queued" ? "排队中" : "生成中" : "读取图片…"}</span>{pending ? <small>{task.progress}%</small> : null}</div>)}

@@ -1,4 +1,5 @@
 import { readWordSource } from "@/lib/word-source-import";
+import { readPdfSource } from "@/lib/pdf-source-import";
 import { readDocumentImages } from "@/lib/ai";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api-route";
@@ -59,7 +60,13 @@ async function extractSourceFile(file: File, signal?: AbortSignal): Promise<Writ
   const extension = getExtension(file.name);
   let text = "";
 
-  if (extension === "docx") {
+  if (extension === "pdf") {
+    try {
+      text = await readPdfSource(Buffer.from(await file.arrayBuffer()), signal);
+    } catch (error) {
+      throw new WriterFileInputError(`无法读取 PDF「${file.name || "未命名文件"}」：${error instanceof Error ? error.message : "请确认文件没有损坏"}`);
+    }
+  } else if (extension === "docx") {
     try {
       text = await readWordSource(Buffer.from(await file.arrayBuffer()), readDocumentImages, signal);
     } catch (error) {
@@ -76,7 +83,7 @@ async function extractSourceFile(file: File, signal?: AbortSignal): Promise<Writ
 
   return {
     name: file.name || `未命名.${extension}`,
-    mimeType: file.type || (extension === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/plain"),
+    mimeType: file.type || (extension === "pdf" ? "application/pdf" : extension === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/plain"),
     text: extension === "docx" ? normalized : normalized.slice(0, MAX_TEXT_CHARACTERS),
     originalCharacters: normalized.length,
     truncated: extension !== "docx" && normalized.length > MAX_TEXT_CHARACTERS

@@ -150,6 +150,10 @@ test("联网无结果与部分命中：首稿和续改区分检索状态与事�
       assert.ok(prepared.messages[1].content.includes(source), "素材本身的不确定性不被删词过滤");
       assert.ok(prepared.research?.includes(research), "无结果和部分结果状态都保留在参考资料中");
       assert.ok(prepared.messages[1].content.includes(research), "不丢失可用事实和来源");
+      await saveStyle(account.platform, account.id, "简短开场，再按时间顺序介绍活动。");
+      const reused = await prepareWriteCopyContext(input);
+      assert.equal(requests.length, count + 1, "重新生成或改变风格卡仍复用联网资料");
+      assert.equal(reused.research, prepared.research);
       const result = await completePreparedWriteCopy({ prepared, save: true,
         result: { text: source, model: "fixture", ok: true, fallback: false } });
       assert.equal(result.content, source, "不通过后处理删除合法的“不确定”原话");
@@ -162,6 +166,7 @@ test("联网无结果与部分命中：首稿和续改区分检索状态与事�
       assert.match(revised.messages[1].content, /其他段落保持不变/);
       assert.ok(revised.research?.includes(research));
       assert.ok(revised.messages[1].content.includes(source));
+      input.prompt += "。补充核实周日安排";
     }
   } finally {
     server.closeAllConnections();

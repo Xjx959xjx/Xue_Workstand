@@ -7,6 +7,7 @@ import {
   openCliRows,
   parseJsonish,
   parseOpenCliJsonish,
+  retryDetachedBrowserRead,
   resolveOpenCliCommand,
   runOpenCli,
   runPersistentOpenCliBrowserAdapter,
@@ -508,9 +509,13 @@ export async function collectDouyinPostVideosBatch(input: {
       try {
         const parsed = input.ranking
           ? await collectRankedDouyinPages(workspace, accounts, input)
-          : parseJsonish(await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
-            accounts, concurrency, limit: Math.min(input.limit, 500), fromDate: input.fromDate, toDate: input.toDate
-          })]), { timeout: 180_000, signal: input.signal }));
+          : parseJsonish(await retryDetachedBrowserRead(
+            () => runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [buildDouyinBatchPostExtractJs({
+              accounts, concurrency, limit: Math.min(input.limit, 500), fromDate: input.fromDate, toDate: input.toDate
+            })]), { timeout: 180_000, signal: input.signal }),
+            () => ensureDouyinBatchSession(workspace, accounts[0].uid, input.signal),
+            input.signal
+          ));
         if (!Array.isArray(parsed)) throw new Error("抖音批量接口返回无效结果");
         chunkResults = accounts.map((account) => {
           const raw = parsed.find((row) => row?.accountId === account.id);

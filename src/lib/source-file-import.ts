@@ -1,6 +1,6 @@
 import type { WriterSourceFileImport } from "./types";
 
-export const WRITER_SOURCE_FILE_ACCEPT = ".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.srt,.vtt,.log,.yaml,.yml,.docx";
+export const WRITER_SOURCE_FILE_ACCEPT = ".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,.srt,.vtt,.log,.yaml,.yml,.docx,.pdf";
 
 export function appendWriterSourceFiles(current: string, files: WriterSourceFileImport[]) {
   const fileBlocks = files.map((file) => {
