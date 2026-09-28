@@ -124,6 +124,106 @@ export const DOUYIN_RELATED_VIDEO_EXTRACT_JS = `
 })()
 `;
 
+/** 抖音正常页面也常驻隐藏的验证 iframe，只拦截实际显示的验证窗口。 */
+export const DOUYIN_VERIFICATION_CHECK_JS = `(() => {
+  if (/^(?:验证码中间页|安全验证|访问验证)/.test(document.title || "")) return true;
+  return Array.from(document.querySelectorAll('iframe[src*="verifycenter"]')).some(frame => {
+    const rect = frame.getBoundingClientRect();
+    const style = getComputedStyle(frame);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+  });
+})()`;
+
+/** 在现成的抖音页面中直接读取一级评论；各视频互不导航，分页仍串行。 */
+export function buildDouyinCommentsExtractJs(options: { awemeIds: string[]; commentLimit: number }) {
+  return `
+(async () => {
+  if (${DOUYIN_VERIFICATION_CHECK_JS}) {
+    throw new Error("抖音登录或安全验证未通过，请在 Chrome 完成验证码后重试");
+  }
+  if (location.origin !== "https://www.douyin.com" || !/^\\/video\\/\\d+/.test(location.pathname)) return { needsSession: true, rows: [] };
+  const awemeIds = ${JSON.stringify(options.awemeIds)};
+  const commentLimit = ${Math.max(1, Math.min(Math.trunc(options.commentLimit), 200))};
+  let accessError = "";
+  const fetchOne = async (awemeId) => {
+    const startedAt = Date.now();
+    const deadline = startedAt + 15000;
+    const comments = [];
+    const seen = new Set();
+    let cursor = 0;
+    let hasMore = true;
+    let pages = 0;
+    try {
+      while (comments.length < commentLimit && hasMore && pages < 6) {
+        if (accessError) throw new Error("本轮剩余抖音评论请求已暂停：" + accessError);
+        if (Date.now() >= deadline) throw new Error("抖音评论接口超过 15 秒，请重试或缩小采集数量");
+        const url = new URL("https://www.douyin.com/aweme/v1/web/comment/list/");
+        for (const [key, value] of Object.entries({
+          aweme_id: awemeId, cursor: String(cursor), count: String(Math.min(50, commentLimit - comments.length)),
+          item_type: "0", insert_ids: "", whale_cut_token: "", cut_version: "1", rcFT: "", device_platform: "webapp", aid: "6383"
+        })) url.searchParams.set(key, value);
+        const response = await fetch(url.toString(), {
+          credentials: "include", headers: { accept: "application/json, text/plain, */*" },
+          signal: AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+        });
+        if (!response.ok) {
+          const reason = response.status === 429
+            ? "抖音请求过于频繁（429），请稍后再试"
+            : "抖音评论接口 HTTP " + response.status + "，请在 Chrome 检查登录或验证状态";
+          if ([401, 403, 444, 429].includes(response.status)) accessError = reason;
+          throw new Error(reason);
+        }
+        const body = await response.text();
+        if (!body.trim()) {
+          accessError = "抖音评论接口返回空正文，请在 Chrome 检查登录或验证状态";
+          throw new Error(accessError);
+        }
+        let payload;
+        try { payload = JSON.parse(body); }
+        catch {
+          const reason = "抖音评论接口返回非 JSON 内容，请在 Chrome 检查登录或验证状态";
+          if (/^\\s*</.test(body)) accessError = reason;
+          throw new Error(reason);
+        }
+        if (!payload || typeof payload !== "object") throw new Error("抖音评论接口返回无效结果");
+        if (Number(payload.status_code || 0) !== 0) {
+          throw new Error("抖音评论接口状态 " + payload.status_code + (payload.status_msg ? "：" + payload.status_msg : ""));
+        }
+        if (!Array.isArray(payload.comments)) throw new Error("抖音评论接口缺少评论列表，请检查网页会话后重试");
+        pages += 1;
+        for (const item of payload.comments) {
+          const text = String(item?.text || item?.content || "").replace(/\\s+/g, " ").trim();
+          if (!text || seen.has(text)) continue;
+          seen.add(text);
+          comments.push({ text, likes: Number(item.digg_count || 0), replies: Number(item.reply_comment_total || 0) });
+        }
+        const nextCursor = Number(payload.cursor || 0);
+        hasMore = Boolean(payload.has_more) && payload.comments.length > 0;
+        if (hasMore && (!Number.isFinite(nextCursor) || nextCursor === cursor)) {
+          throw new Error("抖音评论分页游标未推进，请重试");
+        }
+        cursor = nextCursor;
+      }
+      return { awemeId, comments: comments.slice(0, commentLimit), pages, hasMore, ms: Date.now() - startedAt };
+    } catch (error) {
+      // 失败视频不伪装成成功的部分结果；同批其他视频的成功结果由调用方保留并展示失败原因。
+      return { awemeId, comments: [], pages, hasMore, ms: Date.now() - startedAt,
+        error: error?.name === "TimeoutError" ? "抖音评论接口超过 15 秒，请重试或缩小采集数量" : String(error?.message || error) };
+    }
+  };
+  const rows = new Array(awemeIds.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(2, awemeIds.length) }, async () => {
+    while (nextIndex < awemeIds.length) {
+      const index = nextIndex++;
+      rows[index] = await fetchOne(awemeIds[index]);
+    }
+  }));
+  return { needsSession: false, rows };
+})()
+`;
+}
+
 export const DOUYIN_VIDEO_COMMENT_EXTRACT_JS = `
 (async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

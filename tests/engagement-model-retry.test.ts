@@ -18,9 +18,11 @@ test("调研模型有限重试、阶段进度、取消与批次保留", async ()
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
+    const userContent = body.messages?.[1]?.content || body.input?.[0]?.content;
     requests += 1;
+    if (!body.stream) { res.writeHead(503); res.end("non-stream unavailable"); return; }
     if (mode === "unauthorized") { res.writeHead(401); res.end("unauthorized"); return; }
-    if (mode === "recover" && !recoveredBatchFailed && JSON.parse(body.messages[1].content).comments[0].text === "评论60") {
+    if (mode === "recover" && !recoveredBatchFailed && JSON.parse(userContent).comments[0].text === "评论60") {
       recoveredBatchFailed = true;
       req.socket.destroy(); return;
     }
@@ -29,10 +31,14 @@ test("调研模型有限重试、阶段进度、取消与批次保留", async ()
     }
     if (mode === "recover" && requests === 3) assert.equal(progressSaved, true);
     const content = mode === "plan"
-      ? requests === 1 ? "正文讨论折叠手机是否值得购买" : JSON.stringify({ queries: ["折叠手机"], anchors: [], eventTerms: [] })
-      : JSON.stringify({ decisions: JSON.parse(body.messages[1].content).comments.map((row: { id: number }) => ({ id: row.id, keep: true })) });
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ choices: [{ message: { content } }] }));
+      ? JSON.stringify({ queries: ["折叠手机"], sources: [{ query: "折叠手机", videoType: "真实上手", discussion: "折叠手机购买取舍" }], anchors: [], eventTerms: [] })
+      : JSON.stringify({ decisions: JSON.parse(userContent).comments.map((row: { id: number }) => ({ id: row.id, keep: true, natural: true, contextComplete: true, reason: "正文折叠手机购买取舍", articleEvidence: brief.fullText })) });
+    res.setHeader("Content-Type", "text/event-stream");
+    res.write(`data: ${JSON.stringify(body.input ? { type: "response.output_text.delta", delta: content } : { choices: [{ delta: { content } }] })}\n\n`);
+    if (mode !== "truncated") res.write(body.input
+      ? 'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+      : 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    res.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -55,6 +61,9 @@ test("调研模型有限重试、阶段进度、取消与批次保留", async ()
     mode = "fail"; requests = 0;
     await assert.rejects(reviewResearchCommentRelevance(samples.slice(0, 1), brief), /AI 筛选评论 1\/1 批.*失败/);
     assert.equal(requests, 2);
+    mode = "truncated"; requests = 0;
+    await assert.rejects(reviewResearchCommentRelevance(samples.slice(0, 1), brief), /失败/);
+    assert.equal(requests, 2, "可解析的半截流也不能保存为已审成功；最多重试一次");
     mode = "unauthorized"; requests = 0;
     await assert.rejects(reviewResearchCommentRelevance(samples.slice(0, 1), brief), /失败/);
     assert.equal(requests, 1);
@@ -66,8 +75,18 @@ test("调研模型有限重试、阶段进度、取消与批次保留", async ()
     assert.equal(requests, 1);
     mode = "plan"; requests = 0; messages.length = 0;
     await planEngagementResearchQueries(brief, undefined, undefined, "bilibili", (message) => { messages.push(message); });
-    assert.deepEqual(messages, ["正在AI 理解完整正文", "正在AI 规划搜索关键词"]);
-    assert.equal(requests, 2);
+    assert.deepEqual(messages, ["正在AI 规划搜索关键词"]);
+    assert.equal(requests, 1);
+    process.env.CHAT_WIRE_API = "responses";
+    requests = 0;
+    await planEngagementResearchQueries(brief, undefined, undefined, "bilibili");
+    assert.equal(requests, 1, "Responses 规划同样必须走可用的流式入口");
+    mode = "review-response"; requests = 0;
+    assert.equal((await reviewResearchCommentRelevance(samples.slice(0, 1), brief)).length, 1);
+    assert.equal(requests, 1);
+    mode = "truncated"; requests = 0;
+    await assert.rejects(reviewResearchCommentRelevance(samples.slice(0, 2), brief), /失败/);
+    assert.equal(requests, 2, "Responses 有文本但无 completed 事件不得被当成成功结果");
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));

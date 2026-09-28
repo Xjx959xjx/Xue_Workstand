@@ -133,6 +133,18 @@ export const engagementGenerationModes = ["quick", "reference", "research"] as c
 
 export type EngagementGenerationMode = (typeof engagementGenerationModes)[number];
 
+export type EngagementResearchReview = {
+  status: "completed" | "partial";
+  candidateCount: number;
+  reviewedCount: number;
+  rejectedCount: number;
+  unreviewedCount: number;
+  decisions: Array<{
+    platform: Platform; videoId: string; videoTitle: string; query: string; text: string;
+    keep: boolean; natural: boolean; contextComplete: boolean; reason: string; articleEvidence: string;
+  }>;
+};
+
 export type EngagementGenerationTimings = {
   sourceMs: number;
   briefMs: number;
@@ -201,6 +213,10 @@ export type DraftAssets = {
         }[];
       };
       relatedResearch?: {
+        review?: EngagementResearchReview;
+        voiceReferences?: string[];
+        capturedCommentCount?: number;
+        searchPlan?: Array<{ query: string; videoType: string; discussion: string }>;
         usedQueries: string[];
         searchAnchors?: string[];
         searchEventTerms?: string[];
@@ -304,6 +320,7 @@ export type DraftAssets = {
         reusedHotCommentCount?: number;
         reusedRelatedCommentCount?: number;
         aiGeneratedCount?: number;
+        outputReview?: { reviewedCount: number; rejectedCount: number; decisions: Array<{ id: number; keep: boolean; reason?: string }> };
         targetLongCommentCount?: number;
         lengthBuckets?: {
           short: number;

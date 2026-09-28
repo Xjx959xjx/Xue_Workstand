@@ -47,6 +47,7 @@ import {
   DOUYIN_SEARCH_EXTRACT_JS,
   buildDouyinBatchStatsExtractJs,
   buildDouyinBatchPostExtractJs,
+  buildDouyinCommentsExtractJs,
   buildDouyinDetailExtractJs,
   buildDouyinStatsExtractJs
 } from "./opencli-douyin-scripts";
@@ -119,6 +120,17 @@ export type DouyinRelatedCommentResult = {
   comments: string[];
   commentSamples: DouyinRelatedCommentSample[];
   appliedMinLikes: number;
+  errors?: string[];
+};
+
+export type DouyinCommentSample = { text: string; likes: number; replies: number };
+type DouyinCommentRows = {
+  awemeId: string;
+  comments: DouyinCommentSample[];
+  pages: number;
+  hasMore: boolean;
+  ms: number;
+  error?: string;
 };
 
 type DouyinVideoStatsSnapshot = {
@@ -207,6 +219,7 @@ export async function getDouyinRelatedTopicComments(
     minLikes?: number;
     excludedVideoIds?: string[];
     signal?: AbortSignal;
+    onTiming?: OpenCliTimingSink;
   } = {}
 ): Promise<DouyinRelatedCommentResult> {
   const cleanQuery = query.replace(/\s+/g, " ").trim();
@@ -226,7 +239,7 @@ export async function getDouyinRelatedTopicComments(
       String(Math.min(30, Math.max(videoLimit * 4, 20))),
       "-f",
       "json"
-    ], { timeout: 45_000, signal: options.signal });
+    ], { timeout: 45_000, signal: options.signal, onTiming: options.onTiming, timingStage: "douyin.comments.search" });
     rawCandidates = asArray(parseJsonish(stdout));
   } catch (error) {
     if (isAbortError(error)) throw error;
@@ -248,30 +261,16 @@ export async function getDouyinRelatedTopicComments(
   const appliedMinLikes = videos.length ? Math.min(...videos.map((video) => video.likes)) : 0;
 
   return withSharedOpenCliBrowserSession(async (workspace) => {
-    const opened = parseJsonish(await runOpenCli(
-      buildOpenCliBrowserArgs(workspace, "open", [videos[0].url], { window: "background" }),
-      { timeout: 30_000, signal: options.signal }
-    ));
-    const commentTab = opened && typeof opened === "object"
-      ? String((opened as Record<string, unknown>).page || "")
-      : "";
+    const rows = await getDouyinCommentRowsWithBrowser(workspace, videos.map((video) => video.id), commentLimit, {
+      ...options
+    });
     const comments: string[] = [];
     const commentSamples: DouyinRelatedCommentSample[] = [];
     const commentErrors: string[] = [];
     for (const video of videos) {
-      let detail: Awaited<ReturnType<typeof getDouyinVideoDetailWithBrowser>> | null = null;
-      try {
-        detail = await getDouyinVideoDetailWithBrowser(workspace, video.id, {
-          commentLimit,
-          signal: options.signal,
-          tab: commentTab || undefined
-        });
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        commentErrors.push(`${video.id}：${formatErrorMessage(error)}`);
-      }
-      const detailedComments = detail?.topComments || [];
-      const selectedComments = dedupeDouyinCommentSamples(detailedComments)
+      const row = rows.find((row) => row.awemeId === video.id);
+      if (row?.error || !row?.comments.length) commentErrors.push(`${video.id}：${row?.error || "没有可读取的评论"}`);
+      const selectedComments = dedupeDouyinCommentSamples(row?.comments || [])
         .filter((comment) => !containsPlatformUserMention(comment.text))
         .slice(0, commentLimit);
       comments.push(...selectedComments.map((comment) => comment.text));
@@ -280,8 +279,6 @@ export async function getDouyinRelatedTopicComments(
         videoId: video.id,
         videoTitle: video.title
       })));
-      if (detail?.publishedAt) video.publishedAt = detail.publishedAt;
-      if (detail?.likeCount && detail.likeCount > video.likes) video.likes = detail.likeCount;
     }
 
     if (!commentSamples.length) {
@@ -296,9 +293,62 @@ export async function getDouyinRelatedTopicComments(
       videos,
       comments: uniqueStrings(comments),
       commentSamples: dedupeDouyinCommentSamples(commentSamples),
-      appliedMinLikes
+      appliedMinLikes,
+      ...(commentErrors.length ? { errors: commentErrors } : {})
     };
   }, { signal: options.signal });
+}
+
+/** 与 B站评论入口一致：已知视频 ID/URL 时跳过搜索和作品详情。 */
+export async function getDouyinComments(
+  video: Pick<Video, "id" | "url">,
+  limit = 50,
+  options: OpenCliTimingOptions = {}
+): Promise<DouyinCommentSample[]> {
+  const awemeId = extractDouyinAwemeId(video.url) || extractDouyinAwemeId(video.id);
+  if (!awemeId) throw new Error("没有识别到抖音视频 ID，请提供抖音视频链接或数字 ID");
+  const commentLimit = Math.max(1, Math.min(Math.trunc(limit) || 50, 200));
+  return withSharedOpenCliBrowserSession(async (workspace) => {
+    const rows = await getDouyinCommentRowsWithBrowser(workspace, [awemeId], commentLimit, options);
+    const row = rows[0];
+    if (row.error || !row.comments.length) throw new Error(`抖音视频 ${awemeId} 评论抓取失败：${row.error || "没有可读取的评论"}`);
+    return row.comments;
+  }, { signal: options.signal });
+}
+
+async function getDouyinCommentRowsWithBrowser(
+  workspace: string,
+  awemeIds: string[],
+  commentLimit: number,
+  options: OpenCliTimingOptions & { tab?: string } = {}
+): Promise<DouyinCommentRows[]> {
+  const read = () => runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [
+    buildDouyinCommentsExtractJs({ awemeIds, commentLimit })
+  ], { tab: options.tab }), {
+    ...options, timeout: Math.ceil(awemeIds.length / 2) * 15_000 + 5_000, timingStage: "douyin.comments.batch"
+  }).then(parseJsonish);
+  let result = await read();
+  if (result && typeof result === "object" && "needsSession" in result && result.needsSession) {
+    // 评论接口需要作品页会话；只在尚无可用页面时初始化，后续视频按 ID 直接读取。
+    await runOpenCli(buildOpenCliBrowserArgs(workspace, "open", [buildDouyinVideoUrl(awemeIds[0])], { window: "background", tab: options.tab }), {
+      ...options, timeout: 30_000, timingStage: "douyin.comments.session-open"
+    });
+    result = await read();
+  }
+  const payload = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const rawRows = payload.rows;
+  if (!Array.isArray(rawRows) || payload.needsSession || rawRows.length !== awemeIds.length) {
+    throw new Error("抖音评论接口返回了无效结果，请在 Chrome 检查登录或验证状态后重试");
+  }
+  return awemeIds.map((awemeId) => {
+    const row = rawRows.find((row: Record<string, unknown>) => row?.awemeId === awemeId);
+    if (!row || !Array.isArray(row.comments)) throw new Error(`抖音视频 ${awemeId} 缺少评论结果，请重试`);
+    const error = String(row.error || "").trim();
+    const comments = row.comments.map(normalizeDouyinHotComment).filter((value: DouyinCommentSample | null): value is DouyinCommentSample => Boolean(value));
+    const ms = toNumber(row.ms);
+    options.onTiming?.({ stage: "douyin.comments.video", ms, ok: !error, meta: { awemeId, pages: toNumber(row.pages), count: comments.length }, ...(error ? { error } : {}) });
+    return { awemeId, comments, pages: toNumber(row.pages), hasMore: Boolean(row.hasMore), ms, ...(error ? { error } : {}) };
+  });
 }
 
 function normalizeDouyinRelatedVideo(row: unknown): DouyinRelatedCommentVideo | null {

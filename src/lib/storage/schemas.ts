@@ -323,9 +323,16 @@ export const hotspotRequestCacheSchema = z.object({
   nextRetryAt: z.number(), error: z.string().optional()
 });
 
+export const engagementReviewDecisionSchema = z.object({
+  id: z.number().int().nonnegative(), keep: z.boolean(),
+  natural: z.boolean(), contextComplete: z.boolean(),
+  reason: z.string().trim().min(1).max(500),
+  articleEvidence: z.string().trim().max(500)
+});
+
 export const engagementReviewCacheSchema = z.object({
   schemaVersion: z.literal(1), engineVersion: z.string().min(1), cachedAt: z.string().datetime(),
-  decisions: z.array(z.object({ id: z.number().int().nonnegative(), keep: z.boolean() })).max(60)
+  decisions: z.array(engagementReviewDecisionSchema).max(60)
 });
 
 export const writerResearchCacheSchema = z.object({

@@ -435,6 +435,30 @@
   gap: 6px;
 }
 
+.engagement-research-details {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+
+.engagement-research-details summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.engagement-research-details p,
+.engagement-research-details li {
+  margin-block: 8px;
+}
+
+.engagement-research-details li {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 100px;
+}
+
 .engagement-diagnostics span {
   display: inline-flex;
   align-items: center;

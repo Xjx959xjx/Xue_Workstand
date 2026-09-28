@@ -28,7 +28,9 @@ test("筛选最多两批并发，缓存隔离、失败续跑、取消及损坏�
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
-    const messages = JSON.parse(raw).messages;
+    const request = JSON.parse(raw);
+    assert.equal(request.stream, true);
+    const messages = request.messages;
     assert.match(messages[0].content, /疑似推广或批量生成的单条评论即使相关也 keep=false/);
     assert.match(messages[0].content, /不能仅凭好评/);
     const payload = JSON.parse(messages[1].content);
@@ -40,9 +42,9 @@ test("筛选最多两批并发，缓存隔离、失败续跑、取消及损坏�
     if (fail && payload.comments[0].text === "评论60") {
       res.writeHead(401); res.end("unauthorized"); return;
     }
-    const decisions = payload.comments.map((row: { id: number; text: string }) => ({ id: row.id, keep: Number(row.text.slice(2)) % 2 === 0 }));
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decisions }) } }] }));
+    const decisions = payload.comments.map((row: { id: number; text: string }) => ({ id: row.id, keep: Number(row.text.slice(2)) % 2 === 0, natural: true, contextComplete: true, reason: "正文中的折叠手机话题", articleEvidence: payload.article }));
+    res.setHeader("Content-Type", "text/event-stream");
+    res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ decisions }) } }] })}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -78,20 +80,27 @@ test("筛选最多两批并发，缓存隔离、失败续跑、取消及损坏�
     await reviewResearchCommentRelevance(samples, newBrief);
     assert.equal(requests, 3, "仅重做失败批次与未开始批次");
     requests = 0;
-    const early = await reviewResearchCommentRelevance(samples, { ...brief, fullText: "提前结束" }, undefined, undefined, undefined, {
-      enoughSamples: (rows) => rows.length >= 50
+    let audit: import("../src/lib/types").EngagementResearchReview | undefined;
+    const all = await reviewResearchCommentRelevance(samples, { ...brief, fullText: "完整筛选" }, undefined, undefined, undefined, {
+      onReview: (value) => { audit = value; }
     });
-    assert.equal(requests, 2);
-    assert.equal(early.length, 60);
+    assert.equal(requests, 4);
+    assert.equal(all.length, 91);
+    assert.equal(audit?.reviewedCount, 181);
+    assert.equal(audit?.unreviewedCount, 0);
+    assert.equal(audit?.rejectedCount, 90);
     requests = 0;
     fail = true;
     let partialReason = "";
     const partial = await reviewResearchCommentRelevance(samples, { ...brief, fullText: "保留通过质检部分" }, undefined, undefined, undefined, {
-      onPartial: (reason) => { partialReason = reason; }
+      onPartial: (reason) => { partialReason = reason; }, onReview: (value) => { audit = value; }
     });
     assert.equal(requests, 2);
     assert.equal(partial.length, 30);
     assert.match(partialReason, /部分评论筛选失败/);
+    assert.equal(audit?.status, "partial");
+    assert.equal(audit?.reviewedCount, 60);
+    assert.equal(audit?.unreviewedCount, 121);
     fail = false;
     requests = 0;
     await assert.rejects(reviewResearchCommentRelevance(samples, { ...brief, fullText: "零预算" }, undefined, undefined, undefined, { maxDurationMs: 0 }), /时间预算/);

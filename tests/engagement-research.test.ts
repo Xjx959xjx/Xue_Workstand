@@ -2,19 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseResearchRelevanceDecisions,
+  parseResearchReviewDecisions,
   analyzeCoordinatedCommentSection,
   buildEngagementResearchPlanningPrompt,
   buildPlatformResearchTasks,
+  buildSourceStats,
   buildLocalEngagementResearchQueries,
   countTargetPlatformResearchComments,
   filterQuarantinedVideoCommentSamples,
   hasResearchSemanticMatch,
   normalizeEngagementResearchPlan,
+  selectCommentVoiceReferences,
   rankHotComments
 } from "../src/lib/engagement-research";
 
+test("语气参考保留自然但语境不匹配的原句，不放行广告、其他平台或未审样本", () => {
+  const base = { platform: "douyin" as const, videoId: "123", videoTitle: "来源视频", query: "篮球", natural: true, keep: false, contextComplete: false, reason: "人物属于来源视频", articleEvidence: "" };
+  const research = { hotComments: ["未审热评"], review: {
+    status: "partial" as const, candidateCount: 5, reviewedCount: 4, rejectedCount: 4, unreviewedCount: 1,
+    decisions: [{ ...base, text: "野总你怎么在这" }, { ...base, text: "野总你怎么在这" },
+      { ...base, text: "好游戏值得推荐", natural: false },
+      { ...base, platform: "bilibili" as const, text: "三连了" }]
+  } };
+  assert.deepEqual(selectCommentVoiceReferences(research, "douyin"), ["野总你怎么在这"]);
+  assert.deepEqual(selectCommentVoiceReferences({ hotComments: ["历史已审原评", "历史已审原评"] }, "douyin"), ["历史已审原评"]);
+});
+
 test("AI 评论筛选必须逐条完整返回，不能漏评或伪造编号", () => {
-  assert.deepEqual([...parseResearchRelevanceDecisions('{"decisions":[{"id":1,"keep":true},{"id":0,"keep":false}]}', 2)], [1]);
+  const decisions = [{ id: 1, keep: true, natural: true, contextComplete: true, reason: "宣传片更像故事", articleEvidence: "少女篮球游戏宣传片" }, { id: 0, keep: false, natural: true, contextComplete: false, reason: "来源博主私梗", articleEvidence: "" }];
+  assert.deepEqual([...parseResearchRelevanceDecisions(JSON.stringify({ decisions }), 2, "少女篮球游戏宣传片")], [1]);
   for (const decisions of [[], [{ id: 0, keep: true }], [{ id: 0, keep: true }, { id: 0, keep: false }], [{ id: 0, keep: true }, { id: 2, keep: true }], [null, null]]) {
     assert.throws(() => parseResearchRelevanceDecisions(JSON.stringify({ decisions }), 2));
   }
@@ -229,21 +245,21 @@ test("带用户 @ 的评论不会进入热评研究或最终候选", () => {
   }, ["Wise", "呆皇", "率土之滨"], ["100万", "陪玩"]), false);
 });
 
-test("评论调研同时抓双平台，并向目标平台倾斜", () => {
-  assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "bilibili", true), [
-    { source: "bilibili", query: "苹果折叠屏", videoLimit: 8 },
-    { source: "douyin", query: "苹果折叠屏", videoLimit: 2 }
-  ]);
-  assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "douyin", true), [
-    { source: "douyin", query: "苹果折叠屏", videoLimit: 8 },
+test("快速评论调研只采目标平台，每词最多两个视频", () => {
+  assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "bilibili"), [
     { source: "bilibili", query: "苹果折叠屏", videoLimit: 2 }
   ]);
-  assert.deepEqual(buildPlatformResearchTasks("苹果折痕", "bilibili", false), [
-    { source: "bilibili", query: "苹果折痕", videoLimit: 6 }
+  assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "douyin"), [
+    { source: "douyin", query: "苹果折叠屏", videoLimit: 2 }
   ]);
-  assert.deepEqual(buildPlatformResearchTasks("苹果折痕", "douyin", false), [
-    { source: "douyin", query: "苹果折痕", videoLimit: 6 }
-  ]);
+});
+
+test("只采抖音时，不把未请求的 B站报告成失败", () => {
+  const rows = [{ source: "douyin" as const, query: "篮球少女", videos: [], comments: [], replyCommentCount: 0, thresholdLabel: "未命中", error: "没有自然评论" }];
+  const stats = buildSourceStats(rows);
+  assert.deepEqual(stats.map((row) => row.source), ["douyin"]);
+  assert.equal(stats[0].status, "failed");
+  assert.equal(stats[0].error, "没有自然评论");
 });
 
 const shortAnchorBrief = {
@@ -288,7 +304,7 @@ test("相关性通过的冷门评论不会被热度分数再次淘汰", () => {
 
 
 test("关键词计划保留 AI 的语义表达、顺序和数量，不按原文字面过滤", () => {
-  const queries = ["折叠手机真的适合普通人吗", "苹果入局折叠屏的意义", "安卓和苹果的产品取舍", "折叠手机使用门槛", "商务手机与日常需求"];
+  const queries = ["折叠手机真的适合普通人吗", "苹果入局折叠屏的意义"];
   assert.deepEqual(normalizeEngagementResearchPlan({ queries }), { queries, anchors: [], eventTerms: [] });
   assert.deepEqual(normalizeEngagementResearchPlan({ queries: ["为什么还要买直板机"], anchors: ["普通消费者"], eventTerms: ["选择成本"] }), {
     queries: ["为什么还要买直板机"], anchors: ["普通消费者"], eventTerms: ["选择成本"]
@@ -296,7 +312,7 @@ test("关键词计划保留 AI 的语义表达、顺序和数量，不按原文�
 });
 
 test("计划只拒绝错误格式和超过执行上限，不静默截断", () => {
-  for (const value of [{ queries: [] }, { queries: [42] }, { queries: [""] }, { queries: "关键词" }, { queries: Array(13).fill("词") }]) {
+  for (const value of [{ queries: [] }, { queries: [42] }, { queries: [""] }, { queries: "关键词" }, { queries: Array(3).fill("词") }]) {
     assert.throws(() => normalizeEngagementResearchPlan(value));
   }
 });
@@ -306,4 +322,23 @@ test("正文理解阶段接收全文，不注入机械摘要或具体搜索词�
   const prompt = buildEngagementResearchPlanningPrompt({ ...shortAnchorBrief, fullText });
   assert.ok(prompt.includes(fullText));
   assert.equal(prompt.includes(shortAnchorBrief.summary), false);
+});
+
+
+test("原评引用正文并不替代独立语境，缺失语境、灌水和伪造证据均不能放行", () => {
+  const article = "少女篮球游戏宣传片看起来像校园故事";
+  const base = { keep: true, natural: true, contextComplete: true, reason: "对宣传片的反应", articleEvidence: "少女篮球游戏宣传片" };
+  const rows = [base, { ...base, contextComplete: false, reason: "西瓜姐姐依赖出演者身份" },
+    { ...base, natural: false }, { ...base, articleEvidence: "西瓜是演员" }, { ...base, articleEvidence: "" }]
+    .map((row, id) => ({ id, ...row }));
+  assert.deepEqual([...parseResearchRelevanceDecisions(JSON.stringify({ decisions: rows }), rows.length, article)], [0]);
+  assert.match(parseResearchReviewDecisions(JSON.stringify({ decisions: rows }), rows.length, article)[1].reason, /程序拒绝/);
+  assert.throws(() => parseResearchReviewDecisions('{"decisions":[{"id":0,"keep":true}]}', 1, article), /正文依据/);
+});
+
+test("搜索来源依据必须和每个词一一对应并保留，不能只生成后丢失", () => {
+  const sources = [{ query: "少女篮球", videoType: "宣传片讨论", discussion: "对校园故事的反应" }];
+  assert.deepEqual(normalizeEngagementResearchPlan({ queries: ["少女篮球"], sources }).sources, sources);
+  assert.throws(() => normalizeEngagementResearchPlan({ queries: ["少女篮球"], sources: [] }), /每个搜索词/);
+  assert.throws(() => normalizeEngagementResearchPlan({ queries: ["少女篮球"], sources: [{ ...sources[0], query: "别的游戏" }] }), /不匹配/);
 });

@@ -63,7 +63,7 @@ export function AssetTextList({
           const originLabel = origin === "reused_hot_comment"
             ? "相关原评"
             : origin === "ai_generated"
-              ? "AI 补写"
+              ? "AI 生成"
               : "";
           return (
             <p className={origin ? `origin-${origin}` : undefined} key={`${index}-${item}`}>

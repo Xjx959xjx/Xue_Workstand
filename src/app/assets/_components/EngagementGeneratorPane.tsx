@@ -64,10 +64,10 @@ export function EngagementGeneratorPane({
           <div className="engagement-chain-summary" aria-label="评论生成链路">
             <strong>正文驱动</strong>
             <span>读取正文</span>
-            <span>相关爆款</span>
-            <span>正文匹配</span>
-            <span>AI 补位</span>
-            <span>反人机质检</span>
+            <span>精准采样</span>
+            <span>语料审查</span>
+            <span>AI 创作</span>
+            <span>去重质检</span>
           </div>
           <div className="engagement-mode-row">
             <span className="field-label">目标平台</span>
@@ -171,7 +171,7 @@ export function EngagementGeneratorPane({
 function progressStageLabel(stage: string) {
   if (stage === "source") return "读取目标视频正文";
   if (stage === "brief") return "提取人物、事件与桥段";
-  if (stage === "research") return "扩抓相关爆款原评";
+  if (stage === "research") return "采集并检查平台语料";
   if (stage === "generate") return "按真实语料补齐";
   if (stage === "filter") return "去重与反人机质检";
   return "评论生成中";

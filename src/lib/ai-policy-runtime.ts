@@ -39,7 +39,7 @@ export async function getAiSettingsView(): Promise<AiSettingsView> {
     return [p.id, { model: value.model || baseModel, effort }];
   })) as AiSettingsView["effective"];
   return { ...settings, defaults, effective, inheritedModels,
-    models: [...new Set([chat.model, web.model, "gpt-6-astra", "gpt-5.5", ...images.map((p) => p.model)].filter(Boolean))],
+    models: [...new Set([chat.model, web.model, "gpt-6-astra", "gpt-6-sol", "gpt-5.5", ...images.map((p) => p.model)].filter(Boolean))],
     services: { chat: chat.model || "未配置", web: web.model, image: imageConfig(defaultImageProfileId()).model, asr: process.env.VOLCENGINE_ASR_RESOURCE_ID || "volc.seedasr.auc", transcriptCleaning: process.env.TRANSCRIPT_CLEAN_USE_MODEL === "true" }
   };
 }
