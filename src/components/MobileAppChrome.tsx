@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Flame, Home, Menu, PenLine, Sword } from "lucide-react";
+import { BookOpen, Flame, Home, Menu, PenLine, Layers3 } from "lucide-react";
 import { SkinToggle } from "./SkinToggle";
 import { TaskCenter } from "./TaskCenter";
 import { useRemoteStatus } from "./RemoteStatusProvider";
@@ -16,7 +16,7 @@ const primaryItems = [
   { href: "/mobile/more", label: "更多", icon: Menu, more: true }
 ];
 
-const secondaryPrefixes = ["/ai-settings", "/hotspots", "/project-workbench", "/assets", "/tools", "/gross-margin"];
+const secondaryPrefixes = ["/images", "/ai-settings", "/hotspots", "/project-workbench", "/assets", "/tools", "/gross-margin"];
 
 export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
   const pathname = usePathname();
@@ -28,16 +28,11 @@ export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
       <header className="mobile-top-bar">
         <Link className="mobile-top-brand" href="/mobile">
           <span className="mobile-top-mark" aria-hidden="true">
-            <span className="mobile-top-mark-default">P</span>
-            <Sword className="mobile-top-mark-shinigami" size={19} strokeWidth={2} />
+            <Layers3 size={20} strokeWidth={1.8} />
           </span>
-          <span className="mobile-brand-copy mobile-brand-copy-default">
-            <strong>风格库</strong>
-            <small>私人远程工作台</small>
-          </span>
-          <span className="mobile-brand-copy mobile-brand-copy-shinigami">
-            <strong>BLEACH</strong>
-            <small>SOUL SOCIETY</small>
+          <span className="mobile-brand-copy">
+            <strong>内容工作台</strong>
+            <small>CONTENT STUDIO</small>
           </span>
         </Link>
         <div className="mobile-top-actions">

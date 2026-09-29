@@ -2,17 +2,14 @@ import { Calculator, RefreshCw, Save, Settings2 } from "lucide-react";
 import { getActiveServiceOptions } from "@/lib/gross-margin-calculator";
 import type { GrossMarginPriceOption } from "@/lib/types";
 import type { GrossMarginWorkbenchController } from "../_hooks/useGrossMarginWorkbench";
-import { PLATFORM_OPTIONS } from "../_lib/gross-margin-workbench-model";
 
 type GrossMarginPricePaneProps = Pick<
   GrossMarginWorkbenchController,
   | "activePricePanelServiceConfigs"
   | "busy"
-  | "handlePlatformChange"
   | "handleSavePriceTable"
   | "loading"
   | "openPriceEditor"
-  | "platform"
   | "priceInputs"
   | "setPriceInput"
   | "table"
@@ -21,11 +18,9 @@ type GrossMarginPricePaneProps = Pick<
 export function GrossMarginPricePane({
   activePricePanelServiceConfigs,
   busy,
-  handlePlatformChange,
   handleSavePriceTable,
   loading,
   openPriceEditor,
-  platform,
   priceInputs,
   setPriceInput,
   table
@@ -43,20 +38,6 @@ export function GrossMarginPricePane({
         </button>
       </div>
       <div className="pane-body">
-        <div className="source-tabs gross-platform-tabs" role="group" aria-label="选择平台">
-          {PLATFORM_OPTIONS.map((option) => (
-            <button
-              aria-pressed={platform === option.value}
-              className={platform === option.value ? "active" : ""}
-              key={option.value}
-              onClick={() => handlePlatformChange(option.value)}
-              type="button"
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
         {loading ? (
           <div className="empty-state-panel panel">
             <div className="panel-inner">

@@ -1,13 +1,13 @@
 "use client";
 
-import { Sword } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 const SKIN_STORAGE_KEY = "content-workbench-skin";
 const SKIN_CHANGE_EVENT = "content-workbench-skin-change";
 const SHINIGAMI_SKIN = "shinigami";
-const DEFAULT_THEME_COLOR = "#f5f5f7";
-const SHINIGAMI_THEME_COLOR = "#100d0e";
+const DEFAULT_THEME_COLOR = "#f4f6f5";
+const SHINIGAMI_THEME_COLOR = "#131e1b";
 
 type SkinToggleProps = {
   compact?: boolean;
@@ -87,7 +87,7 @@ export function SkinToggle({ compact = false }: SkinToggleProps) {
     window.dispatchEvent(new Event(SKIN_CHANGE_EVENT));
   }, []);
 
-  const actionLabel = active ? "恢复原始皮肤" : "启用 BLEACH 死神皮肤";
+  const actionLabel = active ? "切换浅色模式" : "切换深色模式";
 
   return (
     <button
@@ -99,16 +99,16 @@ export function SkinToggle({ compact = false }: SkinToggleProps) {
       title={compact ? actionLabel : undefined}
     >
       <span className="skin-toggle-mark" aria-hidden="true">
-        <Sword size={compact ? 19 : 18} strokeWidth={2} />
+        {active ? <Sun size={18} strokeWidth={1.8} /> : <Moon size={18} strokeWidth={1.8} />}
       </span>
       {compact ? null : (
         <>
           <span className="skin-toggle-copy">
-            <strong>BLEACH·尸魂界</strong>
-            <small>{active ? "黑崎一护 · 灵压展开" : "角色群像主题"}</small>
+            <strong>{active ? "深色模式" : "浅色模式"}</strong>
+            <small>切换界面外观</small>
           </span>
           <span className="skin-toggle-state" aria-hidden="true">
-            {active ? "还原" : "启用"}
+            {active ? "浅色" : "深色"}
           </span>
         </>
       )}

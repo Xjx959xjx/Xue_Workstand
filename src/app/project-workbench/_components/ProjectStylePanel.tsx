@@ -42,30 +42,11 @@ export function ProjectStylePanel({
 
   return (
     <section className="project-workbench-section style-editor-panel" aria-label="项目风格卡">
-      <div className="project-style-head">
-        <div className="project-style-heading">
-          <div className="project-style-title-row">
-            <h2>项目风格卡</h2>
-            <span className={`status-pill ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveLabel}</span>
-          </div>
-          <p className="pane-subtitle">{styleStatus}</p>
-        </div>
-        <div className="project-style-actions">
-          <button className="btn" disabled={busy === "style"} onClick={onGenerateStyle} type="button">
-            <Sparkles aria-hidden="true" size={16} />
-            {busy === "style" ? "生成中" : generateLabel}
-          </button>
-          {canShowSave ? (
-            <button className="btn" disabled={!canSaveWorkspace} onClick={onSaveWorkspace} type="button">
-              <Save aria-hidden="true" size={16} />
-              {busy === "save" ? "保存中" : "保存"}
-            </button>
-          ) : null}
-          <Link className={`btn primary ${canWrite ? "" : "disabled"}`} href={writerHref} aria-disabled={!canWrite}>
-            写作
-            <ArrowRight aria-hidden="true" size={16} />
-          </Link>
-        </div>
+      <div className="project-style-heading">
+        <span className="page-title-eyebrow">STYLE CARD</span>
+        <h2>项目风格卡</h2>
+        <label htmlFor="project-style-document">语气、结构与表达习惯</label>
+        <p className="pane-subtitle" role="status">{styleStatus} · {saveLabel}</p>
       </div>
 
       {activeStyleJob && (activeStyleJob.status === "running" || activeStyleJob.status === "queued") ? (
@@ -85,12 +66,18 @@ export function ProjectStylePanel({
       <div className="project-style-document">
         <textarea
           aria-label="项目风格卡"
+          id="project-style-document"
           autoComplete="off"
           className="project-workbench-style"
           value={styleDraft}
           onChange={(event) => onStyleDraftChange(event.target.value)}
           placeholder={EMPTY_STYLE}
         />
+      </div>
+      <div className="project-style-actions">
+        {canShowSave ? <button className="btn primary" disabled={!canSaveWorkspace} onClick={onSaveWorkspace} type="button"><Save aria-hidden="true" size={15} />{busy === "save" ? "保存中" : "保存风格卡"}</button> : null}
+        <button className="btn" disabled={busy === "style"} onClick={onGenerateStyle} type="button"><Sparkles aria-hidden="true" size={15} />{busy === "style" ? "生成中" : generateLabel}</button>
+        <Link className={`btn ${canWrite ? "" : "disabled"}`} href={writerHref} aria-disabled={!canWrite}>去写作<ArrowRight aria-hidden="true" size={15} /></Link>
       </div>
     </section>
   );

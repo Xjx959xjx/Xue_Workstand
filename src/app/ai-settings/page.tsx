@@ -53,7 +53,7 @@ export default function AiSettingsPage() {
 
   return <div className="ai-settings-page" data-unsaved-changes={w.dirty ? "true" : undefined}>
     <header className="page-header ai-settings-header">
-      <div><h1>AI 模型配置</h1><p>直接选择各环节的模型和推理强度，保存后生效。</p></div>
+      <div><span className="page-title-eyebrow">PREFERENCES / 01</span><h1>让工具，适合你的工作方式</h1><p>按创作环节组织模型与服务配置。</p></div>
       <div className="ai-header-actions">
         <span className="ai-save-state" role="status">{w.loading ? "读取中…" : w.error ? "需要处理" : w.dirty ? `${w.dirtyIds.length} 项待保存` : "已保存"}</span>
         <button className="btn" disabled={!w.dirty || w.saving} onClick={w.discard}>撤销修改</button>
@@ -62,12 +62,25 @@ export default function AiSettingsPage() {
     </header>
     {w.error ? <div className="ai-message error" role="alert"><span>{w.error}</span><button className="btn compact" disabled={w.saving} onClick={() => { if (!w.dirty || window.confirm("重新载入将丢弃当前未保存修改，确定继续吗？")) void w.load(); }}>重新载入</button></div> : null}
     {w.message ? <div className="ai-message success" role="status">{w.message}</div> : null}
+    <div className="ai-view-label">工作区</div>
+    <div className="ai-workspace">
     {w.loading ? <div className="panel ai-loading" role="status">正在读取模型配置…</div> : w.saved ? <div className="panel ai-settings-list" aria-busy={w.saving}>
-      {AI_GROUPS.slice(1).map((group) => <section className="ai-settings-group" key={group} aria-label={group}>
+      <span className="page-title-eyebrow">MODEL PREFERENCES</span><h2 className="ai-section-title">按工作环节配置</h2>
+      {AI_GROUPS.slice(1).map((group) => <section className="ai-settings-group" id={`ai-group-${AI_GROUPS.indexOf(group)}`} key={group} aria-label={group}>
         <div className="ai-group-heading"><h2>{group}</h2><span>模型</span><span>推理强度</span><span className="sr-only">操作</span></div>
         {AI_POLICIES.filter((policy) => policy.group === group).map((policy) => <PolicyRow key={policy.id} policy={policy} w={w}/>)}
       </section>)}
       <p className="ai-service-note">语音转写：{w.saved.services.asr}，无需设置推理强度。转写稿模型清洗{w.saved.services.transcriptCleaning ? "已开启" : "默认关闭"}。</p>
     </div> : null}
+      <aside className="ai-inspector" aria-label="配置说明">
+        <span className="page-title-eyebrow">CONTEXT / 当前工作</span>
+        <h2>配置说明</h2>
+        <p>按工作环节选择模型。留空沿用服务默认配置，修改后点击保存生效。</p>
+        <nav aria-label="配置分组">{AI_GROUPS.slice(1).map((group, index) => <a href={`#ai-group-${index + 1}`} key={group}><span>{group}</span><span aria-hidden="true">↗</span></a>)}</nav>
+        <h3>当前修改</h3>
+        <p role="status">{w.dirty ? `${w.dirtyIds.length} 项配置尚未保存` : "没有待保存的修改"}</p>
+        <p>恢复默认只影响对应环节，仍需保存。图片模型不使用推理强度。</p>
+      </aside>
+    </div>
   </div>;
 }

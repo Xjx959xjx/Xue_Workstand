@@ -1,26 +1,21 @@
 "use client";
 
-import { Check, ChevronDown, FileText, FolderKanban, LinkIcon, Plus, Trash2, UsersRound } from "lucide-react";
+import { Check, FileText, LinkIcon, Plus, Trash2, UsersRound } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
-import type { AccountListItem, CopySource, ProjectListItem } from "@/lib/types";
+import type { AccountListItem, CopySource } from "@/lib/types";
 import { SourceRow } from "./SourceRow";
 
 type CasePipelinePanelProps = {
   accounts: AccountListItem[];
   availableSourceCount: number;
-  isDirty: boolean;
   managedSourceIds: string[];
-  projectDescription: string;
-  projectName: string;
   projectSources: CopySource[];
   selectedAccounts: AccountListItem[];
-  selectedProjectMeta: ProjectListItem | null;
   sourcePoolManage: boolean;
   deletingSourcePool: boolean;
   onDeleteSelectedPoolSources: () => void;
   onOpenAccountPicker: () => void;
   onOpenLinkIntake: () => void;
-  onOpenProjectModal: () => void;
   onOpenSourcePicker: () => void;
   onOpenSourcePreview: (source: CopySource) => void;
   onToggleAccount: (accountId: string) => void;
@@ -31,45 +26,28 @@ type CasePipelinePanelProps = {
 export function CasePipelinePanel({
   accounts,
   availableSourceCount,
-  isDirty,
   managedSourceIds,
-  projectDescription,
-  projectName,
   projectSources,
   selectedAccounts,
-  selectedProjectMeta,
   sourcePoolManage,
   deletingSourcePool,
   onDeleteSelectedPoolSources,
   onOpenAccountPicker,
   onOpenLinkIntake,
-  onOpenProjectModal,
   onOpenSourcePicker,
   onOpenSourcePreview,
   onToggleAccount,
   onToggleManagedSource,
   onToggleSourcePoolManage
 }: CasePipelinePanelProps) {
-  const title = projectName.trim() || selectedProjectMeta?.name || "未命名项目";
-  const saveState = selectedProjectMeta ? (isDirty ? "未保存" : "已保存") : projectName.trim() ? "待保存" : "未命名";
   const emptyAccountHint = accounts.length ? "未选择账号，将只按案例素材提炼风格。" : "暂无账号，可只用案例素材生成。";
 
   return (
     <aside className="project-workbench-section project-context-panel" aria-label="项目上下文">
-      <button className="project-context-summary project-context-summary-button" onClick={onOpenProjectModal} type="button">
-        <FolderKanban aria-hidden="true" size={16} />
-        <span className="project-context-summary-copy">
-          <strong>{title}</strong>
-          <small>{projectDescription.trim() || "点击补充项目说明"}</small>
-        </span>
-        <span className={`project-save-state ${isDirty || !selectedProjectMeta ? "pending" : "done"}`}>{saveState}</span>
-        <ChevronDown aria-hidden="true" size={15} />
-      </button>
-
       <div className="project-context-block">
         <div className="project-context-block-head">
           <div>
-            <h2>案例素材</h2>
+            <h2>参考资料</h2>
             <small>{projectSources.length ? `${projectSources.length} 份将参与风格提炼` : availableSourceCount ? "从已有素材或视频链接中加入" : "暂无已有素材，请先转写视频链接"}</small>
           </div>
           {projectSources.length ? (

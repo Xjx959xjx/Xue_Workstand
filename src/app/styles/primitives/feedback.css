@@ -56,8 +56,6 @@
   font-size: var(--text-meta);
   font-weight: var(--font-weight-medium);
   line-height: var(--line-height-meta);
-  backdrop-filter: blur(16px) saturate(var(--glass-saturation));
-  -webkit-backdrop-filter: blur(16px) saturate(var(--glass-saturation));
 }
 
 .notice::before,
@@ -103,10 +101,8 @@
   border: 1px solid var(--toast-state-border);
   border-radius: var(--radius-lg);
   color: var(--text);
-  background: var(--glass-popover);
+  background: var(--panel-raised);
   box-shadow: var(--shadow-lift);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   pointer-events: auto;
   animation: task-toast-enter 210ms var(--ease-out) both;
 }

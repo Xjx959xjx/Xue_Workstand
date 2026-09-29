@@ -7,6 +7,8 @@ import type { AccountDetail, VideoListItem } from "@/lib/types";
 
 type LibraryDetailPaneProps = {
   busy: string;
+  hasAccounts: boolean;
+  hasVisibleAccounts: boolean;
   loading: boolean;
   selectedAccount: AccountDetail | null;
   selectedVideo: VideoListItem | null;
@@ -31,6 +33,8 @@ type LibraryDetailPaneProps = {
 
 export const LibraryDetailPane = memo(function LibraryDetailPane({
   busy,
+  hasAccounts,
+  hasVisibleAccounts,
   loading,
   selectedAccount,
   selectedVideo,
@@ -66,6 +70,13 @@ export const LibraryDetailPane = memo(function LibraryDetailPane({
     : loading
       ? "正在读取本地风格库。"
       : stylePreview || (styleLoaded ? "暂无风格卡内容。" : "风格卡待读取。");
+
+  if (!loading && !selectedAccount) {
+    return <aside className="pane library-detail-pane">
+      <div className="pane-header library-detail-header"><div><h2>详情</h2><p className="pane-subtitle">等待选择</p></div></div>
+      <div className="pane-body"><div className="library-detail-empty"><strong>{!hasAccounts ? "从采集开始" : hasVisibleAccounts ? "先选择一个账号" : "当前筛选没有账号"}</strong><p>{!hasAccounts ? "在上方输入账号名或主页链接，采集完成后可查看视频、转写和风格。" : hasVisibleAccounts ? "在左侧选择账号，再查看视频原稿和账号风格。" : "清除左侧筛选，或换个关键词查找账号。"}</p></div></div>
+    </aside>;
+  }
 
   return (
     <aside className="pane library-detail-pane">

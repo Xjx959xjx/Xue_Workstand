@@ -3,7 +3,6 @@
 import { Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  Flame,
   RefreshCw,
   SlidersHorizontal,
   TrendingUp
@@ -341,15 +340,10 @@ function DouyinHotlistPageContent() {
     <div className="page douyin-hotlist-page workbench-frame-page">
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">对标内容</span>
-          <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <Flame size={20} strokeWidth={2.1} />
-            </span>
-            <div className="page-title-copy">
-              <h1>视频热榜</h1>
-              <p className="subtle">维护抖音 / B站独立对标池，抓取{windowLabel}值得拆解的内容。</p>
-            </div>
+          <span className="page-title-eyebrow">DISCOVER / 02</span>
+          <div className="page-title-copy">
+            <h1>看见正在发生的趋势</h1>
+            <p className="subtle">跟踪账号与热门作品，为创作积累真实参考。</p>
           </div>
         </div>
         <div className="page-header-meta">
@@ -371,14 +365,8 @@ function DouyinHotlistPageContent() {
 
       {error ? <div className="error" role="alert">{error}</div> : null}
 
-      <section className="douyin-hotlist-workspace workbench-frame-workspace">
-        <section className="pane douyin-hotlist-rank-pane">
-          <div className="pane-header">
-            <div>
-              <h2>{rankTitle}</h2>
-              <p className="pane-subtitle">{rankSubtitle}</p>
-            </div>
-            <div className="douyin-hotlist-rank-actions">
+      <div className="douyin-hotlist-section-heading"><strong>本周热门作品</strong><span>{rankSubtitle}</span></div>
+      <div className="douyin-hotlist-rank-actions" aria-label="榜单筛选">
               <WindowFilterControl
                 disabled={operationBusy}
                 onChange={setWindowFilter}
@@ -411,8 +399,11 @@ function DouyinHotlistPageContent() {
               <span className={`status-pill ${initialLoading || refreshing ? "pending" : "completed"}`}>
                 {initialLoading ? "读取中" : refreshing ? `刷新 ${Math.round(activeRefreshJob?.progress || 0)}%` : `${visibleItems.length} 条`}
               </span>
-            </div>
-          </div>
+      </div>
+
+      <section className="douyin-hotlist-workspace workbench-frame-workspace">
+        <section className="pane douyin-hotlist-rank-pane">
+          <div className="pane-header"><h2>{rankTitle}</h2><span>{visibleItems.length} 条内容</span></div>
 
           {initialLoading ? (
             <HotlistLoadingRows />
@@ -422,6 +413,17 @@ function DouyinHotlistPageContent() {
             <EmptyHotlist hasAccounts={Boolean(snapshot?.accounts.length)} selectedAccount={selectedAccount?.name} windowLabel={windowLabel} />
           )}
         </section>
+        <aside className="douyin-hotlist-context" aria-label="关注中的账号">
+          <span className="page-title-eyebrow">CONTEXT / 当前工作</span>
+          <h2>关注中的账号</h2>
+          <p>按账号追踪作品变化，筛选热门视频后查看来源与转写。</p>
+          <div className="douyin-hotlist-context-stats"><div><strong>{summary?.accountCount || 0}</strong><span>关注账号</span></div><div><strong>{summary?.recentVideoCount || 0}</strong><span>{windowLabel}作品</span></div></div>
+          <div className="douyin-hotlist-context-list">
+            {(snapshot?.accounts || []).map((account) => <button key={account.id} className={selectedAccountId === account.id ? "active" : ""} type="button" aria-pressed={selectedAccountId === account.id} onClick={() => setSelectedAccountId(account.id)}><span className="douyin-hotlist-context-avatar">{account.name.slice(0, 1)}</span><span><strong>{account.name}</strong><small>{getPlatformLabel(account.platform)} · {account.recentVideoCount} 条作品</small></span></button>)}
+            {!snapshot?.accounts.length ? <p className="subtle">添加账号后在这里查看关注列表。</p> : null}
+          </div>
+          <button className="btn" type="button" onClick={() => setAccountDrawerOpen(true)}>管理关注账号</button>
+        </aside>
       </section>
       {accountDrawerOpen ? (
         <AccountManagementDrawer

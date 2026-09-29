@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MessageSquarePlus, RefreshCw } from "lucide-react";
+import { History, Plus, RefreshCw } from "lucide-react";
 import { AssetsFeishuModal } from "./_components/AssetsFeishuModal";
 import { EngagementGeneratorPane } from "./_components/EngagementGeneratorPane";
 import { EngagementHistoryPane } from "./_components/EngagementHistoryPane";
@@ -12,6 +12,7 @@ import { useAssetFeishuPublish } from "./_hooks/useAssetFeishuPublish";
 import { useEngagementGeneration } from "./_hooks/useEngagementGeneration";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useTasks } from "@/components/TaskProvider";
+import { confirmDiscardUnsavedChanges } from "@/components/UnsavedChangesGuard";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import { ENGAGEMENT_RECORD_QUERY_PARAM } from "@/lib/job-links";
 import {
@@ -39,6 +40,7 @@ function AssetsPageContent() {
   const searchParams = useSearchParams();
   const { activeJobs, recentJobs, startTask } = useTasks();
   const { notify } = useFeedback();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [sourceInput, setSourceInput] = useState("");
   const [includeComments, setIncludeComments] = useState(true);
   const [includeDanmaku, setIncludeDanmaku] = useState(false);
@@ -85,6 +87,18 @@ function AssetsPageContent() {
     sourceInput,
     startTask
   });
+  const loadedSource = resultRecord
+    ? resultRecord.sourceType === "url"
+      ? resultRecord.sourceUrl || resultRecord.resolvedUrl || resultRecord.sourceText
+      : resultRecord.sourceText
+    : "";
+  const hasUnsavedDraft = Boolean(sourceInput.trim()) && (!resultRecord
+    || sourceInput.trim() !== loadedSource.trim()
+    || includeComments !== resultRecord.options.includeComments
+    || (includeComments && commentCount !== resultRecord.options.commentCount)
+    || includeDanmaku !== resultRecord.options.includeDanmaku
+    || (includeDanmaku && danmakuCount !== resultRecord.options.danmakuCount)
+    || (resultRecord.platform !== "unknown" && targetPlatform !== (resultRecord.options.targetPlatform || resultRecord.platform)));
 
   useEffect(() => {
     if (!supportsDanmaku && includeDanmaku) setIncludeDanmaku(false);
@@ -255,10 +269,23 @@ function AssetsPageContent() {
 
   async function handleSelectRecord(record: EngagementRecordSummary) {
     if (openingRecordId) return;
+    if (!confirmDiscardUnsavedChanges("打开历史记录会替换当前尚未生成的输入，是否继续？")) return;
     const opened = await openRecord(record.id);
     if (!opened) return;
     loadedRecordParamRef.current = record.id;
     replaceSelectedRecordInUrl(record.id);
+    setHistoryOpen(false);
+  }
+
+  function handleNewTask() {
+    if (!confirmDiscardUnsavedChanges("新建任务会清空当前尚未生成的输入，是否继续？")) return;
+    openRecordRequestRef.current += 1;
+    loadedRecordParamRef.current = "";
+    setSourceInput("");
+    setResultRecord(null);
+    setNotice("");
+    setHistoryOpen(false);
+    router.replace("/assets", { scroll: false });
   }
 
   async function copyText(text: string, message: string) {
@@ -267,22 +294,19 @@ function AssetsPageContent() {
   }
 
   return (
-    <div className="page assets-page">
+    <div className="page assets-page" data-unsaved-changes={hasUnsavedDraft ? "true" : undefined}>
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">互动素材</span>
+          <span className="page-title-eyebrow">CREATE / 03</span>
           <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <MessageSquarePlus size={20} strokeWidth={2.1} />
-            </span>
             <div className="page-title-copy">
-              <h1>评论生成</h1>
-              <p className="subtle">读取正文，匹配真实参考后生成。</p>
+              <h1>让内容，产生更多对话</h1>
+              <p className="subtle">准备素材与生成参数，集中整理互动结果。</p>
             </div>
           </div>
         </div>
         <div className="page-header-meta">
-          <span className="stat-pill">{recordsLoading ? "读取中" : `${records.length} 条记录`}</span>
+          <button className="btn primary" type="button" disabled={Boolean(busy) || Boolean(generationProgress)} onClick={handleNewTask}><Plus size={16} aria-hidden="true" />新建任务</button>
           <button className="btn ghost" onClick={() => void handleRefresh()} type="button">
             <RefreshCw size={16} />
             刷新
@@ -290,14 +314,13 @@ function AssetsPageContent() {
         </div>
       </header>
 
+      <nav className="engagement-view-navigation" aria-label="评论生成视图">
+        <button className={!historyOpen ? "active" : ""} onClick={() => setHistoryOpen(false)} type="button">工作区</button>
+        <button className={historyOpen ? "active" : ""} onClick={() => setHistoryOpen(true)} type="button"><History size={14} aria-hidden="true" />历史记录 <span>{records.length}</span></button>
+      </nav>
+
       <section className="engagement-workbench">
-        <section className="panel engagement-main">
-          <div className="engagement-refbar">
-            <div>
-              <h2>生成器</h2>
-              <p className="pane-subtitle">链接或文案。</p>
-            </div>
-          </div>
+        <section className="panel engagement-main" hidden={historyOpen}>
           <div className="engagement-content-grid">
             <EngagementGeneratorPane
               busy={busy}
@@ -330,6 +353,20 @@ function AssetsPageContent() {
             />
           </div>
         </section>
+        <aside className="engagement-inspector" hidden={historyOpen} aria-label="生成上下文">
+          <span className="page-title-eyebrow">CONTEXT / 当前工作</span>
+          <h2>生成参数</h2>
+          <p>左侧准备素材，中央浏览、复制与导出结果。历史记录在顶部单独查看。</p>
+          <dl>
+            <div><dt>目标平台</dt><dd>{effectivePlatform === "bilibili" ? "B站" : "抖音"}</dd></div>
+            <div><dt>生成类型</dt><dd>{[includeComments ? "评论" : "", includeDanmaku ? "弹幕" : ""].filter(Boolean).join(" / ") || "未选择"}</dd></div>
+            <div><dt>预计数量</dt><dd>{(includeComments ? commentCount : 0) + (includeDanmaku ? danmakuCount : 0)} 条</dd></div>
+          </dl>
+          <h3>当前结果</h3>
+          <p>{resultRecord ? "结果已生成，可以在中央查看或导出。" : "尚未生成内容"}</p>
+          <button className="btn" onClick={() => setHistoryOpen(true)} type="button"><History size={15} aria-hidden="true" />查看历史记录</button>
+        </aside>
+        <div id="engagement-history" hidden={!historyOpen}>
         <EngagementHistoryPane
           loading={recordsLoading}
           openingRecordId={openingRecordId}
@@ -339,6 +376,7 @@ function AssetsPageContent() {
           onExportRecord={(record) => void handleExportRecord(record)}
           onSelectRecord={handleSelectRecord}
         />
+        </div>
       </section>
 
       {feishuResult ? <AssetsFeishuModal result={feishuResult} onClose={() => setFeishuResult(null)} /> : null}

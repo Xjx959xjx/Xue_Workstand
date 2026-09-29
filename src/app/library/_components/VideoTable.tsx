@@ -13,6 +13,8 @@ type VideoTableProps = {
   busy: string;
   effectiveSortMode: VideoSortMode;
   failedCount: number;
+  hasAccounts: boolean;
+  hasVisibleAccounts: boolean;
   loading: boolean;
   maxPrimaryMetric: number;
   pendingCount: number;
@@ -41,6 +43,8 @@ export const VideoTable = memo(function VideoTable({
   busy,
   effectiveSortMode,
   failedCount,
+  hasAccounts,
+  hasVisibleAccounts,
   loading,
   maxPrimaryMetric,
   pendingCount,
@@ -112,13 +116,16 @@ export const VideoTable = memo(function VideoTable({
             <Search aria-hidden="true" size={14} />
             <input
               aria-label="搜索视频标题"
+              autoComplete="off"
+              disabled={!selectedAccount}
+              name="videoFilter"
               onChange={(event) => onVideoFilterChange(event.target.value)}
               placeholder="搜索视频…"
               type="search"
               value={videoFilter}
             />
           </div>
-          <select className="filter-select" aria-label="筛选转写状态" onChange={(event) => onVideoStatusFilterChange(event.target.value as VideoStatusFilter)} value={videoStatusFilter}>
+          <select className="filter-select" aria-label="筛选转写状态" disabled={!selectedAccount} name="videoStatusFilter" onChange={(event) => onVideoStatusFilterChange(event.target.value as VideoStatusFilter)} value={videoStatusFilter}>
             <option value="all">全部状态</option>
             <option value="pending">待转写</option>
             <option value="completed">已转写</option>
@@ -127,7 +134,7 @@ export const VideoTable = memo(function VideoTable({
           <button
             className="btn compact"
             aria-label={videoManageMode ? "退出视频选择" : "批量选择视频"}
-            disabled={!selectedAccount}
+            disabled={!videos.length}
             onClick={onToggleVideoManage}
             title={videoManageMode ? "退出选择" : "批量选择"}
             type="button"
@@ -158,11 +165,11 @@ export const VideoTable = memo(function VideoTable({
         </div>
       ) : null}
       <div className="pane-body">
-        {loading ? (
+        {loading || accountDetailLoading ? (
           <div className="library-loading-list video" aria-hidden="true">
             {Array.from({ length: 6 }).map((_, index) => <span className="library-loading-row video" key={index} />)}
           </div>
-        ) : (
+        ) : videos.length ? (
           <table className="video-table">
             <thead>
               <tr>
@@ -219,8 +226,7 @@ export const VideoTable = memo(function VideoTable({
               })}
             </tbody>
           </table>
-        )}
-        {!loading && !accountDetailLoading && selectedAccountMeta && !videos.length ? <p className="subtle">当前筛选下没有视频。</p> : null}
+        ) : <div className="library-video-empty"><strong>{!hasAccounts ? "先添加账号" : !hasVisibleAccounts ? "当前筛选没有账号" : !selectedAccountMeta ? "等待选择账号" : selectedAccountMeta.videoCount ? "没有匹配的视频" : "这个账号还没有视频"}</strong><p>{!hasAccounts ? "在上方完成一次采集后，这里会列出作品。" : !hasVisibleAccounts ? "先清除账号筛选。" : !selectedAccountMeta ? "先从上方账号卡片中选择一个账号。" : selectedAccountMeta.videoCount ? "调整搜索词或转写状态筛选。" : "采集或更新这个账号后，视频会显示在这里。"}</p></div>}
       </div>
     </section>
   );

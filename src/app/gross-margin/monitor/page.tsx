@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   AlertTriangle,
   CalendarRange,
@@ -280,7 +281,7 @@ function GrossMarginMonitorPageContent() {
 
   return (
     <div className="page gross-margin-page gross-monitor-page">
-      <h1 className="sr-only">数据监控</h1>
+      <header className="page-header gross-monitor-page-header"><div className="page-title-group"><span className="page-title-eyebrow">ANALYTICS / 02</span><div className="page-title-copy"><h1>关注每一次关键变化</h1><p className="subtle">对比目标与当前表现，定位值得关注的变化。</p></div></div></header>
       <div className="gross-monitor-topbar">
         <div className="page-header-meta gross-monitor-overview" aria-label="监控概览">
           <span className="stat-pill gross-monitor-stat">
@@ -392,7 +393,7 @@ function GrossMarginMonitorPageContent() {
         </div>
       </div>
 
-      <section className="gross-monitor-board">
+      <div className="gross-monitor-workspace"><section className="gross-monitor-board">
         {loading ? (
           <div className="gross-monitor-empty">
             <RefreshCw aria-hidden="true" size={18} />
@@ -422,7 +423,7 @@ function GrossMarginMonitorPageContent() {
             <p>还没有监控记录。先在数据维护里导出文案，系统会自动保存维护目标。</p>
           </div>
         )}
-      </section>
+      </section><aside className="gross-monitor-context" aria-label="监控说明"><span className="page-title-eyebrow">CONTEXT / 当前工作</span><h2>关注偏离目标的项目</h2><p>目标、当前值与差值放在同一条记录里，便于发现需要处理的变化。</p><div className="gross-monitor-context-stat"><strong>{overview.highGapCount}</strong><span>条高缺口记录</span></div><div className="gross-monitor-context-stat"><strong>{overview.refreshIssueCount}</strong><span>条刷新异常</span></div><Link className="btn" href="/gross-margin">返回数据维护</Link></aside></div>
       {deleteTarget ? (
         <ConfirmDialog
           body={`会删除监控记录“${deleteTarget.title || deleteTarget.videoUrl}”，删除后无法恢复。`}

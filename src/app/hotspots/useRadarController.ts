@@ -12,13 +12,13 @@ export function useRadarController() {
   const pathname = usePathname();
   const params = useSearchParams();
   const view = params.get("view") === "news" ? "news" : "topics";
-  const [preferredLayout, setPreferredLayout] = useState<"cards" | "overview">("cards");
+  const [preferredLayout, setPreferredLayout] = useState<"list" | "cards" | "overview">("list");
   const requestedLayout = params.get("layout");
-  const layout = requestedLayout === "cards" || requestedLayout === "overview" ? requestedLayout : preferredLayout;
+  const layout = requestedLayout === "list" || requestedLayout === "cards" || requestedLayout === "overview" ? requestedLayout : preferredLayout;
   const grade = params.get("grade") || "";
   const sort = params.get("sort") === "priority" ? "priority" : "latest";
   useEffect(() => {
-    try { const saved = localStorage.getItem("hotspot-layout-v1"); if (saved === "cards" || saved === "overview") setPreferredLayout(saved); }
+    try { const saved = localStorage.getItem("hotspot-layout-v1"); if (saved === "list" || saved === "cards" || saved === "overview") setPreferredLayout(saved); }
     catch { /* 视图偏好属于可选设置，浏览器禁用存储时仍使用 URL。 */ }
   }, []);
   const search = params.get("q") || "";
@@ -48,7 +48,7 @@ export function useRadarController() {
     for (const [key, value] of Object.entries(values)) { if (value) next.set(key, value); else next.delete(key); }
     router.replace(`${pathname}?${next}`, { scroll: false });
   }, [params, pathname, router]);
-  function setLayout(next: "cards" | "overview", filters: Record<string, string> = {}) {
+  function setLayout(next: "list" | "cards" | "overview", filters: Record<string, string> = {}) {
     setPreferredLayout(next);
     try { localStorage.setItem("hotspot-layout-v1", next); }
     catch { /* 视图偏好写入失败不影响 URL 中的选择。 */ }

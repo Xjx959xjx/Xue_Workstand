@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { useId, useRef } from "react";
+import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 
@@ -22,15 +22,18 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
 
   return (
-    <ModalBackdrop disabled={busy} onClose={onCancel} initialFocusRef={confirmButtonRef}>
+    <ModalBackdrop disabled={busy} onClose={onCancel} initialFocusRef={cancelButtonRef}>
       <div
-        aria-labelledby="confirm-dialog-title"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        aria-busy={busy}
         aria-modal="true"
         className="modal-panel confirm-panel"
-        onKeyDown={(event) => handleConfirmKeyDown(event, busy, onConfirm)}
         role="dialog"
         tabIndex={-1}
       >
@@ -39,29 +42,19 @@ export function ConfirmDialog({
             <AlertTriangle aria-hidden="true" size={20} />
           </div>
           <div>
-            <h2 id="confirm-dialog-title">{title}</h2>
-            <div className="confirm-dialog-content">{body}</div>
+            <h2 id={titleId}>{title}</h2>
+            <div className="confirm-dialog-content" id={descriptionId}>{body}</div>
           </div>
         </div>
         <div className="confirm-dialog-actions">
-          <button className="btn" disabled={busy} onClick={onCancel} type="button">
+          <button className="btn" disabled={busy} ref={cancelButtonRef} onClick={onCancel} type="button">
             {cancelLabel}
           </button>
-          <button className="btn danger" disabled={busy} onClick={onConfirm} ref={confirmButtonRef} type="button">
-            {busy ? "删除中…" : confirmLabel}
+          <button className="btn danger" disabled={busy} onClick={onConfirm} type="button">
+            {busy ? "处理中…" : confirmLabel}
           </button>
         </div>
       </div>
     </ModalBackdrop>
   );
-}
-
-function handleConfirmKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onConfirm: () => void) {
-  if (event.key === "Enter" && !busy && !event.nativeEvent.isComposing) {
-    const target = event.target;
-    if (!(target instanceof HTMLButtonElement) || target.type !== "button") {
-      event.preventDefault();
-      onConfirm();
-    }
-  }
 }

@@ -15,7 +15,6 @@ type GrossMarginResultPaneProps = Pick<
   | "engagementTarget"
   | "handleExportReview"
   | "openBulkMonitorModal"
-  | "openImportModal"
   | "openTemplateModal"
   | "reviewTemplate"
   | "reviewTemplateLineCount"
@@ -29,7 +28,6 @@ export function GrossMarginResultPane({
   engagementTarget,
   handleExportReview,
   openBulkMonitorModal,
-  openImportModal,
   openTemplateModal,
   reviewTemplate,
   reviewTemplateLineCount,
@@ -95,10 +93,6 @@ export function GrossMarginResultPane({
 
         <div className="gross-action-panel">
           <div className="gross-action-grid">
-            <button className="btn" onClick={openImportModal} type="button">
-              <Upload aria-hidden="true" size={15} />
-              导入模板
-            </button>
             <button className="btn" disabled={Boolean(busy)} onClick={openBulkMonitorModal} type="button">
               <Upload aria-hidden="true" size={15} />
               一键监控

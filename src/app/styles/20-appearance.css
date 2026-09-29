@@ -1,0 +1,99 @@
+/* Appearance switch; theme colors live in 00-tokens.css. */
+.skin-toggle {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  overflow: hidden;
+  width: 100%;
+  min-height: 40px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  transition:
+    color var(--motion-base) var(--ease-apple),
+    border-color var(--motion-base) var(--ease-apple),
+    background-color var(--motion-base) var(--ease-apple),
+    box-shadow var(--motion-base) var(--ease-apple),
+    transform var(--motion-fast) var(--ease-press);
+}
+
+.skin-toggle:hover {
+  border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
+  color: var(--text-strong);
+  background: color-mix(in oklch, var(--accent-tint) 44%, var(--panel-raised));
+  box-shadow: none;
+  transform: none;
+}
+
+.skin-toggle:active {
+  box-shadow: var(--surface-inset-highlight);
+  transform: scale(0.985);
+}
+
+.skin-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring-shadow);
+}
+
+.skin-toggle-mark {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--line));
+  border-radius: var(--radius-md);
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+}
+
+.skin-toggle-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.skin-toggle-copy strong,
+.skin-toggle-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skin-toggle-copy strong {
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: var(--font-weight-heading);
+  line-height: 1.3;
+}
+
+.skin-toggle-copy small {
+  display: none;
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.skin-toggle-state {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  font-size: 10px;
+  font-weight: var(--font-weight-label);
+  line-height: 1.2;
+}
+
+.sidebar-bottom {
+  display: grid;
+  gap: 8px;
+}
+
+
+.skin-toggle.compact { width: 38px; min-height: 38px; grid-template-columns: 1fr; padding: 6px; }

@@ -5,8 +5,14 @@
 
 .engagement-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
+}
+
+.engagement-workbench.with-history { grid-template-columns: minmax(0, 1fr) 280px; }
+#engagement-history { min-width: 0; }
+@media (max-width: 1200px) {
+  .engagement-workbench.with-history { grid-template-columns: minmax(0, 1fr); }
 }
 
 .engagement-main,
@@ -22,12 +28,11 @@
 
 .engagement-refbar {
   display: flex;
-  min-height: 62px;
+  min-height: 54px;
   align-items: center;
   padding: var(--pane-header-pad);
   border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 88%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
+  background: var(--panel);
 }
 
 .engagement-refbar h2 {
@@ -39,7 +44,7 @@
 
 .engagement-content-grid {
   display: grid;
-  grid-template-columns: minmax(340px, 0.95fr) minmax(420px, 1.05fr);
+  grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr);
   align-items: stretch;
   min-height: calc(calc(var(--app-vh) * 100) - 244px);
 }
@@ -61,6 +66,7 @@
 
 .engagement-generator-pane {
   border-right: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
+  background: var(--panel-soft);
 }
 
 .engagement-generator-pane .pane-body {
@@ -693,3 +699,40 @@
     border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
   }
 }
+
+/* Studio engagement composition: source, results, contextual inspector. */
+.engagement-view-navigation { display: flex; gap: 24px; border-bottom: 1px solid var(--line); }
+.engagement-view-navigation button { display: inline-flex; align-items: center; gap: 7px; padding: 14px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.engagement-view-navigation button.active { border-bottom-color: var(--accent); color: var(--text); }
+.engagement-view-navigation span { font-size: 11px; }
+.assets-page > .engagement-workbench { display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 0; height: auto; margin-top: 24px; min-height: 480px; }
+.engagement-main { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr); min-height: 480px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.engagement-main[hidden], .engagement-inspector[hidden] { display: none; }
+.engagement-content-grid { display: contents; }
+.engagement-generator-pane { grid-column: 1; padding: 24px; border-right: 1px solid var(--line); background: var(--panel-soft); }
+.engagement-result-pane { grid-column: 2; padding: 24px; background: var(--panel); }
+.engagement-refbar { display: none; }
+.engagement-inspector { min-width: 0; min-height: 480px; padding: 30px; border: 1px solid var(--line); border-left: 0; background: var(--panel); }
+
+.engagement-inspector h2 { margin: 24px 0 12px; font-size: 22px; }
+.engagement-inspector h3 { margin: 28px 0 12px; font-size: 12px; }
+.engagement-inspector p { color: var(--muted); font-size: 13px; line-height: 1.9; }
+.engagement-inspector dl { display: grid; gap: 18px; margin: 28px 0; font-size: 12px; }
+.engagement-inspector dl > div { display: flex; justify-content: space-between; gap: 16px; }
+.engagement-inspector dt { color: var(--muted); }
+.engagement-inspector dd { margin: 0; }
+.engagement-inspector > .btn { margin-top: 8px; }
+#engagement-history { width: 100%; grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .assets-page > .engagement-workbench { grid-template-columns: 1fr; }
+  .engagement-inspector { float: none; width: 100%; min-height: 0; border: 1px solid var(--line); border-top: 0; }
+}
+@media (max-width: 780px) {
+  .engagement-main { display: block; min-height: 0; }
+  .engagement-generator-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+  .engagement-result-pane { padding: 20px; }
+  .engagement-inspector { padding: 20px; }
+}
+
+.page.assets-page { display: flex; flex-direction: column; height: auto; gap: 0; }
+.assets-page .page-header { margin-bottom: 34px; padding: 0; min-height: 0; }

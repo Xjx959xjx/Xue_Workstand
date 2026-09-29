@@ -32,8 +32,8 @@
   place-items: center;
   padding: 24px;
   background: var(--overlay);
-  backdrop-filter: blur(12px) saturate(0.9);
-  -webkit-backdrop-filter: blur(12px) saturate(0.9);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   overscroll-behavior: contain;
 }
 
@@ -59,10 +59,8 @@
   overflow: hidden;
   border: 1px solid color-mix(in oklch, var(--line) 78%, transparent);
   border-radius: var(--radius-xl);
-  background: var(--glass-popover);
+  background: var(--panel-raised);
   box-shadow: var(--shadow-lift);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
 
 .modal-panel:focus {
@@ -374,7 +372,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 18px 20px;
   border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 82%, transparent);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
@@ -401,4 +399,29 @@
   display: grid;
   grid-template-columns: 140px minmax(0, 1fr);
   gap: 10px;
+}
+
+@media (max-width: 600px) {
+  .modal-backdrop {
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .modal-panel {
+    max-width: 100%;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .modal-header {
+    flex-wrap: wrap;
+    padding: 14px;
+  }
+
+  .modal-editor textarea {
+    min-height: min(420px, 45dvh);
+  }
+
+  .confirm-dialog-actions .btn {
+    flex: 1;
+    min-height: 44px;
+  }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { FolderKanban, RefreshCw } from "lucide-react";
+import { ChevronDown, Plus, RefreshCw } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
@@ -288,7 +288,7 @@ export default function ProjectWorkbenchPage() {
   }, [message, notify]);
 
   function resetProjectForm() {
-    if (!confirmDiscardUnsavedChanges()) return;
+    if (!confirmDiscardUnsavedChanges()) return false;
     setPickedInitialProject(true);
     setSelectedProjectId("");
     setProjectDetail(null);
@@ -299,6 +299,7 @@ export default function ProjectWorkbenchPage() {
     setStyleDraft("");
     setSavedSnapshot(null);
     setMessage("");
+    return true;
   }
 
   function confirmDiscardUnsavedChanges() {
@@ -563,18 +564,16 @@ export default function ProjectWorkbenchPage() {
     <div className="page project-workbench-page" data-unsaved-changes={isDirty ? "true" : undefined}>
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">项目策划台</span>
+          <span className="page-title-eyebrow">COLLECTION / 02</span>
           <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <FolderKanban size={20} strokeWidth={2.1} />
-            </span>
             <div className="page-title-copy">
-              <h1>项目工作台</h1>
-              <p className="subtle">整理参考素材，生成并编辑项目风格卡。</p>
+              <h1>把零散资料，整理成方向</h1>
+              <p className="subtle">围绕项目组织素材，沉淀可复用的风格。</p>
             </div>
           </div>
         </div>
         <div className="page-header-meta">
+          <button className="btn primary" onClick={() => { if (resetProjectForm()) setProjectModalOpen(true); }} type="button"><Plus size={16} aria-hidden="true" />新建项目</button>
           <button className="btn ghost" disabled={loading} onClick={() => void handleRefresh()} type="button">
             <RefreshCw aria-hidden="true" size={16} />
             {loading ? "读取中" : "刷新"}
@@ -586,17 +585,18 @@ export default function ProjectWorkbenchPage() {
       {projectDetailError ? <div className="error" role="alert">{projectDetailError}</div> : null}
       {message && isTaskProgressMessage(message) ? <div className="notice" role="status">{message}</div> : null}
 
+      <div className="project-view-label">全部内容 <span>{projects.length}</span></div>
       <section className="project-workbench-shell">
-        <main className="project-workbench-canvas">
+        <div className="project-main-document">
+          <div className="project-collection-summary">
+            <strong>{projectName.trim() || "未命名项目"}</strong>
+            <span>项目资料 / {projectSources.length} 份素材</span>
+          </div>
           <div className="project-workbench-grid">
             <CasePipelinePanel
               availableSourceCount={copySources.length}
-              isDirty={isDirty}
-              projectDescription={projectDescription}
-              projectName={projectName}
               projectSources={projectSources}
               selectedAccounts={selectedAccounts}
-              selectedProjectMeta={selectedProjectMeta}
               accounts={accounts}
               managedSourceIds={managedSourceIds}
               sourcePoolManage={sourcePoolManage}
@@ -604,7 +604,6 @@ export default function ProjectWorkbenchPage() {
               onDeleteSelectedPoolSources={() => setDeleteSourcesConfirmOpen(true)}
               onOpenAccountPicker={() => openCaseDrawer("accounts")}
               onOpenLinkIntake={() => openCaseDrawer("links")}
-              onOpenProjectModal={() => setProjectModalOpen(true)}
               onOpenSourcePicker={() => openCaseDrawer("sources")}
               onOpenSourcePreview={setPreviewSource}
               onToggleManagedSource={toggleManagedSource}
@@ -627,7 +626,19 @@ export default function ProjectWorkbenchPage() {
               onStyleDraftChange={setStyleDraft}
             />
           </div>
-        </main>
+        </div>
+        <aside className="project-inspector" aria-label="项目概览">
+          <span className="page-title-eyebrow">CONTEXT / 当前工作</span>
+          <h2>项目概览</h2>
+          <p>{projectDescription.trim() || "将参考资料和风格放在同一工作区，创建内容时直接调用。"}</p>
+          <dl>
+            <div><dt>参考资料</dt><dd>{projectSources.length} 份</dd></div>
+            <div><dt>参考账号</dt><dd>{selectedAccounts.length} 个</dd></div>
+            <div><dt>风格文稿</dt><dd>{styleDraft.trim().length} 字</dd></div>
+          </dl>
+          <span className={`status-pill ${isDirty ? "pending" : "done"}`} role="status">{isDirty ? "有未保存修改" : selectedProjectMeta ? "已保存" : "尚未创建"}</span>
+          <button className="btn project-switch" onClick={() => setProjectModalOpen(true)} type="button">切换 / 编辑项目<ChevronDown size={14} aria-hidden="true" /></button>
+        </aside>
       </section>
 
       {projectModalOpen ? (

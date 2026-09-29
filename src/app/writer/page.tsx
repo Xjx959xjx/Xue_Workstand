@@ -534,14 +534,12 @@ function WriterPageContent() {
     >
       <header className="page-header writer-page-header">
         <div className="page-title-group">
+          <span className="page-title-eyebrow">CREATE / 01</span>
           <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <PenLine size={20} strokeWidth={2.1} />
-            </span>
             <div className="page-title-copy">
-              <h1>对话写作</h1>
+              <h1>给想法一个完整表达</h1>
               <div className="writer-title-meta">
-                <p className="subtle">选风格，写需求，生成。</p>
+                <p className="subtle">左侧准备任务，右侧专注内容。</p>
                 {sessionDraftHydrated && hasTaskInput ? (
                   <span className="writer-autosave-status" role="status">
                     <CheckCircle2 aria-hidden="true" size={13} />
@@ -563,12 +561,17 @@ function WriterPageContent() {
             {focusMode ? <PanelLeftOpen aria-hidden="true" size={16} /> : <PanelLeftClose aria-hidden="true" size={16} />}
             {focusMode ? "展开任务资料" : "专注写稿"}
           </button>
-          <button className="btn" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
+          <button className="btn primary" disabled={Boolean(busy) || sourceImporting} onClick={handleStartNewTask} type="button">
             <Plus aria-hidden="true" size={16} />
-            新建任务
+            新建草稿
           </button>
         </div>
       </header>
+
+      <nav className="writer-view-navigation" aria-label="写作视图">
+        <button className="active" onClick={closeHistory} type="button">工作区</button>
+        <button aria-haspopup="dialog" onClick={() => setHistoryOpen(true)} type="button">历史记录 <span>{historyDrafts.length}</span></button>
+      </nav>
 
       <section className="writer-workbench">
         <section className="panel writer-main">
@@ -576,7 +579,8 @@ function WriterPageContent() {
             <div className="writer-task" id="writer-task-panel" hidden={focusMode}>
               <div className="section-title-row">
                 <div>
-                  <h2>本次任务</h2>
+                  <span className="page-title-eyebrow">BRIEF / 创作任务</span>
+                  <h2>这次想表达什么？</h2>
                   <p className="pane-subtitle">选好风格，把想法交给这篇稿件。</p>
                 </div>
                 <div className="writer-task-heading-actions">
@@ -596,28 +600,6 @@ function WriterPageContent() {
                   />
                 </div>
 
-                <div className="writer-reference-status" aria-label="当前风格卡状态">
-                  <span className="writer-reference-icon" aria-hidden="true">
-                    <FileText aria-hidden="true" size={14} />
-                  </span>
-                  <span className="writer-reference-copy">
-                    <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyleError ? "风格卡读取失败" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
-                    <small>
-                      {activeSubtitle || "参考风格"}
-                      {activeStyleLoading ? "" : activeStyleError ? " · 查看详情" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
-                    </small>
-                  </span>
-                  <button
-                    aria-label={styleCards.length > 1 ? `查看${activeTitle}` : `查看${activeTitle || "当前参考"}风格卡`}
-                    className="btn ghost icon-only writer-style-trigger"
-                    disabled={!styleCards.length}
-                    onClick={() => setStyleOpen(true)}
-                    title="查看风格卡"
-                    type="button"
-                  >
-                    <Eye aria-hidden="true" size={16} />
-                  </button>
-                </div>
               </div>
 
               <WriterPromptField prompt={prompt} onChange={setPrompt} />
@@ -788,19 +770,16 @@ function WriterPageContent() {
                   {hasUnsavedChanges ? <span className="status-pill pending">未保存</span> : null}
                 </div>
                 <div className="writer-result-actions">
-                  <button
-                    aria-label="打开稿件历史，查看当前稿件版本或全部历史"
-                    className="btn compact writer-history-trigger"
-                    onClick={() => setHistoryOpen(true)}
-                    type="button"
-                  >
-                    <History aria-hidden="true" size={15} />
-                    稿件历史
-                  </button>
-                  {displayResearch ? (
+                  {focusMode && styleCards.length ? (
+                    <button className="btn compact" onClick={() => setStyleOpen(true)} type="button">
+                      <Eye aria-hidden="true" size={15} />
+                      查看风格卡
+                    </button>
+                  ) : null}
+                  {focusMode && displayResearch ? (
                     <button className="btn compact" onClick={() => setResearchOpen(true)} type="button" aria-haspopup="dialog">
                       <BookOpenText aria-hidden="true" size={15} />
-                      {displayResearch.includes("成稿检查（需修改）") ? "参考资料 · 待检查" : "参考资料"}
+                      参考资料
                     </button>
                   ) : null}
                   {lastContent ? (
@@ -894,7 +873,7 @@ function WriterPageContent() {
               ) : (
                 <div className="writer-result-empty">
                   <span aria-hidden="true"><Sparkles size={20} /></span>
-                  <strong>{busy === "generate" ? "正在准备第一版" : "暂无稿件"}</strong>
+                  <strong>{busy === "generate" ? "正在准备第一版" : "好内容从一个想法开始"}</strong>
                   <p>{busy === "generate" ? "正在整理素材、风格和写作要求。" : `${activeTitle || "当前参考"} · ${materialStatusLabel}`}</p>
                 </div>
               )}
@@ -971,6 +950,42 @@ function WriterPageContent() {
             </div>
           </div>
         </section>
+
+        <aside className="writer-inspector" aria-label="写作上下文" hidden={focusMode}>
+          <span className="page-title-eyebrow">CONTEXT / 当前工作</span>
+          <h2>写作上下文</h2>
+          <p>任务、文稿和历史各有位置。当前稿件独立保留自己的风格与参考资料。</p>
+          <h3>本篇风格</h3>
+                <div className="writer-reference-status" aria-label="当前风格卡状态">
+                  <span className="writer-reference-icon" aria-hidden="true">
+                    <FileText aria-hidden="true" size={14} />
+                  </span>
+                  <span className="writer-reference-copy">
+                    <strong>{activeStyleLoading ? "正在载入风格卡" : activeStyleError ? "风格卡读取失败" : activeStyle?.trim() ? "风格卡已载入" : "暂无风格卡"}</strong>
+                    <small>
+                      {activeSubtitle || "参考风格"}
+                      {activeStyleLoading ? "" : activeStyleError ? " · 查看详情" : activeStyle?.trim().length ? ` · ${activeStyle.trim().length} 字` : " · 未配置"}
+                    </small>
+                  </span>
+                  <button
+                    aria-label={styleCards.length > 1 ? `查看${activeTitle}` : `查看${activeTitle || "当前参考"}风格卡`}
+                    className="btn ghost icon-only writer-style-trigger"
+                    disabled={!styleCards.length}
+                    onClick={() => setStyleOpen(true)}
+                    title="查看风格卡"
+                    type="button"
+                  >
+                    <Eye aria-hidden="true" size={16} />
+                  </button>
+                </div>
+
+          <h3>版本</h3>
+          <p>{lastDraftId ? `当前 V${lastDraftVersion?.revision || 1} · ${draftCharacterCount.toLocaleString()} 字` : "尚未保存版本"}</p>
+          <button className="btn" onClick={() => setHistoryOpen(true)} type="button"><History size={15} aria-hidden="true" />查看版本与历史</button>
+          {displayResearch ? <button className="btn" onClick={() => setResearchOpen(true)} type="button" aria-haspopup="dialog"><BookOpenText size={15} aria-hidden="true" />{displayResearch.includes("成稿检查（需修改）") ? "参考资料 · 待检查" : "本稿参考资料"}</button> : null}
+          <h3>素材状态</h3><p>{materialStatusLabel}</p>
+          {selectedStyleRefs.length > 1 ? <p>已选择 {selectedStyleRefs.length} 张风格卡，分别生成独立稿件。</p> : null}
+        </aside>
 
         <WriterHistoryPanel
           drafts={historyDrafts}

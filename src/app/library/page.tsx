@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, FileText, Plus, RefreshCw, X } from "lucide-react";
+import { ChevronLeft, Plus, RefreshCw, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
@@ -19,7 +19,6 @@ import { useLibraryTaskActions } from "./_hooks/useLibraryTaskActions";
 import { useLibraryTaskEffects } from "./_hooks/useLibraryTaskEffects";
 import { useLibraryTranscriptActions } from "./_hooks/useLibraryTranscriptActions";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { EmptyState } from "@/components/EmptyState";
 import { useFeedback, type FeedbackTone } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
@@ -457,60 +456,15 @@ function LibraryPageContent() {
     void handleTranscribe();
   }, [handleTranscribe, selectedAccount, selectedVideo, selectedVideoHasTranscript]);
 
-  if (!loading && !library?.accounts.length) {
-    return (
-      <div className="page library-page workbench-frame-page">
-        <header className="page-header">
-          <div className="page-title-group">
-            <span className="page-title-eyebrow">账号风格</span>
-            <div className="page-title-row">
-              <span className="page-title-mark" aria-hidden="true">
-                <FileText size={20} strokeWidth={2.1} />
-              </span>
-              <div className="page-title-copy">
-                <h1>账号库</h1>
-                <p className="subtle">采集、转写、风格沉淀。</p>
-              </div>
-            </div>
-          </div>
-        </header>
-        <LibraryQuickStartPanel
-          activeOrderOptions={activeOrderOptions}
-          busy={busy}
-          canSubmit={canCollect}
-          customFromDate={customFromDate}
-          customToDate={customToDate}
-          limit={collectLimit}
-          name={collectName}
-          order={collectOrder}
-          platform={collectPlatform}
-          timeRange={collectTimeRange}
-          onCollect={handleCollect}
-          onCustomFromDateChange={setCustomFromDate}
-          onCustomToDateChange={setCustomToDate}
-          onLimitChange={setCollectLimit}
-          onNameChange={setCollectName}
-          onOrderChange={setCollectOrder}
-          onPlatformChange={handleCollectPlatformChange}
-          onTimeRangeChange={setCollectTimeRange}
-        />
-        <EmptyState title="还没有账号" body="在上方添加 B站或抖音账号并采集，采集结果会自动写入本地风格库。" />
-      </div>
-    );
-  }
-
   return (
     <div className={`page library-page workbench-frame-page mobile-library-${mobileView}`}>
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">账号风格</span>
+          <span className="page-title-eyebrow">COLLECTION / 01</span>
           <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <FileText size={20} strokeWidth={2.1} />
-            </span>
             <div className="page-title-copy">
-              <h1>账号库</h1>
-              <p className="subtle">采集、转写、风格沉淀。</p>
+              <h1>每个好作品，都有迹可循</h1>
+              <p className="subtle">集中管理参考账号、作品与转写内容。</p>
             </div>
           </div>
         </div>
@@ -597,11 +551,13 @@ function LibraryPageContent() {
           {accountDetailError ? <div className="error" role="alert">{accountDetailError}</div> : null}
         </div>
       ) : null}
+      <div className="library-view-label">全部内容 <span>{filteredAccounts.length} 个账号</span></div>
       <section className={`three-pane library-workspace workbench-frame-workspace mobile-view-${mobileView}`}>
         <AccountSidebar
           accountFilter={accountFilter}
           accountManageMode={accountManageMode}
           accounts={filteredAccounts}
+          hasAccounts={accounts.length > 0}
           busy={busy}
           loading={initialLibraryLoading}
           selectedAccountId={selectedAccountMeta?.id || ""}
@@ -626,6 +582,8 @@ function LibraryPageContent() {
           busy={busy}
           effectiveSortMode={effectiveSortMode}
           failedCount={failedCount}
+          hasAccounts={accounts.length > 0}
+          hasVisibleAccounts={filteredAccounts.length > 0}
           loading={initialLibraryLoading}
           maxPrimaryMetric={maxPrimaryMetric}
           pendingCount={pendingCount}
@@ -657,7 +615,9 @@ function LibraryPageContent() {
 
         <LibraryDetailPane
           busy={busy}
-          loading={initialLibraryLoading}
+          hasAccounts={accounts.length > 0}
+          hasVisibleAccounts={filteredAccounts.length > 0}
+          loading={initialLibraryLoading || accountDetailLoading}
           selectedAccount={selectedAccount}
           selectedVideo={selectedVideo}
           selectedVideoHasTranscript={selectedVideoHasTranscript}
@@ -757,13 +717,10 @@ function LibraryPageFallback() {
     <div className="page library-page workbench-frame-page">
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">账号风格</span>
+          <span className="page-title-eyebrow">COLLECTION / 01</span>
           <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <FileText size={20} strokeWidth={2.1} />
-            </span>
             <div className="page-title-copy">
-              <h1>账号库</h1>
+              <h1>每个好作品，都有迹可循</h1>
               <p className="subtle">正在读取本地风格库。</p>
             </div>
           </div>

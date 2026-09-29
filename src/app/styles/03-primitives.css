@@ -80,20 +80,19 @@
 }
 
 @media (min-width: 1181px) {
-  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page) {
+  :is(.projects-page, .assets-page, .writer-page, .project-workbench-page) {
     grid-template-rows: auto minmax(0, 1fr);
     height: var(--workspace-page-height);
   }
 
-  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
-  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
+  :is(.projects-page, .assets-page, .writer-page, .project-workbench-page):has(> .notice),
+  :is(.projects-page, .assets-page, .writer-page, .project-workbench-page):has(> .error) {
     grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   :is(.projects-page:has(> .notice), .projects-page:has(> .error)) > .project-workspace,
   :is(.assets-page:has(> .notice), .assets-page:has(> .error)) > :is(.assets-workspace, .engagement-workbench),
   :is(.writer-page:has(> .notice), .writer-page:has(> .error)) > .writer-workbench,
-  :is(.gross-margin-page:has(> .notice), .gross-margin-page:has(> .error)) > .gross-margin-workspace,
   :is(.project-workbench-page:has(> .notice), .project-workbench-page:has(> .error)) > .project-workbench-shell {
     grid-row: 3;
   }
@@ -117,7 +116,6 @@
   .assets-page > :is(.panel.three-pane, .engagement-workbench),
   .projects-page > .project-workspace,
   .writer-page > .writer-workbench,
-  .gross-margin-page > .gross-margin-workspace,
   .project-workbench-page > .project-workbench-shell {
     min-height: 0;
     height: 100%;
@@ -188,7 +186,7 @@
 .empty-state-panel {
   border-style: solid;
   border-color: color-mix(in oklch, var(--accent) 20%, var(--line));
-  background: color-mix(in oklch, var(--accent-tint) 48%, var(--glass-panel));
+  background: var(--panel);
 }
 
 .empty-state-panel .panel-inner {
@@ -205,6 +203,6 @@
   border: 1px solid color-mix(in oklch, var(--accent) 28%, var(--line));
   border-radius: 12px;
   color: var(--accent-strong);
-  background: color-mix(in oklch, var(--accent-tint) 88%, white);
+  background: var(--accent-tint);
   box-shadow: var(--shadow-soft);
 }

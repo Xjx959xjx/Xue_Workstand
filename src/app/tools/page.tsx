@@ -14,8 +14,7 @@ import {
   Paperclip,
   Search,
   Sparkles,
-  Video,
-  Wrench
+  Video
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
@@ -59,6 +58,7 @@ export default function ToolsPage() {
     href: "/tools",
     kinds: ["single-video-transcribe", "publish-copy"]
   });
+  const [activeTool, setActiveTool] = useState("video");
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<SingleVideoTranscribeResult | null>(null);
   const [downloadingKind, setDownloadingKind] = useState<SingleVideoAssetKind | "">("");
@@ -278,14 +278,11 @@ export default function ToolsPage() {
     <div className="page tools-page">
       <header className="page-header">
         <div className="page-title-group">
-          <span className="page-title-eyebrow">内容工具</span>
+          <span className="page-title-eyebrow">PREFERENCES / 02</span>
           <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <Wrench size={20} strokeWidth={2.1} />
-            </span>
             <div className="page-title-copy">
-              <h1>工具台</h1>
-              <p className="subtle">视频素材与发布包装。</p>
+              <h1>简单的工具，顺手的工作</h1>
+              <p className="subtle">视频、文档与发布工具，随取随用。</p>
             </div>
           </div>
         </div>
@@ -293,14 +290,30 @@ export default function ToolsPage() {
           <span className="stat-pill">B站 / 抖音 / PDF</span>
         </div>
       </header>
-      <div className="tools-section-label"><span>你的创作装备</span><span>03 TOOLS / 随时开工</span></div>
-
-      <div className="tools-modules">
-        <div className="tools-utility-column">
-          {renderVideoWorkspace()}
-          {renderStirlingPdfWorkspace()}
+      <div className="tools-view-label">工作区</div>
+      <div className="tools-workspace">
+        <div className="tools-main">
+        <nav className="tools-navigation" aria-label="选择工具">
+          {[
+            { id: "video", title: "视频提取", description: "文稿、封面与音频", icon: Video },
+            { id: "publish", title: "发布包装", description: "标题与平台文案", icon: Sparkles },
+            { id: "pdf", title: "PDF 处理", description: "压缩、转换与合并", icon: FileText }
+          ].map((tool, index) => <button key={tool.id} type="button" aria-pressed={activeTool === tool.id} aria-controls={`tool-panel-${tool.id}`} onClick={() => setActiveTool(tool.id)}><span className="tools-choice-index">0{index + 1}</span><span><strong>{tool.title}</strong><small>{tool.description}</small></span><span className="tools-choice-action">进入工具 <ArrowRight size={13} aria-hidden="true" /></span></button>)}
+        </nav>
+        <div className="tools-active-workspace">
+          <div id="tool-panel-video" hidden={activeTool !== "video"}>{renderVideoWorkspace()}</div>
+          <div id="tool-panel-publish" hidden={activeTool !== "publish"}>{renderPublishWorkspace()}</div>
+          <div id="tool-panel-pdf" hidden={activeTool !== "pdf"}>{renderStirlingPdfWorkspace()}</div>
         </div>
-        {renderPublishWorkspace()}
+        </div>
+        <aside className="tools-inspector" aria-label="工具说明">
+          <span className="page-title-eyebrow">CONTEXT / 当前工作</span>
+          <h2>一次只处理一件事</h2>
+          <p>工具入口在上方，输入和结果在下方展开。切换工具时保留当前输入。</p>
+          <h3>{activeTool === "video" ? "视频提取" : activeTool === "publish" ? "发布包装" : "PDF 工具"}</h3>
+          <p>{activeTool === "video" ? "支持 B站与抖音链接，可提取视频文稿并下载视频、封面或音频。" : activeTool === "publish" ? "准备正文与主题，按目标平台生成标题、发布文案和话题。生成依据会随结果展示。" : "连接你的 PDF 服务，完成压缩、合并与格式转换。服务地址可在工具设置中修改。"}</p>
+          {activeJobs.length ? <p role="status">当前有 {activeJobs.length} 项任务运行中，可在顶部任务中心查看进度。</p> : null}
+        </aside>
       </div>
 
       {notice ? (

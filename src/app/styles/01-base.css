@@ -9,10 +9,7 @@ body {
 }
 
 body {
-  background:
-    radial-gradient(circle at 76% -12%, color-mix(in oklch, var(--accent-soft) 42%, transparent) 0, transparent 34vw),
-    linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg) 34%, var(--bg) 100%);
-  background-attachment: fixed;
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--text-body);
@@ -36,7 +33,7 @@ html {
 html { zoom: var(--app-ui-scale); }
 
 @media (min-width: 901px) {
-  :root { --app-ui-scale: 0.9; }
+  :root { --app-ui-scale: 1; }
 }
 
 ::-webkit-scrollbar {

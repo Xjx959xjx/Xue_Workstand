@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { confirmDiscardUnsavedChanges } from "@/components/UnsavedChangesGuard";
 import {
   bulkSaveGrossMarginMonitorRecords,
   getGrossMarginLibrary,
@@ -87,6 +88,9 @@ export function useGrossMarginWorkbench() {
     () => tables.find((item) => item.platform === platform) || tables[0] || null,
     [platform, tables]
   );
+  const priceDirty = Boolean(table?.items.some((item) =>
+    priceInputs[item.id] !== undefined && priceInputs[item.id] !== String(item.unitPrice)
+  ));
   const reviewTemplate = useMemo(() => getPlatformReviewTemplate(library, platform), [library, platform]);
   const platformAccounts = useMemo(
     () => (library?.accounts || []).filter((account) => account.platform === platform),
@@ -234,9 +238,11 @@ export function useGrossMarginWorkbench() {
   }
 
   function handlePlatformChange(nextPlatform: PlatformKey) {
+    if (nextPlatform === platform) return true;
+    const nextTable = tables.find((item) => item.platform === nextPlatform);
+    if (!nextTable) return false;
+    if (priceDirty && !confirmDiscardUnsavedChanges("单价表有未保存的修改，切换平台会丢失这些修改。是否继续？")) return false;
     setPlatform(nextPlatform);
-    const nextTable = tables.find((item) => item.platform === nextPlatform) || null;
-    if (!nextTable) return;
     setPriceInputs(makePriceInputs(nextTable));
     setSelectedOptions(makeDefaultSelections(nextTable));
     const nextAccount = findGrossMarginAccount(
@@ -244,6 +250,7 @@ export function useGrossMarginWorkbench() {
       accountName
     );
     if (nextAccount) applyAccountPrice(nextAccount, "custom");
+    return true;
   }
 
   function handleAccountNameChange(value: string) {
@@ -256,9 +263,9 @@ export function useGrossMarginWorkbench() {
 
   function handleVideoUrlChange(value: string) {
     const nextUrl = normalizeVideoUrlInput(value);
-    setVideoUrl(nextUrl);
     const nextPlatform = detectVideoPlatform(nextUrl);
-    if (nextPlatform && nextPlatform !== platform) handlePlatformChange(nextPlatform);
+    if (nextPlatform && nextPlatform !== platform && !handlePlatformChange(nextPlatform)) return;
+    setVideoUrl(nextUrl);
   }
 
   function updateOriginalPrice(value: string) {
@@ -288,6 +295,7 @@ export function useGrossMarginWorkbench() {
   }
 
   async function handleRefresh() {
+    if (priceDirty && !confirmDiscardUnsavedChanges("刷新会丢失尚未保存的单价修改。是否继续？")) return;
     setBusy("refresh");
     try {
       const result = await getGrossMarginLibrary({ fresh: true });
@@ -467,6 +475,7 @@ export function useGrossMarginWorkbench() {
     platformAccounts,
     priceEditorOpen,
     priceInputs,
+    priceDirty,
     quantityInputs,
     reviewTemplate,
     reviewTemplateLineCount,

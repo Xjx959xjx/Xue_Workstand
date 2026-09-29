@@ -20,7 +20,7 @@
 
   .page-header {
     min-height: 72px;
-    padding: 10px 16px;
+    padding: 0 0 18px;
   }
 
   .page-header .subtle {
@@ -30,16 +30,6 @@
   .panel-inner {
     gap: 10px;
     padding: 12px;
-  }
-}
-
-@media (max-width: 1180px) {
-  .app-shell {
-    grid-template-columns: var(--sidebar-width-compact) minmax(0, 1fr);
-  }
-
-  .route-progress {
-    left: var(--sidebar-width-compact);
   }
 }
 
@@ -66,6 +56,7 @@
   }
 
   .main-content {
+    padding: 20px 16px;
     padding-bottom: calc(74px + env(safe-area-inset-bottom));
   }
 
@@ -112,7 +103,7 @@
   }
 
   .page-header {
-    padding: 12px;
+    padding: 0 0 16px;
   }
 
   .page-title-row {

@@ -111,18 +111,25 @@ export function useImageWorkbench() {
   }, [id, selectedJob?.dataRevision, selectedJob?.status, fail]);
 
   function select(nextId: string) {
-    if (uploadLock.current || submitLock.current || nextId === id) return;
-    didHydrate.current = true;
+    if (uploadLock.current || submitLock.current) return false;
+    if (nextId === id) return true;
+    if (!confirmDiscardUnsavedChanges("打开其他作品会替换当前未生成的输入，是否继续？")) return false;
+    didHydrate.current = false;
+    formTouched.current = false;
+    const next = emptyForm(defaultProfileId.current);
+    setForm(next); setBaseline(JSON.stringify(next)); setReferences([]);
     setError(""); setRecord(null); setRecordReferences([]);
     router.replace(`/images?recordId=${encodeURIComponent(nextId)}`, { scroll: false });
+    return true;
   }
   function newRecord() {
-    if (uploadLock.current || submitLock.current || active || !confirmDiscardUnsavedChanges("新建画布会清空当前未生成的输入，是否继续？")) return;
+    if (uploadLock.current || submitLock.current || active || !confirmDiscardUnsavedChanges("新建画布会清空当前未生成的输入，是否继续？")) return false;
     const next = emptyForm(defaultProfileId.current);
     setBatchIds([]); setActiveId(""); setForm(next); setBaseline(JSON.stringify(next)); setReferences([]); setError("");
     setRecord(null); setRecordReferences([]); setCanvasId(crypto.randomUUID()); setBoardRecords([]); setBoardTotal(0);
     formTouched.current = false; didHydrate.current = true;
     router.replace("/images", { scroll: false });
+    return true;
   }
   function reuse(image?: ImageFile) {
     if (!record || busy || uploading || !confirmDiscardUnsavedChanges("复用参数会替换当前未生成的输入，是否继续？")) return false;
@@ -132,7 +139,7 @@ export function useImageWorkbench() {
     setForm(next); setReferences(refs); formTouched.current = true; setError(""); return true;
   }
   async function reproduce(recordId: string) {
-    if (submitLock.current || uploadLock.current) return;
+    if (submitLock.current || uploadLock.current || !confirmDiscardUnsavedChanges("复用其他作品会替换当前未生成的输入，是否继续？")) return;
     submitLock.current = true; setBusy(true); setError("");
     try {
       const { record: source, references: refs } = await getImageGenerationRecord(recordId);

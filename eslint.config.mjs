@@ -11,10 +11,12 @@ const eslintConfig = [
       ".vinext/**",
       ".wrangler/**",
       ".dev-server/**",
+      ".dev-sandbox/**",
       ".remote-server/**",
       "dist/**",
       "node_modules/**",
       "output/**",
+      "outputs/**",
       "style-library/**",
       "next-env.d.ts"
     ]

@@ -9,6 +9,7 @@ type AccountSidebarProps = {
   accountFilter: string;
   accountManageMode: boolean;
   accounts: AccountListItem[];
+  hasAccounts: boolean;
   busy: string;
   loading: boolean;
   selectedAccountId: string;
@@ -26,6 +27,7 @@ export const AccountSidebar = memo(function AccountSidebar({
   accountFilter,
   accountManageMode,
   accounts,
+  hasAccounts,
   busy,
   loading,
   selectedAccountId,
@@ -49,6 +51,7 @@ export const AccountSidebar = memo(function AccountSidebar({
           <button
             className="btn compact account-manage-toggle"
             aria-label={accountManageMode ? "退出账号选择" : "批量选择账号"}
+            disabled={!hasAccounts}
             onClick={onToggleAccountManage}
             title={accountManageMode ? "退出选择" : "批量选择"}
             type="button"
@@ -139,8 +142,8 @@ export const AccountSidebar = memo(function AccountSidebar({
         ) : null}
         {!loading && !accounts.length ? (
           <div className="library-filter-empty">
-            <p className="subtle">没有匹配的账号。</p>
-            <button className="btn compact" onClick={onClearFilters} type="button">清除搜索</button>
+            <p className="subtle">{hasAccounts ? "没有匹配的账号。" : "还没有账号，请使用上方采集入口添加。"}</p>
+            {hasAccounts ? <button className="btn compact" onClick={onClearFilters} type="button">清除筛选</button> : null}
           </div>
         ) : null}
       </div>
