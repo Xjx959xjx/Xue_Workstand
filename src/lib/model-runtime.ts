@@ -96,7 +96,7 @@ type ChatMessage = {
 };
 
 const DEFAULT_FALLBACK_CHAT_BASE_URL = "https://www.fhl.mom";
-const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-5.5";
+const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-6.1-sol";
 const DEFAULT_WEB_RESEARCH_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_WEB_RESEARCH_MODEL = "gpt-6";
 const MAX_ADDITIONAL_CHAT_FALLBACKS = 4;
@@ -388,7 +388,7 @@ export function chatCompletionPayload(input: {
   return {
     model: input.config.model,
     messages: input.messages,
-    ...(/^gpt-6(?:-|$)/i.test(input.config.model) ? {} : { temperature: 0.75 }),
+    ...(/^gpt-6(?:\.\d+)?(?:-|$)/i.test(input.config.model) ? {} : { temperature: 0.75 }),
     stream: input.stream,
     max_tokens: input.maxOutputTokens,
     ...(input.webSearch ? { web_search_options: {} } : {}),
@@ -543,6 +543,12 @@ export function classifyModelFailure(error: unknown): {
   if (/模型连接中断，未收到完成结果|ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|other side closed|fetch failed|SocketError/i.test(message)) {
     return { kind: "network", userMessage: "对话模型服务连接异常", rawMessage: compactErrorMessage(message) };
   }
+  if (/\bmodel_not_found\b/i.test(message)) {
+    return { kind: "endpoint", userMessage: "当前节点不支持所选模型，请在 AI 模型配置中选择该节点可用的型号", rawMessage: compactErrorMessage(message) };
+  }
+  if (originalError instanceof ModelHttpError && (originalError.status === 400 || originalError.status === 422)) {
+    return { kind: "endpoint", userMessage: "对话模型请求参数或模型配置不兼容，请检查节点配置", rawMessage: compactErrorMessage(message) };
+  }
   if (/404\b|405\b|unknown endpoint|not found|unsupported|invalid url|no route|cannot post/i.test(message)) {
     return { kind: "endpoint", userMessage: "对话模型接口地址不兼容", rawMessage: compactErrorMessage(message) };
   }
@@ -660,9 +666,9 @@ async function probeResponses(config: ChatRuntimeConfig, signal: AbortSignal): P
     model: config.model,
     instructions: "你是健康检查探针。只回复 ok。",
     input: [{ role: "user", content: "请只回复 ok" }],
-    stream: /^gpt-6(?:-|$)/i.test(config.model),
-    max_output_tokens: /^gpt-6(?:-|$)/i.test(config.model) ? 256 : 16,
-    reasoning: responseReasoning(/^gpt-6(?:-|$)/i.test(config.model) ? "low" : "none"),
+    stream: /^gpt-6(?:\.\d+)?(?:-|$)/i.test(config.model),
+    max_output_tokens: /^gpt-6(?:\.\d+)?(?:-|$)/i.test(config.model) ? 256 : 16,
+    reasoning: responseReasoning(/^gpt-6(?:\.\d+)?(?:-|$)/i.test(config.model) ? "low" : "none"),
     store: false
   }, signal);
   const text = await parseResponseApiBody(response);
@@ -688,8 +694,8 @@ async function probeChatCompletions(config: ChatRuntimeConfig, signal: AbortSign
       { role: "system", content: "你是健康检查探针。只回复 ok。" },
       { role: "user", content: "请只回复 ok" }
     ],
-    reasoningEffort: /^gpt-6(?:-|$)/i.test(config.model) ? "low" : "none",
-    maxOutputTokens: /^gpt-6(?:-|$)/i.test(config.model) ? 256 : 16,
+    reasoningEffort: /^gpt-6(?:\.\d+)?(?:-|$)/i.test(config.model) ? "low" : "none",
+    maxOutputTokens: /^gpt-6(?:\.\d+)?(?:-|$)/i.test(config.model) ? 256 : 16,
     // 健康探针只需要验证可生成文本。部分 OpenAI 兼容网关会把流式探针路由到网页入口，
     // 与实际评论生成使用的非流式调用不一致，因而固定使用非流式请求。
     stream: false

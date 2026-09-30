@@ -41,8 +41,10 @@ test("配置原子保存、热读取与并发版本冲突，恢复默认不改�
   const view = await getAiSettingsView();
   assert.equal(view.effective.comment_generate.model, "gpt-6-astra");
   assert.equal(view.effective.comment_generate.effort, "low");
-  assert.equal(view.effective.danmaku.model, "gpt-5.5");
+  assert.equal(view.effective.danmaku.model, "gpt-6.1-sol");
   assert.equal(view.effective.danmaku.effort, "medium");
+  assert.equal(view.inheritedEfforts.transcript_clean, "low");
+  assert.equal(view.inheritedEfforts.image_generate, "none");
   assert.equal(JSON.stringify(view).includes("apiKey"), false);
   await saveAiSettings({ ...saved, overrides: {} });
   assert.equal(await aiPolicySignature(["comment_plan"]), signature);

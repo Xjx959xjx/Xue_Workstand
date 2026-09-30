@@ -20,7 +20,7 @@ test("参考同步只移除目标引用，添加不重复，AI 必须保留引�
   assert.equal(isJobKindAllowedForAppMode("image-prompt-assist", "gross-margin"), false);
 });
 
-test("图片助手固定 GPT-5.5 low，其他对话仍用原配置", async () => {
+test("图片助手默认 gpt-6.1-sol high，其他对话仍用原配置", async () => {
   const { createServer } = await import("node:http");
   const { assistImagePrompt } = await import("../src/lib/image-prompt-assist");
   const { chatCompleteStrict } = await import("../src/lib/ai");
@@ -40,8 +40,8 @@ test("图片助手固定 GPT-5.5 low，其他对话仍用原配置", async () =>
     for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_)/.test(key)) delete process.env[key];
     Object.assign(process.env, { CHAT_API_KEY: "fixture", CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, CHAT_MODEL: "original-model", CHAT_WIRE_API: "chat_completions", CHAT_FALLBACK_ENABLED: "0" });
     await assistImagePrompt({ prompt: "一只猫", mode: "polish" });
-    assert.equal(requests[0].model, "gpt-5.5");
-    assert.equal(requests[0].reasoning_effort, "low");
+    assert.equal(requests[0].model, "gpt-6.1-sol");
+    assert.equal(requests[0].reasoning_effort, "high");
     await chatCompleteStrict([{ role: "user", content: "一只猫" }]);
     assert.equal(requests[1].model, "original-model");
   } finally {

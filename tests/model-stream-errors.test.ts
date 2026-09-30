@@ -2,7 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
 import { streamResponseText } from "../src/lib/ai";
-import { classifyModelFailure } from "../src/lib/model-runtime";
+import { classifyModelFailure, ModelHttpError } from "../src/lib/model-runtime";
+
+test("HTTP 503 型号不存在归为配置错误，不按暂时故障重试", () => {
+  const error = new ModelHttpError(503, JSON.stringify({ error: { code: "model_not_found" } }));
+  for (const value of [error, new Error("关键词规划失败", { cause: error })]) {
+    const failure = classifyModelFailure(value);
+    assert.equal(failure.kind, "endpoint");
+    assert.match(failure.userMessage, /当前节点不支持所选模型/);
+  }
+});
+
+test("HTTP 400/422 参数拒绝不归为可重试的上游故障", () => {
+  for (const status of [400, 422]) {
+    const failure = classifyModelFailure(new ModelHttpError(status, JSON.stringify({ error: { message: "invalid upstream request" } })));
+    assert.equal(failure.kind, "endpoint");
+    assert.match(failure.userMessage, /请求参数或模型配置不兼容/);
+  }
+  const unavailable = new ModelHttpError(503, JSON.stringify({ error: { code: "no_available_provider" } }));
+  assert.equal(classifyModelFailure(unavailable).kind, "server");
+});
 
 test("HTTP200流内错误明确失败，部分文本不冒充完整成功", async () => {
   const original = { ...process.env };

@@ -71,7 +71,7 @@ export async function analyzeRadar(signals: RadarSignal[], feedback: RadarFeedba
     result = await chatCompleteStrict([
       { role: "system", content: system + constraints },
       { role: "user", content: JSON.stringify(payload) }
-    ], "low", { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout, maxOutputTokens: input.candidates ? 7000 : 3500, retryTransientFailure: true });
+    ], undefined, { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout, maxOutputTokens: input.candidates ? 7000 : 3500, retryTransientFailure: true });
     } catch (error) {
       options.signal?.throwIfAborted();
       if (timeout.aborted) throw new Error(`热点模型单批处理超过 ${batchTimeoutMs / 1000} 秒，请检查模型服务；已采集资讯和已完成选题可继续查看`);

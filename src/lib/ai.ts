@@ -600,7 +600,8 @@ async function streamResponseApi(
     input: requestInput,
     stream: true,
     tools: input.tools,
-    tool_choice: input.tools?.length ? "required" : undefined,
+    // Some Responses relays reject forced built-in tools; strict research checks actual tool use.
+    tool_choice: input.tools?.length ? "auto" : undefined,
     include: input.tools?.length ? ["web_search_call.action.sources"] : undefined,
     reasoning: responseReasoning(input.reasoningEffort || config.reasoningEffort),
     max_output_tokens: input.maxOutputTokens,
@@ -1077,7 +1078,7 @@ async function createResponse(
     input,
     stream: false,
     tools,
-    tool_choice: tools?.length ? "required" : undefined,
+    tool_choice: tools?.length ? "auto" : undefined,
     include: tools?.length ? ["web_search_call.action.sources"] : undefined,
     reasoning: responseReasoning(reasoningEffort || config.reasoningEffort),
     max_output_tokens: options.maxOutputTokens,
@@ -1527,7 +1528,7 @@ async function buildWebResearchContext(
 ) {
   const configs = await applyAiPolicy(getConfiguredWebResearchConfigs(), "web_research");
   const fingerprint = JSON.stringify({
-    version: 1,
+    version: 2,
     messages: buildWriterWebResearchMessages(input),
     configs: configs.map(({ baseUrl, responsesUrl, model, wireApi, serviceTier }) => ({ baseUrl, responsesUrl, model, wireApi, serviceTier }))
   });
@@ -1567,7 +1568,8 @@ function buildWebResearchFailureContext(error: unknown) {
 
 function summarizeWebResearchFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
-  if (/terminated|联网搜索连接中断|UND_ERR_SOCKET/i.test(message) || classifyModelFailure(error).kind === "network") {
+  const failure = classifyModelFailure(error);
+  if (/terminated|联网搜索连接中断|UND_ERR_SOCKET/i.test(message) || failure.kind === "network") {
     return "模型联网搜索连接中断";
   }
   if (/524\b|响应超时|a timeout occurred|timeout|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|ETIMEDOUT|Connect Timeout/i.test(message)) {
@@ -1598,6 +1600,9 @@ function summarizeWebResearchFailure(error: unknown) {
     return "本地 opencli 搜索失败";
   }
   if (/原生联网搜索未返回可用结果/.test(message)) return "没有返回可用资料";
+  if (/no_available_provider|no upstream provider/i.test(message)) return "模型联网搜索没有可用上游，请检查服务节点或稍后重试";
+  if (failure.kind === "endpoint") return "模型联网搜索请求参数或接口不兼容，请检查 Responses 节点配置";
+  if (failure.kind === "server") return "模型联网搜索上游服务异常，请稍后重试";
   return "";
 }
 

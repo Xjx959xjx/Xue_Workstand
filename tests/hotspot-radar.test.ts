@@ -52,6 +52,8 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
+    assert.equal(body.model, process.env.CHAT_MODEL);
+    assert.equal(body.reasoning_effort, process.env.CHAT_REASONING_EFFORT);
     const payload = JSON.parse(body.messages[1].content);
     const system = body.messages[0].content as string;
     requests++;
@@ -72,7 +74,7 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
   const address = server.address();
   assert.ok(address && typeof address === "object");
   for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_|HOTSPOT_RADAR_)/.test(key)) delete process.env[key];
-  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "test", CHAT_MODEL: "test", CHAT_BASE_URL: `http://127.0.0.1:${address.port}/v1`, CHAT_WIRE_API: "chat_completions" });
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "test", CHAT_MODEL: "test", CHAT_REASONING_EFFORT: "high", CHAT_BASE_URL: `http://127.0.0.1:${address.port}/v1`, CHAT_WIRE_API: "chat_completions" });
   const feedback = { schemaVersion: 1 as const, ratings: [], history: [] };
   try {
     const first = signal();

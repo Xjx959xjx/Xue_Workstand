@@ -137,6 +137,20 @@
 .newsnow-toolbar .newsnow-actions { flex-wrap: nowrap; gap: 4px; }
 .newsnow-toolbar .icon-btn { width: 28px; min-width: 28px; height: 28px; padding: 0; }
 .newsnow-frame { border: 0; border-radius: 0; }
+.newsnow-refresh-status { min-width: 0; max-width: min(32vw, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.newsnow-manage { gap: 6px; white-space: nowrap; }
+.newsnow-manage small { min-width: 16px; padding: 0 4px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--muted); font-size: 10px; }
+.newsnow-feedback { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 10px 12px; color: var(--rose); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 12px; }
+.newsnow-failures { position: relative; flex: 0 0 auto; }
+.newsnow-failures summary { cursor: pointer; list-style: none; color: var(--rose); }
+.newsnow-failures summary::-webkit-details-marker { display: none; }
+.newsnow-failures summary small { position: absolute; top: 1px; right: 1px; display: grid; place-items: center; min-width: 11px; height: 11px; padding: 0 2px; border-radius: 999px; background: var(--rose); color: #fff; font-size: 8px; line-height: 1; }
+.newsnow-failure-panel { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(360px, calc(100vw - 32px)); max-height: min(240px, 50vh); overflow: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); box-shadow: var(--shadow-float); color: var(--text); font-size: 12px; line-height: 1.6; }
+.newsnow-failure-panel > strong { font-size: 12px; }
+.newsnow-failure-panel ul { margin: 8px 0 0; padding-left: 18px; }
+.newsnow-failure-panel li + li { margin-top: 6px; }
+.newsnow-failure-panel b { font-weight: 600; }
+@media (max-width: 760px) { .newsnow-refresh-status { display: none; } .newsnow-manage > span { display: none; } }
 /* AI 选题候选区，不影响资讯发现的嵌入布局。 */
 .trend-candidates { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; }
 .trend-candidates-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }

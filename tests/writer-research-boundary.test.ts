@@ -27,7 +27,7 @@ test("主题检索保留素材中的对象和时间条件，支持资料与要�
   assert.ok(!withoutMaterials[1].content.includes("undefined"));
 });
 
-test("搜索断流丢弃半截资料并非流式重试；取消和鉴权失败不重试", async () => {
+test("首选搜索兼容 auto 工具选择，断流仅重试一次；参数、限流、鉴权和取消不重试", async () => {
   const originalEnv = { ...process.env };
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-research-recovery-"));
   let scenario = "disconnect";
@@ -38,9 +38,20 @@ test("搜索断流丢弃半截资料并非流式重试；取消和鉴权失败�
     for await (const chunk of req) body += chunk;
     const payload = JSON.parse(body);
     requests.push(payload);
-    if (scenario === "auth") {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { message: "unauthorized" } }));
+    // Reproduce relays which reject forced built-in tool selection.
+    if (payload.tool_choice === "required" || scenario === "invalid" || scenario === "auth") {
+      res.writeHead(scenario === "auth" ? 401 : 400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: scenario === "auth" ? "unauthorized" : "invalid upstream request" } }));
+      return;
+    }
+    if (scenario === "rate-limit") {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify({ type: "response.failed", response: { error: { message: "Rate limit exceeded", code: "rate_limit_exceeded" } } })}\n\n`);
+      return;
+    }
+    if (scenario === "no-tool") {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('data: {"type":"response.output_text.delta","delta":"仅凭记忆的回答 https://example.com/source"}\n\ndata: {"type":"response.completed","response":{}}\n\n');
       return;
     }
     if (payload.stream) {
@@ -71,15 +82,16 @@ test("搜索断流丢弃半截资料并非流式重试；取消和鉴权失败�
     WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
     CHAT_FALLBACK_ENABLED: "0" });
   try {
-    for (scenario of ["disconnect", "eof", "retry-eof", "auth", "cancel"]) {
+    for (scenario of ["disconnect", "eof", "retry-eof", "invalid", "rate-limit", "auth", "cancel", "no-tool"]) {
       requests.length = 0;
       controller = new AbortController();
       const run = () => webSearchCompleteStrict([{ role: "user", content: "搜索篮球少女" }], "low", { signal: controller.signal });
       if (scenario === "retry-eof") {
         await assert.rejects(run, /联网搜索连接中断/);
         assert.equal(requests.length, 2, "重试仍不完整时明确失败，不继续无限重试");
-      } else if (scenario === "auth" || scenario === "cancel") {
-        await assert.rejects(run);
+      } else if (["invalid", "rate-limit", "auth", "cancel", "no-tool"].includes(scenario)) {
+        if (scenario === "no-tool") await assert.rejects(run, /模型没有实际调用 web_search 工具/);
+        else await assert.rejects(run);
         assert.equal(requests.length, 1);
       } else {
         const result = await run();
@@ -89,6 +101,7 @@ test("搜索断流丢弃半截资料并非流式重试；取消和鉴权失败�
         assert.deepEqual(requests[1].tools, [{ type: "web_search" }]);
         for (const request of requests) assert.equal("max_output_tokens" in request, false, "首次和重试均不注入固定输出上限");
       }
+      for (const request of requests) assert.equal(request.tool_choice, "auto");
     }
   } finally {
     server.closeAllConnections();
@@ -144,6 +157,7 @@ test("联网无结果与部分命中：首稿和续改区分检索状态与事�
       const prepared = await prepareWriteCopyContext(input);
       assert.equal(requests.length, count + 1, "准备首稿只请求一次联网研究");
       assert.deepEqual(requests.at(-1)?.tools, [{ type: "web_search" }]);
+      assert.equal(requests.at(-1)?.tool_choice, "auto");
       assert.equal("max_output_tokens" in requests.at(-1)!, false);
       assert.ok(prepared.messages[0].content.includes(writerResearchBoundaryInstruction()));
       assert.match(prepared.messages[1].content, /含内部检索状态，仅有依据的相关事实可用于成稿/);

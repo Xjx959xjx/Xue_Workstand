@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "identity": "user",
+  "data": {
+    "document": {
+      "document_id": "Nn0EdjAAYohuVaxi90rc8BnknQg",
+      "revision_id": 7,
+      "url": "https://tcnnt6cxkcat.feishu.cn/docx/Nn0EdjAAYohuVaxi90rc8BnknQg"
+    }
+  },
+  "_notice": {
+    "update": {
+      "command": "lark-cli update",
+      "current": "1.0.86",
+      "latest": "1.0.95",
+      "message": "lark-cli 1.0.95 available, current 1.0.86, run: lark-cli update"
+    }
+  },
+  "verification": {
+    "all_18_directions_present": true,
+    "all_108_topics_present": true,
+    "all_37_cases_present": true,
+    "native_layout_reviewed": [
+      "opening",
+      "direction_with_case_table_and_topic_grid",
+      "first_month",
+      "review_rules"
+    ],
+    "original_local_document_unchanged": true
+  }
+}

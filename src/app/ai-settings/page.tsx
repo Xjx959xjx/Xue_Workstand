@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
 import { Save } from "lucide-react";
 import { AI_EFFORTS, AI_GROUPS, AI_POLICIES, type AiEffort } from "@/lib/ai-policy-catalog";
 import { useAiSettings } from "./useAiSettings";
 import "./settings.css";
 
-const effortLabels = { default: "服务默认", none: "不指定", low: "轻量", medium: "均衡", high: "深入", xhigh: "最高" };
+const chatModels = ["gpt-6-astra", "gpt-6.1-sol"];
+const effortOptions = AI_EFFORTS.filter((effort) => effort !== "none");
+const effortLabels = { low: "轻量", medium: "均衡", high: "深入", xhigh: "最高" };
 type SettingsController = ReturnType<typeof useAiSettings>;
 type Policy = typeof AI_POLICIES[number];
 
@@ -14,9 +15,9 @@ function PolicyRow({ policy, w }: { policy: Policy; w: SettingsController }) {
   const saved = w.saved!;
   const value = w.overrides[policy.id] || saved.defaults[policy.id];
   const isImage = "kind" in policy;
-  const models = saved.models.filter((model) => isImage === model.startsWith("gpt-image"));
-  const [customInput, setCustomInput] = useState(false);
-  const custom = customInput || (!!value.model && !models.includes(value.model));
+  const models = isImage ? saved.models.filter((model) => model.startsWith("gpt-image")) : chatModels;
+  const model = value.model || saved.inheritedModels[policy.id];
+  const effort = value.effort === "default" ? saved.inheritedEfforts[policy.id] : value.effort;
 
   return <fieldset className="ai-setting-row" disabled={w.saving}>
     <legend className="sr-only">{policy.title}</legend>
@@ -27,24 +28,18 @@ function PolicyRow({ policy, w }: { policy: Policy; w: SettingsController }) {
     <div className="ai-model-field">
       <label className="ai-field">
         <span className="ai-column-label">模型</span>
-        <select aria-label={`${policy.title}模型`} value={custom ? "__custom__" : value.model} onChange={(event) => {
-          setCustomInput(event.target.value === "__custom__");
-          if (event.target.value !== "__custom__") w.change([policy.id], { model: event.target.value });
-        }}>
-          <option value="">默认 · {saved.inheritedModels[policy.id]}</option>
+        <select aria-label={`${policy.title}模型`} value={model} onChange={(event) => w.change([policy.id], { model: event.target.value })}>
           {models.map((model) => <option key={model} value={model}>{model}</option>)}
-          <option value="__custom__">其他模型…</option>
         </select>
       </label>
-      {custom ? <label className="ai-field"><span>自定义模型 ID</span><input aria-label={`${policy.title}自定义模型 ID`} value={value.model} placeholder="输入模型 ID，留空沿用默认" onChange={(event) => w.change([policy.id], { model: event.target.value })}/></label> : null}
     </div>
     <label className="ai-field">
       <span className="ai-column-label">推理强度</span>
-      <select aria-label={`${policy.title}推理强度`} disabled={isImage} value={isImage ? "none" : value.effort} onChange={(event) => w.change([policy.id], { effort: event.target.value as AiEffort | "default" })}>
-        {isImage ? <option value="none">图片模型不适用</option> : ["default", ...AI_EFFORTS].map((effort) => <option value={effort} key={effort}>{effortLabels[effort as keyof typeof effortLabels]}</option>)}
+      <select aria-label={`${policy.title}推理强度`} disabled={isImage} value={isImage ? "none" : effort} onChange={(event) => w.change([policy.id], { effort: event.target.value as AiEffort })}>
+        {isImage ? <option value="none">图片模型不适用</option> : effortOptions.map((effort) => <option value={effort} key={effort}>{effortLabels[effort]}</option>)}
       </select>
     </label>
-    <button type="button" className="btn compact ai-reset" aria-label={`恢复${policy.title}默认`} disabled={!w.overrides[policy.id]} onClick={() => { setCustomInput(false); w.change([policy.id], null); }}>恢复默认</button>
+    <button type="button" className="btn compact ai-reset" aria-label={`恢复${policy.title}默认`} disabled={!w.overrides[policy.id]} onClick={() => w.change([policy.id], null)}>恢复默认</button>
   </fieldset>;
 }
 

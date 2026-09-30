@@ -159,7 +159,7 @@ npm run dev
 - `DOUYIN_TRANSCRIBE_CONCURRENCY`：抖音批量转写并发数，默认 `3`，建议保持在 `1-4`。
 - `DOUYIN_HOTLIST_REFRESH_CONCURRENCY`：视频热榜账号刷新并发数，默认 `2`，允许 `1-5`；抖音使用共享会话内的有界并发，每六个账号返回后保存结果并更新进度，分页间隔 `250ms`。变量名沿用旧版抖音热榜配置。
 - `CHAT_API_KEY`、`CHAT_BASE_URL`、`CHAT_RESPONSES_URL`、`CHAT_COMPLETIONS_URL`、`CHAT_MODEL`、`CHAT_WIRE_API`、`CHAT_REASONING_EFFORT`、`CHAT_SERVICE_TIER`：主对话模型配置，用于自动提炼风格和生成文案。新中转站如果只兼容 OpenAI Chat Completions，可设 `CHAT_WIRE_API=chat_completions`；不确定时可设 `CHAT_WIRE_API=auto`，系统会在 Responses 不兼容时自动切到 Chat Completions。`CHAT_SERVICE_TIER=priority` 可显式请求中转站 / Codex 的快速服务层，和 `xhigh` 推理档位是两件事。`CHAT_BASE_URL` 可以填中转站根地址，也可以用 `CHAT_RESPONSES_URL` / `CHAT_COMPLETIONS_URL` 指定完整接口地址。`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 也会作为主模型配置读取。
-- `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：第一备用对话模型配置。默认备用地址和模型是旧配置 `https://www.fhl.mom` / `gpt-5.5` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。还可按相同后缀配置 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`，系统会依次尝试。
+- `CHAT_FALLBACK_API_KEY`、`CHAT_FALLBACK_BASE_URL`、`CHAT_FALLBACK_RESPONSES_URL`、`CHAT_FALLBACK_COMPLETIONS_URL`、`CHAT_FALLBACK_MODEL`、`CHAT_FALLBACK_WIRE_API`、`CHAT_FALLBACK_REASONING_EFFORT`、`CHAT_FALLBACK_SERVICE_TIER`、`CHAT_FALLBACK_PROXY_URL`、`CHAT_FALLBACK_ENABLED`：第一备用对话模型配置。默认配置为 `https://www.fhl.mom` / `gpt-6.1-sol` / `responses` / `xhigh`，但必须单独填写 `CHAT_FALLBACK_API_KEY` 或 `FHL_API_KEY` 才会启用，避免把主模型 key 发到旧中转站。还可按相同后缀配置 `CHAT_FALLBACK_2_*` 至 `CHAT_FALLBACK_5_*`，系统会依次尝试。
 - `CHAT_PROXY_URL`：可选。若 Node/Next 直连模型服务失败，可设为本机代理，例如 `http://127.0.0.1:7890`。
 - 本机模型请求按代理地址复用连接池，空闲连接默认保留 30 秒（服务端 keep-alive 提示优先），最多保留 8 个代理池；淘汰时等待在途请求结束。直连继续使用 Undici 默认连接池，云端继续使用原生 fetch。此优化减少重复建连，不改变模型、推理强度或重试策略。
 - `CHAT_HEALTH_PROBE_TIMEOUT_MS`：对话模型健康检查探针超时，默认 `8000` 毫秒，允许 `2000-30000`。
@@ -178,7 +178,7 @@ npm run dev
 
 对话写作页位于 `/writer`。参考风格支持同时选择多个账号或项目；多选后会按每张风格卡并发生成一篇互不混合的独立文案，并分别保存为草稿，可在结果区直接切换。单篇草稿只保存自身使用的风格引用，后续模型续改和手动编辑都会沿用该稿风格并保存为同一写作会话下的新版本，不会覆盖上一版；历史列表只加载标题、版本和时间，点开后才读取草稿全文。旧草稿继续兼容读取。素材、原文、抖音 / B站视频链接和支持文档共用一个输入框：视频链接自动转写，飞书、网易灵犀、企业微信、腾讯文档及普通公开网页链接自动读取正文；同一支持文档成功读取后会缓存 24 小时，并发生成时只读取一次共享资料，读取失败不会缓存；链接未公开或当前工具身份无权限时会明确报错，不会把裸链接交给模型猜。默认首稿只读取所选风格卡（含用户保存偏好）、本次要求与素材、实际提供的支持资料，不再自动读取、匹配或附带博主原作。公共提示只说明要求优先级、事实依据和输出形式，不追加修辞规则或编辑检查。随后一次生成全文，明确字数和禁用词未通过时保留稿件，并在“参考资料”中显示检查提醒。新稿保存当时的风格正文、任务约束与内容指纹，原作参考数组为空；续改沿用这份快照，不重新转写、抓文档、联网或选样。续改支持“按要求微调”与“重新校准风格”，选中段落时两种方式均只调整选中范围；普通续改不附带原作，明确校准时可使用旧稿快照中已有的原作，不重新采集或选样。旧稿缺少快照会明确说明使用当前关联卡，并从该版开始保存快照。续改以本轮指令为准，不机械套用首稿的字数检查。联网检索开关位于生成按钮旁，使用独立 `WEB_RESEARCH_*` Responses API，和现有 Chat Completions 写作接口互不影响；没有独立配置且对话模型链里也没有 Responses 节点时，入口才会置灰。选中稿件段落后可以只改局部，但模型仍会返回并保存完整新稿。
 
-联网检索提示词位于 `src/lib/writer-prompts.ts` 的 `writerWebResearchInstruction()`，同时接收本次要求、素材与支持文档。按问题复杂度整理具体资料与来源，不预设条数、字数或搜索轮数；关键资料不足时补搜，资料充分或结果重复时停止，用户明确要求的范围优先。写作检索的原生请求和一次连接故障重试共用 90 秒预算，失败后转入最多 60 秒的 OpenCLI 备用搜索；重试和切换会显示进度。独立严格检索调用仍沿用原有 180 秒预算。成功的写作检索结果在 `.cache/writer-research` 持久化缓存 30 分钟，相同要求、素材、已读取支持文档和检索配置可跨次生成复用；仅换风格卡不重新检索。同一进程内相同检索并发请求合并，命中与等待会显示进度。输入、检索提示词或节点/模型配置改变以及缓存过期时重新检索；失败或取消不缓存，备用搜索成功结果保留原生失败说明。旧稿续改继续复用已保存资料。
+联网检索提示词位于 `src/lib/writer-prompts.ts` 的 `writerWebResearchInstruction()`，同时接收本次要求、素材与支持文档。按问题复杂度整理具体资料与来源，不预设条数、字数或搜索轮数；关键资料不足时补搜，资料充分或结果重复时停止，用户明确要求的范围优先。原生 Responses 搜索使用 `tool_choice=auto` 兼容中转接口，并校验响应中实际调用了 `web_search`；没有工具调用的回答明确失败。HTTP 400/422 参数或模型配置错误不做连接故障重试，进度提示会区分接口不兼容与上游不可用。写作检索的原生请求和一次连接故障重试共用 90 秒预算，失败后转入最多 60 秒的 OpenCLI 备用搜索；重试和切换会显示进度。独立严格检索调用仍沿用原有 180 秒预算。成功的写作检索结果在 `.cache/writer-research` 持久化缓存 30 分钟，相同要求、素材、已读取支持文档和检索配置可跨次生成复用；仅换风格卡不重新检索。同一进程内相同检索并发请求合并，命中与等待会显示进度。输入、检索提示词或节点/模型配置改变以及缓存过期时重新检索；失败或取消不缓存，备用搜索成功结果保留原生失败说明。旧稿续改继续复用已保存资料。
 
 写作素材支持点选或拖入 TXT、Markdown、CSV、JSON、HTML、字幕、DOCX 和 PDF 文件；PDF 会提取其中的文字层，扫描件请先进行 OCR。本地文件正文中的链接会保留为正文，不会误触发视频转写或支持文档抓取。
 
@@ -271,6 +271,8 @@ npm run package:release -- --include-library
 生图工作台支持模型配置选择、自定义宽高（256–4096）、16 倍数对齐和常用比例 / 2K / 4K 预设。尺寸是否可用由对应图片服务决定。新增服务使用 `.env.local` 的 `IMAGE_PROFILES` JSON 数组，例如 `[{"id":"provider2","label":"第二套服务","model":"模型名","baseUrl":"https://example.com/v1","apiKey":"服务密钥"}]`。每套配置有独立密钥和地址，页面只接收名称与 ID；原 `IMAGE_*` 配置保留为 `default`，`IMAGE_DEFAULT_PROFILE` 可指定新建任务默认选择的配置 ID。历史记录保留所选配置 ID，旧记录继续使用默认配置；修改配置后重启服务生效。
 
 ### 游戏热点雷达
+
+资讯发现沿用本机 NewsNow v0.0.41。右上角刷新最多并发请求 4 个来源，覆盖全部卡片（含隐藏的来源）；来源失败时保留旧内容并显示失败原因。卡片可拖拽排序、隐藏与恢复，偏好仅保存在当前浏览器。对固定镜像应用交互层：`node --import tsx scripts/install-newsnow-workbench.mjs --apply`。脚本先校验镜像，备份部署代码，再重建 NewsNow 容器，不删除数据卷；升级镜像前需要更新适配器。
 
 `/hotspots` 接入 36 个游戏媒体、赛事、官方和社区入口。点击刷新创建 `hotspot-refresh` 后台任务，支持进度、取消和重启后的中断恢复；页面读取已有快照，不自动调用模型。采集保留最近 72 小时有发布时间的资讯，规则预筛后交给两轮 AI 输出五档编辑优先级、评论方向和视频切入点。编辑优先级不是客观热度，评论方向不是实测评论情绪。
 

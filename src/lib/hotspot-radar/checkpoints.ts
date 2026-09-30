@@ -11,7 +11,7 @@ const locks = new Map<string, Promise<unknown>>();
 export function radarCheckpointKey(system: string, payload: unknown) {
   // Only a digest is persisted; credentials and endpoint configuration never enter the record.
   const targets = getConfiguredChatConfigs().map(({ apiKey: _apiKey, ...config }) => { void _apiKey; return config; });
-  return createHash("sha256").update(JSON.stringify({ version: 3, system, payload, targets, reasoning: "low", output: 3500 })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ version: 4, system, payload, targets, reasoning: "service-default", output: 3500 })).digest("hex");
 }
 function target(key: string) { return path.join(libraryRoot(), ".cache", "hotspot-analysis", `${normalizeStorageSegment(key, "热点分析缓存键")}.json`); }
 export async function readRadarCheckpoint<T>(key: string, schema: z.ZodType<T>) {
