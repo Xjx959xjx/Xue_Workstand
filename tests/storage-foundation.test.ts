@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { compactJobForPersistence } from "../src/lib/job-persistence";
-import { saveTranscript, saveVideos, upsertAccount } from "../src/lib/storage";
+import { getDraftSummaries, resolveDraft, saveDraft, saveTranscript, saveVideos, upsertAccount } from "../src/lib/storage";
 import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "../src/lib/storage/schemas";
 import type { Account, JobRecord, Video } from "../src/lib/types";
 
@@ -46,8 +46,26 @@ test("存储校验兼容无版本旧记录并拒绝未来版本", () => {
   );
 });
 
+test("同一毫秒相同正文的并发保存保留独立ID和版本", async (t) => {
+  await withTemporaryLibrary(async () => {
+    const first = await upsertAccount({ platform: "douyin", name: "保存一", uid: "save-one" });
+    const second = await upsertAccount({ platform: "douyin", name: "保存二", uid: "save-two" });
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const drafts = await Promise.all([first, first, second].map((account, index) => saveDraft({
+      platform: account.platform, accountId: account.id, accountName: account.name,
+      title: "并发测试", mode: "topic", prompt: "测试", content: "相同正文",
+      styleRef: { platform: account.platform, accountId: account.id, accountName: account.name },
+      version: { sessionId: `session-${index}`, revision: 1, origin: "generated", contextFingerprint: "test", promptVersion: "test" }
+    })));
+    assert.equal(new Set(drafts.map(draft => draft.createdAt)).size, 1);
+    assert.equal(new Set(drafts.map(draft => draft.id)).size, 3);
+    assert.equal((await getDraftSummaries()).length, 3);
+    for (const draft of drafts) assert.equal((await resolveDraft(draft.id)).draft.version?.sessionId, draft.version?.sessionId);
+  });
+});
+
 test("已结束任务只压缩过大的磁盘结果", () => {
-  const job = jobFixture({ result: { content: "x".repeat(4096) } });
+  const job = jobFixture({ result: { draft: { id: "saved-draft" }, content: "x".repeat(4096) } });
   const compacted = compactJobForPersistence(job, 512);
 
   assert.equal(compacted.result, undefined);

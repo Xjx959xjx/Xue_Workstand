@@ -1,4 +1,17 @@
-import type { JobRecord } from "./types";
+import type { JobKind, JobRecord } from "./types";
+
+export function defaultJobHref(kind: JobKind) {
+  if (kind === "image-generation" || kind === "image-prompt-assist") return "/images";
+  if (kind === "image-cover") return "/writer";
+  if (kind === "write-copy") return "/writer";
+  if (kind === "project-style") return "/project-workbench";
+  if (kind === "engagement") return "/assets";
+  if (kind === "hotlist-refresh") return "/douyin-hotlist";
+  if (kind === "single-video-transcribe" || kind === "publish-copy") return "/tools";
+  if (kind === "hotspot-refresh") return "/hotspots";
+  if (kind === "gross-margin-refresh") return "/gross-margin/monitor";
+  return "/library";
+}
 
 export const ENGAGEMENT_RECORD_QUERY_PARAM = "recordId";
 

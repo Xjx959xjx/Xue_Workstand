@@ -108,11 +108,10 @@ export function useWriterGeneration({
   const [generatedVariants, setGeneratedVariants] = useState<WriterVariantState[]>([]);
   const [activeVariantKey, setActiveVariantKey] = useState("");
   const [generateStage, setGenerateStage] = useState("");
-  const [generateProgress, setGenerateProgress] = useState(0);
   const [activeWriteJobId, setActiveWriteJobId] = useState(readPendingWriteJobId);
-  const generationBaseContentRef = useRef("");
+  const generationRestoreRef = useRef<(() => void) | null>(null);
   const versionEditsRef = useRef(new Map<string, WriterVariantState>());
-  const handledWriteJobsRef = useRef<Set<string>>(new Set());
+  const handledWriteJobsRef = useRef(new Map<string, number>());
   const reportedHydrationErrorsRef = useRef<Set<string>>(new Set());
   const writeJobSourceKey = useMemo(
     () =>
@@ -200,26 +199,39 @@ export function useWriterGeneration({
     applyVariantState(target);
   }, [activeVariantKey, applyVariantState, generatedVariants]);
 
+  // Preserve every independently edited style variant during history browsing and failed generation.
+  const captureEditingState = useCallback(() => () => {
+    setLastContent(lastContent);
+    setLastResearch(lastResearch);
+    setLastSavedContent(lastSavedContent);
+    setLastDraftBase(lastDraftBase);
+    setLastDraftId(lastDraftId);
+    setGeneratedVariants(generatedVariants);
+    setActiveVariantKey(activeVariantKey);
+  }, [activeVariantKey, generatedVariants, lastContent, lastDraftBase, lastDraftId, lastResearch, lastSavedContent]);
+
+  const restoreGenerationState = useCallback(() => {
+    generationRestoreRef.current?.();
+    generationRestoreRef.current = null;
+  }, []);
+
   useEffect(() => {
     if (!activeWriteJob) return;
     setActiveWriteJobId(activeWriteJob.id);
     setGenerateStage(activeWriteJob.message || "正在生成文案");
-    setGenerateProgress(activeWriteJob.progress || 0);
-    if (activeWriteJob.partialText) setLastContent(activeWriteJob.partialText);
-
     if (isActiveJob(activeWriteJob)) {
+      if (activeWriteJob.partialText) setLastContent(activeWriteJob.partialText);
       setBusy("generate");
       return;
     }
 
     const result = activeWriteJob.result as WriteGenerationResult | undefined;
-    const isWaitingForHydratedResult = activeWriteJob.status === "completed" && !result && Boolean((activeWriteJob as { hasResult?: boolean }).hasResult);
+    const isWaitingForHydratedResult = !result && Boolean((activeWriteJob as { hasResult?: boolean }).hasResult);
     if (isWaitingForHydratedResult) {
       if (activeWriteJob.error) {
-        restoreGenerationBase();
+        restoreGenerationState();
         setBusy("");
         setGenerateStage("结果同步失败");
-        setGenerateProgress(100);
         if (!reportedHydrationErrorsRef.current.has(activeWriteJob.id)) {
           reportedHydrationErrorsRef.current.add(activeWriteJob.id);
           setNotice(activeWriteJob.error);
@@ -227,19 +239,30 @@ export function useWriterGeneration({
         return;
       }
       setGenerateStage("正在同步生成结果");
-      setGenerateProgress(100);
       return;
     }
 
-    if (handledWriteJobsRef.current.has(activeWriteJob.id)) return;
-    handledWriteJobsRef.current.add(activeWriteJob.id);
+    const dataRevision = activeWriteJob.dataRevision || 0;
+    if (handledWriteJobsRef.current.has(activeWriteJob.id)) {
+      if (dataRevision > handledWriteJobsRef.current.get(activeWriteJob.id)!) {
+        handledWriteJobsRef.current.set(activeWriteJob.id, dataRevision);
+        const saved = result ? isWriteBatchResult(result) ? result.results : [result] : [];
+        for (const item of saved) if (item.draft) onDraftSaved?.(item.draft);
+        if (saved.some(item => item.draft)) {
+          void refresh();
+          setNotice("停止前已完成的稿件已保存到版本历史，当前编辑已保留。");
+        }
+      }
+      return;
+    }
+    handledWriteJobsRef.current.set(activeWriteJob.id, dataRevision);
     clearPendingWriteJobId(activeWriteJob.id);
-    setActiveWriteJobId("");
+    if (activeWriteJob.status === "completed") setActiveWriteJobId("");
     setBusy("");
 
-    if (activeWriteJob.status === "completed" || (result && isWriteBatchResult(result) && result.results.length > 0)) {
+    if (activeWriteJob.status === "completed" || (result && (isWriteBatchResult(result) ? result.results.length > 0 : Boolean(result.draft)))) {
       if (result) {
-        generationBaseContentRef.current = "";
+        generationRestoreRef.current = null;
         if (isWriteBatchResult(result)) {
           const isRevisionBatch = result.results.every(item => item.draft?.version?.origin === "revision");
           const nextVariants = isRevisionBatch && generatedVariants.length
@@ -278,37 +301,28 @@ export function useWriterGeneration({
             void refresh();
           }
           setNotice(
-            `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到版本历史。`
+            `${result.fallback ? result.fallbackReason || "模型暂不可用，已用本地模板生成，可继续编辑。" : `已调用 ${result.usedModel}${useWebResearch ? "，已启用联网检索" : ""}。`}已自动保存到版本历史。${activeWriteJob.status !== "completed" ? "任务已中止，已完成版本已保留。" : ""}`
           );
         }
       } else {
-        generationBaseContentRef.current = "";
+        generationRestoreRef.current = null;
         setNotice("文案生成完成。");
       }
-      setGenerateStage("生成完成");
-      setGenerateProgress(100);
+      setGenerateStage(activeWriteJob.status === "completed" ? "生成完成" : "已中止，结果已保存");
       return;
     }
 
     if (activeWriteJob.status === "failed") {
-      restoreGenerationBase();
+      restoreGenerationState();
       setNotice(activeWriteJob.error || "生成失败，请检查模型配置、代理或输入内容后重试。");
       setGenerateStage("生成失败");
-      setGenerateProgress(100);
       return;
     }
 
     if (activeWriteJob.status === "cancelled") {
-      restoreGenerationBase();
+      restoreGenerationState();
       setNotice("已停止本次生成，版本历史不会新增未完成内容。");
       setGenerateStage("已停止");
-      setGenerateProgress(Math.max(0, activeWriteJob.progress || 0));
-    }
-
-    function restoreGenerationBase() {
-      if (!generationBaseContentRef.current) return;
-      setLastContent(generationBaseContentRef.current);
-      generationBaseContentRef.current = "";
     }
   }, [
     activeTitle,
@@ -319,6 +333,7 @@ export function useWriterGeneration({
     onDraftSaved,
     onRevisionCompleted,
     refresh,
+    restoreGenerationState,
     routerReplace,
     setBusy,
     setNotice,
@@ -327,11 +342,10 @@ export function useWriterGeneration({
 
   const handleGenerate = useCallback(async () => {
     if (!canGenerate) return;
-    generationBaseContentRef.current = "";
+    generationRestoreRef.current = captureEditingState();
     setBusy("generate");
     setNotice("");
     setGenerateStage("准备写作任务");
-    setGenerateProgress(6);
     setLastContent("");
     setLastResearch("");
     setLastSavedContent("");
@@ -367,24 +381,25 @@ export function useWriterGeneration({
       rememberPendingWriteJobId(job.id);
       setActiveWriteJobId(job.id);
       setGenerateStage(job.message);
-      setGenerateProgress(job.progress);
       setNotice(styleRefs.length > 1
         ? `${styleRefs.length} 张风格卡已开始并发生成，每张会得到一篇独立文案。`
         : "文案生成已在后台开始，可以切换到其他模块。");
     } catch (err) {
+      restoreGenerationState();
       setNotice(err instanceof Error ? err.message : "生成失败，请检查模型配置、代理或输入内容后重试。");
       setGenerateStage("任务启动失败");
-      setGenerateProgress(0);
       setActiveWriteJobId("");
       setBusy("");
     }
   }, [
     activeTitle,
     canGenerate,
+    captureEditingState,
     mode,
     normalizedPrompt,
     normalizedSourceText,
     originalSourceInput,
+    restoreGenerationState,
     selectedAccount,
     selectedProject,
     styleRefs,
@@ -403,11 +418,10 @@ export function useWriterGeneration({
       setNotice("请选择有正文的稿件后再修改。");
       return;
     }
-    generationBaseContentRef.current = lastContent;
+    generationRestoreRef.current = captureEditingState();
     setBusy("generate");
     setNotice("");
     setGenerateStage("准备续改任务");
-    setGenerateProgress(6);
 
     const isProject = lastDraftBase.targetType === "project";
     try {
@@ -438,18 +452,17 @@ export function useWriterGeneration({
       rememberPendingWriteJobId(job.id);
       setActiveWriteJobId(job.id);
       setGenerateStage(job.message);
-      setGenerateProgress(job.progress);
       setNotice("续改任务已开始，完成后会新增一个版本。");
     } catch (err) {
-      generationBaseContentRef.current = "";
+      restoreGenerationState();
       setNotice(err instanceof Error ? err.message : "续改任务启动失败，请稍后重试。");
       setGenerateStage("任务启动失败");
-      setGenerateProgress(0);
       setActiveWriteJobId("");
       setBusy("");
     }
   }, [
     canRevise,
+    captureEditingState,
     generatedVariants,
     activeVariantKey,
     lastContent,
@@ -458,6 +471,7 @@ export function useWriterGeneration({
     revisionInstruction,
     revisionScope,
     revisionMode,
+    restoreGenerationState,
     selectedText,
     setBusy,
     setNotice,
@@ -485,7 +499,6 @@ export function useWriterGeneration({
     setLastSavedContent(lastContent);
     setLastDraftBase(draftToSaveBase(draft));
     updateActiveVariant({
-      content: lastContent,
       savedContent: lastContent,
       draftId: draft.id,
       draftBase: draftToSaveBase(draft)
@@ -547,12 +560,11 @@ export function useWriterGeneration({
   }, [updateActiveVariant]);
 
   const loadDraftResult = useCallback((draft: Draft, batch: Draft[] = [draft]) => {
-    generationBaseContentRef.current = "";
+    generationRestoreRef.current = null;
     const variant = variantStateFromDraft(draft);
     setGeneratedVariants(batch.map(variantStateFromDraft));
     applyVariantState(variant);
     setGenerateStage("");
-    setGenerateProgress(100);
   }, [applyVariantState]);
 
   const loadDraftVersion = useCallback((draft: Draft) => {
@@ -564,7 +576,7 @@ export function useWriterGeneration({
   }, [activeVariantKey, applyVariantState, generatedVariants, lastContent]);
 
   const clearDraftResult = useCallback(() => {
-    generationBaseContentRef.current = "";
+    generationRestoreRef.current = null;
     setLastContent("");
     setLastResearch("");
     setLastSavedContent("");
@@ -573,21 +585,9 @@ export function useWriterGeneration({
     setGeneratedVariants([]);
     setActiveVariantKey("");
     setGenerateStage("");
-    setGenerateProgress(0);
     clearPendingWriteJobId(activeWriteJobId);
     setActiveWriteJobId("");
   }, [activeWriteJobId]);
-
-  // Preserve every independently edited style variant during history browsing.
-  const captureEditingState = () => () => {
-    setLastContent(lastContent);
-    setLastResearch(lastResearch);
-    setLastSavedContent(lastSavedContent);
-    setLastDraftBase(lastDraftBase);
-    setLastDraftId(lastDraftId);
-    setGeneratedVariants(generatedVariants);
-    setActiveVariantKey(activeVariantKey);
-  };
 
   return {
     captureEditingState,
@@ -596,7 +596,6 @@ export function useWriterGeneration({
     canStopGenerate,
     clearDraftResult,
     copyLast,
-    generateProgress,
     generateStage,
     activeVariantKey,
     generatedVariants: variantSummaries,

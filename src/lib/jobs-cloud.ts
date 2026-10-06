@@ -1,4 +1,5 @@
 import type { JobDataChange, JobEvent, JobRecord, JobScope } from "./types";
+import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "./storage/schemas";
 
 type CloudJobRow = {
   id: string;
@@ -21,6 +22,22 @@ type CloudJobRow = {
 
 type CloudJobBindings = { DB: D1Database };
 
+export const CLOUD_JOB_LEASE_MS = 120_000;
+
+export class CloudJobConflictError extends Error {
+  constructor() {
+    super("云端任务状态或执行租约已变化，请刷新任务中心。");
+    this.name = "CloudJobConflictError";
+  }
+}
+
+type CloudJobLease = {
+  state: JobRecord["status"];
+  cancel_requested: number;
+  lease_owner: string | null;
+  lease_expires_at: number | null;
+};
+
 let bindingsPromise: Promise<CloudJobBindings> | null = null;
 
 async function getBindings() {
@@ -36,9 +53,11 @@ async function getBindings() {
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
-  if (!value) return fallback;
+  if (value == null) return fallback;
   try {
-    return JSON.parse(value) as T;
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("字段必须是 JSON 对象");
+    return parsed as T;
   } catch {
     throw new Error("云端任务记录损坏：JSON 字段无法解析。");
   }
@@ -55,6 +74,7 @@ function millisFromIso(value: string | undefined) {
 
 function rowToJob(row: CloudJobRow): JobRecord {
   const progress = parseJson<{
+    schemaVersion?: number;
     title?: string;
     inputSummary?: string;
     href?: string;
@@ -69,7 +89,8 @@ function rowToJob(row: CloudJobRow): JobRecord {
     resumedAt?: string;
   }>(row.progress_json, {});
   const result = parseJson<{ value?: unknown }>(row.result_json, {});
-  return {
+  return parseStoredRecord<JobRecord>(`cloud_jobs/${row.id}`, {
+    schemaVersion: progress.schemaVersion,
     id: row.id,
     kind: row.type as JobRecord["kind"],
     status: row.state,
@@ -94,7 +115,7 @@ function rowToJob(row: CloudJobRow): JobRecord {
     createdAt: isoFromMillis(row.created_at) || new Date().toISOString(),
     updatedAt: isoFromMillis(row.updated_at) || new Date().toISOString(),
     completedAt: isoFromMillis(row.finished_at)
-  };
+  }, "job");
 }
 
 export async function readCloudJob(jobId: string) {
@@ -106,13 +127,21 @@ export async function readCloudJob(jobId: string) {
 export async function listCloudJobs() {
   const { DB } = await getBindings();
   const rows = (await DB.prepare("SELECT * FROM cloud_jobs ORDER BY updated_at DESC").all<CloudJobRow>()).results || [];
-  return rows.map(rowToJob);
+  const jobs: JobRecord[] = [];
+  const readErrors: Record<string, string> = {};
+  for (const row of rows) {
+    try { jobs.push(rowToJob(row)); }
+    catch (error) { readErrors[row.id] = `云端任务 ${row.id} 无法读取：${error instanceof Error ? error.message : "请检查任务记录。"}`; }
+  }
+  return { jobs, readErrors };
 }
 
-export async function writeCloudJob(job: JobRecord) {
+export async function writeCloudJob(job: JobRecord, owner?: string, allowTerminalDataChange = false) {
+  job = { ...parseStoredRecord<JobRecord>(`cloud_jobs/${job.id}`, job, "job"), schemaVersion: STORAGE_SCHEMA_VERSION };
   const { DB } = await getBindings();
   const compact = job.resultCompacted ? { resultCompacted: true, resultSizeBytes: job.resultSizeBytes } : { value: job.result };
   const progress = JSON.stringify({
+    schemaVersion: job.schemaVersion,
     title: job.title,
     inputSummary: job.inputSummary,
     href: job.href,
@@ -127,10 +156,21 @@ export async function writeCloudJob(job: JobRecord) {
     resumedAt: job.resumedAt
   });
   const now = millisFromIso(job.updatedAt);
-  await DB.prepare(
+  const statement = DB.prepare(
     `INSERT INTO cloud_jobs (id,type,scope,state,input_json,progress_json,result_json,error,attempt,cancel_requested,data_revision,data_change_json,created_at,updated_at,started_at,finished_at)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0,?10,?11,?12,?13,?14,?15)
-     ON CONFLICT(id) DO UPDATE SET type=?2,scope=?3,state=?4,progress_json=?6,result_json=?7,error=?8,attempt=?9,data_revision=?10,data_change_json=?11,updated_at=?13,started_at=COALESCE(?14,started_at),finished_at=?15,lease_owner=CASE WHEN ?4 IN ('completed','failed','cancelled','interrupted') THEN NULL ELSE lease_owner END,lease_expires_at=CASE WHEN ?4 IN ('completed','failed','cancelled','interrupted') THEN NULL ELSE lease_expires_at END`
+     ON CONFLICT(id) DO UPDATE SET type=?2,scope=?3,state=?4,progress_json=?6,result_json=?7,error=?8,attempt=?9,data_revision=?10,data_change_json=?11,updated_at=?13,started_at=COALESCE(started_at,?14),finished_at=?15,
+       cancel_requested=CASE WHEN ?4='cancelled' THEN 1 ELSE cancel_requested END,
+       lease_owner=CASE WHEN ?4 IN ('completed','failed','interrupted') THEN NULL ELSE lease_owner END,
+       lease_expires_at=CASE WHEN ?4 IN ('completed','failed','interrupted') THEN NULL ELSE lease_expires_at END
+     WHERE updated_at<=?13 AND (
+       (state IN ('queued','running') AND (
+         ?4='cancelled' OR
+         (?16 IS NOT NULL AND lease_owner=?16 AND lease_expires_at>?17 AND cancel_requested=0) OR
+         (?16 IS NULL AND ?4 IN ('queued','interrupted','failed') AND (lease_expires_at IS NULL OR lease_expires_at<=?17))
+       )) OR
+       (?18=1 AND state=?4 AND data_revision<?10 AND lease_owner=?16 AND lease_expires_at>?17)
+     )`
   ).bind(
     job.id,
     job.kind,
@@ -146,30 +186,57 @@ export async function writeCloudJob(job: JobRecord) {
     millisFromIso(job.createdAt),
     now,
     job.status === "running" ? now : null,
-    job.completedAt ? millisFromIso(job.completedAt) : null
-  ).run();
+    job.completedAt ? millisFromIso(job.completedAt) : null,
+    owner || null,
+    Date.now(),
+    Number(allowTerminalDataChange)
+  );
 
   const event = job.events?.at(-1);
-  if (event) {
-    const payloadJson = JSON.stringify(event);
-    const previous = await DB.prepare(
-      "SELECT payload_json FROM cloud_job_events WHERE job_id = ?1 ORDER BY id DESC LIMIT 1"
-    ).bind(job.id).first<{ payload_json: string }>();
-    if (previous?.payload_json !== payloadJson) {
-      await DB.prepare("INSERT INTO cloud_job_events (job_id,kind,payload_json,created_at) VALUES (?1,?2,?3,?4)")
-        .bind(job.id, "state", payloadJson, millisFromIso(event.at))
-        .run();
-    }
-  }
+  // D1 batch is transactional: clients must never see a state without its change event.
+  const results = await DB.batch([
+    statement,
+    DB.prepare(`INSERT INTO cloud_job_events (job_id,kind,payload_json,created_at)
+      SELECT ?1,'state',?2,?3 WHERE changes()>0`)
+      .bind(job.id, JSON.stringify(event || { at: job.updatedAt, status: job.status, message: job.message, progress: job.progress }), now)
+  ]);
+  if (!(results[0].meta?.changes || 0)) throw new CloudJobConflictError();
 }
 
-export async function claimCloudJob(jobId: string, owner: string, leaseMs = 120_000) {
+export async function readCloudJobLease(jobId: string) {
+  const { DB } = await getBindings();
+  return DB.prepare("SELECT state,cancel_requested,lease_owner,lease_expires_at FROM cloud_jobs WHERE id=?1")
+    .bind(jobId).first<CloudJobLease>();
+}
+
+export async function claimCloudJob(jobId: string, owner: string, maxActive = 5) {
   const { DB } = await getBindings();
   const now = Date.now();
   const result = await DB.prepare(
-    "UPDATE cloud_jobs SET state='running',lease_owner=?2,lease_expires_at=?3,started_at=COALESCE(started_at,?4),updated_at=?4 WHERE id=?1 AND (state='queued' OR (state='running' AND (lease_expires_at IS NULL OR lease_expires_at < ?4)))"
-  ).bind(jobId, owner, now + leaseMs, now).run();
+    `UPDATE cloud_jobs SET state='running',lease_owner=?2,lease_expires_at=?3,started_at=COALESCE(started_at,?4),updated_at=?4
+     WHERE id=?1 AND cancel_requested=0
+       AND (state='queued' OR (state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=?4)))
+       AND (lease_expires_at IS NULL OR lease_expires_at<=?4)
+       AND (SELECT COUNT(*) FROM cloud_jobs WHERE lease_expires_at>?4)<?5`
+  ).bind(jobId, owner, now + CLOUD_JOB_LEASE_MS, now, maxActive).run();
   return (result.meta?.changes || 0) > 0;
+}
+
+export async function renewCloudJobLease(jobId: string, owner: string) {
+  const { DB } = await getBindings();
+  const now = Date.now();
+  const result = await DB.prepare(`UPDATE cloud_jobs SET lease_expires_at=?3
+    WHERE id=?1 AND lease_owner=?2 AND lease_expires_at>?4 AND state='running' AND cancel_requested=0`)
+    .bind(jobId, owner, now + CLOUD_JOB_LEASE_MS, now).run();
+  if (result.meta?.changes) return "active" as const;
+  const lease = await readCloudJobLease(jobId);
+  return lease?.state === "cancelled" || lease?.cancel_requested ? "cancelled" as const : "lost" as const;
+}
+
+export async function releaseCloudJobLease(jobId: string, owner: string) {
+  const { DB } = await getBindings();
+  await DB.prepare("UPDATE cloud_jobs SET lease_owner=NULL,lease_expires_at=NULL WHERE id=?1 AND lease_owner=?2")
+    .bind(jobId, owner).run();
 }
 
 export async function deleteCloudJob(jobId: string) {
@@ -179,12 +246,6 @@ export async function deleteCloudJob(jobId: string) {
   await DB.prepare("INSERT INTO cloud_job_events (job_id,kind,payload_json,created_at) VALUES (?1,'removed','{}',?2)")
     .bind(jobId, Date.now())
     .run();
-}
-
-export async function getCloudJobEventCursor() {
-  const { DB } = await getBindings();
-  const row = await DB.prepare("SELECT COALESCE(MAX(id), 0) AS cursor FROM cloud_job_events").first<{ cursor: number }>();
-  return Number(row?.cursor || 0);
 }
 
 export async function listCloudJobEvents(afterId: number) {

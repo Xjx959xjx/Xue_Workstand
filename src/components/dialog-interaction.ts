@@ -56,6 +56,8 @@ function onKeyDown(event: KeyboardEvent) {
   const entry = topDialog();
   if (!entry || event.defaultPrevented || event.isComposing) return;
   if (event.key === "Escape") {
+    // Native popovers own their Escape light-dismiss; let them close before the modal.
+    if (event.target instanceof Element && event.target.closest("[popover]")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!entry.options().disabled) entry.options().onClose();

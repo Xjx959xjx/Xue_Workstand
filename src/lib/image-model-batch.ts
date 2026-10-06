@@ -4,7 +4,7 @@ export function imageModelBatch(input: ImageGenerationInput, models: string[], p
   if (models.length === 0) return [input];
   const selected = profiles.find((profile) => profile.id === (input.profileId || "default"));
   return [...new Set(models)].map((model) => {
-    const profile = imageProfileForModel(profiles, model, selected?.resolution);
+    const profile = selected?.model === model && selected.configured ? selected : imageProfileForModel(profiles, model, selected?.resolution);
     if (!profile?.configured) throw new Error(`${imageModelLabel(model)} 未配置，请先取消勾选或配置服务。`);
     return { ...input, profileId: profile.id, size: profile.id === input.profileId ? input.size : imageSizeForProfile(profile, imageRatioForSize(input.size)) };
   });

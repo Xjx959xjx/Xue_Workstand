@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { aiPolicySignature } from "./ai-policy-runtime";
 import { getConfiguredChatConfigs } from "./model-runtime";
 import { runCommentPipeline, pipelineKept, type CommentPipelineCheckpoint } from "./engagement-pipeline";
-import { commentPipelineCheckpointSchema } from "./storage/schemas";
+import { commentPipelineCheckpointSchema, danmakuBatchCheckpointSchema } from "./storage/schemas";
 import { chatCompleteStrict, getChatRuntimeConfig } from "./ai";
 import { auditedCommentModelCall } from "./engagement-model-audit";
 import { classifyModelFailure } from "./model-runtime";
@@ -104,7 +104,6 @@ type SourceContext = {
   platform: Platform;
   accountId: string;
   accountName: string;
-  comments: string[];
   danmaku: string[];
 };
 
@@ -128,12 +127,14 @@ const DANMAKU_MODEL_CONCURRENCY = Math.min(COMMENT_MODEL_CONCURRENCY, 2);
 const ENGAGEMENT_AUTO_SUPPLEMENT_MAX_PASSES = 2;
 
 export async function generateEngagement(input: GenerateEngagementInput, runOptions: GenerateEngagementOptions = {}) {
+  runOptions = { ...runOptions, checkpointId: runOptions.checkpointId || randomUUID() };
   let result = await generateEngagementPass(input, runOptions);
   let supplementPass = 0;
 
   while (supplementPass < ENGAGEMENT_AUTO_SUPPLEMENT_MAX_PASSES) {
     const gaps = getEngagementCountGaps(result.record);
     if (!gaps.danmakuCount) break;
+    if (result.hasPermanentDanmakuFailure) break;
 
     supplementPass += 1;
     await emitEngagementProgress(runOptions, {
@@ -157,6 +158,7 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
             : currentRecord.platform
         },
         {
+          checkpointId: runOptions.checkpointId,
           signal: runOptions.signal,
           async onProgress(progress) {
             const mergedPreview = progress.previewComments?.length
@@ -187,6 +189,7 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
         comments: record.comments,
         danmaku: record.danmaku
       };
+      if (!["timeout", "rate_limit", "network", "server"].includes(classifyModelFailure(error).kind)) break;
     }
   }
 
@@ -206,7 +209,7 @@ export async function generateEngagement(input: GenerateEngagementInput, runOpti
     }
   }
 
-  return result;
+  return { draft: result.draft, record: result.record, comments: result.comments, danmaku: result.danmaku };
 }
 
 async function generateEngagementPass(input: GenerateEngagementInput, runOptions: GenerateEngagementOptions = {}) {
@@ -252,11 +255,15 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
         prepared.contexts,
         options.danmakuCount,
         prepared.existingRecord?.danmaku?.items.map((item) => item.text) || [],
-        runOptions.signal
+        runOptions
       )
     : Promise.resolve(null);
-  const [comments, danmaku] = await Promise.all([commentsPromise, danmakuPromise]);
-  throwIfAborted(runOptions.signal);
+  const settled = await Promise.allSettled([commentsPromise, danmakuPromise]);
+  const comments = settled[0].status === "fulfilled" ? settled[0].value : null;
+  const danmaku = settled[1].status === "fulfilled" ? settled[1].value : null;
+  const errors = settled.filter((item): item is PromiseRejectedResult => item.status === "rejected").map((item) => item.reason);
+  if (!comments && !danmaku && errors.length) throw errors[0];
+  const failureReason = errors.map((error) => error instanceof Error ? error.message : "互动素材生成失败").join("；");
 
   const timings: EngagementGenerationTimings = {
     sourceMs,
@@ -341,8 +348,8 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
           },
           comments: nextComments,
           danmaku: nextDanmaku,
-          fallback: Boolean(nextComments?.fallback || nextDanmaku?.fallback || current.fallback),
-          fallbackReason: [current.fallbackReason, prepared.fallbackReason, nextComments?.fallbackReason, nextDanmaku?.fallbackReason]
+          fallback: Boolean(nextComments?.fallback || nextDanmaku?.fallback || current.fallback || errors.length),
+          fallbackReason: [current.fallbackReason, prepared.fallbackReason, nextComments?.fallbackReason, nextDanmaku?.fallbackReason, failureReason]
             .filter(Boolean)
             .join("；") || undefined
         };
@@ -356,17 +363,19 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
         platform: prepared.platform,
         draftId: prepared.draft?.id,
         sourceText: prepared.content.content,
+        sourceDurationSec: prepared.content.durationSec,
+        sourceSegments: prepared.content.segments,
         options: {
           ...options,
           targetPlatform: prepared.platform === "unknown" ? options.targetPlatform : prepared.platform
         },
         comments: savedComments,
         danmaku: savedDanmaku,
-        fallback: Boolean(comments?.fallback || danmaku?.fallback || prepared.fallback),
-        fallbackReason: [prepared.fallbackReason, comments?.fallbackReason, danmaku?.fallbackReason]
+        fallback: Boolean(comments?.fallback || danmaku?.fallback || prepared.fallback || errors.length),
+        fallbackReason: [prepared.fallbackReason, comments?.fallbackReason, danmaku?.fallbackReason, failureReason]
           .filter(Boolean)
           .join("；") || undefined
-      }, { idempotencyKey: comments?.checkpointKey });
+      }, { idempotencyKey: runOptions.checkpointId });
 
   if (prepared.existingRecord?.draftId && (record.comments || record.danmaku)) {
     const updatedDraft = await updateDraftAssets(prepared.existingRecord.draftId, (current) => ({
@@ -377,12 +386,11 @@ async function generateEngagementPass(input: GenerateEngagementInput, runOptions
     draft = updatedDraft.targetType === "account" || updatedDraft.targetType === "project" ? updatedDraft : draft;
   }
 
-  return {
-    draft,
-    record,
-    comments: record.comments,
-    danmaku: record.danmaku
-  };
+  if (!runOptions.signal?.aborted) await runOptions.onProgress?.({ stage: "filter", progress: 94, message: errors.length ? "已保存可用结果，未完成部分仍报错" : "本轮互动素材已保存", checkpointSaved: true });
+  if (errors.length) throw errors[0];
+  throwIfAborted(runOptions.signal);
+  return { draft, record, comments: record.comments, danmaku: record.danmaku,
+    hasPermanentDanmakuFailure: Boolean(danmaku?.diagnostics.batches.some((batch) => batch.status === "failed" && batch.retryable === false)) };
 }
 
 function getEngagementCountGaps(record: EngagementRecord) {
@@ -554,7 +562,7 @@ export async function generateDraftEngagement(input: {
   draftId: string;
   commentCount: number;
   danmakuCount: number;
-}) {
+}, runOptions: GenerateEngagementOptions = {}) {
   const resolved = await resolveDraft(input.draftId);
   const supportsDanmaku = draftSupportsBilibili(resolved.draft);
   const result = await generateEngagement({
@@ -564,7 +572,7 @@ export async function generateDraftEngagement(input: {
     commentCount: input.commentCount,
     includeDanmaku: supportsDanmaku,
     danmakuCount: input.danmakuCount
-  });
+  }, runOptions);
   const next = result.draft ?? resolved.draft;
   return {
     draft: next,
@@ -612,7 +620,9 @@ async function prepareEngagementSource(input: GenerateEngagementInput, options: 
         input: existingRecord.sourceUrl || existingRecord.sourceText,
         excludedVideoIds: extractEngagementVideoIds(
           `${existingRecord.sourceUrl || ""} ${existingRecord.resolvedUrl || ""}`
-        )
+        ),
+        durationSec: existingRecord.sourceDurationSec ?? existingRecord.danmaku?.durationSec,
+        segments: existingRecord.sourceSegments
       },
       contexts: [],
       platform: existingRecord.platform === "unknown" ? options.targetPlatform || "unknown" : existingRecord.platform,
@@ -758,24 +768,24 @@ function draftToEngagementContent(draft: Draft): EngagementContent {
 }
 
 function sanitizeEngagementSource(source: EngagementContent, transportGuard: EngagementTransportGuard): EngagementContent {
-  const content = sanitizeEngagementGenerationText(source.content);
-  const titleCandidate = sanitizeEngagementGenerationText(source.title);
+  const content = sanitizeEngagementGenerationText(source.content, transportGuard);
+  const titleCandidate = sanitizeEngagementGenerationText(source.title, transportGuard);
   const titleLooksLikeShareEnvelope = transportGuard.hasTransportSource && /^\d{5,}[A-Za-z][A-Za-z0-9]{5,}/.test(titleCandidate);
   const title = titleCandidate
     && !titleLooksLikeShareEnvelope
     && !containsEngagementTransportLeak(titleCandidate, transportGuard)
     ? titleCandidate
     : makeEngagementTitle(content, "互动素材");
-  const input = sanitizeEngagementGenerationText(source.input || "");
+  const input = sanitizeEngagementGenerationText(source.input || "", transportGuard);
   return {
     ...source,
     title,
     content,
-    prompt: sanitizeEngagementGenerationText(source.prompt || "") || undefined,
+    prompt: sanitizeEngagementGenerationText(source.prompt || "", transportGuard) || undefined,
     input: input && input !== content ? input : undefined,
     segments: source.segments?.map((segment) => ({
       ...segment,
-      text: sanitizeEngagementGenerationText(segment.text)
+      text: sanitizeEngagementGenerationText(segment.text, transportGuard)
     })).filter((segment) => segment.text)
   };
 }
@@ -804,7 +814,6 @@ async function buildAccountSourceContext(
   const account = await resolveAccount(platform, accountId);
   const summary = await getAccountSummary(account);
   const contextVideos = prioritizeVideos(summary.videos, sourceVideoIds).slice(0, 10);
-  const comments = uniqueText(contextVideos.flatMap((video) => video.topComments || [])).slice(0, 120);
   const danmaku = options.includeDanmaku && platform === "bilibili"
     ? uniqueText(contextVideos.flatMap((video) => video.danmakuSamples || [])).slice(0, 180)
     : [];
@@ -813,7 +822,6 @@ async function buildAccountSourceContext(
     platform,
     accountId,
     accountName,
-    comments,
     danmaku
   };
 }
@@ -833,7 +841,8 @@ function extractEngagementVideoIds(value: string) {
   const text = String(value || "");
   return uniqueText([
     ...(text.match(/BV[0-9A-Za-z]{10}/gi) || []),
-    ...(text.match(/(?:video\/|modal_id=)(\d{8,})/gi) || []).map((match) => match.match(/\d{8,}/)?.[0] || "")
+    ...(text.match(/(?:video\/|(?:modal_id|aweme_id|item_id|video_id)=)(\d{8,})/gi) || []).map((match) => match.match(/\d{8,}/)?.[0] || ""),
+    ...(text.match(/\b\d{18,20}\b/g) || [])
   ]);
 }
 
@@ -844,7 +853,7 @@ export async function generateComments(input: {
   const { source, count, platform, excludedComments, signal, onProgress } = input;
   if (platform === "unknown") throw new Error("没有识别到评论目标平台，请选择抖音或 B站。");
   if (!getChatRuntimeConfig().configured || process.env.ENGAGEMENT_MODEL_COMMENTS === "0") throw new Error("评论生成需要可用的对话模型，请检查模型配置。");
-  const transportGuard = buildEngagementTransportGuard([source.input, source.title, source.content]);
+  const transportGuard = buildEngagementTransportGuard([source.input, source.title, source.content], source.excludedVideoIds);
   const generationSource = sanitizeEngagementSource(source, transportGuard);
   const runtimeSignature = getConfiguredChatConfigs().map((config) => ({ baseUrl: config.baseUrl, responsesUrl: config.responsesUrl, chatCompletionsUrl: config.chatCompletionsUrl, model: config.model, wireApi: config.wireApi, reasoningEffort: config.reasoningEffort, serviceTier: config.serviceTier }));
   const signature = createHash("sha256").update(JSON.stringify({ engine: ENGAGEMENT_ENGINE_VERSION, source: generationSource, count, platform, excludedComments, runtime: runtimeSignature, policy: await aiPolicySignature(["comment_plan", "comment_generate"]) })).digest("hex");
@@ -876,19 +885,21 @@ export async function generateComments(input: {
       async save() { state.updatedAt = nowIso(); await writeEngagementCache("pipeline", checkpointKey, commentPipelineCheckpointSchema.parse(state)); },
       async generate(batch, batchSignal) {
         const usedComments = [...excludedComments, ...pipelineKept(state, count)];
-        const prompt = buildCommentBatchPrompt({ source: generationSource, relatedResearch, platform, requestedCount: batch.requestedCount, usedComments });
+        const prompt = buildCommentBatchPrompt({ source: generationSource, relatedResearch, platform, requestedCount: batch.requestedCount, usedComments, transportGuard });
         const result = await generateCommentBatch([{ role: "system", content: buildCommentSystemPrompt(platform) }, { role: "user", content: prompt }], batch.requestedCount, batchSignal, (message) => onProgress?.({ stage: "generate", message, progress: 45 }), checkpointKey);
         return { candidates: result.batchParsed, model: result.result.model, attempts: result.attempts };
       },
+      select: (comments, reviewed) => selectCommentSamples(comments, transportGuard, count, [...excludedComments, ...reviewed]).items,
       onProgress: (kept, message) => onProgress?.({ stage: "filter", progress: 45 + Math.floor(kept.length / count * 49), message, checkpointSaved: true, previewComments: kept.map((text, i) => makeCommentItem(text, platform, i, "ai_generated")) })
     });
     if (!texts.length) throw new Error("模型未返回可保存的评论，已保留检查点，请重试。");
     const candidates = state.batches.flatMap((batch) => batch.candidates || []);
+    const selection = selectCommentSamples(candidates, transportGuard, count, excludedComments);
     const batches = state.batches.filter((batch) => batch.candidates || batch.error).map((batch) => ({ index: batch.index, requestedCount: batch.requestedCount, parsedCount: batch.candidates?.length || 0, model: batch.model, fallback: false, status: batch.candidates ? "completed" as const : "failed" as const, attempts: batch.attempts, fallbackReason: batch.error }));
     return { checkpointKey, usedModel: batches.find((batch) => batch.model)?.model || "", fallback: Boolean(relatedResearch.summaryError), fallbackReason: relatedResearch.summaryError, briefMs: 0, researchMs, generationMs: Date.now() - generationStartedAt, cacheHits: parsed?.success ? ["research" as const] : [],
       diagnostics: { relatedResearch: toRelatedCommentResearchDiagnostics(relatedResearch, voiceReferences), research: [toRelatedCommentResearchSummary(relatedResearch)], generation: {
         mode: "model_batch" as const, requestedCount: count, batchSize: count, batchCount: batches.length, parsedCount: candidates.length, completedCount: texts.length, supplementedCount: texts.length, reusedHotCommentCount: 0, reusedRelatedCommentCount: 0, aiGeneratedCount: texts.length,
-        lengthBuckets: summarizeCommentLengthBuckets(texts), intentBuckets: summarizeCommentIntentBuckets(texts), lowSignalRejectedCount: 0, syntheticRejectedCount: 0, nearDuplicateRejectedCount: 0, repeatedStyleRejectedCount: 0, entityCorrectedCount: 0, unsupportedEntityRejectedCount: 0, transportRejectedCount: 0, nativeEmoteCount: texts.filter(hasNativeEmote).length, batches
+        lengthBuckets: summarizeCommentLengthBuckets(texts), intentBuckets: summarizeCommentIntentBuckets(texts), lowSignalRejectedCount: selection.lowSignalRejectedCount, syntheticRejectedCount: 0, nearDuplicateRejectedCount: selection.nearDuplicateRejectedCount, repeatedStyleRejectedCount: 0, entityCorrectedCount: 0, unsupportedEntityRejectedCount: 0, transportRejectedCount: selection.transportRejectedCount, nativeEmoteCount: texts.filter(hasNativeEmote).length, batches
       } }, items: texts.map((text, i) => makeCommentItem(text, platform, i, "ai_generated")) };
   });
 }
@@ -1030,22 +1041,26 @@ export function buildCommentBatchPrompt(input: {
   platform: Platform;
   requestedCount: number;
   usedComments: string[];
+  transportGuard?: EngagementTransportGuard;
 }) {
+  const guard = input.transportGuard || buildEngagementTransportGuard([input.source.input, input.source.title, input.source.content], input.source.excludedVideoIds);
+  const source = sanitizeEngagementSource(input.source, guard);
+  const references = input.relatedResearch?.referenceSamples
+    ? groupCommentVoiceReferences(input.relatedResearch.referenceSamples)
+    : [{ platform: input.platform, title: "历史表达参考", comments: input.relatedResearch ? selectCommentVoiceReferences(input.relatedResearch) : [] }];
   return `根据正文和抓取的评论给我${input.requestedCount}条评论，优先直接复用符合正文的原评，保留原话，不够再补写。
 
 <当前视频>
-${formatCommentSource(input.source)}
+${formatCommentSource(source)}
 </当前视频>
 
 <表达参考>
 以下是按来源分组的抓取原评。
-${JSON.stringify(input.relatedResearch?.referenceSamples
-    ? groupCommentVoiceReferences(input.relatedResearch.referenceSamples)
-    : [{ platform: input.platform, title: "历史表达参考", comments: input.relatedResearch ? selectCommentVoiceReferences(input.relatedResearch) : [] }])}
+${JSON.stringify(references.map((group) => ({ ...group, title: sanitizeEngagementGenerationText(group.title, guard), comments: group.comments.filter((text) => !containsEngagementTransportLeak(text, guard)) })))}
 </表达参考>
 ${input.usedComments.length ? `
 <已生成评论>
-${JSON.stringify(input.usedComments)}
+${JSON.stringify(input.usedComments.filter((text) => !containsEngagementTransportLeak(text, guard)))}
 </已生成评论>
 ` : ""}
 ${input.usedComments.length
@@ -1063,10 +1078,11 @@ async function generateDanmaku(
   contexts: SourceContext[],
   count: number,
   excludedDanmaku: string[] = [],
-  signal?: AbortSignal
+  runOptions: GenerateEngagementOptions = {}
 ) {
+  const { signal } = runOptions;
   throwIfAborted(signal);
-  const transportGuard = buildEngagementTransportGuard([source.input, source.title, source.content]);
+  const transportGuard = buildEngagementTransportGuard([source.input, source.title, source.content], source.excludedVideoIds);
   const generationSource = sanitizeEngagementSource(source, transportGuard);
   const contextSamples = uniqueText(contexts.flatMap((context) => context.danmaku));
   const loadedStyleProfile = await loadEngagementStyleProfile(
@@ -1079,11 +1095,13 @@ async function generateDanmaku(
   const styleProfile: EngagementStyleProfile = {
     ...loadedStyleProfile,
     examples: uniqueText(
-      loadedStyleProfile.examples.map((example) => sanitizeEngagementGenerationText(example))
+      loadedStyleProfile.examples.map((example) => sanitizeEngagementGenerationText(example, transportGuard))
     ).filter((example) => !containsEngagementTransportLeak(example, transportGuard))
   };
   assertNativeStyleProfile(styleProfile, "B站弹幕");
   const timeline = buildDanmakuTimeline(generationSource, count, styleProfile);
+  const signature = createHash("sha256").update(JSON.stringify({ engine: ENGAGEMENT_DANMAKU_ENGINE_VERSION, source: generationSource, styleProfile, count, excludedDanmaku,
+    runtime: getConfiguredChatConfigs().map(({ baseUrl, responsesUrl, chatCompletionsUrl, model, wireApi, reasoningEffort, serviceTier }) => ({ baseUrl, responsesUrl, chatCompletionsUrl, model, wireApi, reasoningEffort, serviceTier })), policy: await aiPolicySignature(["danmaku"]) })).digest("hex");
   const batches = chunkValues(timeline.slots, DANMAKU_GENERATION_BATCH_SIZE);
   const parsedItems: Array<{ slot: DanmakuSlot; text: string }> = [];
   const acceptedTextsBySlot = new Map<number, string>();
@@ -1094,47 +1112,61 @@ async function generateDanmaku(
   for (let start = 0; start < batches.length; start += DANMAKU_MODEL_CONCURRENCY) {
     throwIfAborted(signal);
     const wave = batches.slice(start, start + DANMAKU_MODEL_CONCURRENCY);
+    const attempted = new Map<number, number>();
     const settled = await Promise.allSettled(wave.map(async (slots, waveIndex) => {
-      let lastError: unknown;
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        try {
-          const result = await chatCompleteStrict(
-            [
-              {
-                role: "system",
-                content:
-                  "你在模拟一群互不认识的 B站观众。严格按给定时间槽和台词锚点各写一条即时弹幕，只负责写文本，不得自己编时间。弹幕是看见当下画面脱口而出的短反应，不是视频评论、测评总结或台词改写。只有明确标记的复读槽才能复读；其他槽位不得重复已经用过的句子。不要攻击、造谣、色情、歧视或刷屏。只输出与槽位等长、顺序一致的 JSON 字符串数组。"
-              },
-              {
-                role: "user",
-                content: buildDanmakuBatchPrompt(
-                  generationSource,
-                  styleProfile,
-                  slots,
-                  uniqueText([...excludedDanmaku, ...parsedItems.map((item) => item.text)]).slice(-80)
-                )
-              }
-            ],
-            "medium",
-            { policy: "danmaku", signal }
-          );
-          throwIfAborted(signal);
-          if (result.fallback || !result.text.trim()) {
-            throw new Error(result.fallbackReason || "模型没有返回可用弹幕，请重试或更换模型。");
-          }
-          const texts = parseStringArray(result.text).slice(0, slots.length);
-          if (!texts.length) {
-            throw new Error("模型返回了内容，但没有解析到可用弹幕。");
-          }
-          return { result, slots, texts, attempts: attempt, batchIndex: start + waveIndex };
-        } catch (error) {
-          throwIfAborted(signal);
-          lastError = error;
-          if (attempt >= 2 || !isRetryableCommentBatchError(error)) throw error;
-          await waitForCommentRetry(5_000, signal);
+      const batchIndex = start + waveIndex;
+      const cacheKey = `danmaku-${shortHash(`${runOptions.checkpointId}:${signature}:${batchIndex}`)}`;
+      return withEngagementCacheLock("pipeline", cacheKey, async () => {
+        throwIfAborted(signal);
+        const cached = await readEngagementCache<unknown>("pipeline", cacheKey);
+        if (cached !== null) {
+          const parsed = danmakuBatchCheckpointSchema.safeParse(cached);
+          if (!parsed.success || parsed.data.signature !== signature || parsed.data.index !== batchIndex || parsed.data.texts.length > slots.length) throw new Error("弹幕批次检查点损坏或与当前输入不匹配，已停止恢复；已有素材未被修改。");
+          return { result: { model: parsed.data.model }, slots, texts: parsed.data.texts, attempts: parsed.data.attempts, batchIndex };
         }
-      }
-      throw lastError;
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          attempted.set(batchIndex, attempt);
+          try {
+            const result = await chatCompleteStrict(
+              [
+                {
+                  role: "system",
+                  content:
+                    "你在模拟一群互不认识的 B站观众。严格按给定时间槽和台词锚点各写一条即时弹幕，只负责写文本，不得自己编时间。弹幕是看见当下画面脱口而出的短反应，不是视频评论、测评总结或台词改写。只有明确标记的复读槽才能复读；其他槽位不得重复已经用过的句子。不要攻击、造谣、色情、歧视或刷屏。只输出与槽位等长、顺序一致的 JSON 字符串数组。"
+                },
+                {
+                  role: "user",
+                  content: buildDanmakuBatchPrompt(
+                    generationSource,
+                    styleProfile,
+                    slots,
+                    uniqueText([...excludedDanmaku, ...parsedItems.map((item) => item.text)]).slice(-80)
+                  )
+                }
+              ],
+              "medium",
+              { policy: "danmaku", signal }
+            );
+            throwIfAborted(signal);
+            if (result.fallback || !result.text.trim()) {
+              throw new Error(result.fallbackReason || "模型没有返回可用弹幕，请重试或更换模型。");
+            }
+            const texts = parseStringArray(result.text, { preservePositions: true }).slice(0, slots.length);
+            if (!texts.some(Boolean)) {
+              throw new Error("模型返回了内容，但没有解析到可用弹幕。");
+            }
+            await writeEngagementCache("pipeline", cacheKey, danmakuBatchCheckpointSchema.parse({ schemaVersion: 1, signature, index: batchIndex, texts, model: result.model, attempts: attempt }));
+            return { result, slots, texts, attempts: attempt, batchIndex };
+          } catch (error) {
+            throwIfAborted(signal);
+            lastError = error;
+            if (attempt >= 2 || !isRetryableCommentBatchError(error)) throw error;
+            await waitForCommentRetry(5_000, signal);
+          }
+        }
+        throw lastError;
+      });
     }));
 
     settled.forEach((item, waveIndex) => {
@@ -1148,7 +1180,8 @@ async function generateDanmaku(
           parsedCount: 0,
           model: "",
           status: "failed",
-          attempts: 2,
+          attempts: attempted.get(start + waveIndex) || 0,
+          retryable: isRetryableCommentBatchError(item.reason),
           error
         });
         return;
@@ -1177,6 +1210,9 @@ async function generateDanmaku(
         parsedItems.push({ slot, text: normalized });
       });
     });
+    if (!signal?.aborted) await runOptions.onProgress?.({ stage: "generate", progress: 65, message: `弹幕批次已保存 ${Math.min(start + wave.length, batches.length)}/${batches.length}`, checkpointSaved: true });
+    throwIfAborted(signal);
+    if (settled.some((item) => item.status === "rejected" && !isRetryableCommentBatchError(item.reason))) break;
   }
 
   const selection = selectDanmakuItems(parsedItems, excludedDanmaku);
@@ -1527,6 +1563,9 @@ function throwIfAborted(signal?: AbortSignal) {
 }
 
 function isRetryableCommentBatchError(error: unknown) {
+  const kind = classifyModelFailure(error).kind;
+  if (["auth", "quota", "endpoint", "not_configured"].includes(kind)) return false;
+  if (["timeout", "rate_limit", "network", "server"].includes(kind)) return true;
   const message = error instanceof Error ? error.message : String(error || "");
   return /限流|rate limit|429|暂时异常|暂时不可用|连接异常|网络|超时|timeout|5\d\d|没有解析到可用评论/i.test(message);
 }
@@ -1779,8 +1818,8 @@ function makeCommentItem(
   };
 }
 
-export function parseStringArray(text: string, options: { preserveItems?: boolean } = {}) {
-  const decode = (values: string[]) => options.preserveItems
+export function parseStringArray(text: string, options: { preserveItems?: boolean; preservePositions?: boolean } = {}) {
+  const decode = (values: string[]) => options.preservePositions ? values.map((value) => value.trim()) : options.preserveItems
     ? values.map((value) => value.trim()).filter(Boolean)
     : uniqueText(values);
   const parsed = parseJsonFromText(text);
@@ -1791,6 +1830,7 @@ export function parseStringArray(text: string, options: { preserveItems?: boolea
       : [];
   const jsonValues = decode(values.map((value) => (typeof value === "string" ? value : "")));
   if (jsonValues.length) return jsonValues;
+  if (options.preservePositions) return [];
   // Some completed responses contain one JSON string per line without the outer array.
   // Decode only an entirely well-formed string list; arbitrary prose is not a comment.
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^```/.test(line));

@@ -5,8 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   getActiveServiceOptions,
   getMinimumQuantityWarning,
-  getSelectedOption,
-  toAmount
+  getSelectedOption
 } from "@/lib/gross-margin-calculator";
 import type { GrossMarginAccountPrice } from "@/lib/types";
 import type { GrossMarginWorkbenchController } from "../_hooks/useGrossMarginWorkbench";
@@ -24,6 +23,7 @@ type GrossMarginMaintenancePaneProps = Pick<
   | "accountName"
   | "accountPriceKind"
   | "activeServiceConfigs"
+  | "calculation"
   | "discountPrice"
   | "handleAccountNameChange"
   | "handleAccountPriceKindChange"
@@ -33,7 +33,6 @@ type GrossMarginMaintenancePaneProps = Pick<
   | "originalPrice"
   | "platform"
   | "platformAccounts"
-  | "priceInputs"
   | "quantityInputs"
   | "rebateRate"
   | "selectedOptions"
@@ -196,6 +195,7 @@ export function GrossMarginMaintenancePane({
   accountName,
   accountPriceKind,
   activeServiceConfigs,
+  calculation,
   discountPrice,
   handleAccountNameChange,
   handleAccountPriceKindChange,
@@ -205,7 +205,6 @@ export function GrossMarginMaintenancePane({
   originalPrice,
   platform,
   platformAccounts,
-  priceInputs,
   quantityInputs,
   rebateRate,
   selectedOptions,
@@ -355,12 +354,11 @@ export function GrossMarginMaintenancePane({
               {activeServiceConfigs.map((config) => {
                 const options = table ? getActiveServiceOptions(table, config.service) : [];
                 const selectedOption = getSelectedOption(options, selectedOptions[config.service]);
-                const unitPrice = selectedOption ? toAmount(priceInputs[selectedOption.id] ?? selectedOption.unitPrice) : 0;
-                const quantity = toAmount(quantityInputs[config.service]);
+                const line = calculation.lines.find(line => line.service === config.service);
                 const minimumWarning = getMinimumQuantityWarning(
                   selectedOption,
                   quantityInputs[config.service],
-                  quantity
+                  line?.quantity ?? 0
                 );
                 return (
                   <tr key={config.service}>
@@ -400,8 +398,8 @@ export function GrossMarginMaintenancePane({
                         {minimumWarning ? <small className="gross-quantity-warning">{minimumWarning}</small> : null}
                       </div>
                     </td>
-                    <td>{formatUnitPrice(unitPrice)}</td>
-                    <td>{formatMoney(quantity * unitPrice)}</td>
+                    <td>{formatUnitPrice(line?.unitPrice ?? 0)}</td>
+                    <td>{formatMoney(line?.total ?? 0)}</td>
                   </tr>
                 );
               })}

@@ -1,5 +1,6 @@
 import { assistImagePrompt } from "./image-prompt-assist";
 import { generateImages } from "./image-generation";
+import { generateDraftCover } from "./cover";
 import { randomUUID } from "crypto";
 import path from "path";
 import {
@@ -31,18 +32,27 @@ import { getHotspotRadar } from "./hotspots";
 import { hasSupportDocumentReference } from "./support-documents";
 import { extractRewriteSourceMaterial, splitWriterSourceInput } from "./source-extraction";
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
-import { buildEngagementRecordHref } from "./job-links";
+import { buildEngagementRecordHref, defaultJobHref } from "./job-links";
 import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES, isResumableJobKind } from "./job-persistence";
 import { libraryRoot, resolveDraft } from "./storage";
 import { generatePublishCopy } from "./publish-copy";
-import { isCloudStorageMode, readJsonFile, storageFs as fs, writeJsonFile } from "./storage/fs";
+import { fileExists, isCloudStorageMode, readJsonFile, storageFs as fs, writeJsonFile } from "./storage/fs";
+import { normalizeStorageSegment } from "./storage/core";
+import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "./storage/schemas";
+import { mapWithConcurrency } from "./concurrency";
+import { startJobSchema } from "./job-validation";
+import { isActiveJob, isTerminalJob, selectJobList } from "./job-sync";
 import {
   claimCloudJob,
+  CloudJobConflictError,
   deleteCloudJob,
   getCloudJobEventBounds,
   listCloudJobEvents,
   listCloudJobs,
   readCloudJob,
+  readCloudJobLease,
+  releaseCloudJobLease,
+  renewCloudJobLease,
   writeCloudJob
 } from "./jobs-cloud";
 import { transcribeLinkSource, transcribeVideo } from "./transcription";
@@ -56,10 +66,9 @@ import {
   JobScope,
   JobStartInput,
   WriteBatchResult,
-  WriteGenerationResult,
-  jobKinds
+  WriteGenerationResult
 } from "./types";
-import { nowIso, safeSegment, shortHash } from "./utils";
+import { nowIso, shortHash } from "./utils";
 import { logJobTransition } from "./observability";
 
 type JobRuntime = {
@@ -70,6 +79,8 @@ type JobRuntime = {
   cancelRequests: Set<string>;
   pending: Map<string, JobStartInput>;
   records: Map<string, JobRecord>;
+  readErrors: Map<string, string>;
+  cloudOwners: Map<string, string>;
   changeEpoch: string;
   changeRevision: number;
   changeLog: Array<{ revision: number; jobId: string; removed?: boolean }>;
@@ -77,6 +88,7 @@ type JobRuntime = {
 
 type PatchJobOptions = {
   persist?: boolean;
+  recordSavedData?: boolean;
   beforePatch?: (current: JobRecord) => void;
 };
 
@@ -102,6 +114,8 @@ const runtime = (() => {
     existing.cancelRequests ||= new Set();
     existing.pending ||= new Map();
     existing.records ||= new Map();
+    existing.readErrors ||= new Map();
+    existing.cloudOwners ||= new Map();
     existing.changeEpoch ||= "";
     existing.changeRevision ||= 0;
     existing.changeLog ||= [];
@@ -115,6 +129,8 @@ const runtime = (() => {
     cancelRequests: new Set(),
     pending: new Map(),
     records: new Map(),
+    readErrors: new Map(),
+    cloudOwners: new Map(),
     changeEpoch: "",
     changeRevision: 0,
     changeLog: []
@@ -128,21 +144,10 @@ let jobSummaryCache: JobSummaryCache | null = null;
 const PARTIAL_TEXT_PATCH_INTERVAL_MS = 250;
 const PARTIAL_TEXT_PATCH_CHARS = 160;
 const JOB_SUMMARY_EVENT_LIMIT = 3;
-const JOB_SUMMARY_LIMIT = 80;
 const JOB_CHANGE_LOG_LIMIT = 1200;
 const DEFAULT_MAX_ACTIVE_JOBS = 5;
 const DEFAULT_JOB_HISTORY_LIMIT = 200;
 const DEFAULT_JOB_HISTORY_MAX_BYTES = 20 * 1024 * 1024;
-const jobKindSet = new Set<JobKind>(jobKinds);
-const jobStatusSet = new Set<JobRecord["status"]>([
-  "queued",
-  "running",
-  "completed",
-  "failed",
-  "interrupted",
-  "cancelled"
-]);
-
 function jobsPath() {
   return path.join(libraryRoot(), "jobs");
 }
@@ -160,7 +165,7 @@ function jobPayloadPath(jobId: string) {
 }
 
 function normalizeJobId(jobId: string) {
-  return safeSegment(jobId.trim());
+  return normalizeStorageSegment(jobId.trim(), "任务 ID");
 }
 
 async function ensureJobs() {
@@ -170,30 +175,64 @@ async function ensureJobs() {
   ]);
 }
 
-async function readJson<T>(target: string): Promise<T | null> {
-  return readJsonFile<T>(target);
+async function readJobRecord(target: string): Promise<JobRecord | null> {
+  const raw = await readJsonFile<unknown>(target);
+  if (raw === null && !await fileExists(target)) return null;
+  const job = parseStoredRecord<JobRecord>(target, raw, "job");
+  if (job.id !== path.basename(target, ".json")) throw new Error(`任务记录 ID 与文件名不一致：${target}。请检查素材库。`);
+  return job;
 }
 
-async function writeJson(target: string, value: unknown) {
-  return writeJsonFile(target, value);
+// One incompatible file must not prevent reading healthy jobs; report every failure to the task center.
+async function readJobForList(target: string) {
+  try {
+    const job = await readJobRecord(target);
+    runtime.readErrors.delete(target);
+    return job;
+  } catch (error) {
+    runtime.readErrors.set(target, error instanceof Error ? error.message : `读取任务失败：${target}。请检查素材库。`);
+    return null;
+  }
+}
+
+export function getJobReadErrors() {
+  return [...runtime.readErrors.values()];
+}
+
+export function getJobRecoveryErrors() {
+  return Object.fromEntries([...runtime.readErrors]
+    .filter(([target]) => path.dirname(target) === jobPayloadsPath())
+    .map(([target, message]) => [path.basename(target, ".json"), message]));
+}
+
+async function readCloudJobsForList() {
+  const { jobs, readErrors } = await listCloudJobs();
+  for (const key of runtime.readErrors.keys()) if (key.startsWith("cloud_jobs/")) runtime.readErrors.delete(key);
+  for (const [id, message] of Object.entries(readErrors)) runtime.readErrors.set(`cloud_jobs/${id}`, message);
+  return jobs;
 }
 
 async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
+  job = { ...parseStoredRecord<JobRecord>(jobJsonPath(job.id), job, "job"), schemaVersion: STORAGE_SCHEMA_VERSION };
+  if (options.persist !== false || isCloudStorageMode()) {
+    const persisted = compactJobForPersistence(job, jobResultPersistBytes());
+    if (isCloudStorageMode()) await writeCloudJob(persisted, runtime.cloudOwners.get(job.id), options.recordSavedData);
+    else await writeJsonFile(jobJsonPath(job.id), persisted);
+    invalidateJobSummaryCache();
+  }
   runtime.records.set(job.id, job);
   recordJobChange(job.id);
-  if (options.persist === false) return;
-  const persisted = compactJobForPersistence(job, jobResultPersistBytes());
-  if (isCloudStorageMode()) await writeCloudJob(persisted);
-  else await writeJson(jobJsonPath(job.id), persisted);
-  invalidateJobSummaryCache();
 }
 
 async function patchJob(jobId: string, patch: Partial<JobRecord>, options: PatchJobOptions = {}) {
   return enqueueJobWrite(jobId, async () => {
-    const current = runtime.records.get(jobId) || (await readJson<JobRecord>(jobJsonPath(jobId)));
+    const current = isCloudStorageMode() ? await readCloudJob(jobId) : runtime.records.get(jobId) || await readJobRecord(jobJsonPath(jobId));
     if (!current) throw new Error("找不到任务记录");
-    if (isTerminalJob(current)) return current;
+    const terminal = isTerminalJob(current);
+    if (terminal && !options.recordSavedData) return current;
     options.beforePatch?.(current);
+    // A save can finish during cancellation; record its data without reopening the task.
+    if (terminal) patch = Object.fromEntries(Object.entries(patch).filter(([key]) => ["result", "resultRef", "dataRevision", "dataChange"].includes(key)));
     const next: JobRecord = {
       ...current,
       ...patch,
@@ -220,12 +259,18 @@ function patchTransientJob(jobId: string, patch: Partial<JobRecord>) {
   return patchJob(jobId, patch, { persist: false });
 }
 
+function queueJobPatch(jobId: string, patch: Partial<JobRecord>, transient = false) {
+  void (transient ? patchTransientJob(jobId, patch) : patchJob(jobId, patch))
+    .catch((error) => reportJobPersistenceError(jobId, error));
+}
+
 function patchJobWithDataChange(
   jobId: string,
   patch: Partial<JobRecord>,
   dataChange: Omit<NonNullable<JobRecord["dataChange"]>, "at">
 ) {
   return patchJob(jobId, patch, {
+    recordSavedData: true,
     beforePatch(current) {
       patch.dataRevision = (current.dataRevision || 0) + 1;
       patch.dataChange = { ...dataChange, at: nowIso() };
@@ -254,7 +299,7 @@ async function enqueueJobWrite<T>(jobId: string, run: () => Promise<T>) {
 }
 
 async function ensureInitialized() {
-  if (runtime.initialized) return;
+  if (runtime.initialized && !isCloudStorageMode()) return;
   if (runtime.initializing) return runtime.initializing;
 
   runtime.initializing = initializeRuntimeJobs().finally(() => {
@@ -273,17 +318,13 @@ async function initializeRuntimeJobs() {
 
 async function listJobsFromDisk() {
   if (isCloudStorageMode()) {
-    return (await listCloudJobs())
+    return (await readCloudJobsForList())
       .filter((job) => isJobKindAllowedForAppMode(job.kind))
       .sort(compareJobsByUpdatedAtDesc);
   }
   await ensureJobs();
-  const files = await fs.readdir(jobsPath()).catch(() => [] as string[]);
-  const jobs = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".json"))
-      .map((file) => readJson<JobRecord>(path.join(jobsPath(), file)))
-  );
+  const files = await fs.readdir(jobsPath());
+  const jobs = await mapWithConcurrency(files.filter((file) => file.endsWith(".json")), 6, (file) => readJobForList(path.join(jobsPath(), file)));
   return jobs
     .filter((job): job is JobRecord => Boolean(job))
     .filter((job) => isJobKindAllowedForAppMode(job.kind))
@@ -292,13 +333,13 @@ async function listJobsFromDisk() {
 
 async function listJobSummariesFromDisk() {
   if (isCloudStorageMode()) {
-    return (await listCloudJobs())
+    return (await readCloudJobsForList())
       .filter((job) => isJobKindAllowedForAppMode(job.kind))
       .sort(compareJobsByUpdatedAtDesc)
       .map((job) => ({ ...toJobListItem(job), filePath: "" }));
   }
   await ensureJobs();
-  const files = await fs.readdir(jobsPath()).catch(() => [] as string[]);
+  const files = await fs.readdir(jobsPath());
   const stats = await fs.stat(jobsPath());
   const jsonFileCount = files.filter((file) => file.endsWith(".json")).length;
 
@@ -310,11 +351,11 @@ async function listJobSummariesFromDisk() {
     return jobSummaryCache.jobs;
   }
 
-  const summaries = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".json"))
-      .map((file) => readJobSummary(path.join(jobsPath(), file)))
-  );
+  const targets = new Set(files.filter((file) => file.endsWith(".json")).map((file) => path.join(jobsPath(), file)));
+  for (const key of runtime.readErrors.keys()) {
+    if (path.dirname(key) === jobsPath() && !targets.has(key)) runtime.readErrors.delete(key);
+  }
+  const summaries = await mapWithConcurrency([...targets], 6, readJobSummary);
   const jobs = summaries
     .filter((job): job is JobSummaryRead => Boolean(job))
     .filter((job) => isJobKindAllowedForAppMode(job.kind))
@@ -329,32 +370,37 @@ async function listJobSummariesFromDisk() {
 }
 
 async function readJobSummary(target: string): Promise<JobSummaryRead | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(target, "utf8");
-  } catch (error) {
-    if (isMissingFileError(error)) return null;
-    throw new Error(`读取 JSON 文件失败：${target}。${describeFsError(error)}`);
-  }
-
-  return parseJobSummaryJson(target, raw);
+  const job = await readJobForList(target);
+  return job ? { ...toJobListItem(job), filePath: target } : null;
 }
 
 async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
-  const staleJobs = jobs.filter((job) => (job.status === "running" || job.status === "queued") && !runtime.active.has(job.id));
+  const staleJobs = jobs.filter((job) => isActiveJob(job) && !runtime.active.has(job.id) && !runtime.pending.has(job.id));
   if (!staleJobs.length) return [];
 
   const interruptedAt = nowIso();
   const resumable: Array<{ jobId: string; input: JobStartInput }> = [];
   await Promise.all(
     staleJobs.map(async (summary) => {
-      const job = isCloudStorageMode()
-        ? await readCloudJob(summary.id)
-        : await readJson<JobRecord>(summary.filePath);
-      if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
-      const input = await readJobPayload(job.id);
-      if (input && input.kind === job.kind && isResumableJobKind(job.kind, input)) {
-        await writeJob({
+      let job: JobRecord | null;
+      let input: JobStartInput | null;
+      try {
+        job = isCloudStorageMode() ? await readCloudJob(summary.id) : await readJobRecord(summary.filePath);
+        if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
+        if (isCloudStorageMode()) {
+          const lease = await readCloudJobLease(job.id);
+          if (!lease || (lease.lease_expires_at || 0) > Date.now()) return;
+        }
+        input = await readJobPayload(job.id, job.kind);
+      } catch (error) {
+        runtime.readErrors.set(jobPayloadPath(summary.id), `任务 ${summary.id} 未恢复：${error instanceof Error ? error.message : "读取恢复参数失败，请检查素材库。"}`);
+        return;
+      }
+      const legacyBatch = input?.kind === "batch-transcribe" && !input.input.videoIds &&
+        (job.status === "running" || (job.attempt || 0) > 0);
+      const unstartedCloudJob = isCloudStorageMode() && job.status === "queued" && !job.attempt;
+      if (input && (unstartedCloudJob || isResumableJobKind(job.kind, input)) && !legacyBatch) {
+        try { await writeJob({
           ...job,
           status: "queued",
           stage: "queued",
@@ -366,16 +412,23 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
         });
         resumable.push({ jobId: job.id, input });
         return;
+        } catch (error) {
+          if (error instanceof CloudJobConflictError) return; // Another isolate acquired the task during recovery.
+          throw error;
+        }
       }
-      await writeJob({
+      try { await writeJob({
         ...job,
         status: "interrupted",
         progress: job.progress || 0,
-        message: input ? "服务重启后任务已中断，可从任务中心重试。" : "服务重启后任务已中断，且缺少恢复参数。",
-        error: input ? "任务已中断，可重试。" : "任务恢复参数缺失，请重新发起。",
+        message: legacyBatch ? "旧版批量任务缺少固定候选，已中断，请确认范围后重新发起。" : input ? "服务重启后任务已中断，可从任务中心重试。" : "服务重启后任务已中断，且缺少恢复参数。",
+        error: legacyBatch ? "缺少原批次候选，无法安全自动恢复。" : input ? "任务已中断，可重试。" : "任务恢复参数缺失，请重新发起。",
         updatedAt: interruptedAt,
         completedAt: interruptedAt
-      });
+      }); } catch (error) {
+        if (error instanceof CloudJobConflictError) return; // Keep the state owned by another isolate.
+        throw error;
+      }
     })
   );
   return resumable;
@@ -383,16 +436,16 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
 
 function stripSummaryFilePath({ filePath, ...job }: JobSummaryRead): JobListItem {
   void filePath;
-  return job;
+  return withJobRecoveryError(job);
 }
 
 export async function listJobs() {
   await ensureInitialized();
   const jobs = new Map((await listJobsFromDisk()).map((job) => [job.id, job]));
   for (const job of runtime.records.values()) {
-    if (isJobKindAllowedForAppMode(job.kind)) jobs.set(job.id, job);
+    if (!isCloudStorageMode() && isJobKindAllowedForAppMode(job.kind)) jobs.set(job.id, job);
   }
-  return [...jobs.values()].sort(compareJobsByUpdatedAtDesc);
+  return [...jobs.values()].map(withJobRecoveryError).sort(compareJobsByUpdatedAtDesc);
 }
 
 export function isJobExecuting(jobId: string) {
@@ -405,10 +458,10 @@ export async function listJobSummaries(options: { all?: boolean } = {}) {
     (await listJobSummariesFromDisk()).map((job) => [job.id, stripSummaryFilePath(job)])
   );
   for (const job of runtime.records.values()) {
-    if (isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
+    if (!isCloudStorageMode() && isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
   }
   const sorted = [...summaries.values()].sort(compareJobsByUpdatedAtDesc);
-  return options.all ? sorted : sorted.slice(0, JOB_SUMMARY_LIMIT);
+  return options.all ? sorted : selectJobList(sorted);
 }
 
 export async function listJobSummaryChanges(cursor?: string) {
@@ -435,12 +488,19 @@ export async function listJobSummaryChanges(cursor?: string) {
     const jobs = await Promise.all(
       [...latestById.entries()].map(async ([jobId, event]) => {
         if (event.kind === "removed") return null;
-        const job = await readCloudJob(jobId);
-        return job && isJobKindAllowedForAppMode(job.kind) ? toJobListItem(job) : null;
+        const key = `cloud_jobs/${jobId}`;
+        try {
+          const job = await readCloudJob(jobId);
+          runtime.readErrors.delete(key);
+          return job && isJobKindAllowedForAppMode(job.kind) ? toJobListItem(job) : null;
+        } catch (error) {
+          runtime.readErrors.set(key, `云端任务 ${jobId} 无法读取：${error instanceof Error ? error.message : "请检查任务记录。"}`);
+          return null;
+        }
       })
     );
     const removedJobIds = [...latestById.entries()]
-      .filter(([, event]) => event.kind === "removed")
+      .filter(([jobId, event]) => event.kind === "removed" || runtime.readErrors.has(`cloud_jobs/${jobId}`))
       .map(([jobId]) => jobId);
     return {
       jobs: jobs.filter((job): job is JobListItem => Boolean(job)),
@@ -489,26 +549,29 @@ export async function listJobSummaryChanges(cursor?: string) {
 export async function getJob(jobId: string) {
   await ensureInitialized();
   const cached = runtime.records.get(jobId);
-  if (cached) {
+  if (cached && !isCloudStorageMode()) {
     assertJobKindAllowedForAppMode(cached.kind);
-    return cached;
+    return withJobRecoveryError(cached);
   }
 
   const job = isCloudStorageMode()
     ? await readCloudJob(jobId)
-    : await readJson<JobRecord>(jobJsonPath(jobId));
+    : await readJobRecord(jobJsonPath(jobId));
   if (!job) throw new Error("找不到任务记录");
   assertJobKindAllowedForAppMode(job.kind);
-  runtime.records.set(job.id, job);
-  return job;
+  const current = cached?.updatedAt === job.updatedAt && cached.status === job.status ? cached : job;
+  runtime.records.set(job.id, current);
+  return withJobRecoveryError(current);
 }
 
 export async function createJob(input: JobStartInput) {
+  input = startJobSchema.parse(input);
   assertJobKindAllowedForAppMode(input.kind);
   await ensureInitialized();
   if (input.kind === "engagement") input = { ...input, checkpointId: input.checkpointId || randomUUID() };
   const now = nowIso();
   const job: JobRecord = {
+    schemaVersion: STORAGE_SCHEMA_VERSION,
     id: makeJobId(input.kind),
     kind: input.kind,
     status: "queued",
@@ -518,7 +581,7 @@ export async function createJob(input: JobStartInput) {
     stage: "queued",
     message: "任务已加入队列",
     progress: 0,
-    href: input.href || defaultHref(input),
+    href: input.href || defaultJobHref(input.kind),
     events: [
       {
         at: now,
@@ -559,32 +622,68 @@ async function scheduleCloudJob(jobId: string, input: JobStartInput) {
     const { waitUntil } = await import(workersModule) as unknown as {
       waitUntil(promise: Promise<unknown>): void;
     };
-    waitUntil(runCloudJobAndRelease(jobId, input));
+    waitUntil(runCloudJobAndRelease(jobId, input).catch((error) => reportJobPersistenceError(jobId, error)));
   } catch (error) {
     runtime.pending.delete(jobId);
     await patchJob(jobId, {
       status: "failed",
       stage: "error",
       message: "云端任务调度失败",
-      error: error instanceof Error ? error.message : "无法注册 Worker 后台任务"
-    }).catch(() => undefined);
+      error: error instanceof Error ? error.message : "无法注册 Worker 后台任务",
+      completedAt: nowIso()
+    }).catch((writeError) => reportJobPersistenceError(jobId, writeError));
   }
 }
 
 async function runCloudJobAndRelease(jobId: string, input: JobStartInput) {
+  const owner = randomUUID();
+  while (runtime.pending.has(jobId)) {
+    const lease = await readCloudJobLease(jobId);
+    if (!lease || isTerminalJob({ status: lease.state }) || (lease.lease_expires_at || 0) > Date.now()) {
+      runtime.pending.delete(jobId);
+      return;
+    }
+    if (await claimCloudJob(jobId, owner, maxActiveJobs())) break;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  // A queued cancellation can win while the claim is awaiting D1.
+  if (!runtime.pending.has(jobId)) {
+    await releaseCloudJobLease(jobId, owner);
+    return;
+  }
   runtime.pending.delete(jobId);
-  const claimed = await claimCloudJob(jobId, `${jobId}:${Date.now()}`);
-  if (!claimed) return;
+  runtime.cloudOwners.set(jobId, owner);
+  let checking = false;
+  let heartbeat: Promise<void> = Promise.resolve();
+  const timer = setInterval(() => {
+    if (checking) return;
+    checking = true;
+    heartbeat = renewCloudJobLease(jobId, owner).then((state) => {
+      if (state === "active") return;
+      if (state === "cancelled") runtime.cancelRequests.add(jobId);
+      runtime.abortControllers.get(jobId)?.abort(state === "cancelled" ? new CancelledJobError() : new CloudJobConflictError());
+    }).catch((error) => {
+      runtime.abortControllers.get(jobId)?.abort(new Error(`云端任务租约检查失败：${error instanceof Error ? error.message : "请检查任务存储"}`));
+    }).finally(() => { checking = false; });
+  }, 1500);
   const promise = runJob(jobId, input);
   runtime.active.set(jobId, promise);
   try {
     await promise;
   } finally {
-    runtime.active.delete(jobId);
+    clearInterval(timer);
+    try {
+      await heartbeat;
+      await releaseCloudJobLease(jobId, owner);
+    } finally {
+      runtime.cloudOwners.delete(jobId);
+      runtime.active.delete(jobId);
+    }
   }
 }
 
 function pumpJobQueue() {
+  if (isCloudStorageMode()) return;
   while (runtime.active.size < maxActiveJobs()) {
     const next = runtime.pending.entries().next();
     if (next.done) return;
@@ -593,7 +692,7 @@ function pumpJobQueue() {
     runtime.pending.delete(jobId);
     if (runtime.cancelRequests.has(jobId)) continue;
 
-    const promise = runJob(jobId, input).finally(() => {
+    const promise = runJob(jobId, input).catch((error) => reportJobPersistenceError(jobId, error)).finally(() => {
       runtime.active.delete(jobId);
       pumpJobQueue();
     });
@@ -622,6 +721,22 @@ async function runJob(jobId: string, input: JobStartInput) {
       await completeJob(jobId, { message: "提示词建议已生成", result, resultRef: { id: jobId, href: `/images?assistId=${encodeURIComponent(jobId)}`, label: "查看建议" } });
     } else if (input.kind === "image-generation") {
       await runImageGenerationJob(jobId, input);
+    } else if (input.kind === "image-cover") {
+      const draft = (await resolveDraft(input.input.draftId)).draft;
+      const href = buildWriterDraftHref(draft);
+      await patchJob(jobId, { href, resultRef: { id: draft.id, href, label: "查看草稿封面" } });
+      const result = await generateDraftCover({
+        ...input.input, signal: getJobAbortSignal(jobId),
+        onStage: (stage) => patchJob(jobId, stage).then(() => {}),
+        onSaved: async (images) => {
+          await patchJobWithDataChange(jobId, {
+            stage: "save", message: `已保存 ${images.length}/${input.input.count} 张封面`,
+            result: { draftId: draft.id, imageIds: images.map((image) => image.id) }
+          }, { resource: "drafts", recordId: draft.id });
+        }
+      });
+      throwIfCancelled(jobId);
+      await completeJob(jobId, { message: `已生成 ${result.images.length} 张封面`, result: { draftId: draft.id, imageIds: result.images.map((image) => image.id) } });
     } else if (input.kind === "write-copy") {
       await runWriteCopyJob(jobId, input);
     } else if (input.kind === "account-style") {
@@ -648,10 +763,16 @@ async function runJob(jobId: string, input: JobStartInput) {
       await runEngagementJob(jobId, input);
     }
   } catch (error) {
-    if (isCancelledJobError(error, controller.signal)) {
+    if (error instanceof CloudJobConflictError || controller.signal.reason instanceof CloudJobConflictError) return;
+    if (controller.signal.aborted && controller.signal.reason instanceof Error && !(controller.signal.reason instanceof CancelledJobError) && !runtime.cancelRequests.has(jobId)) {
+      error = controller.signal.reason;
+    }
+    const cancelled = runtime.cancelRequests.has(jobId) || controller.signal.reason instanceof CancelledJobError ||
+      (!controller.signal.aborted && isCancelledJobError(error));
+    if (cancelled) {
       const current = runtime.records.get(jobId) || (isCloudStorageMode()
         ? await readCloudJob(jobId)
-        : await readJson<JobRecord>(jobJsonPath(jobId)));
+        : await readJobRecord(jobJsonPath(jobId)));
       await patchJob(jobId, {
         status: "cancelled",
         stage: "cancelled",
@@ -730,7 +851,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
 
   const batch = await prepareWriteCopyBatchContext(start.input, {
     signal: getJobAbortSignal(jobId),
-    onProgress(message) { void patchJob(jobId, { stage: "prepare-style", message, progress: 32 }); }
+    onProgress(message) { queueJobPatch(jobId, { stage: "prepare-style", message, progress: 32 }); }
   });
   throwIfCancelled(jobId);
 
@@ -757,6 +878,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     stage: "generate", message: "正在生成正文", progress: text => Math.min(86, 55 + Math.floor(text.length / 120))
   });
   let completedCount = 0;
+  const partialResult: WriteBatchResult = { kind: "write-batch", results: [], failures: batch.preparationFailures || [], research: batch.research, sourceDigest: batch.sourceDigest };
   const outcomes = await Promise.all(batch.variants.map(async (variant) => {
     try {
       const result = await streamResponseTextWithFallback({
@@ -778,6 +900,11 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
         save: start.input.save,
         signal: getJobAbortSignal(jobId)
       });
+      if (completed.draft) {
+        partialResult.results.push(completed);
+        const result = { ...partialResult, results: [...partialResult.results], failures: [...partialResult.failures] };
+        await patchJobWithDataChange(jobId, { result, resultRef: writeResultRef(result) }, { resource: "drafts" });
+      }
       completedCount += 1;
       await patchTransientJob(jobId, {
         stage: "generate",
@@ -789,6 +916,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
       return { result: completed };
     } catch (error) {
       if (isCancelledJobError(error, getJobAbortSignal(jobId))) throw error;
+      partialResult.failures.push(writeVariantFailure(variant, error));
       completedCount += 1;
       await patchTransientJob(jobId, {
         stage: "generate",
@@ -891,6 +1019,9 @@ async function runWriteRevisionJob(jobId: string, start: Extract<JobStartInput, 
     save: start.input.save,
     signal: getJobAbortSignal(jobId)
   });
+  if (finalResult.draft) {
+    await patchJobWithDataChange(jobId, { result: finalResult, resultRef: writeResultRef(finalResult) }, { resource: "drafts" });
+  }
   throwIfCancelled(jobId);
   await completeJob(jobId, {
     message: "文案新版本已生成",
@@ -924,7 +1055,7 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
       const percent = progress.analysisCount
         ? Math.floor((progress.completedCount / progress.analysisCount) * 25)
         : 0;
-      void patchJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "analysis",
         message: progress.message || `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
         progress: Math.min(34, 12 + percent)
@@ -1030,7 +1161,7 @@ async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, {
       const percent = progress.analysisCount
         ? Math.floor((progress.completedCount / progress.analysisCount) * 30)
         : 0;
-      void patchJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "analysis",
         message: progress.message || `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
         progress: Math.min(44, 15 + percent)
@@ -1144,37 +1275,41 @@ async function runBatchTranscribeJob(jobId: string, start: Extract<JobStartInput
   throwIfCancelled(jobId);
   const result = await runBatchTranscribe(start.input, {
     signal: getJobAbortSignal(jobId),
+    async onCandidates(videoIds) {
+      if (!start.input.videoIds) {
+        await writeJobPayload(jobId, { ...start, input: { ...start.input, videoIds } });
+      }
+    },
     onPrepare() {
       throwIfCancelled(jobId);
-      void patchTransientJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "prepare",
         message: "正在读取账号和候选视频",
         progress: 8
-      });
+      }, true);
     },
     onMediaPreloadStart({ total }) {
       throwIfCancelled(jobId);
-      void patchTransientJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "media-preload",
         message: `正在预取 ${total} 条抖音视频的媒体地址`,
         progress: 12
-      });
+      }, true);
     },
     onVideoStart({ index, total, video }) {
       throwIfCancelled(jobId);
       const progress = total ? 18 + Math.round((index / total) * 64) : 70;
-      void patchTransientJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "transcribe",
         message: `正在处理第 ${index + 1}/${total} 条视频：${video.title}`,
         progress
-      });
+      }, true);
     },
-    onVideoResult(video) {
-      throwIfCancelled(jobId);
-      void patchTransientJob(jobId, {
+    async onVideoResult(video) {
+      await patchJobWithDataChange(jobId, {
         message: `已处理：${video.title}`,
         result: { latestVideo: video }
-      });
+      }, { resource: "library-account", accountId: start.input.accountId, videoId: video.videoId });
     },
     async onTranscribeComplete({ completed, skipped, failed }) {
       throwIfCancelled(jobId);
@@ -1189,19 +1324,19 @@ async function runBatchTranscribeJob(jobId: string, start: Extract<JobStartInput
     },
     onStyleStart() {
       throwIfCancelled(jobId);
-      void patchTransientJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "style",
         message: "正在更新账号风格卡",
         progress: 88
-      });
+      }, true);
     },
     onFinalize() {
       throwIfCancelled(jobId);
-      void patchTransientJob(jobId, {
+      queueJobPatch(jobId, {
         stage: "finalize",
         message: "正在整理转写结果",
         progress: 98
-      });
+      }, true);
     }
   });
   throwIfCancelled(jobId);
@@ -1456,8 +1591,9 @@ export async function cancelJob(jobId: string) {
 export async function retryJob(jobId: string) {
   await ensureInitialized();
   const current = await getJob(jobId);
+  if (current.recoveryError) throw new Error(current.recoveryError);
   if (!isTerminalJob(current)) throw new Error("任务仍在运行，无法重试");
-  const input = await readJobPayload(jobId);
+  const input = await readJobPayload(jobId, current.kind);
   if (!input) throw new Error("任务恢复参数缺失，请重新发起。");
   return createJob(input);
 }
@@ -1514,7 +1650,7 @@ function createPartialTextUpdater(
 
   return {
     update(text: string) {
-      if (shouldPatch(text)) void patch(text);
+      if (shouldPatch(text)) void patch(text).catch((error) => reportJobPersistenceError(jobId, error));
     },
     async flush(text: string) {
       if (text && text.length !== lastPatchedLength) await patch(text);
@@ -1529,6 +1665,7 @@ function makeJobId(kind: JobKind) {
 function defaultJobTitle(input: JobStartInput) {
   if (input.kind === "image-prompt-assist") return input.input.mode === "polish" ? "AI 润色提示词" : "AI 构图建议";
   if (input.kind === "image-generation") return "生成图片";
+  if (input.kind === "image-cover") return "生成草稿封面";
   if (input.kind === "write-copy") return "生成文案";
   if (input.kind === "account-style") return "生成账号风格卡";
   if (input.kind === "project-style") return "生成项目风格卡";
@@ -1545,6 +1682,7 @@ function defaultJobTitle(input: JobStartInput) {
 }
 
 function defaultInputSummary(input: JobStartInput) {
+  if (input.kind === "image-cover") return input.input.draftId;
   if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return input.input.prompt.slice(0, 60);
   if (input.kind === "write-copy") {
     if (input.input.action === "revise") return input.input.revisionScope === "selection" ? "选中段落续改" : "全文续改";
@@ -1576,7 +1714,9 @@ function defaultInputSummary(input: JobStartInput) {
 }
 
 function defaultJobScope(input: JobStartInput): JobScope {
-  if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return { targetType: "text", sourceKey: shortHash(input.input.prompt) };
+  if (input.kind === "image-cover") return { targetType: "draft", draftId: input.input.draftId };
+  if (input.kind === "image-generation") return { targetType: "text", sourceKey: shortHash(input.input.prompt), canvasId: input.input.canvasId };
+  if (input.kind === "image-prompt-assist") return { targetType: "text", sourceKey: shortHash(input.input.prompt) };
   if (input.kind === "write-copy") {
     return compactJobScope({
       targetType: input.input.targetType,
@@ -1670,19 +1810,6 @@ function compactJobScope(scope: JobScope): JobScope {
   ) as JobScope;
 }
 
-function defaultHref(input: JobStartInput) {
-  if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return "/images";
-  if (input.kind === "write-copy") return "/writer";
-  if (input.kind === "account-style" || input.kind === "transcribe-video" || input.kind === "batch-transcribe") return "/library";
-  if (input.kind === "project-style") return "/project-workbench";
-  if (input.kind === "hotlist-refresh") return "/douyin-hotlist";
-  if (input.kind === "collect-account") return "/library";
-  if (input.kind === "single-video-transcribe" || input.kind === "publish-copy") return "/tools";
-  if (input.kind === "hotspot-refresh") return "/hotspots";
-  if (input.kind === "gross-margin-refresh") return "/gross-margin/monitor";
-  return "/assets";
-}
-
 function firstWriteResultContent(result: WriteGenerationResult) {
   return isWriteBatchResult(result) ? result.results[0]?.content : result.content;
 }
@@ -1695,7 +1822,7 @@ function writeResultRef(result: WriteGenerationResult) {
     }
     return {
       id: firstResult.draft.id,
-      href: "/writer",
+      href: buildWriterDraftHref(firstResult.draft),
       label: `查看 ${result.results.length} 篇文案`
     };
   }
@@ -1777,7 +1904,8 @@ async function pruneJobHistory() {
 
   for (const job of jobs) {
     const size = await fs.stat(job.filePath).then((stat) => stat.size).catch(() => 0);
-    if (!isTerminalJob(job)) {
+    const leased = isCloudStorageMode() && ((await readCloudJobLease(job.id))?.lease_expires_at || 0) > Date.now();
+    if (!isTerminalJob(job) || isJobExecuting(job.id) || leased) {
       retainedBytes += size;
       continue;
     }
@@ -1812,12 +1940,19 @@ function invalidateJobSummaryCache() {
 
 async function writeJobPayload(jobId: string, input: JobStartInput) {
   await ensureJobs();
-  await writeJson(jobPayloadPath(jobId), { version: 1, input });
+  await writeJsonFile(jobPayloadPath(jobId), { schemaVersion: STORAGE_SCHEMA_VERSION, version: 1, input });
 }
 
-async function readJobPayload(jobId: string) {
-  const payload = await readJson<{ version?: number; input?: JobStartInput }>(jobPayloadPath(jobId));
-  if (payload?.version !== 1 || !payload.input || !jobKindSet.has(payload.input.kind)) return null;
+async function readJobPayload(jobId: string, expectedKind: JobKind): Promise<JobStartInput | null> {
+  const target = jobPayloadPath(jobId);
+  const raw = await readJsonFile<unknown>(target);
+  if (raw === null && !await fileExists(target)) return null;
+  if (raw && typeof raw === "object" && "version" in raw && raw.version !== 1) {
+    throw new Error(`任务恢复参数版本不支持：${target}。请使用对应版本的程序，或重新发起任务。`);
+  }
+  const payload = parseStoredRecord<{ input: JobStartInput }>(target, raw, "job-payload");
+  if (payload.input.kind !== expectedKind) throw new Error(`任务恢复参数类型不一致：${target}。请重新发起任务。`);
+  runtime.readErrors.delete(target);
   return payload.input;
 }
 
@@ -1847,15 +1982,6 @@ function parseJobChangeCursor(cursor?: string) {
   return { epoch, revision };
 }
 
-function isTerminalJob(job: Pick<JobRecord, "status">) {
-  return (
-    job.status === "completed" ||
-    job.status === "failed" ||
-    job.status === "cancelled" ||
-    job.status === "interrupted"
-  );
-}
-
 function shouldRecordJobEvent(
   current: JobRecord,
   next: JobRecord,
@@ -1882,6 +2008,8 @@ function throwIfCancelled(jobId: string): asserts jobId is string {
   if (runtime.cancelRequests.has(jobId)) {
     throw new CancelledJobError();
   }
+  const signal = getJobAbortSignal(jobId);
+  if (signal?.aborted) throw signal.reason;
 }
 
 class CancelledJobError extends Error {
@@ -1898,217 +2026,8 @@ function isCancelledJobError(error: unknown, signal?: AbortSignal) {
   return error.name === "AbortError" || /AbortError|aborted|任务已停止/i.test(error.message);
 }
 
-function parseJobSummaryJson(target: string, raw: string): JobSummaryRead {
-  const kind = readRequiredString(target, raw, "kind");
-  if (!jobKindSet.has(kind as JobKind)) {
-    throw new Error(`任务记录字段无效：${target} 的 kind 不是已知任务类型。`);
-  }
-
-  const status = readRequiredString(target, raw, "status");
-  if (!jobStatusSet.has(status as JobRecord["status"])) {
-    throw new Error(`任务记录字段无效：${target} 的 status 不是已知任务状态。`);
-  }
-
-  const inputSummary = readOptionalString(target, raw, "inputSummary");
-  const error = readOptionalString(target, raw, "error");
-  const scope = readOptionalObject<JobScope>(target, raw, "scope");
-  const stage = readOptionalString(target, raw, "stage");
-  const href = readOptionalString(target, raw, "href");
-  const resultRef = readOptionalObject<JobRecord["resultRef"]>(target, raw, "resultRef");
-  const events = readOptionalArray<JobEvent>(target, raw, "events");
-  const dataRevision = readOptionalNumber(target, raw, "dataRevision");
-  const dataChange = readOptionalObject<JobRecord["dataChange"]>(target, raw, "dataChange");
-  const attempt = readOptionalNumber(target, raw, "attempt");
-  const resumedAt = readOptionalString(target, raw, "resumedAt");
-  const completedAt = readOptionalString(target, raw, "completedAt");
-  const resultCompacted = readOptionalBoolean(target, raw, "resultCompacted");
-  const resultSizeBytes = readOptionalNumber(target, raw, "resultSizeBytes");
-
-  return {
-    id: readRequiredString(target, raw, "id"),
-    kind: kind as JobKind,
-    status: status as JobRecord["status"],
-    title: readRequiredString(target, raw, "title"),
-    ...(inputSummary ? { inputSummary: summarizeJobListText(inputSummary, 120) } : {}),
-    ...(scope ? { scope } : {}),
-    ...(stage ? { stage } : {}),
-    message: summarizeJobListText(readRequiredString(target, raw, "message"), 160),
-    progress: readRequiredNumber(target, raw, "progress"),
-    ...(href ? { href } : {}),
-    ...(resultRef ? { resultRef } : {}),
-    ...(events ? { events: summarizeJobEvents(events) } : {}),
-    ...(dataRevision !== undefined ? { dataRevision } : {}),
-    ...(dataChange ? { dataChange } : {}),
-    ...(attempt !== undefined ? { attempt } : {}),
-    ...(resumedAt ? { resumedAt } : {}),
-    ...(error ? { error: summarizeJobListText(error, 240) } : {}),
-    createdAt: readRequiredString(target, raw, "createdAt"),
-    updatedAt: readRequiredString(target, raw, "updatedAt"),
-    ...(completedAt ? { completedAt } : {}),
-    ...(resultCompacted !== undefined ? { resultCompacted } : {}),
-    ...(resultSizeBytes !== undefined ? { resultSizeBytes } : {}),
-    hasPartialText: hasTopLevelProperty(raw, "partialText"),
-    hasResult: hasTopLevelProperty(raw, "result"),
-    filePath: target
-  };
-}
-
-function readRequiredString(target: string, raw: string, key: string) {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (value.found && typeof value.value === "string") return value.value;
-  throw new Error(`任务记录字段缺失或无效：${target} 缺少字符串字段 ${key}。`);
-}
-
-function readOptionalString(target: string, raw: string, key: string) {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (!value.found) return undefined;
-  if (typeof value.value === "string") return value.value;
-  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是字符串。`);
-}
-
-function readRequiredNumber(target: string, raw: string, key: string) {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (value.found && typeof value.value === "number" && Number.isFinite(value.value)) return value.value;
-  throw new Error(`任务记录字段缺失或无效：${target} 缺少数字字段 ${key}。`);
-}
-
-function readOptionalNumber(target: string, raw: string, key: string) {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (!value.found) return undefined;
-  if (typeof value.value === "number" && Number.isFinite(value.value)) return value.value;
-  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是数字。`);
-}
-
-function readOptionalBoolean(target: string, raw: string, key: string) {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (!value.found) return undefined;
-  if (typeof value.value === "boolean") return value.value;
-  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是布尔值。`);
-}
-
-function readOptionalObject<T>(target: string, raw: string, key: string): T | undefined {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (!value.found) return undefined;
-  if (value.value && typeof value.value === "object" && !Array.isArray(value.value)) return value.value as T;
-  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是对象。`);
-}
-
-function readOptionalArray<T>(target: string, raw: string, key: string): T[] | undefined {
-  const value = readOptionalTopLevelJsonValue(target, raw, key);
-  if (!value.found) return undefined;
-  if (Array.isArray(value.value)) return value.value as T[];
-  throw new Error(`任务记录字段无效：${target} 的 ${key} 不是数组。`);
-}
-
-function readOptionalTopLevelJsonValue(
-  target: string,
-  raw: string,
-  key: string
-): { found: false } | { found: true; value: unknown } {
-  const valueStart = topLevelValueStart(raw, key);
-  if (valueStart < 0) return { found: false };
-  const valueEnd = findJsonValueEnd(target, raw, valueStart);
-  const valueText = raw.slice(valueStart, valueEnd).trim();
-
-  try {
-    return { found: true, value: JSON.parse(valueText) as unknown };
-  } catch (error) {
-    throw new Error(`JSON 文件损坏，无法解析：${target}。${describeFsError(error)}`);
-  }
-}
-
-function hasTopLevelProperty(raw: string, key: string) {
-  return topLevelValueStart(raw, key) >= 0;
-}
-
-function topLevelValueStart(raw: string, key: string) {
-  const propertyIndex = raw.indexOf(`\n  "${key}":`);
-  if (propertyIndex < 0) return -1;
-  const colonIndex = raw.indexOf(":", propertyIndex);
-  if (colonIndex < 0) return -1;
-
-  let valueStart = colonIndex + 1;
-  while (valueStart < raw.length && /\s/.test(raw[valueStart])) valueStart += 1;
-  return valueStart < raw.length ? valueStart : -1;
-}
-
-function findJsonValueEnd(target: string, raw: string, start: number) {
-  const first = raw[start];
-  if (first === "\"") return findJsonStringEnd(target, raw, start);
-  if (first === "{" || first === "[") return findJsonStructuredValueEnd(target, raw, start);
-
-  let end = start;
-  while (end < raw.length && raw[end] !== "," && raw[end] !== "\n" && raw[end] !== "\r" && raw[end] !== "}") {
-    end += 1;
-  }
-  if (end === start) {
-    throw new Error(`JSON 文件损坏，无法解析：${target}。字段值为空。`);
-  }
-  return end;
-}
-
-function findJsonStringEnd(target: string, raw: string, start: number) {
-  let escaped = false;
-  for (let index = start + 1; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "\"") return index + 1;
-  }
-  throw new Error(`JSON 文件损坏，无法解析：${target}。字符串字段没有闭合。`);
-}
-
-function findJsonStructuredValueEnd(target: string, raw: string, start: number) {
-  const stack = [raw[start] === "{" ? "}" : "]"];
-  let inString = false;
-  let escaped = false;
-
-  for (let index = start + 1; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === "\"") {
-      inString = true;
-    } else if (char === "{") {
-      stack.push("}");
-    } else if (char === "[") {
-      stack.push("]");
-    } else if (char === stack.at(-1)) {
-      stack.pop();
-      if (!stack.length) return index + 1;
-    } else if (char === "}" || char === "]") {
-      throw new Error(`JSON 文件损坏，无法解析：${target}。结构字段括号不匹配。`);
-    }
-  }
-
-  throw new Error(`JSON 文件损坏，无法解析：${target}。结构字段没有闭合。`);
-}
-
-function isMissingFileError(error: unknown) {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
-}
-
-function describeFsError(error: unknown) {
-  return error instanceof Error && error.message ? error.message : "未知文件系统错误";
-}
-
 function toJobListItem(job: JobRecord): JobListItem {
-  const { partialText, result, ...item } = job;
+  const { partialText, result, ...item } = withJobRecoveryError(job);
   return {
     ...item,
     error: item.error ? summarizeJobListText(item.error, 240) : undefined,
@@ -2118,6 +2037,20 @@ function toJobListItem(job: JobRecord): JobListItem {
     hasPartialText: Boolean(partialText),
     hasResult: typeof result !== "undefined"
   };
+}
+
+function withJobRecoveryError<T extends JobRecord>(job: T): T {
+  return { ...job, recoveryError: isTerminalJob(job) ? undefined : runtime.readErrors.get(jobPayloadPath(job.id)) };
+}
+
+function reportJobPersistenceError(jobId: string, error: unknown) {
+  runtime.abortControllers.get(jobId)?.abort(error);
+  if (error instanceof CloudJobConflictError) return; // Cancellation or another owner already controls the persisted status.
+  runtime.pending.delete(jobId);
+  const message = `任务 ${jobId} 状态保存失败：${error instanceof Error ? error.message : "请检查素材库访问权限和剩余空间。"}`;
+  runtime.readErrors.set(jobPayloadPath(jobId), message);
+  recordJobChange(jobId);
+  console.error(message);
 }
 
 function summarizeJobEvents(events: JobEvent[]) {

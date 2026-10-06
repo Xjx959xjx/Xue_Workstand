@@ -1,5 +1,6 @@
 "use client";
 
+import { MoreHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/components/Formatters";
@@ -36,6 +37,7 @@ export function EngagementHistoryPane({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const selectedRecordRef = useRef<HTMLButtonElement>(null);
+  const contextTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!resultRecord?.id) return;
@@ -44,6 +46,7 @@ export function EngagementHistoryPane({
 
   useEffect(() => {
     if (!contextMenu) return;
+    contextMenuRef.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
 
     const handlePointerDown = (event: PointerEvent) => {
       if (contextMenuRef.current?.contains(event.target as Node)) return;
@@ -52,7 +55,18 @@ export function EngagementHistoryPane({
 
     const handleScroll = () => setContextMenu(null);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setContextMenu(null);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setContextMenu(null);
+        contextTriggerRef.current?.focus();
+      }
+      if (!contextMenuRef.current) return;
+      const items = [...contextMenuRef.current.querySelectorAll<HTMLElement>("[role=menuitem]")];
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+      }
     };
 
     window.addEventListener("pointerdown", handlePointerDown);
@@ -106,34 +120,32 @@ export function EngagementHistoryPane({
             <HistoryLoadingRows />
           ) : records.length ? (
             records.map((record) => (
-              <button
-                aria-current={resultRecord?.id === record.id ? "true" : undefined}
-                className={`list-button ${resultRecord?.id === record.id ? "active" : ""}`}
-                disabled={Boolean(openingRecordId)}
-                key={record.id}
-                onClick={() => void onSelectRecord(record)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setContextMenu({
-                    record,
-                    x: event.clientX,
-                    y: event.clientY
-                  });
-                }}
-                ref={resultRecord?.id === record.id ? selectedRecordRef : undefined}
-                title="右键可删除这条记录"
-                type="button"
-              >
-                <span>
-                  <span className="list-title">{record.title}</span>
-                  <span className="list-meta">
-                    {formatSourceType(record.sourceType)} · {formatDate(record.createdAt)}
+              <div className="engagement-history-row" key={record.id}>
+                <button
+                  aria-current={resultRecord?.id === record.id ? "true" : undefined}
+                  className={`list-button ${resultRecord?.id === record.id ? "active" : ""}`}
+                  disabled={Boolean(openingRecordId)}
+                  onClick={() => void onSelectRecord(record)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setContextMenu({ record, x: event.clientX, y: event.clientY });
+                  }}
+                  ref={resultRecord?.id === record.id ? selectedRecordRef : undefined}
+                  type="button"
+                >
+                  <span>
+                    <span className="list-title">{record.title}</span>
+                    <span className="list-meta">{formatSourceType(record.sourceType)} · {formatDate(record.createdAt)}</span>
                   </span>
-                </span>
-                <span className="status-pill done">
-                  {openingRecordId === record.id ? "读取中" : `${record.commentCount}/${record.danmakuCount}`}
-                </span>
-              </button>
+                  <span className="status-pill done">{openingRecordId === record.id ? "读取中" : `${record.commentCount}/${record.danmakuCount}`}</span>
+                </button>
+                <button
+                  aria-label={`打开 ${record.title} 的操作菜单`}
+                  className="btn icon-btn icon-only engagement-history-menu-trigger"
+                  onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); contextTriggerRef.current = event.currentTarget; setContextMenu({ record, x: rect.right - 172, y: rect.bottom + 4 }); }}
+                  type="button"
+                ><MoreHorizontal aria-hidden="true" size={16} /></button>
+              </div>
             ))
           ) : (
             <p className="subtle">生成后会在这里保留记录。</p>
@@ -150,6 +162,7 @@ export function EngagementHistoryPane({
         >
           <button
             className="history-context-menu-item"
+            role="menuitem"
             onClick={() => {
               onExportRecord(contextMenu.record);
               setContextMenu(null);
@@ -160,6 +173,7 @@ export function EngagementHistoryPane({
           </button>
           <button
             className="history-context-menu-item danger mobile-destructive-action"
+            role="menuitem"
             onClick={() => {
               setDeleteTarget(contextMenu.record);
               setContextMenu(null);

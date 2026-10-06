@@ -42,7 +42,7 @@ jobs:
         timeout-minutes: 25
         env:
           WINDOWS_NODE_DIR: ${{ github.workspace }}\.vendor\node-win-x64
-        run: npm run package:release -- --preset gross-margin-win-installer --skip-zip --skip-installer-compile
+        run: npm run package:release -- --preset gross-margin-win-installer --allow-empty-gross-margin --skip-zip --skip-installer-compile
 
       - name: Inspect installer inputs
         shell: pwsh

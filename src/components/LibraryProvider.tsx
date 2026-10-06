@@ -16,6 +16,12 @@ let libraryOverviewCache: LibraryOverviewResponse | null = null;
 let libraryOverviewRequest: Promise<LibraryOverviewResponse> | null = null;
 let libraryOverviewRequestSeq = 0;
 
+export function invalidateLibraryOverviewCache() {
+  libraryOverviewCache = null;
+  libraryOverviewRequest = null;
+  libraryOverviewRequestSeq += 1;
+}
+
 export function LibraryProvider({
   children,
   enabled = true
@@ -85,7 +91,7 @@ function buildLibraryOverview(library: LibraryOverviewResponse): LibraryOverview
 }
 
 function loadLibraryOverview(force: boolean) {
-  if (!force && libraryOverviewRequest) return libraryOverviewRequest;
+  if (libraryOverviewRequest) return libraryOverviewRequest;
   if (!force && libraryOverviewCache) return Promise.resolve(libraryOverviewCache);
 
   const requestSeq = libraryOverviewRequestSeq + 1;

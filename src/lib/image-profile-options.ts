@@ -15,6 +15,6 @@ export function imageSizeForProfile(profile: ImageProfile | undefined, ratio: st
   return x >= y ? `${edge}x${Math.round(edge * y / x)}` : `${Math.round(edge * x / y)}x${edge}`;
 }
 export function imageProfileForModel(profiles: ImageProfile[], model: string, resolution?: ImageProfile["resolution"]) {
-  const candidates = profiles.filter((profile) => profile.model === model);
+  const candidates = profiles.filter((profile) => profile.model === model && profile.configured);
   return candidates.find((profile) => (profile.resolution || "1080p") === (resolution || "1080p")) || candidates.find((profile) => (profile.resolution || "1080p") === "1080p") || candidates[0];
 }

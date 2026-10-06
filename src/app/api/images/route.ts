@@ -11,7 +11,8 @@ export async function GET(request: Request) {
     assertJobKindAllowedForAppMode("image-generation");
     const offset = z.coerce.number().int().min(0).parse(new URL(request.url).searchParams.get("offset") || 0);
     const canvasId = imageCanvasIdSchema.optional().parse(new URL(request.url).searchParams.get("canvasId") || undefined);
-    return listImageRecords(offset, 40, canvasId);
+    const limit = z.coerce.number().int().min(1).parse(new URL(request.url).searchParams.get("limit") || 40);
+    return listImageRecords(offset, limit, canvasId);
   }, { fallbackMessage: "读取生图历史失败" });
 }
 

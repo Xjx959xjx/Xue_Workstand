@@ -1,5 +1,6 @@
 import type { GrossMarginPriceTable, GrossMarginServiceKind } from "./types";
 import { detectVideoPlatform, extractVideoUrl, getVideoComparableKey, normalizeVideoUrlInput } from "./platform-links";
+import { parseGrossMarginMetric } from "./gross-margin-calculator";
 
 export type GrossMarginBulkMonitorItem = {
   platform: GrossMarginPriceTable["platform"];
@@ -140,7 +141,10 @@ function parseMonitorTemplateBlock(lines: string[], position: number): GrossMarg
     if (!pair) continue;
     const service = resolveMetricService(pair.key);
     if (!service) continue;
-    const value = parseMetricValue(pair.value);
+    if (pair.value === "/") continue;
+    const parsed = parseGrossMarginMetric(pair.value);
+    if (parsed === null) throw new Error(`第 ${position} 条「${pair.key}」数量无效，请检查数字和单位。`);
+    const value = Math.round(parsed);
     if (value > 0) {
       targetStats[service] = value;
     }
@@ -197,15 +201,4 @@ function resolveMetricService(label: string) {
 
 function normalizeMetricLabel(value: string) {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function parseMetricValue(value: string) {
-  const normalized = value.replace(/,/g, "").trim();
-  const match = normalized.match(/([\d.]+)/);
-  if (!match) return 0;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount)) return 0;
-  if (/[wW万]/.test(normalized)) return Math.round(amount * 10000);
-  if (/千/.test(normalized)) return Math.round(amount * 1000);
-  return Math.round(amount);
 }

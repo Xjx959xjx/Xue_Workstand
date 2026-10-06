@@ -487,6 +487,24 @@
   font-size: 10.5px;
 }
 
+.engagement-history-row {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.engagement-history-row .list-button {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.engagement-history-menu-trigger {
+  flex: 0 0 32px;
+  align-self: stretch;
+  min-height: 0;
+}
+
 .asset-list-block {
   display: grid;
   gap: 8px;

@@ -16,6 +16,8 @@ export type AccountSourceResult = {
   warning?: string;
   fetchedAt?: string;
   refreshing?: boolean;
+  fallback?: boolean;
+  fallbackReason?: string;
 };
 
 type WecomResponse = {
@@ -29,12 +31,14 @@ type WecomResponse = {
 let cachedResult: AccountSourceResult | null = null;
 let refreshPromise: Promise<AccountSourceResult> | null = null;
 let lastRefreshError = "";
+let lastRefreshFailedAt = 0;
 
 export async function resolveGrossMarginAccounts(
   localAccounts: GrossMarginAccountPrice[],
   options: {
     persisted?: AccountSourceResult | null;
     refresh?: boolean;
+    cachedOnly?: boolean;
     onFresh?: (result: AccountSourceResult) => Promise<void>;
   } = {}
 ): Promise<AccountSourceResult> {
@@ -52,6 +56,13 @@ export async function resolveGrossMarginAccounts(
   }
 
   const now = Date.now();
+  if (options.cachedOnly) {
+    if (lastRefreshError) return resolveRefreshFailure(new Error(lastRefreshError), localAccounts, false);
+    return { ...(cachedResult || { accounts: localAccounts, source: "local" as const }), refreshing: Boolean(refreshPromise) };
+  }
+  if (!options.refresh && lastRefreshError && now - lastRefreshFailedAt < DEFAULT_CACHE_TTL_MS) {
+    return resolveRefreshFailure(new Error(lastRefreshError), localAccounts, false);
+  }
   if (cachedResult?.source === "wecom" && cachedResult.fetchedAt) {
     const fetchedAt = Date.parse(cachedResult.fetchedAt);
     if (!options.refresh && Number.isFinite(fetchedAt) && now - fetchedAt < cacheTtlMs()) return cachedResult;
@@ -66,9 +77,9 @@ export async function resolveGrossMarginAccounts(
   }
 
   void refreshGrossMarginAccounts(url, options.onFresh).catch((error) => {
-    const detail = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
-    lastRefreshError = detail;
-    console.warn(`[gross-margin-accounts] 在线账号表后台同步失败：${detail}`);
+    lastRefreshError = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
+    lastRefreshFailedAt = Date.now();
+    console.warn(`[gross-margin-accounts] 在线账号表后台同步失败：${lastRefreshError}`);
   });
 
   if (cachedResult?.source === "wecom" && cachedResult.accounts.length) {
@@ -105,9 +116,10 @@ function refreshGrossMarginAccounts(
       source: "wecom",
       fetchedAt: new Date().toISOString()
     };
+    await onFresh?.(result);
     cachedResult = result;
     lastRefreshError = "";
-    await onFresh?.(result);
+    lastRefreshFailedAt = 0;
     return result;
   })().finally(() => {
     refreshPromise = null;
@@ -115,19 +127,20 @@ function refreshGrossMarginAccounts(
   return refreshPromise;
 }
 
-function resolveRefreshFailure(error: unknown, localAccounts: GrossMarginAccountPrice[]): AccountSourceResult {
+function resolveRefreshFailure(error: unknown, localAccounts: GrossMarginAccountPrice[], recordFailure = true): AccountSourceResult {
   const detail = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
   lastRefreshError = detail;
+  if (recordFailure) lastRefreshFailedAt = Date.now();
   if (process.env.WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL === "0") {
     throw new Error(`读取企业微信账号表失败：${detail}`);
   }
   const warning = cachedResult?.source === "wecom"
     ? `在线账号表同步失败，当前展示上次成功缓存：${detail}`
     : `在线账号表同步失败，当前使用本地账号缓存：${detail}`;
-  console.warn(`[gross-margin-accounts] ${warning}`);
+  if (recordFailure) console.warn(`[gross-margin-accounts] ${warning}`);
   return cachedResult?.source === "wecom" && cachedResult.accounts.length
-    ? { ...cachedResult, warning }
-    : { accounts: localAccounts, source: "local", warning };
+    ? { ...cachedResult, warning, refreshing: false, fallback: true, fallbackReason: detail }
+    : { accounts: localAccounts, source: "local", warning, refreshing: false, fallback: true, fallbackReason: detail };
 }
 
 async function fetchWecomSheetContent(url: string) {
@@ -211,6 +224,7 @@ function getTextContent(value: unknown) {
 
 export function parseWecomAccountSheet(markdown: string): GrossMarginAccountPrice[] {
   const accounts: GrossMarginAccountPrice[] = [];
+  let unsupportedAccountRows = false;
   let section = "";
   let headers: Record<string, number> | null = null;
 
@@ -223,6 +237,7 @@ export function parseWecomAccountSheet(markdown: string): GrossMarginAccountPric
     }
     if (!trimmed.startsWith("|")) continue;
     const cells = splitMarkdownRow(trimmed);
+    if (cells.every(value => /^:?-+:?$/.test(value))) continue;
     if (!headers && cells.includes("账号昵称")) {
       headers = Object.fromEntries(cells.map((cell, index) => [cell, index]));
       continue;
@@ -231,12 +246,20 @@ export function parseWecomAccountSheet(markdown: string): GrossMarginAccountPric
 
     const platform = cell(cells, headers, "平台") || section;
     const name = cell(cells, headers, "账号昵称");
-    if (!name || (platform !== "抖音" && platform !== "B站")) continue;
+    if (platform !== "抖音" && platform !== "B站") continue;
+    if (!Object.keys(headers).some(header => /^定制(?:视频)?(?:价格|报价);/.test(header))) {
+      if (name) unsupportedAccountRows = true;
+      continue;
+    }
+    if (!cells.some(Boolean)) continue;
+    if (!name) throw new Error("在线账号表存在缺少账号昵称的行，请修正后重试。");
 
     const account = platform === "抖音" ? parseDouyinAccount(cells, headers, name) : parseBilibiliAccount(cells, headers, name);
-    if (account) accounts.push(account);
+    if (!account) throw new Error(`在线账号表「${name}」的账号 ID 或定制/植入报价缺失或无效，请修正后重试。`);
+    accounts.push(account);
   }
 
+  if (accounts.length && unsupportedAccountRows) throw new Error("在线账号表存在不支持的报价表头，请统一定制与植入报价列后重试。");
   return accounts;
 }
 

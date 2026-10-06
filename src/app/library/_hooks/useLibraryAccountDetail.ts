@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { cachedGetAccountDetail } from "@/lib/detail-cache";
 import type { AccountDetail, AccountListItem } from "@/lib/types";
 
@@ -11,10 +11,9 @@ type ReloadOptions = {
 
 type UseLibraryAccountDetailInput = {
   selectedAccountMeta: AccountListItem | null;
-  setStyleDraft: Dispatch<SetStateAction<string>>;
 };
 
-export function useLibraryAccountDetail({ selectedAccountMeta, setStyleDraft }: UseLibraryAccountDetailInput) {
+export function useLibraryAccountDetail({ selectedAccountMeta }: UseLibraryAccountDetailInput) {
   const [accountDetail, setAccountDetail] = useState<AccountDetail | null>(null);
   const [accountDetailLoading, setAccountDetailLoading] = useState(false);
   const [accountDetailError, setAccountDetailError] = useState("");
@@ -22,27 +21,33 @@ export function useLibraryAccountDetail({ selectedAccountMeta, setStyleDraft }: 
   const selectedAccountDetailId = selectedAccountMeta?.id || "";
   const selectedAccountDetailPlatform = selectedAccountMeta?.platform;
   const selectedAccountUpdatedAt = selectedAccountMeta?.updatedAt || "";
+  const requestSeqRef = useRef(0);
 
   const reloadSelectedAccountDetail = useCallback(async (options: ReloadOptions = {}) => {
     if (!selectedAccountDetailId || !selectedAccountDetailPlatform) return null;
+    const requestSeq = ++requestSeqRef.current;
+    const accountId = selectedAccountDetailId;
+    const platform = selectedAccountDetailPlatform;
     const detail = await cachedGetAccountDetail({
-      platform: selectedAccountDetailPlatform,
-      accountId: selectedAccountDetailId,
+      platform,
+      accountId,
       includeStyle: options.includeStyle,
       version: selectedAccountUpdatedAt,
       force: options.force ?? true
     });
+    if (requestSeq !== requestSeqRef.current) return null;
     setAccountDetail((current) => {
       if (!current || current.id !== detail.id || typeof detail.style === "string") return detail;
       if (typeof current.style === "string") return { ...detail, style: current.style };
       return detail;
     });
-    if (typeof detail.style === "string") setStyleDraft(detail.style);
+    setAccountDetailLoading(false);
     return detail;
-  }, [selectedAccountDetailId, selectedAccountDetailPlatform, selectedAccountUpdatedAt, setStyleDraft]);
+  }, [selectedAccountDetailId, selectedAccountDetailPlatform, selectedAccountUpdatedAt]);
 
   useEffect(() => {
     let ignore = false;
+    const requestSeq = ++requestSeqRef.current;
     if (!selectedAccountDetailId || !selectedAccountDetailPlatform) {
       setAccountDetail(null);
       setAccountDetailError("");
@@ -58,23 +63,23 @@ export function useLibraryAccountDetail({ selectedAccountMeta, setStyleDraft }: 
       version: selectedAccountUpdatedAt
     })
       .then((detail) => {
-        if (ignore) return;
+        if (ignore || requestSeq !== requestSeqRef.current) return;
         setAccountDetail(detail);
-        setStyleDraft(typeof detail.style === "string" ? detail.style : "");
       })
       .catch((err) => {
-        if (ignore) return;
+        if (ignore || requestSeq !== requestSeqRef.current) return;
         setAccountDetail(null);
         setAccountDetailError(err instanceof Error ? err.message : "读取账号详情失败");
       })
       .finally(() => {
-        if (!ignore) setAccountDetailLoading(false);
+        if (!ignore && requestSeq === requestSeqRef.current) setAccountDetailLoading(false);
       });
 
     return () => {
       ignore = true;
+      if (requestSeq === requestSeqRef.current) requestSeqRef.current += 1;
     };
-  }, [selectedAccountDetailId, selectedAccountDetailPlatform, selectedAccountUpdatedAt, setStyleDraft]);
+  }, [selectedAccountDetailId, selectedAccountDetailPlatform, selectedAccountUpdatedAt]);
 
   return {
     accountDetail,

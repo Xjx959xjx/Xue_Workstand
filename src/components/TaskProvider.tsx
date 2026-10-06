@@ -19,10 +19,10 @@ import {
 } from "@/lib/client";
 import { invalidateAccountDetail, invalidateProjectDetail } from "@/lib/detail-cache";
 import { formatJobErrorMessage } from "@/lib/job-messages";
-import { getJobResultHref } from "@/lib/job-links";
-import { applyJobListResponse } from "@/lib/job-sync";
+import { defaultJobHref, getJobResultHref } from "@/lib/job-links";
+import { applyJobListResponse, isActiveJob, isTerminalJob } from "@/lib/job-sync";
 import type { JobKind, JobListItem, JobRecord, JobStartInput } from "@/lib/types";
-import { useLibrary } from "./LibraryProvider";
+import { invalidateLibraryOverviewCache, useLibrary } from "./LibraryProvider";
 
 type TaskContextValue = {
   jobs: JobRecord[];
@@ -39,7 +39,6 @@ type TaskContextValue = {
 const TaskContext = createContext<TaskContextValue | null>(null);
 const NOTIFIED_STORAGE_KEY = "style-workbench-notified-jobs";
 const WATCHED_STORAGE_KEY = "style-workbench-watched-jobs";
-const TASKS_CHANGED_EVENT = "style-workbench:tasks-changed";
 const ACTIVE_JOB_POLL_INTERVAL_MS = 1500;
 const INITIAL_TASK_REFRESH_DELAY_MS = 1600;
 const ROUTE_TASK_REFRESH_DELAY_MS = 800;
@@ -50,7 +49,8 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
   const { notify } = useFeedback();
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [operationError, setOperationError] = useState("");
+  const [readError, setReadError] = useState("");
   const jobsRef = useRef<JobRecord[]>([]);
   const cursorRef = useRef<string | undefined>(undefined);
   const firstLoadRef = useRef(true);
@@ -107,7 +107,7 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
         ).filter((job) => !allowedKindKey || allowedKindKey.split("|").includes(job.kind));
         jobsRef.current = mergedJobs;
         setJobs(mergedJobs);
-        setError("");
+        setReadError((data.readErrors || []).join("\n"));
         handleJobDataSync(
           mergedJobs,
           firstLoadRef.current,
@@ -126,7 +126,7 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
         );
         firstLoadRef.current = false;
       } catch (err) {
-        setError(err instanceof Error ? err.message : "读取任务状态失败");
+        setReadError(err instanceof Error ? err.message : "读取任务状态失败");
       } finally {
         setLoading(false);
       }
@@ -174,14 +174,6 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
   }, [refreshJobs]);
 
   useEffect(() => {
-    const onTasksChanged = () => {
-      void refreshJobs();
-    };
-    window.addEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
-    return () => window.removeEventListener(TASKS_CHANGED_EVENT, onTasksChanged);
-  }, [refreshJobs]);
-
-  useEffect(() => {
     const onFocus = () => {
       void refreshJobs();
     };
@@ -198,7 +190,7 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
   }, [refreshJobs]);
 
   const activeJobs = useMemo(
-    () => jobs.filter((job) => job.status === "queued" || job.status === "running"),
+    () => jobs.filter(isActiveJob),
     [jobs]
   );
   const hasActiveJobs = activeJobs.length > 0;
@@ -234,12 +226,11 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
         const result = await startJob(input);
         watchedRef.current.add(result.job.id);
         persistWatchedJobIds(watchedRef.current);
-        setError("");
-        emitTasksChanged();
+        setOperationError("");
         await refreshJobs();
         return result.job;
       } catch (err) {
-        setError(err instanceof Error ? err.message : "启动后台任务失败");
+        setOperationError(err instanceof Error ? err.message : "启动后台任务失败");
         throw err;
       }
     },
@@ -247,10 +238,15 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
   );
 
   const cancelTask = useCallback(async (jobId: string) => {
-    const result = await cancelJob(jobId);
-    emitTasksChanged();
-    await refreshJobs();
-    return result.job;
+    try {
+      const result = await cancelJob(jobId);
+      setOperationError("");
+      await refreshJobs();
+      return result.job;
+    } catch (err) {
+      setOperationError(err instanceof Error ? err.message : "停止后台任务失败");
+      throw err;
+    }
   }, [refreshJobs]);
 
   const retryTask = useCallback(async (jobId: string) => {
@@ -258,12 +254,11 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
       const result = await retryJobRequest(jobId);
       watchedRef.current.add(result.job.id);
       persistWatchedJobIds(watchedRef.current);
-      setError("");
-      emitTasksChanged();
+      setOperationError("");
       await refreshJobs();
       return result.job;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "重试后台任务失败");
+      setOperationError(err instanceof Error ? err.message : "重试后台任务失败");
       throw err;
     }
   }, [refreshJobs]);
@@ -274,13 +269,13 @@ export function TaskProvider({ children, allowedKinds }: { children: React.React
       activeJobs,
       recentJobs: jobs.slice(0, 12),
       loading,
-      error,
+      error: operationError || readError,
       refreshJobs,
       startTask,
       cancelTask,
       retryTask
     }),
-    [activeJobs, cancelTask, error, jobs, loading, refreshJobs, retryTask, startTask]
+    [activeJobs, cancelTask, jobs, loading, operationError, readError, refreshJobs, retryTask, startTask]
   );
 
   return (
@@ -303,14 +298,12 @@ export function useOptionalTasks() {
 type UseScopedTasksOptions = {
   href?: string;
   kinds?: JobKind[];
-  includeRecent?: boolean;
 };
 
 export function useScopedTasks(options: UseScopedTasksOptions = {}) {
   const context = useContext(TaskContext);
   const kindKey = options.kinds?.join("|") || "";
   const kindSet = useMemo(() => (kindKey ? new Set(kindKey.split("|") as JobKind[]) : null), [kindKey]);
-  const includeRecent = options.includeRecent ?? true;
   const scopedJobs = useMemo(
     () => (context?.jobs ?? []).filter((job) => isJobInScope(job, options.href, kindSet)),
     [context?.jobs, kindSet, options.href]
@@ -322,7 +315,7 @@ export function useScopedTasks(options: UseScopedTasksOptions = {}) {
     return {
       jobs: scopedJobs,
       activeJobs,
-      recentJobs: includeRecent ? scopedJobs.slice(0, 12) : activeJobs,
+      recentJobs: scopedJobs.slice(0, 12),
       loading: context.loading,
       error: context.error,
       refreshJobs: context.refreshJobs,
@@ -330,7 +323,7 @@ export function useScopedTasks(options: UseScopedTasksOptions = {}) {
       cancelTask: context.cancelTask,
       retryTask: context.retryTask
     };
-  }, [context, includeRecent, scopedJobs]);
+  }, [context, scopedJobs]);
 
   if (!scopedContext) throw new Error("useScopedTasks must be used inside TaskProvider");
   return scopedContext;
@@ -358,7 +351,10 @@ function handleJobDataSync(
 
   previousDataRevision.clear();
   nextDataRevision.forEach((revision, jobId) => previousDataRevision.set(jobId, revision));
-  if (libraryChanged) void refreshLibrary({ force: true });
+  if (libraryChanged) {
+    invalidateLibraryOverviewCache();
+    void refreshLibrary({ force: false });
+  }
 }
 
 function invalidateJobClientCaches(job: JobRecord) {
@@ -370,7 +366,7 @@ function invalidateJobClientCaches(job: JobRecord) {
     invalidateGrossMarginLibraryCache();
   }
   if (job.kind === "hotspot-refresh") invalidateHotspotRadarCache();
-  if (job.kind === "write-copy") invalidateDraftsCache();
+  if (job.kind === "write-copy" || job.kind === "image-cover") invalidateDraftsCache();
   if (job.kind === "engagement") {
     invalidateEngagementRecordsCache();
     if (job.scope?.draftId) invalidateDraftsCache();
@@ -445,14 +441,6 @@ function handleJobNotifications(
   }
 }
 
-function isTerminalJob(job: JobRecord) {
-  return job.status === "completed" || job.status === "failed" || job.status === "cancelled" || job.status === "interrupted";
-}
-
-function isActiveJob(job: JobRecord | JobListItem) {
-  return job.status === "queued" || job.status === "running";
-}
-
 function isRecentJob(job: Pick<JobRecord, "completedAt" | "updatedAt" | "createdAt">) {
   const time = Date.parse(job.completedAt || job.updatedAt || job.createdAt);
   return Number.isFinite(time) && Date.now() - time < 15 * 60 * 1000;
@@ -499,7 +487,8 @@ function shouldHydrateJob(
   cache: Map<string, JobRecord>,
   pathname: string
 ) {
-  const relevantToCurrentPage = isJobRelevantToPath(job, pathname);
+  if (job.kind === "image-generation" || job.kind === "image-cover") return false;
+  const relevantToCurrentPage = isJobRelevantToHref(job, pathname);
   const needsFullJob = Boolean(job.hasResult || job.hasPartialText);
   if (isActiveJob(job)) return relevantToCurrentPage && needsFullJob;
   if (!isTerminalJob(job)) return false;
@@ -507,26 +496,17 @@ function shouldHydrateJob(
   const previous = previousStatus.get(job.id);
   if (previous && previous !== job.status) return true;
   const cachedJob = cache.get(job.id);
-  if (cachedJob?.status === job.status && (!job.hasResult || typeof cachedJob.result !== "undefined")) return false;
-  return shouldHydrateRecentTerminalJob(job, index, pathname);
-}
-
-function shouldHydrateRecentTerminalJob(job: JobListItem, index: number, pathname: string) {
-  void pathname;
+  if (cachedJob?.status === job.status && (cachedJob.dataRevision || 0) >= (job.dataRevision || 0) && (!job.hasResult || typeof cachedJob.result !== "undefined")) return false;
   return index < 12 && isRecentJob(job);
 }
 
 function shouldExposeHydrationError(job: JobListItem) {
-  return job.status === "completed" && Boolean(job.hasResult);
+  return isTerminalJob(job) && Boolean(job.hasResult);
 }
 
 function formatHydrationError(err: unknown) {
   const message = err instanceof Error ? err.message : "";
-  return `任务已完成，但读取生成结果失败${message ? `：${formatJobErrorMessage(message)}。` : "。"}请刷新任务中心后重试。`;
-}
-
-function isJobRelevantToPath(job: JobListItem, pathname: string) {
-  return isJobRelevantToHref(job, pathname);
+  return `任务已结束，但读取生成结果失败${message ? `：${formatJobErrorMessage(message)}。` : "。"}请刷新任务中心后重试。`;
 }
 
 function isJobRelevantToHref(job: Pick<JobRecord, "kind" | "href" | "resultRef">, targetHref: string) {
@@ -544,19 +524,6 @@ function isJobInScope(job: JobListItem, href: string | undefined, kinds: Set<Job
   return true;
 }
 
-function defaultJobHref(kind: JobRecord["kind"]) {
-  if (kind === "image-generation" || kind === "image-prompt-assist") return "/images";
-  if (kind === "write-copy") return "/writer";
-  if (kind === "project-style") return "/project-workbench";
-  if (kind === "engagement") return "/assets";
-  if (kind === "hotlist-refresh") return "/douyin-hotlist";
-  if (kind === "collect-account") return "/library";
-  if (kind === "single-video-transcribe" || kind === "publish-copy") return "/tools";
-  if (kind === "hotspot-refresh") return "/hotspots";
-  if (kind === "gross-margin-refresh") return "/gross-margin/monitor";
-  return "/library";
-}
-
 function mergeJobSummaries(
   jobs: JobListItem[],
   cache: Map<string, JobRecord>,
@@ -564,13 +531,16 @@ function mergeJobSummaries(
   pathname: string
 ) {
   return jobs.map((job) => {
+    // Keep the stored status intact; pages treat a recovery failure as interrupted.
+    if (job.recoveryError) job = { ...job, status: "interrupted", error: job.recoveryError, message: job.recoveryError };
     const hydrationError = hydrationErrors.get(job.id);
     const fullJob = cache.get(job.id);
     if (fullJob) {
-      const mergedJob = { ...fullJob, ...job };
+      const mergedJob = { ...fullJob, ...job,
+        ...(job.hasResult && (job.dataRevision || 0) > (fullJob.dataRevision || 0) ? { result: undefined } : {}) };
       return hydrationError ? { ...mergedJob, error: hydrationError, message: hydrationError } : mergedJob;
     }
-    if (isJobRelevantToPath(job, pathname)) {
+    if (isJobRelevantToHref(job, pathname)) {
       if (hydrationError) return { ...job, error: hydrationError, message: hydrationError };
       return job;
     }
@@ -589,13 +559,14 @@ function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
   if (job.status === "cancelled") return;
   const hydrationFailed = job.status === "completed" && Boolean(job.error) && Boolean((job as { hasResult?: boolean }).hasResult);
   const failed = job.status === "failed" || hydrationFailed;
+  const interrupted = job.status === "interrupted" || Boolean(job.recoveryError);
   const partialFailure = !failed && hasPartialRefreshFailure(job);
   const resultHref = getJobResultHref(job);
   notify({
-    tone: failed ? "error" : partialFailure ? "warning" : "success",
-    title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : partialFailure ? `${job.title}部分完成` : `${job.title}完成`,
-    message: failed ? formatJobErrorMessage(job.error || job.message) : job.message,
-    durationMs: failed || partialFailure ? 15000 : resultHref ? 10000 : 5000,
+    tone: failed ? "error" : interrupted || partialFailure ? "warning" : "success",
+    title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : interrupted ? `${job.title}已中断` : partialFailure ? `${job.title}部分完成` : `${job.title}完成`,
+    message: failed || interrupted ? formatJobErrorMessage(job.recoveryError || job.error || job.message) : job.message,
+    durationMs: failed || interrupted || partialFailure ? 15000 : resultHref ? 10000 : 5000,
     action:
       resultHref
         ? {
@@ -640,9 +611,4 @@ function readWatchedJobIds() {
 function persistWatchedJobIds(ids: Set<string>) {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(WATCHED_STORAGE_KEY, JSON.stringify([...ids].slice(-20)));
-}
-
-function emitTasksChanged() {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(new Event(TASKS_CHANGED_EVENT));
 }

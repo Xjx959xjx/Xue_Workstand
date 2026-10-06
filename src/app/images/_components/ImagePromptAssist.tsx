@@ -12,6 +12,7 @@ export function ImagePromptAssist({ prompt, referenceIds, disabled, onApply }: {
   const search = useSearchParams();
   const { jobs, startTask, cancelTask } = useTasks();
   const [id, setId] = useState(search.get("assistId") || "");
+  const assistId = search.get("assistId") || "";
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ text: string; fallback: boolean; fallbackReason?: string } | null>(null);
@@ -20,16 +21,22 @@ export function ImagePromptAssist({ prompt, referenceIds, disabled, onApply }: {
   const job = jobs.find((item) => item.id === id);
   const active = pending || job?.status === "queued" || job?.status === "running";
   const status = job?.status;
+  const kind = job?.kind;
+  const savedResult = job?.result;
+  useEffect(() => {
+    setId(assistId); setResult(null); setError(""); original.current = "";
+  }, [assistId]);
   useEffect(() => {
     if (!id || (status && status !== "completed")) return;
     let cancelled = false;
-    void getJob(id).then(({ job: full }) => {
+    const request = savedResult !== undefined ? Promise.resolve({ job: { kind, status, result: savedResult } }) : getJob(id);
+    void request.then(({ job: full }) => {
       if (cancelled || full.status !== "completed") return;
       if (full.kind !== "image-prompt-assist") throw new Error("这不是提示词建议任务。");
       setResult(imagePromptAssistResultSchema.parse(full.result));
     }).catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : "读取建议失败，请重试。"); });
     return () => { cancelled = true; };
-  }, [id, status]);
+  }, [id, status, kind, savedResult]);
   async function start(mode: "polish" | "suggest") {
     if (lock.current || active) return;
     lock.current = true; setPending(true); setError(""); setResult(null); original.current = prompt;

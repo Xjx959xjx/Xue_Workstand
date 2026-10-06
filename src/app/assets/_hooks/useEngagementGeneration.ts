@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { engagementSourceKey } from "@/lib/job-scope";
 import { extractFirstLinkFromInput } from "@/lib/platform-links";
 import type { EngagementRecord, JobRecord, JobStartInput, Platform } from "@/lib/types";
@@ -41,7 +41,7 @@ export function useEngagementGeneration({
 }: UseEngagementGenerationInput) {
   const [resultRecord, setResultRecord] = useState<EngagementRecord | null>(null);
   const [activeEngagementJobId, setActiveEngagementJobId] = useState("");
-  const [handledEngagementJobIds, setHandledEngagementJobIds] = useState<string[]>([]);
+  const handledEngagementJobIdsRef = useRef(new Set<string>());
   const trimmedSource = sourceInput.trim();
   const activeTitle = resultRecord?.title || trimmedSource.slice(0, 32) || "评论生成";
   const currentInput = useMemo(
@@ -96,24 +96,25 @@ export function useEngagementGeneration({
       setBusy("generate");
       return;
     }
-    if (handledEngagementJobIds.includes(engagementJob.id)) return;
-    setHandledEngagementJobIds((current) => [...current, engagementJob.id]);
+    if (handledEngagementJobIdsRef.current.has(engagementJob.id)) return;
     setBusy("");
     if (engagementJob.status === "completed") {
       const result = engagementJob.result as { record?: EngagementRecord } | undefined;
       if (result?.record) {
+        handledEngagementJobIdsRef.current.add(engagementJob.id);
         setResultRecord(result.record);
         onRecordCompleted(result.record);
         setNotice(buildSuccessMessage(result.record));
       } else {
-        setNotice("互动素材已生成。");
+        setNotice("任务已完成，但暂未收到互动素材结果，正在等待任务同步。");
       }
       return;
     }
+    handledEngagementJobIdsRef.current.add(engagementJob.id);
     if (engagementJob.status === "failed") {
       setNotice(engagementJob.error || "生成评论失败，请检查输入和模型配置。");
     }
-  }, [engagementJob, handledEngagementJobIds, onRecordCompleted, setBusy, setNotice]);
+  }, [engagementJob, onRecordCompleted, setBusy, setNotice]);
 
   const handleGenerate = useCallback(async () => {
     if (!includeComments && !includeDanmaku) {
@@ -223,17 +224,18 @@ function matchesEngagementScope(job: JobRecord, input: EngagementJobInput) {
   return job.scope?.targetType === input.sourceType && job.scope.sourceKey === engagementSourceKey(input);
 }
 
-function findTaskJob(
+export function findTaskJob(
   jobs: JobRecord[],
   jobId: string,
   kind: JobRecord["kind"],
   matchesScope: (job: JobRecord) => boolean
 ) {
-  if (jobId) {
-    const tracked = jobs.find((job) => job.id === jobId && job.kind === kind);
-    if (tracked) return tracked;
-  }
-  return jobs.find((job) => job.kind === kind && isActiveJob(job) && matchesScope(job)) || null;
+  const tracked = jobs.find((job) => job.id === jobId && job.kind === kind);
+  if (tracked && isActiveJob(tracked)) return tracked;
+  const latest = jobs.filter((job) => job.kind === kind && matchesScope(job)).sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  return jobs.find((job) => job.kind === kind && isActiveJob(job) && matchesScope(job))
+    || (tracked && latest && latest.createdAt > tracked.createdAt ? latest : tracked)
+    || null;
 }
 
 function isActiveJob(job: JobRecord) {

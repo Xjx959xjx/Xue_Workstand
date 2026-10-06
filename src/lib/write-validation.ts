@@ -89,3 +89,9 @@ export const writeCopyInputSchema = z.object({
     ctx.addIssue({ code: "custom", message: "请选择至少一个参考风格", path: ["accountId"] });
   }
 });
+
+export const directWriteCopyInputSchema = writeCopyInputSchema.superRefine((input, ctx) => {
+  if (input.action === "revise" && input.revisionTargets?.length) {
+    ctx.addIssue({ code: "custom", message: "多稿续改请通过写作台或任务接口 /api/jobs 发起。", path: ["revisionTargets"] });
+  }
+});

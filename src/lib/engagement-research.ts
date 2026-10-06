@@ -469,19 +469,6 @@ export function quarantineCommentSourcesLocally(samples: HotCommentSample[]): Vi
   };
 }
 
-export function formatEngagementCommentResearch(research: EngagementCommentResearch) {
-  return [
-    `语料覆盖：相关视频 ${research.relatedVideoCount} 个 / 去重采集 ${research.capturedCommentCount ?? research.freshCommentCount} 条 / 精选表达参考 ${research.relatedCommentCount} 条（目标平台 ${research.targetPlatformCommentCount} 条）`,
-    research.quarantinedVideoCount
-      ? `反人机质检：整组过滤 ${research.quarantinedVideoCount} 个视频 / ${research.quarantinedCommentCount} 条评论`
-      : "反人机质检：未发现高置信人机评论源",
-    formatList("AI 主题锚点", research.searchAnchors),
-    formatList("AI 事件锚点", research.searchEventTerms),
-    formatList("检索词", research.usedQueries),
-    formatList("可供复用的原生评论", research.hotComments.slice(0, 36)),
-    research.summaryError ? `覆盖提醒：${research.summaryError}` : ""
-  ].filter(Boolean).join("\n");
-}
 
 function isUsableResearchCache(cached: {
   engineVersion: string;
@@ -835,9 +822,6 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-function formatList(label: string, values: string[]) {
-  return values.length ? `${label}：\n${values.map((value) => `- ${value}`).join("\n")}` : "";
-}
 
 function formatSource(source: EngagementResearchSourceStat["source"]) {
   if (source === "bilibili") return "B站";

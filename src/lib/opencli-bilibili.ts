@@ -6,6 +6,7 @@ import os from "os";
 import path from "path";
 import {
   asArray,
+  openCliRows,
   mergeTimingMeta,
   opencliBin,
   parseJsonish,
@@ -168,7 +169,7 @@ export async function collectBilibiliVideos(input: {
     signal: input.signal
   });
   const raw = parseJsonish(stdout);
-  const rows = asArray(raw);
+  const rows = openCliRows(raw);
   const videos = await mapWithConcurrency(
     rows,
     BILIBILI_DETAIL_CONCURRENCY,
@@ -489,11 +490,11 @@ export async function downloadBilibiliVideo(video: Video, options: { signal?: Ab
   }
 }
 
-export async function hydrateBilibiliVideoStats(video: Video): Promise<Video> {
+export async function hydrateBilibiliVideoStats(video: Video, options: OpenCliTimingOptions = {}): Promise<Video> {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) throw new Error("没有从视频记录里解析到 B 站 BV 号，无法补全统计数据。");
 
-  const metadata = await getBilibiliVideoFields(bvid);
+  const metadata = await getBilibiliVideoFields(bvid, options);
   const requiredFields = ["view", "like", "reply", "favorite"] as const;
   const fieldMap = {
     view: "views",
@@ -580,10 +581,7 @@ export async function resolveBilibiliStatsFieldSources(
   const [publicResult] = await Promise.allSettled([loadPublicFields()]);
   if (publicResult.status === "fulfilled") {
     const publicFields = publicResult.value;
-    const stat = publicFields.stat && typeof publicFields.stat === "object"
-      ? (publicFields.stat as Record<string, unknown>)
-      : {};
-    const metadata = { ...publicFields, ...stat };
+    const metadata = normalizeBilibiliPublicFields(publicFields);
     if (hasBilibiliStatFields(metadata)) {
       return {
         metadata,
@@ -595,12 +593,9 @@ export async function resolveBilibiliStatsFieldSources(
 
   const [opencliResult] = await Promise.allSettled([loadOpenCliFields()]);
   const publicFields = publicResult.status === "fulfilled" ? publicResult.value : {};
-  const stat = publicFields.stat && typeof publicFields.stat === "object"
-    ? (publicFields.stat as Record<string, unknown>)
-    : {};
   const opencliFields = opencliResult.status === "fulfilled" ? opencliResult.value : {};
   return {
-    metadata: { ...publicFields, ...stat, ...opencliFields },
+    metadata: { ...normalizeBilibiliPublicFields(publicFields), ...opencliFields },
     opencliResult,
     publicResult
   };
@@ -679,6 +674,16 @@ async function normalizeBilibiliVideo(
   const likes = firstNumber(object.likes, object.like, metadata.like);
   const comments = firstNumber(object.comments, object.reply, object.replies, metadata.reply);
   const favorites = firstNumber(object.favorites, object.stow, object.collect, metadata.favorite);
+  if (options.hydrateDetails && (metadata.reply == null || metadata.favorite == null)) {
+    throw new Error(metadataResult.error || "B站未返回评论或收藏统计，无法按互动数据排序，请重试或改用播放/时间排序。");
+  }
+  const missingFields = ([
+    ["views", [object.plays, object.views, object.play, object.view, metadata.view]],
+    ["likes", [object.likes, object.like, metadata.like]],
+    ["comments", [object.comments, object.reply, object.replies, metadata.reply]],
+    ["favorites", [object.favorites, object.stow, object.collect, metadata.favorite]]
+  ] as const).filter(([, values]) => !values.some((value) => value != null && value !== "" && Number.isFinite(Number(value))))
+    .map(([field]) => field);
 
   return {
     id: safeSegment(bvid || shortHash(`${title}-${url}`)),
@@ -693,6 +698,12 @@ async function normalizeBilibiliVideo(
     hotScore: 0,
     relativeViewRate: 0,
     transcriptStatus: "not_started",
+    statsHydration: {
+      status: missingFields.length ? "partial" : "complete",
+      source: "collect",
+      checkedAt: nowIso(),
+      missingFields
+    },
     raw: {
       ...(typeof row === "object" && row ? row : { value: row }),
       metadata,
@@ -787,7 +798,8 @@ async function getBilibiliVideoFields(bvid: string, options: OpenCliTimingOption
         .filter((entry): entry is readonly [string, unknown] => Boolean(entry?.[0]))
     ) as Record<string, unknown>;
   }
-  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  if (raw && typeof raw === "object") return raw as Record<string, unknown>;
+  throw new Error("OpenCLI 返回了无法解析的 B站视频详情，请检查平台会话或 CLI 版本。");
 }
 
 async function getBilibiliPublicVideoFields(bvid: string, options: OpenCliTimingOptions = {}) {
@@ -1004,7 +1016,7 @@ function toError(error: unknown) {
 
 async function runBilibiliSubtitleCommand(args: string[], errors: unknown[], options: { signal?: AbortSignal } = {}) {
   try {
-    return await runPersistentOpenCliBrowserAdapter(args, { signal: options.signal });
+    return await runPersistentOpenCliBrowserAdapter(args, { signal: options.signal, timeout: 30_000 });
   } catch (error) {
     if (isAbortError(error, options.signal)) throw error;
     if (isBilibiliSubtitleMissingError(error)) return "";

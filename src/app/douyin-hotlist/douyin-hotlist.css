@@ -409,7 +409,13 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 }
 
 .douyin-hotlist-platform-filter button {
+  flex: 0 0 48px;
   min-width: 48px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 740;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .douyin-hotlist-window-filter button:hover:not(:disabled),

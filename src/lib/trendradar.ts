@@ -51,18 +51,32 @@ async function readItems(file: string, kind: TrendRadarItem["kind"], signal?: Ab
   }
 }
 
-export async function getTrendRadarFeed(signal?: AbortSignal, root = process.env.TRENDRADAR_OUTPUT_DIR || path.join(homedir(), "Applications/trendradar/output"), options: { maxAgeHours?: number; now?: number } = {}): Promise<TrendRadarFeed> {
+export async function getTrendRadarFeed(signal?: AbortSignal, root = process.env.TRENDRADAR_OUTPUT_DIR || path.join(homedir(), "Applications/trendradar/output"), options: { maxAgeHours?: number; now?: number; kinds?: TrendRadarItem["kind"][] } = {}): Promise<TrendRadarFeed> {
   const hours = options.maxAgeHours ?? Number(process.env.HOTSPOT_RADAR_MAX_AGE_HOURS || 72);
   if (!Number.isFinite(hours) || hours < 6 || hours > 168) throw new Error("TrendRadar 读取窗口须为 6～168 小时");
   const now = options.now ?? Date.now();
-  const files = await Promise.all([windowDatabases(root, "news", hours, now), windowDatabases(root, "rss", hours, now)]);
-  const missing = files.flatMap((group, index) => group.length ? [] : [index ? "窗口内无 RSS 数据库" : "窗口内无热榜数据库"]);
+  const kinds = options.kinds || ["hotlist", "rss"];
+  const failures: string[] = [];
+  const files = await Promise.all((["hotlist", "rss"] as const).map(async kind => {
+    if (!kinds.includes(kind)) return [];
+    try { return await windowDatabases(root, kind === "rss" ? "rss" : "news", hours, now); }
+    catch (error) { signal?.throwIfAborted(); failures.push(error instanceof Error ? error.message : "读取 TrendRadar 目录失败"); return []; }
+  }));
+  const missing = files.flatMap((group, index) => group.length || !kinds.includes(index ? "rss" : "hotlist") ? [] : [index ? "窗口内无 RSS 数据库" : "窗口内无热榜数据库"]);
   // 每类按日期倒序读取，限制同时打开的数据库数；先保留最新内容和排名。
+  let readableDatabases = 0;
   const rows = await Promise.all(files.map(async (group, index) => {
     const entries = [];
     for (const file of group) {
       signal?.throwIfAborted();
-      for (const row of await readItems(file, index ? "rss" : "hotlist", signal)) entries.push({ ...row, databaseDay: path.basename(file, ".db"), latestDay: path.basename(group[0], ".db") });
+      try {
+        const databaseRows = await readItems(file, index ? "rss" : "hotlist", signal);
+        readableDatabases++;
+        for (const row of databaseRows) entries.push({ ...row, databaseDay: path.basename(file, ".db"), latestDay: path.basename(group[0], ".db") });
+      } catch (error) {
+        signal?.throwIfAborted();
+        failures.push(error instanceof Error ? error.message : "读取 TrendRadar 数据库失败");
+      }
     }
     return entries;
   }));
@@ -98,8 +112,8 @@ export async function getTrendRadarFeed(signal?: AbortSignal, root = process.env
   const ordered = Array.from({ length: Math.max(...groups.map(group => group.length)) }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
   const lastRuns = rows.flatMap(entries => entries[0] ? [entries[0].observed_at] : []);
   return {
-    items: ordered, generatedAt: lastRuns.sort().at(-1) || "", available: files.some(group => group.length > 0), missing,
-    warnings: [...(invalidUrls ? [`已排除 ${invalidUrls} 条不安全链接`] : []), ...(rows.some(entries => entries.length >= 2000) ? ["每个日库最多读取最近 2000 条，历史候选可能不完整"] : [])],
+    items: ordered, generatedAt: lastRuns.sort().at(-1) || "", available: readableDatabases > 0, missing,
+    warnings: [...failures, ...(invalidUrls ? [`已排除 ${invalidUrls} 条不安全链接`] : []), ...(rows.some(entries => entries.length >= 2000) ? ["每个日库最多读取最近 2000 条，历史候选可能不完整"] : [])],
     counts: { hotlist: groups[0].length, rss: groups[1].length, newItems: items.filter(item => item.isNew).length }
   };
 }

@@ -11,7 +11,7 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  return apiJson(async () => generateDraftEngagement(await parseJsonBody(request, schema)), {
+  return apiJson(async () => generateDraftEngagement(await parseJsonBody(request, schema), { signal: request.signal }), {
     fallbackMessage: "生成评论和弹幕失败"
   });
 }

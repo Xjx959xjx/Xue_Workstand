@@ -107,6 +107,8 @@ async function start() {
     throw new Error("尚未安装 LaunchAgent，请先执行 npm run remote:setup。");
   }
 
+  await assertNoActiveJobs();
+
   await fs.promises.mkdir(stateRoot, { recursive: true });
   await runNodeScript(devScript, ["stop"], { allowFailure: true });
   await stopLaunchAgent();
@@ -192,6 +194,7 @@ async function deploy() {
   }
   await assertNoActiveJobs();
   const build = await buildRelease();
+  await assertNoActiveJobs();
   const previousRelease = await currentReleasePath();
 
   try {
@@ -200,6 +203,7 @@ async function deploy() {
     if (!(await waitForHealth(30_000, build.buildId))) {
       throw new Error("新版本启动后未在 30 秒内通过健康检查。");
     }
+    await fs.promises.writeFile(path.join(build.releaseRoot, "HEALTHY"), `${new Date().toISOString()}\n`, "utf8");
     await pruneReleases(2);
     console.log(`发布成功：${build.buildId}`);
     console.log("手机重新打开或点击版本提示即可使用新版本。");
@@ -220,13 +224,14 @@ async function rollback() {
   await assertNoActiveJobs();
   const current = await currentReleasePath();
   const releases = await listReleases();
-  const target = releases.find((release) => release !== current);
+  const target = releases.find((release) => release !== current && fs.existsSync(path.join(release, "HEALTHY")));
   if (!target) throw new Error("没有可回退的历史版本。");
 
   await activateRelease(target);
   try {
     await switchToProduction();
-    if (!(await waitForHealth(30_000))) {
+    const build = await readReleaseBuild(target);
+    if (!(await waitForHealth(30_000, build?.buildId))) {
       throw new Error("回退版本未通过健康检查。");
     }
     console.log(`已回退到：${path.basename(target)}`);
@@ -234,7 +239,8 @@ async function rollback() {
     if (current) {
       await activateRelease(current);
       await switchToProduction();
-      await waitForHealth(30_000);
+      const build = current ? await readReleaseBuild(current) : null;
+      await waitForHealth(30_000, build?.buildId);
     }
     throw error;
   }
@@ -452,9 +458,13 @@ async function bootstrapLaunchAgent() {
 
 async function assertNoActiveJobs() {
   const result = await fetchJson("http://127.0.0.1:3000/api/jobs", 5_000);
-  if (!result.ok) return;
+  if (!result.ok) throw new Error(`无法确认任务状态，已停止切换：${result.error || "任务接口不可用"}`);
   const jobs = Array.isArray(result.data?.jobs) ? result.data.jobs : [];
-  const active = jobs.filter((job) => job?.status === "queued" || job?.status === "running");
+  const active = jobs.filter((job) =>
+    ["queued", "running"].includes(job?.status) ||
+    (Array.isArray(job?.readErrors) && job.readErrors.length > 0) ||
+    (Array.isArray(job?.recoveryErrors) && job.recoveryErrors.length > 0)
+  );
   if (active.length) {
     throw new Error(`当前有 ${active.length} 个运行或排队任务，请等待完成或手动停止后再继续。`);
   }
@@ -464,8 +474,12 @@ async function waitForHealth(timeoutMs, expectedBuildId) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const result = await fetchJson(healthUrl, 2_500);
-    const buildMatches = !expectedBuildId || result.data?.app?.buildId === expectedBuildId;
-    if (result.ok && buildMatches) return true;
+    const app = result.data?.app;
+    const buildMatches = !expectedBuildId || app?.buildId === expectedBuildId;
+    const modeMatches = app?.appMode === "workspace";
+    const serviceHealthy = app?.status !== "degraded";
+    const storageHealthy = result.data?.services?.storage?.status !== "unavailable";
+    if (result.ok && buildMatches && modeMatches && serviceHealthy && storageHealthy) return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;

@@ -141,6 +141,7 @@ type DouyinCommentRows = {
 };
 
 type DouyinVideoStatsSnapshot = {
+  missingFields?: DouyinDetailStatField[];
   title: string;
   likeCount: number;
   commentCount: number;
@@ -187,11 +188,7 @@ export async function resolveAccountUid(
     return searchBilibiliUserUid(name, { signal: options.signal });
   }
 
-  return searchDouyinUserSecUid(name, { signal: options.signal });
-}
-
-async function searchDouyinUserSecUid(name: string, options: { signal?: AbortSignal } = {}) {
-  return searchDouyinUserSecUidWithBrowser(name, options);
+  return searchDouyinUserSecUidWithBrowser(name, { signal: options.signal });
 }
 
 async function searchDouyinUserSecUidWithBrowser(name: string, options: { signal?: AbortSignal } = {}) {
@@ -734,7 +731,8 @@ export async function refreshDouyinVideoDownloadUrl(
 
 export async function checkDouyinVideoAvailability(
   account: Account,
-  video: Pick<Video, "id" | "url" | "raw">
+  video: Pick<Video, "id" | "url" | "raw">,
+  options: { signal?: AbortSignal } = {}
 ) {
   const awemeId = resolveDouyinAwemeId(video);
   if (!awemeId) {
@@ -745,7 +743,7 @@ export async function checkDouyinVideoAvailability(
   }
 
   try {
-    const rows = await getDouyinVideoRows(account, { limit: 50 });
+    const rows = await getDouyinVideoRows(account, { limit: 50, signal: options.signal });
     const row = rows.find((item) => getDouyinRowAwemeId(item) === awemeId);
     if (row) {
       return {
@@ -758,6 +756,7 @@ export async function checkDouyinVideoAvailability(
       reason: "当前账号最近 50 条视频里找不到这条，可能已删除、隐藏、下架，或账号权限不可见。"
     };
   } catch (error) {
+    if (isAbortError(error)) throw error;
     return {
       visible: null,
       reason: `无法检查视频是否仍可见：${error instanceof Error ? error.message : "opencli 检查失败"}`
@@ -796,7 +795,7 @@ async function getDouyinVideoRows(account: Account, options: DouyinMediaLookupOp
     timeout: 90_000,
     signal: options.signal
   });
-  return asArray(parseJsonish(stdout))
+  return openCliRows(parseJsonish(stdout))
     .map((row) => (row && typeof row === "object" ? (row as Record<string, unknown>) : null))
     .filter(Boolean) as Array<Record<string, unknown>>;
 }
@@ -974,33 +973,38 @@ export async function hydrateDouyinVideoStatsBatch(
         };
       }
 
+      const missingFields = detail.missingFields || [];
+      const detailStats = {
+        likes: detail.likeCount,
+        comments: detail.commentCount,
+        favorites: detail.favoriteCount,
+        shares: detail.shareCount
+      };
+      const statistics = Object.fromEntries(
+        ([ ["digg_count", "likes", detail.likeCount], ["comment_count", "comments", detail.commentCount], ["collect_count", "favorites", detail.favoriteCount], ["share_count", "shares", detail.shareCount] ] as const)
+          .filter(([, field]) => !missingFields.includes(field))
+          .map(([key, , value]) => [key, value])
+      );
       return {
         ...video,
         title: detail.title || video.title,
         publishedAt: detail.publishedAt || video.publishedAt,
         stats: {
           ...video.stats,
-          likes: detail.likeCount,
-          comments: detail.commentCount,
-          favorites: detail.favoriteCount,
-          shares: detail.shareCount
+          ...Object.fromEntries(Object.entries(detailStats).filter(([field]) => !missingFields.includes(field as DouyinDetailStatField)))
         },
         statsHydration: {
-          status: "complete",
+          status: missingFields.length ? "partial" : "complete",
           source: "opencli",
           checkedAt,
-          missingFields: []
+          missingFields,
+          ...(missingFields.length ? { error: "抖音详情接口返回的统计字段不完整，请检查网页会话后重试。" } : {})
         },
         raw: {
           ...(video.raw && typeof video.raw === "object" ? video.raw : {}),
           detail: {
             create_time: detail.publishedAt,
-            statistics: {
-              digg_count: detail.likeCount,
-              comment_count: detail.commentCount,
-              collect_count: detail.favoriteCount,
-              share_count: detail.shareCount
-            }
+            statistics
           }
         },
         updatedAt: checkedAt
@@ -1014,8 +1018,8 @@ export async function hydrateDouyinVideoStats(
   options: VideoStatsTimingOptions = {}
 ): Promise<Video> {
   const [hydrated] = await hydrateDouyinVideoStatsBatch([video], options);
-  if (hydrated.statsHydration?.status === "failed") {
-    throw new Error(hydrated.statsHydration.error || "抖音详情接口没有返回统计数据。");
+  if (hydrated.statsHydration?.status !== "complete") {
+    throw new Error(hydrated.statsHydration?.error || "抖音详情接口没有返回统计数据。");
   }
   return hydrated;
 }
@@ -1552,6 +1556,7 @@ async function getDouyinVideoDetailSnapshot(
   if (!object.hasStats) return null;
   return {
     title: stringField(object.title),
+    missingFields: douyinSnapshotMissingFields(object),
     likeCount: toNumber(object.likeCount),
     commentCount: toNumber(object.commentCount),
     favoriteCount: toNumber(object.favoriteCount),
@@ -1581,7 +1586,7 @@ async function getDouyinVideoDetailSnapshots(
       signal: options.signal
     })
   );
-  const rows = asArray(result);
+  const rows = openCliRows(result);
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
     const object = row as Record<string, unknown>;
@@ -1593,6 +1598,7 @@ async function getDouyinVideoDetailSnapshots(
     }
     details.set(awemeId, {
       title: stringField(object.title),
+      missingFields: douyinSnapshotMissingFields(object),
       likeCount: toNumber(object.likeCount),
       commentCount: toNumber(object.commentCount),
       favoriteCount: toNumber(object.favoriteCount),
@@ -1842,4 +1848,12 @@ function missingDouyinDetailFieldsFromObject(object: Record<string, unknown>): D
   return DOUYIN_DETAIL_STAT_FIELDS.filter((field) =>
     !sources.some((source) => aliases[field].some((alias) => Object.prototype.hasOwnProperty.call(source, alias)))
   );
+}
+
+function douyinSnapshotMissingFields(object: Record<string, unknown>): DouyinDetailStatField[] {
+  const fields = [ ["likeCount", "digg_count", "likes"], ["commentCount", "comment_count", "comments"], ["favoriteCount", "collect_count", "favorites"], ["shareCount", "share_count", "shares"] ] as const;
+  return fields.filter(([key, source]) =>
+    object[key] == null || object[key] === "" || !Number.isFinite(Number(object[key])) || Number(object[key]) < 0 ||
+    (Array.isArray(object.missingFields) && object.missingFields.includes(source))
+  ).map(([, , field]) => field);
 }

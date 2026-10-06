@@ -69,7 +69,7 @@ const logTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 export function parseSortMode(value: string | null): SortMode {
-  return sortOptions.some((option) => option.value === value) ? value as SortMode : "heat";
+  return sortOptions.some((option) => option.value === value) ? value as SortMode : "likes";
 }
 
 export function parseWindowFilter(value: string | null): WindowFilter {
@@ -92,7 +92,7 @@ export function buildHotlistHref({
   const params = new URLSearchParams(search);
   if (account === "all") params.delete("account");
   else params.set("account", account);
-  if (sort === "heat") params.delete("sort");
+  if (sort === "likes") params.delete("sort");
   else params.set("sort", sort);
   if (window === DEFAULT_WINDOW) params.delete("window");
   else params.set("window", window);

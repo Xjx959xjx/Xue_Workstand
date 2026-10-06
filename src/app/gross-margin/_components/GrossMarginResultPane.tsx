@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { AppMode } from "@/lib/app-mode";
 import { Copy, FileText, MessageSquarePlus, Upload } from "lucide-react";
 import type { GrossMarginWorkbenchController } from "../_hooks/useGrossMarginWorkbench";
 import {
@@ -21,7 +22,8 @@ type GrossMarginResultPaneProps = Pick<
   | "reviewTemplateLineCount"
   | "setSplitDeliveryEnabled"
   | "splitDeliveryEnabled"
->;
+  | "validationError"
+> & { appMode: AppMode };
 
 export function GrossMarginResultPane({
   busy,
@@ -34,7 +36,9 @@ export function GrossMarginResultPane({
   reviewTemplate,
   reviewTemplateLineCount,
   setSplitDeliveryEnabled,
-  splitDeliveryEnabled
+  splitDeliveryEnabled,
+  appMode,
+  validationError
 }: GrossMarginResultPaneProps) {
   return (
     <aside className="pane gross-result-pane">
@@ -45,6 +49,7 @@ export function GrossMarginResultPane({
         </div>
       </div>
       <div className="pane-body">
+        {validationError ? <p className="notice error" role="alert">{validationError}</p> : null}
         <div className="gross-result-panel maintenance">
           <span>维护成本</span>
           <strong>{formatMoney(calculation.maintenanceCost)}</strong>
@@ -106,7 +111,7 @@ export function GrossMarginResultPane({
             <button
               aria-busy={busy === "export"}
               className="btn primary gross-export-primary"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || Boolean(validationError)}
               onClick={() => void handleExportReview()}
               type="button"
             >
@@ -114,7 +119,7 @@ export function GrossMarginResultPane({
               {busy === "export" ? "导出中" : "导出并监控"}
             </button>
           </div>
-          <EngagementJump engagementTarget={engagementTarget} />
+          {appMode === "workspace" ? <EngagementJump engagementTarget={engagementTarget} /> : null}
         </div>
       </div>
     </aside>

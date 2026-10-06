@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderKanban, RefreshCw } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
+import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { deleteCopySources, getCopySources, refreshCopySources, saveProjectStyle, transcribeCopySource, upsertProject } from "@/lib/client";
 import { cachedGetProjectDetail, invalidateProjectDetail } from "@/lib/detail-cache";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
@@ -46,7 +47,7 @@ export default function ProjectWorkbenchPage() {
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [styleJobId, setStyleJobId] = useState("");
-  const [handledJobIds, setHandledJobIds] = useState<string[]>([]);
+  const handledJobIdsRef = useRef(new Set<string>());
   const [pickedInitialProject, setPickedInitialProject] = useState(false);
   const [projectDetail, setProjectDetail] = useState<ProjectDetail | null>(null);
   const [projectDetailLoading, setProjectDetailLoading] = useState(false);
@@ -139,6 +140,7 @@ export default function ProjectWorkbenchPage() {
     projectName.trim() || projectDescription.trim() || sourceAccountIds.length || sourceMaterialIds.length || styleDraft.trim()
   );
   const isDirty = savedSnapshot ? !snapshotsEqual(savedSnapshot, currentSnapshot) : hasWorkspaceContent;
+  useUnsavedChangesGuard(isDirty || Boolean(linkInput.trim()), "当前项目还有未保存内容，确定要离开吗？");
   const canSaveProject = Boolean(projectName.trim()) && busy !== "save";
   const canSaveWorkspace = Boolean(projectName.trim() && isDirty) && busy !== "save" && busy !== "style";
   const canWrite = Boolean(selectedProjectMeta && !isDirty && busy !== "save" && busy !== "style");
@@ -234,8 +236,7 @@ export default function ProjectWorkbenchPage() {
       setBusy("style");
       return;
     }
-    if (handledJobIds.includes(activeStyleJob.id)) return;
-    setHandledJobIds((current) => [...current, activeStyleJob.id]);
+    if (handledJobIdsRef.current.has(activeStyleJob.id)) return;
     setBusy("");
     if (activeStyleJob.status === "completed") {
       const result = activeStyleJob.result as ({ project: ProjectSummary; style: string; fallback?: boolean; fallbackReason?: string }) | undefined;
@@ -260,8 +261,10 @@ export default function ProjectWorkbenchPage() {
         );
         setMessage(result.fallback ? result.fallbackReason || "已用本地模板生成项目风格卡。" : "项目风格卡已更新。");
       } else {
-        setMessage("项目风格卡已更新。");
+        setMessage("项目风格任务结果缺失，请稍后重试。");
+        return;
       }
+      handledJobIdsRef.current.add(activeStyleJob.id);
       void refresh();
     }
     if (activeStyleJob.status === "failed") {
@@ -271,7 +274,7 @@ export default function ProjectWorkbenchPage() {
     if (activeStyleJob.status === "cancelled") {
       setMessage("已停止项目风格卡生成。");
     }
-  }, [activeStyleJob, handledJobIds, refresh]);
+  }, [activeStyleJob, refresh]);
 
   useEffect(() => {
     if (!styleJobIdMismatch || busy !== "style") return;
@@ -282,7 +285,7 @@ export default function ProjectWorkbenchPage() {
   useEffect(() => {
     if (!message || isTaskProgressMessage(message)) return;
     notify({
-      tone: message.includes("失败") || message.includes("先") ? "error" : "success",
+      tone: message.includes("失败") || message.includes("缺失") || message.includes("先") ? "error" : "success",
       message
     });
   }, [message, notify]);

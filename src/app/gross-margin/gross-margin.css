@@ -1326,6 +1326,10 @@
   padding-top: 0;
 }
 
+.gross-monitor-page:has(> .field-hint.warning) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .gross-monitor-topbar {
   position: static;
   container-name: gross-monitor-topbar;
@@ -1334,6 +1338,8 @@
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px;
+  min-height: 96px;
+  align-content: start;
   padding: 8px;
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-lg);
@@ -1409,10 +1415,10 @@
 }
 
 .gross-monitor-inline-filters {
-  display: grid;
-  grid-template-columns: 184px auto auto auto;
+  display: flex;
   align-items: center;
   justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -1420,8 +1426,8 @@
 .gross-monitor-search-field {
   position: relative;
   display: flex;
-  width: 184px;
-  min-width: 184px;
+  width: 228px;
+  min-width: 190px;
 }
 
 .gross-monitor-search-field > svg {
@@ -1444,20 +1450,58 @@
 }
 
 .gross-monitor-filter-group {
-  grid-template-columns: 104px 160px;
+  display: flex;
+  gap: 8px;
 }
 
 .gross-monitor-date-range {
-  grid-template-columns: 14px 120px auto 120px;
-  padding-left: 2px;
+  grid-template-columns: 14px minmax(100px, 1fr) auto minmax(100px, 1fr);
+  min-height: 42px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: color-mix(in oklch, var(--panel-soft) 82%, var(--panel-raised));
   color: var(--muted);
 }
 
+.gross-monitor-filter-control {
+  position: relative;
+  display: block;
+}
+
+.gross-monitor-filter-control > span {
+  position: absolute;
+  top: 5px;
+  left: 10px;
+  z-index: 1;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.gross-monitor-filter-control::after {
+  position: absolute;
+  top: 18px;
+  right: 11px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  content: "";
+  pointer-events: none;
+  transform: rotate(45deg);
+}
+
+.gross-monitor-project-control {
+  min-width: 176px;
+}
+
 .gross-monitor-inline-input,
-.gross-monitor-inline-select,
-.gross-monitor-inline-date {
-  min-height: var(--control-height-sm);
-  height: var(--control-height-sm);
+.gross-monitor-inline-select {
+  min-height: 42px;
+  height: 42px;
   padding: 6px 10px;
   border: 1px solid color-mix(in oklch, var(--line-strong) 82%, var(--line));
   border-radius: var(--control-radius);
@@ -1476,8 +1520,7 @@
 }
 
 .gross-monitor-inline-input:focus,
-.gross-monitor-inline-select:focus,
-.gross-monitor-inline-date:focus {
+.gross-monitor-inline-select:focus {
   border-color: var(--accent);
   background: var(--panel-raised);
   box-shadow: 0 0 0 3px var(--focus);
@@ -1491,24 +1534,69 @@
 }
 
 .gross-monitor-inline-select {
-  width: 104px;
+  width: 124px;
   min-width: 0;
-  max-width: 104px;
+  max-width: 124px;
+  padding-top: 16px;
+  padding-right: 30px;
+  appearance: none;
 }
 
 .gross-monitor-project-select {
-  width: 160px;
-  max-width: 160px;
+  width: 176px;
+  max-width: 176px;
+}
+
+.gross-monitor-date-segment {
+  position: relative;
+  display: grid;
+  align-content: center;
+  min-width: 100px;
+  height: 34px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.gross-monitor-date-segment:hover,
+.gross-monitor-date-segment:focus-within {
+  border-color: var(--line-strong);
+  background: var(--panel-raised);
+}
+
+.gross-monitor-date-segment > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.gross-monitor-date-segment > strong {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .gross-monitor-inline-date {
-  width: 120px;
+  position: absolute;
+  inset: 0;
+  width: 100%;
   min-width: 0;
-  max-width: 120px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .gross-monitor-inline-date-separator {
-  color: var(--muted);
+  color: var(--line-strong);
   font-size: 11px;
   font-weight: 700;
 }
@@ -2205,6 +2293,17 @@
     grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   }
 
+  .gross-monitor-filter-control,
+  .gross-monitor-filter-control select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .gross-monitor-project-control {
+    min-width: 0;
+  }
+
   .gross-monitor-date-range {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
@@ -2292,6 +2391,17 @@
   .gross-monitor-filter-group {
     display: grid;
     grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  }
+
+  .gross-monitor-filter-control,
+  .gross-monitor-filter-control select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .gross-monitor-project-control {
+    min-width: 0;
   }
 
   .gross-monitor-date-range {

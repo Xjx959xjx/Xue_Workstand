@@ -15,7 +15,13 @@ export function GrossMarginBulkMonitorModal({
   onSubmit: (input: { template: string; createProject: boolean; projectName: string }) => Promise<void>;
 }) {
   const [template, setTemplate] = useState("");
-  const parsed = useMemo(() => parseGrossMarginBulkMonitorTemplate(template), [template]);
+  const parsed = useMemo(() => {
+    try {
+      return parseGrossMarginBulkMonitorTemplate(template);
+    } catch (error) {
+      return { items: [], warnings: [error instanceof Error ? error.message : "维护模板无法解析"] };
+    }
+  }, [template]);
   const defaultProjectName = useMemo(() => makeDefaultProjectName(parsed.items.length), [parsed.items.length]);
   const [projectName, setProjectName] = useState(defaultProjectName);
   const [projectNameTouched, setProjectNameTouched] = useState(false);

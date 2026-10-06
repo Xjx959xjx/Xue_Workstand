@@ -19,6 +19,7 @@ import {
   makeDefaultSelections,
   makeEmptyQuantityInputs,
   makePriceInputs,
+  parseGrossMarginAmount,
   toAbsoluteMetricValue,
   toAmount
 } from "@/lib/gross-margin-calculator";
@@ -43,6 +44,7 @@ import {
   type GrossMarginImportedTemplate,
   type PlatformKey
 } from "../_lib/gross-margin-workbench-model";
+import { useGrossMarginAccountRefresh } from "./useGrossMarginAccountRefresh";
 
 type BusyState = "" | "refresh" | "prices" | "price-editor" | "export" | "template" | "bulk-monitor";
 type VideoAccountLookupState = {
@@ -55,6 +57,10 @@ const pricePanelServiceConfigs = GROSS_MARGIN_SERVICE_CONFIGS.filter((config) =>
 export function useGrossMarginWorkbench() {
   const { notify } = useFeedback();
   const [library, setLibrary] = useState<GrossMarginLibrary | null>(null);
+  const libraryRef = useRef(library);
+  const libraryLoaded = Boolean(library);
+  useEffect(() => { libraryRef.current = library; }, [library]);
+  useGrossMarginAccountRefresh(library, setLibrary);
   const [platform, setPlatform] = useState<PlatformKey>("douyin");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<BusyState>("");
@@ -110,8 +116,8 @@ export function useGrossMarginWorkbench() {
   );
   const calculation = useMemo(
     () => calculateGrossMargin({
-      discountPrice: toAmount(discountPrice),
-      originalPrice: toAmount(originalPrice),
+      discountPrice,
+      originalPrice,
       configs: activeServiceConfigs,
       priceInputs,
       quantityInputs,
@@ -120,6 +126,8 @@ export function useGrossMarginWorkbench() {
     }),
     [activeServiceConfigs, discountPrice, originalPrice, priceInputs, quantityInputs, selectedOptions, table]
   );
+  const validationError = calculation.errors?.[0] ||
+    (parseGrossMarginAmount(rebateRate, 100) === null ? "返点比例必须在 0 到 100 之间" : "");
   const reviewTemplateValues = useMemo(
     () => buildGrossMarginTemplateValues({
       account: matchedAccount,
@@ -171,7 +179,7 @@ export function useGrossMarginWorkbench() {
 
   useEffect(() => {
     const nextUrl = normalizeVideoUrlInput(videoUrl);
-    if (!library || !nextUrl || !detectVideoPlatform(nextUrl)) {
+    if (!libraryLoaded || !nextUrl || !detectVideoPlatform(nextUrl)) {
       setVideoAccountLookup({ status: "idle", message: "" });
       return;
     }
@@ -190,7 +198,7 @@ export function useGrossMarginWorkbench() {
             return;
           }
 
-          const accounts = (library.accounts || []).filter((account) => account.platform === result.platform);
+          const accounts = (libraryRef.current?.accounts || []).filter((account) => account.platform === result.platform);
           const resolvedAccount = findGrossMarginAccount(accounts, result.accountName);
           const resolvedName = resolvedAccount?.name || result.accountName;
           accountNameRef.current = resolvedName;
@@ -223,7 +231,7 @@ export function useGrossMarginWorkbench() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [library, videoUrl]);
+  }, [libraryLoaded, videoUrl]);
 
   function applyLibraryTable(nextLibrary: GrossMarginLibrary, preferredPlatform: PlatformKey) {
     const nextTable = nextLibrary.tables.find((item) => item.platform === preferredPlatform) || nextLibrary.tables[0] || null;
@@ -293,7 +301,9 @@ export function useGrossMarginWorkbench() {
       const result = await getGrossMarginLibrary({ fresh: true });
       setLibrary(result);
       applyLibraryTable(result, platform);
-      notify({ tone: "success", message: "毛利单价表已刷新" });
+      notify(result.accountSourceFallback
+        ? { tone: "warning", message: result.accountSourceWarning || "在线账号同步失败，当前展示缓存" }
+        : { tone: "success", message: "毛利单价表已刷新" });
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "刷新失败" });
     } finally {
@@ -309,7 +319,12 @@ export function useGrossMarginWorkbench() {
         platform: table.platform,
         items: table.items.map((item) => ({
           ...item,
-          unitPrice: toAmount(priceInputs[item.id] ?? item.unitPrice)
+          unitPrice: (() => {
+            const raw = priceInputs[item.id] ?? item.unitPrice;
+            const amount = parseGrossMarginAmount(raw);
+            if ((typeof raw === "string" && !raw.trim()) || amount === null) throw new Error(`${item.name}单价必须是有效的非负数字`);
+            return amount;
+          })()
         }))
       });
       setLibrary(result.library);
@@ -342,6 +357,10 @@ export function useGrossMarginWorkbench() {
 
   async function handleExportReview() {
     if (busy) return;
+    if (validationError) {
+      notify({ tone: "error", message: validationError });
+      return;
+    }
     if (!videoUrl.trim()) {
       notify({ tone: "error", message: "请先补视频链接，再导出文案" });
       return;
@@ -477,6 +496,7 @@ export function useGrossMarginWorkbench() {
     templateModalOpen,
     videoUrl,
     videoAccountLookup,
+    validationError,
     closeBulkMonitorModal: () => setBulkMonitorModalOpen(false),
     closeImportModal: () => setImportModalOpen(false),
     closePriceEditor: () => setPriceEditorOpen(false),

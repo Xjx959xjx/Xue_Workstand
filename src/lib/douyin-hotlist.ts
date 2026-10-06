@@ -466,7 +466,7 @@ async function resolveWatchlistAccounts(accountIds: string[]) {
   const entries = await Promise.all(
     accountIds.map(async (accountId) => ({
       accountId,
-      account: await resolveDouyinHotlistAccount(accountId).catch(() => null)
+      account: await resolveDouyinHotlistAccount(accountId)
     }))
   );
 

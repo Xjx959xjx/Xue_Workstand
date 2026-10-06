@@ -10,6 +10,7 @@ type AccountStyleEditorModalProps = {
   styleDraft: string;
   styleProgress: number;
   styleStage: string;
+  unsavedChanges: boolean;
   onChange: (value: string) => void;
   onClose: () => void;
   onGenerateStyle: () => void;
@@ -22,22 +23,29 @@ export const AccountStyleEditorModal = memo(function AccountStyleEditorModal({
   styleDraft,
   styleProgress,
   styleStage,
+  unsavedChanges,
   onChange,
   onClose,
   onGenerateStyle,
   onSaveStyle
 }: AccountStyleEditorModalProps) {
+  const handleClose = () => {
+    if (busy) return;
+    if (unsavedChanges && !window.confirm("账号风格卡还有未保存修改，确定关闭吗？")) return;
+    onClose();
+  };
   return (
-    <LibraryEditorModal labelledBy="library-style-modal-title" panelRef={panelRef} onClose={onClose}>
+    <LibraryEditorModal labelledBy="library-style-modal-title" panelRef={panelRef} disabled={Boolean(busy)} unsavedChanges={unsavedChanges} onClose={handleClose}>
       <div className="modal-header">
         <h2 id="library-style-modal-title">账号风格卡</h2>
-        <button className="btn" onClick={onClose} type="button">
+        <button className="btn" disabled={Boolean(busy)} onClick={handleClose} type="button">
           关闭
         </button>
       </div>
       <div className="modal-editor">
         <textarea
           aria-label="账号风格卡"
+          disabled={Boolean(busy)}
           autoComplete="off"
           name="accountStyle"
           value={styleDraft}

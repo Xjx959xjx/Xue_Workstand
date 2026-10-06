@@ -33,18 +33,28 @@ export function calculateGrossMargin({
   table
 }: {
   configs: GrossMarginServiceConfig[];
-  discountPrice: number;
-  originalPrice: number;
+  discountPrice: number | string;
+  originalPrice: number | string;
   priceInputs: Record<string, string>;
   quantityInputs: Record<GrossMarginServiceKind, string>;
   selectedOptions: Partial<Record<GrossMarginServiceKind, string>>;
   table: GrossMarginPriceTable | null;
 }): GrossMarginCalculationResult {
+  const errors: string[] = [];
+  function amount(value: string | number | undefined, label: string) {
+    const parsed = parseGrossMarginAmount(value);
+    if (parsed === null) errors.push(`${label}必须是 0 到 1 亿之间的有效数字`);
+    return parsed ?? 0;
+  }
+  const original = amount(originalPrice, "原价");
+  const discount = amount(discountPrice, "折后价格");
   const lines: GrossMarginCalculationLine[] = configs.map((config) => {
     const options = table ? getActiveServiceOptions(table, config.service) : [];
     const option = getSelectedOption(options, selectedOptions[config.service]);
-    const unitPrice = option ? toAmount(priceInputs[option.id] ?? option.unitPrice) : 0;
-    const quantity = toAmount(quantityInputs[config.service]);
+    const rawPrice = option ? priceInputs[option.id] ?? option.unitPrice : 0;
+    if (option && typeof rawPrice === "string" && !rawPrice.trim()) errors.push(`${config.label}单价不能为空`);
+    const unitPrice = option ? amount(rawPrice, `${config.label}单价`) : 0;
+    const quantity = amount(quantityInputs[config.service], `${config.label}数量`);
     return {
       service: config.service,
       label: config.label,
@@ -53,20 +63,21 @@ export function calculateGrossMargin({
       quantity,
       unitPrice,
       quantityUnit: option?.quantityUnit || "个",
-      total: quantity * unitPrice
+      total: roundMoney(quantity * unitPrice)
     };
   });
-  const maintenanceCost = lines.reduce((sum, line) => sum + line.total, 0);
-  const grossProfit = discountPrice - maintenanceCost;
+  const maintenanceCost = roundMoney(lines.reduce((sum, line) => sum + line.total, 0));
+  const grossProfit = roundMoney(discount - maintenanceCost);
 
   return {
-    originalPrice,
-    discountPrice,
+    originalPrice: original,
+    discountPrice: discount,
     maintenanceCost,
     grossProfit,
-    grossMarginRate: originalPrice > 0 ? grossProfit / originalPrice : 0,
-    rebateRate: originalPrice > 0 ? (originalPrice - discountPrice) / originalPrice : 0,
-    lines
+    grossMarginRate: original > 0 ? grossProfit / original : 0,
+    rebateRate: original > 0 ? (original - discount) / original : 0,
+    lines,
+    errors
   };
 }
 
@@ -155,6 +166,26 @@ export function roundUpToStep(value: number, step: number) {
 export function toAmount(value: string | number | undefined) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function parseGrossMarginAmount(value: string | number | undefined, max = 100_000_000) {
+  if (value === undefined || (typeof value === "string" && !value.trim())) return 0;
+  if (typeof value === "string" && !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim())) return null;
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= max ? parsed : null;
+}
+
+export function parseGrossMarginMetric(value: string) {
+  const match = value.trim().replace(/,/g, "").match(/^(\d+(?:\.\d+)?)\s*(万|w|千|个|元)?$/i);
+  if (!match) return null;
+  const multiplier = /^(万|w)$/i.test(match[2] || "") ? 10000 : match[2] === "千" ? 1000 : 1;
+  const parsed = Number(match[1]) * multiplier;
+  return Number.isFinite(parsed) && parsed <= 100_000_000 ? parsed : null;
+}
+
+function roundMoney(value: number) {
+  return Math.sign(value) * Math.round((Math.abs(value) + Number.EPSILON * Math.abs(value)) * 100) / 100;
 }
 
 export function formatAmountInput(value: number) {

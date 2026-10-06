@@ -117,9 +117,10 @@ async function refreshMonitorRecordSnapshot(
       () => fetchMonitorRecordStats(record, onTiming, meta, signal),
       meta
     );
-    return saveRefreshedMonitorRecord(record, fetched, onTiming);
+    return await saveRefreshedMonitorRecord(record, fetched, onTiming);
   } catch (error) {
     throwIfAborted(signal);
+    if (isRevisionConflict(error)) return resolveGrossMarginMonitorRecord(record.id);
     return saveFailedMonitorRecord(record, error, onTiming);
   }
 }
@@ -154,17 +155,24 @@ async function saveRefreshedMonitorRecord(
 ) {
   const warnings: string[] = [];
   try {
-    if ("warning" in fetched && fetched.warning) warnings.push(fetched.warning);
+    if ("warning" in fetched && typeof fetched.warning === "string" && fetched.warning) warnings.push(fetched.warning);
     const refreshedAt = new Date().toISOString();
-    return timeMonitorOperation(
+    return await timeMonitorOperation(
       onTiming,
       "storage.save-monitor-record",
       () => updateGrossMarginMonitorRecord(record.id, (current) => {
         const fetchedStats = normalizeFetchedStatsForMonitor(current.platform, fetched.stats);
+        if (!Object.keys(fetchedStats).length) throw new Error("没有取得有效监控指标，已保留上次成功数据，请重试。");
+        const expectedServices: GrossMarginServiceKind[] = current.platform === "douyin"
+          ? ["like", "comment", "favorite", "share"]
+          : ["play", "like", "coin", "favorite", "comment", "share", "danmaku"];
+        if (expectedServices.some(service => fetchedStats[service] === undefined)) {
+          warnings.push("部分指标未返回，缺失项保留上次成功数据，请重试。");
+        }
         const currentStats =
           current.platform === "douyin" && typeof current.currentStats?.play === "number"
-            ? { ...fetchedStats, play: current.currentStats.play }
-            : fetchedStats;
+            ? { ...current.currentStats, ...fetchedStats, play: current.currentStats.play }
+            : { ...current.currentStats, ...fetchedStats };
         const shouldCapturePlaySample =
           typeof fetchedStats.play === "number" && Number.isFinite(fetchedStats.play) && currentStats.play === fetchedStats.play;
         const playSamples = shouldCapturePlaySample
@@ -190,10 +198,11 @@ async function saveRefreshedMonitorRecord(
           lastRefreshedAt: refreshedAt,
           updatedAt: refreshedAt
         };
-      }),
+      }, record.revision),
       recordTimingMeta(record)
     );
   } catch (error) {
+    if (isRevisionConflict(error)) return resolveGrossMarginMonitorRecord(record.id);
     return saveFailedMonitorRecord(record, error, onTiming);
   }
 }
@@ -218,9 +227,16 @@ function saveFailedMonitorRecord(record: GrossMarginMonitorRecord, error: unknow
       warnings: [error instanceof Error ? error.message : "刷新监控数据失败"],
       lastRefreshedAt: failedAt,
       updatedAt: failedAt
-    })),
+    }), record.revision),
     recordTimingMeta(record)
-  );
+  ).catch((saveError) => {
+    if (isRevisionConflict(saveError)) return resolveGrossMarginMonitorRecord(record.id);
+    throw saveError;
+  });
+}
+
+function isRevisionConflict(error: unknown) {
+  return error instanceof Error && "statusCode" in error && error.statusCode === 409;
 }
 
 export async function refreshGrossMarginMonitorRecords(recordIds?: string[], options: GrossMarginRefreshOptions = {}) {
@@ -308,25 +324,13 @@ function normalizeFetchedStatsForMonitor(
   platform: MonitorPlatform,
   stats: Partial<Record<GrossMarginServiceKind, number>>
 ) {
-  if (platform === "bilibili") {
-    return {
-      play: stats.play,
-      like: stats.like,
-      coin: stats.coin,
-      favorite: stats.favorite,
-      comment: stats.comment,
-      share: stats.share,
-      danmaku: stats.danmaku
-    };
-  }
-  const normalized: Partial<Record<GrossMarginServiceKind, number>> = {
-    like: stats.like,
-    comment: stats.comment,
-    favorite: stats.favorite,
-    share: stats.share
-  };
-  if (typeof stats.play === "number" && Number.isFinite(stats.play)) {
-    normalized.play = stats.play;
+  const services: GrossMarginServiceKind[] = platform === "bilibili"
+    ? ["play", "like", "coin", "favorite", "comment", "share", "danmaku"]
+    : ["play", "like", "comment", "favorite", "share"];
+  const normalized: Partial<Record<GrossMarginServiceKind, number>> = {};
+  for (const service of services) {
+    const value = stats[service];
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) normalized[service] = value;
   }
   return normalized;
 }
@@ -339,19 +343,7 @@ async function getDouyinMonitorStats(input: {
   onTiming?: OpenCliTimingSink;
   signal?: AbortSignal;
 } = {}) {
-  const fallback = await getCachedDouyinVideoStatsByUrl(input.url, options).catch((error) => ({
-    platform: "douyin" as const,
-    title: "",
-    url: input.url,
-    publishedAt: "",
-    stats: {},
-    warning: error instanceof Error ? error.message : "抖音当前数据抓取失败，请手动补充。"
-  }));
-
-  return {
-    ...fallback,
-    warning: "warning" in fallback && fallback.warning ? fallback.warning : ""
-  };
+  return getCachedDouyinVideoStatsByUrl(input.url, options);
 }
 
 function getCachedDouyinVideoStatsByUrl(url: string, options: {

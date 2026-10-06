@@ -10,7 +10,7 @@ import { withMutationLock } from "./storage/mutation-lock";
 import { analyzeRadar, toStoredSignal } from "./hotspot-radar/analysis";
 import { mergeRadarSignals } from "./hotspot-radar/collector";
 import type { CollectedSource, RadarRefreshOptions } from "./hotspot-radar/collector";
-import { SOURCES, isRecentVerifiedSignal, sameEvent } from "./hotspot-radar/source-rules.mjs";
+import { isRecentVerifiedSignal, sameEvent } from "./hotspot-radar/source-rules.mjs";
 import { radarGrades } from "./hotspot-radar/types";
 import type { RadarFeedback, RadarRating } from "./hotspot-radar/types";
 import type { HotspotEvent, HotspotRadarRefreshResult, HotspotRadarResponse, HotspotSignal } from "./types";
@@ -42,7 +42,7 @@ export async function getHotspotRadar(options: { refresh?: boolean } & RadarRefr
     response.collection = { generatedAt: collection.generatedAt, signalCount: collection.signals.length, status: collection.status, error: collection.error, analyzedCount: collection.analyzedCount, candidateCount: collection.candidateCount };
     response.scouts = collection.scouts;
     response.analysis = collection.analysis;
-    if (collection.status !== "completed") response.provisionalHotspots = summarizeSnapshot(applyFeedback({ ...snapshot, hotspots: collection.partialHotspots }, feedback)).hotspots;
+    if (collection.status !== "completed") response.provisionalHotspots = summarizeSnapshot(applyFeedback({ ...snapshot, hotspots: collection.partialHotspots, signals: [...snapshot.signals, ...collection.signals] }, feedback)).hotspots;
   }
   return response;
 }
@@ -50,7 +50,7 @@ export async function getHotspotDetail(id: string) {
   const [snapshot, feedback] = await Promise.all([readSnapshot(), readFeedback()]);
   const collection = await readRadarCollection();
   const partial = collection?.status !== "completed" ? collection?.partialHotspots.find(item => item.id === id) : undefined;
-  const hotspot = applyFeedback({ ...snapshot, hotspots: partial ? [partial] : snapshot.hotspots }, feedback).hotspots.find(item => item.id === id);
+  const hotspot = applyFeedback({ ...snapshot, hotspots: partial ? [partial] : snapshot.hotspots, signals: [...snapshot.signals, ...(partial ? collection!.signals : [])] }, feedback).hotspots.find(item => item.id === id);
   if (!hotspot) throw new Error("选题不存在或已过期，请刷新选题列表");
   const ids = new Set(hotspot.signalIds);
   return { hotspot, signals: [...new Map([...snapshot.signals, ...(partial ? collection!.signals : [])].map(item => [item.id, item])).values()].filter(item => ids.has(item.id)) };
@@ -71,12 +71,17 @@ export function summarizeSnapshot(snapshot: HotspotRadarRefreshResult): HotspotR
   return { ...snapshot, signals: [], hotspots: snapshot.hotspots.map(item => ({ ...item, evidence: [], research: [], playerFocus: [], angles: [], risks: [], accounts: [], timeline: undefined, displayInfo: { ...item.displayInfo, facts: [] } })) };
 }
 function applyFeedback(snapshot: HotspotRadarRefreshResult, feedback: RadarFeedback) {
+  const sources = new Map(snapshot.signals.map(item => [item.id, item.sourceId]));
   const ratings = new Map(feedback.ratings.map(item => [item.hotspotId, item.rating]));
   const hotspots = snapshot.hotspots.filter(item => isVisibleTopic(item, snapshot)).map(item => {
+    item = { ...item, sourceIds: [...new Set([...(item.sourceIds || []), ...item.signalIds.flatMap(id => sources.has(id) ? [sources.get(id)!] : [])])] };
     const rating = ratings.get(item.id);
     if (!rating) return item;
     const gradeLabel: HotspotEvent["gradeLabel"] = rating === "不行" ? "先看看" : rating;
-    return { ...item, userRating: rating, gradeLabel, priorityLabel: gradeLabel, displayInfo: { ...item.displayInfo, statusLine: gradeLabel }, status: gradeLabel === "吊爆了" ? "ready" as const : "watch" as const };
+    const score = 100 - radarGrades.indexOf(gradeLabel) * 20;
+    const hasBody = item.status === "ready" || item.displayInfo.statusLine.includes("已取得正文");
+    const status: HotspotEvent["status"] = item.status === "risk" ? "risk" : score >= 60 && hasBody ? "ready" : "watch";
+    return { ...item, userRating: rating, gradeLabel, priorityLabel: gradeLabel, score, status, displayInfo: { ...item.displayInfo, statusLine: item.displayInfo.statusLine.replace(/^(吊爆了|有点东西|能做|还行|先看看)/, gradeLabel) } };
   });
   return { ...snapshot, hotspots: sortTopics(hotspots), summary: { ...snapshot.summary, hotspotCount: hotspots.length, readyCount: hotspots.filter(item => item.status === "ready").length } };
 }
@@ -99,7 +104,7 @@ export function retainPriorityTopics(previous: HotspotRadarRefreshResult, curren
     const retainedUntil = item.gradeLabel === "吊爆了" ? existingDeadline || new Date(now + 72 * 3600000).toISOString() : undefined;
     const unchanged = Boolean(old?.eventFingerprint && old.eventFingerprint === item.eventFingerprint);
     const timeline = item.timeline ? [...new Map([...(old?.timeline || []), ...item.timeline].map(entry => [entry.signalId, entry])).values()].sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || "")).slice(0, 30) : old?.timeline;
-    return { ...item, ...(unchanged ? { updatedAt: old!.updatedAt, development: old!.development } : {}), timeline, retainedUntil, signalIds: [...new Set([...item.signalIds, ...(old?.signalIds || [])])], evidence: [...new Set(item.evidence)] };
+    return { ...item, ...(unchanged ? { updatedAt: old!.updatedAt, development: old!.development } : {}), timeline, retainedUntil, sourceIds: [...new Set([...(item.sourceIds || []), ...(old?.sourceIds || [])])], signalIds: [...new Set([...item.signalIds, ...(old?.signalIds || [])])], evidence: [...new Set(item.evidence)] };
   });
   for (const item of previous.hotspots) {
     if (!currentIds.has(item.id) && item.gradeLabel === "吊爆了" && item.retainedUntil && Date.parse(item.retainedUntil) > now) pool.push(item);
@@ -198,7 +203,7 @@ export async function publishRadarSnapshot(snapshot: HotspotRadarRefreshResult, 
   await writeJsonFile(snapshotPath(), hotspotSnapshotSchema.parse(snapshot));
 }
 function emptySnapshot(): HotspotRadarRefreshResult {
-  return { schemaVersion: 1, generatedAt: "", hotspots: [], signals: [], scouts: SOURCES.map(source => ({ id: source.id, board: "game", name: source.name, scope: source.scope, cadence: "手动任务刷新", sources: [source.url], status: "paused", coverage: 0, itemCount: 0 })), summary: { sourceCount: SOURCES.length, completedSourceCount: 0, failedSourceCount: 0, signalCount: 0, hotspotCount: 0, readyCount: 0, averageScore: 0, boardStats: [], generatedAt: "" }, refresh: { requested: 0, completed: 0, failed: 0, sources: [] } };
+  return { schemaVersion: 1, generatedAt: "", hotspots: [], signals: [], scouts: [], summary: { sourceCount: 0, completedSourceCount: 0, failedSourceCount: 0, signalCount: 0, hotspotCount: 0, readyCount: 0, averageScore: 0, boardStats: [], generatedAt: "" }, refresh: { requested: 0, completed: 0, failed: 0, sources: [] } };
 }
 export function getHotspotRadarSnapshotSummary(snapshot: HotspotRadarResponse) {
   return `${snapshot.summary.completedSourceCount}/${snapshot.summary.sourceCount} 个源可用，${snapshot.summary.signalCount} 条信号，${snapshot.summary.hotspotCount} 个选题。`;
@@ -209,7 +214,7 @@ export async function getRadarSignals(query: { page?: number; search?: string; s
   const snapshot = collection ? null : await readSnapshot();
   const all = collection?.signals || snapshot?.signals || [];
   const matching = [...all].sort((a, b) => Date.parse(b.publishedAt || b.capturedAt) - Date.parse(a.publishedAt || a.capturedAt)).filter(item => (!query.id || item.id === query.id) && (!query.source || item.sourceId === query.source) && (!query.search || `${item.title} ${item.sourceName} ${item.summary || ""}`.toLowerCase().includes(query.search.toLowerCase())));
-  const page = Math.max(1, query.page || 1);
+  const page = Math.min(Math.max(1, Math.floor(query.page || 1)), Math.max(1, Math.ceil(matching.length / 30)));
   const items: HotspotSignal[] = query.id ? matching : matching.slice((page - 1) * 30, page * 30).map(({ summary: _summary, ...item }) => { void _summary; return item; });
   return { items, total: matching.length, page, generatedAt: collection?.generatedAt || snapshot?.generatedAt || "" };
 }

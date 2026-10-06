@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useScopedTasks } from "@/components/TaskProvider";
 import { getCachedHotspotRadar, getHotspotRadar, getHotspotDetail, getRadarSignals, saveHotspotFeedback } from "@/lib/client";
 import type { HotspotEvent, HotspotRadarResponse, HotspotSignal } from "@/lib/types";
+import { radarGrades } from "@/lib/hotspot-radar/types";
 import type { RadarRating } from "@/lib/hotspot-radar/types";
 
 export function useRadarController() {
@@ -44,10 +45,10 @@ export function useRadarController() {
   const jobKey = job ? `${job.id}:${job.dataRevision || 0}:${job.status}` : "";
   const previousJobKey = useRef("");
   const setFilter = useCallback((values: Record<string, string>) => {
-    const next = new URLSearchParams(params.toString());
+    const next = new URLSearchParams(window.location.search);
     for (const [key, value] of Object.entries(values)) { if (value) next.set(key, value); else next.delete(key); }
     router.replace(`${pathname}?${next}`, { scroll: false });
-  }, [params, pathname, router]);
+  }, [pathname, router]);
   function setLayout(next: "cards" | "overview", filters: Record<string, string> = {}) {
     setPreferredLayout(next);
     try { localStorage.setItem("hotspot-layout-v1", next); }
@@ -66,9 +67,10 @@ export function useRadarController() {
     Promise.all([getHotspotRadar(), view === "news" ? getRadarSignals({ page, search, source }) : Promise.resolve({ items: [], total: 0 })]).then(([radar, articles]) => {
       if (ignore) return;
       setSnapshot(radar); setFeed(articles); setError("");
+      if (view === "news" && "page" in articles && articles.page !== page) setFilter({ page: String(articles.page) });
     }).catch(error => { if (!ignore) setError(message(error)); }).finally(() => { if (!ignore) setLoading(false); });
     return () => { ignore = true; };
-  }, [page, search, source, revision, view]);
+  }, [page, search, source, revision, view, setFilter]);
   useEffect(() => {
     const sequence = ++detailSequence.current;
     setDetail(null); setDetailError(""); setNotice("");
@@ -82,7 +84,7 @@ export function useRadarController() {
       .catch(error => { if (sequence === detailSequence.current) setDetailError(message(error)); })
       .finally(() => { if (sequence === detailSequence.current) setDetailLoading(false); });
     return () => { detailSequence.current += 1; };
-  }, [selectedId, view]);
+  }, [selectedId, view, revision]);
   async function refresh(retryReport = false, continueAnalysis = false, trendRadarIds?: string[]) {
     setStarting(true); setError("");
     try { await tasks.startTask({ kind: "hotspot-refresh", href: "/hotspots?view=topics", input: { retryReport, continueAnalysis, trendRadarIds } }); }
@@ -97,7 +99,11 @@ export function useRadarController() {
     try {
       const updated = await saveHotspotFeedback(detail.topic.id, rating);
       setSnapshot(updated);
-      if (sequence === detailSequence.current) { setDetail(current => current?.topic ? { ...current, topic: { ...current.topic, userRating: rating } } : current); setNotice(`已保存“${rating}”，后续选题会参考`); }
+      const updatedDetail = await getHotspotDetail(detail.topic.id);
+      if (sequence === detailSequence.current) {
+        setDetail({ topic: updatedDetail.hotspot, signals: updatedDetail.signals });
+        setNotice(`已保存“${rating}”，后续选题会参考`);
+      }
     } catch (error) { if (sequence === detailSequence.current) setDetailError(message(error)); }
     finally { setSaving(false); }
   }
@@ -109,12 +115,11 @@ export function useRadarController() {
   }
   const provisional = snapshot?.provisionalHotspots || [];
   const allTopics = [...provisional, ...(snapshot?.hotspots || []).filter(item => !provisional.some(partial => partial.id === item.id))];
-  const sourceName = snapshot?.scouts.find(item => item.id === source)?.name;
   const topics = allTopics.filter(item => (!category || item.monitorType === category)
     && (!grade || item.gradeLabel === grade)
-    && (!source || item.signalIds.some(id => id.startsWith(`signal:${source}:`)) || Boolean(sourceName && item.displayInfo.sourceLine.includes(sourceName)))
+    && (!source || item.sourceIds?.includes(source))
     && (!search || `${item.title} ${item.summary} ${item.displayInfo.sourceLine}`.toLowerCase().includes(search.toLowerCase())))
-    .sort((a, b) => (sort === "priority" ? b.score - a.score : 0) || (b.publishedAt || b.freshness).localeCompare(a.publishedAt || a.freshness));
+    .sort((a, b) => (sort === "priority" ? radarGrades.indexOf(a.gradeLabel || "先看看") - radarGrades.indexOf(b.gradeLabel || "先看看") : 0) || (b.publishedAt || b.freshness).localeCompare(a.publishedAt || a.freshness));
 
   return { layout, setLayout, grade, sort, topicCount: allTopics.length, snapshot, feed, detail, error, detailError, loading, detailLoading, saving, starting, notice, active, latest, view, search, source, category, page, selectedId, topics, provisional, setFilter, refresh, cancel, rate, write };
 }

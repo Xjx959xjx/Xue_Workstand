@@ -32,13 +32,13 @@ export function cachedGetAccountDetail(input: {
     platform: input.platform,
     accountId: input.accountId,
     includeStyle: input.includeStyle
-  })
+    })
     .then((detail) => {
-      remember(accountDetailCache, cacheKey, detail);
+      if (accountDetailRequests.get(cacheKey) === request) remember(accountDetailCache, cacheKey, detail);
       return detail;
     })
     .finally(() => {
-      accountDetailRequests.delete(cacheKey);
+      if (accountDetailRequests.get(cacheKey) === request) accountDetailRequests.delete(cacheKey);
     });
 
   accountDetailRequests.set(cacheKey, request);
@@ -57,13 +57,13 @@ export function cachedGetProjectDetail(projectId: string, options: DetailCacheOp
 
   const request = getProjectDetail(projectId, {
     includeStyle: options.includeStyle
-  })
+    })
     .then((detail) => {
-      remember(projectDetailCache, cacheKey, detail);
+      if (projectDetailRequests.get(cacheKey) === request) remember(projectDetailCache, cacheKey, detail);
       return detail;
     })
     .finally(() => {
-      projectDetailRequests.delete(cacheKey);
+      if (projectDetailRequests.get(cacheKey) === request) projectDetailRequests.delete(cacheKey);
     });
 
   projectDetailRequests.set(cacheKey, request);

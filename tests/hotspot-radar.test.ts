@@ -5,27 +5,22 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { SOURCES, parseRss, makeSignal, isRecentVerifiedSignal } from "../src/lib/hotspot-radar/source-rules.mjs";
+import { isRecentVerifiedSignal } from "../src/lib/hotspot-radar/source-rules.mjs";
 import { canonicalRadarUrl, mergeRadarSignals, safeSourceUrl } from "../src/lib/hotspot-radar/collector";
 import { analyzeRadar, toStoredSignal, parseRadarModelJson, validateModelIds } from "../src/lib/hotspot-radar/analysis";
 import { publishRadarSnapshot, assertCollectionCoverage, getRadarSignals, getHotspotRadar, getHotspotDetail, retainPriorityTopics, saveHotspotFeedback } from "../src/lib/hotspots";
 import type { HotspotEvent, HotspotRadarRefreshResult } from "../src/lib/types";
 
-import { parseRadarFeed } from "../src/lib/hotspot-radar/rss";
 import { writeSupportDocumentCache } from "../src/lib/storage/support-documents";
 import { writeRadarCollection, updateRadarCollection, readRadarCollection } from "../src/lib/hotspot-radar/collection";
 
-const source = SOURCES[1];
-const signal = () => makeSignal(source, "Faker战队回应赛事争议", "https://www.vlr.gg/123", "赛事人物反转，官方回应引发争议", new Date().toISOString());
+const source = { id: "vlr", name: "VLR.gg", url: "https://www.vlr.gg/rss", type: "rss", scope: "电竞赛事" };
+const signal = () => ({ id: "signal:vlr:test", sourceId: source.id, source: source.name, originalSource: "", title: "Faker战队回应赛事争议", url: "https://www.vlr.gg/123", summary: "赛事人物反转，官方回应引发争议", category: source.scope, publishedAt: new Date().toISOString(), collectedAt: new Date().toISOString() });
 
-test("真实来源、RSS 时间过滤、事件聚类保留来源和模型 ID 边界", () => {
+test("来源时间过滤、事件聚类保留来源和模型 ID 边界", () => {
   assert.equal(canonicalRadarUrl("https://example.com/story?id=7&utm_source=feed#top"), "https://example.com/story?id=7");
   assert.notEqual(canonicalRadarUrl("https://example.com/story?id=7"), canonicalRadarUrl("https://example.com/story?id=8"));
-  assert.equal(SOURCES.length, 36);
-  assert.ok(SOURCES.every(item => item.url && item.type !== "reference"));
-  const items = parseRss(`<rss><item><title>赛事争议</title><link>https://www.vlr.gg/123</link><pubDate>${new Date().toUTCString()}</pubDate><description>摘要</description></item></rss>`, source);
-  assert.equal(items.length, 1);
-  assert.equal(isRecentVerifiedSignal(items[0]), true);
+  assert.equal(isRecentVerifiedSignal(signal()), true);
   assert.equal(isRecentVerifiedSignal({ publishedAt: "" }), false);
   assert.equal(isRecentVerifiedSignal({ publishedAt: new Date(Date.now() - 73 * 3600000).toISOString() }), false);
   assert.equal(isRecentVerifiedSignal({ publishedAt: new Date(Date.now() + 7 * 3600000).toISOString() }), false);
@@ -195,7 +190,7 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
     await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify(snapshot));
     const followup = { ...first, id: "followup", url: "https://example.com/new-event", title: "原神官方回应停服争议" };
     await writeSupportDocumentCache({ url: followup.url, provider: "web", content: "原神官方发布说明，回应相关争议。" });
-    await writeRadarCollection({ schemaVersion: 1, generatedAt: snapshot.generatedAt, signals: [first, followup].map(toStoredSignal), scouts: [{ ...snapshot.scouts[0], id: first.sourceId, name: first.source, itemCount: 2, sources: [source.url] }], status: "completed", partialHotspots: [], completedSignalIds: [first.id], analyzedCount: 1, candidateCount: 1 });
+    await writeRadarCollection({ schemaVersion: 1, generatedAt: snapshot.generatedAt, signals: [first, followup].map(toStoredSignal), scouts: [{ id: first.sourceId, board: "game", name: first.source, scope: "游戏", cadence: "手动", status: "running", coverage: 100, itemCount: 2, sources: [source.url] }], status: "completed", partialHotspots: [], completedSignalIds: [first.id], analyzedCount: 1, candidateCount: 1 });
     const beforeResume = submitted.length;
     const resumed = await getHotspotRadar({ refresh: true, continueAnalysis: true });
     assert.equal(resumed.hotspots.length, 2, "继续分析保留已有普通选题");
@@ -235,13 +230,44 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
   }
 });
 
-
-test("RSS 与 Atom 使用标准解析器保留时间和原文链接", async () => {
-  const rss = await parseRadarFeed('<rss version="2.0"><channel><title>测试</title><item><title><![CDATA[赛事 & 回应]]></title><link>https://www.vlr.gg/123</link><pubDate>Mon, 21 Sep 2026 01:00:00 GMT</pubDate><description><![CDATA[<p>内容摘要</p>]]></description></item></channel></rss>', source);
-  assert.equal(rss[0].title, "赛事 & 回应");
-  assert.equal(rss[0].summary, "内容摘要");
-  const atom = await parseRadarFeed('<feed xmlns="http://www.w3.org/2005/Atom"><title>测试</title><entry><id>123</id><title>官方回应</title><link href="https://www.vlr.gg/456"/><updated>2026-09-21T02:00:00Z</updated><summary>争议后续</summary></entry></feed>', source);
-  assert.equal(atom[0].url, "https://www.vlr.gg/456");
-  assert.equal(Date.parse(atom[0].publishedAt), Date.parse("2026-09-21T02:00:00Z"));
-  await assert.rejects(parseRadarFeed("<rss><invalid", source));
+test("分页夹取最后一页，旧快照推导来源 ID，评分保留正文状态", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "radar-state-"));
+  const previousRoot = process.env.STYLE_LIBRARY_DIR;
+  process.env.STYLE_LIBRARY_DIR = root;
+  try {
+    const snapshot = await getHotspotRadar();
+    const now = new Date().toISOString();
+    const signals = Array.from({ length: 40 }, (_, i) => toStoredSignal({ ...signal(), id: `video:douyin:${i}`, sourceId: "video-hotlist" }));
+    const topic: HotspotEvent = {
+      id: "topic", board: "game", monitorType: "breakout", monitorLabel: "热点", triggerMode: "", thresholdHint: "", actionWindow: "",
+      priorityLabel: "还行", scopeMatches: [], title: "游戏回应", game: "游戏", category: "", status: "watch", score: 40,
+      gradeLabel: "还行", freshness: now, publishedAt: now, sources: 1, summary: "", whyNow: "", playerFocus: [], angles: [],
+      evidence: ["待补充"], research: [], risks: [], accounts: [], signalIds: [signals[0].id],
+      displayInfo: { kind: "breakout", subject: "", headline: "", statusLine: "还行 · 正文待补充", timeLabel: now, sourceLine: "测试账号", facts: [], primaryAction: "" }
+    };
+    await mkdir(path.join(root, "hotspots"), { recursive: true });
+    await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify({ ...snapshot, generatedAt: now, hotspots: [topic], signals }));
+    const feed = await getRadarSignals({ page: 99 });
+    assert.equal(feed.page, 2);
+    assert.equal(feed.items.length, 10);
+    assert.equal((await getHotspotRadar()).hotspots[0].sourceIds?.includes("video-hotlist"), true);
+    const rated = (await saveHotspotFeedback("topic", "吊爆了")).hotspots[0];
+    assert.equal(rated.score, 100);
+    assert.equal(rated.status, "watch", "评分不会凭空补充正文");
+    assert.equal(rated.displayInfo.statusLine, "吊爆了 · 正文待补充");
+    assert.equal((await getHotspotDetail("topic")).hotspot.score, 100);
+    const rejected = (await saveHotspotFeedback("topic", "不行")).hotspots[0];
+    assert.equal(rejected.score, 20);
+    assert.equal(rejected.displayInfo.statusLine, "先看看 · 正文待补充");
+    await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify({ ...snapshot, generatedAt: now, hotspots: [{ ...topic, displayInfo: { ...topic.displayInfo, statusLine: "还行 · 已取得正文" } }], signals }));
+    const promoted = (await saveHotspotFeedback("topic", "吊爆了")).hotspots[0];
+    assert.equal(promoted.status, "ready", "已取得正文的选题可按评分升级");
+    assert.equal((await saveHotspotFeedback("topic", "不行")).hotspots[0].status, "watch");
+    await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify({ ...snapshot, generatedAt: now, hotspots: [{ ...topic, status: "risk" }], signals }));
+    assert.equal((await saveHotspotFeedback("topic", "吊爆了")).hotspots[0].status, "risk", "人工评分不能解除核实风险");
+  } finally {
+    if (previousRoot === undefined) delete process.env.STYLE_LIBRARY_DIR;
+    else process.env.STYLE_LIBRARY_DIR = previousRoot;
+    await rm(root, { recursive: true, force: true });
+  }
 });

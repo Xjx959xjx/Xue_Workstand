@@ -49,11 +49,15 @@ export function useImageWorkbench() {
   const defaultProfileId = useRef("default");
   const listRevision = useRef(0);
   const boardRevision = useRef(0);
+  const listLimit = useRef(40);
+  const boardLimit = useRef({ canvasId: "", count: 40 });
   const job = jobs.find((entry) => entry.id === activeId);
   const selectedJob = jobs.find((entry) => entry.id === id);
   const batchJobs = jobs.filter((entry) => batchIds.includes(entry.id) || (boardRecords.some((record) => record.id === entry.id) && (entry.status === "running" || entry.status === "queued")));
   const active = [job, ...batchJobs].some((entry) => entry?.status === "running" || entry?.status === "queued");
-  const taskVersion = jobs.filter((entry) => entry.kind === "image-generation").map((entry) => `${entry.id}:${entry.dataRevision || 0}:${entry.status}`).join("|");
+  const imageJobs = jobs.filter((entry) => entry.kind === "image-generation");
+  const taskVersion = imageJobs.filter((entry) => entry.dataRevision).map((entry) => `${entry.id}:${entry.dataRevision}`).sort().join("|");
+  const boardTaskVersion = imageJobs.filter((entry) => entry.dataRevision && (entry.scope?.canvasId === canvasId || entry.id === id || boardRecords.some((record) => record.id === entry.id))).map((entry) => `${entry.id}:${entry.dataRevision}`).sort().join("|");
   const dirty = JSON.stringify(form) !== baseline;
   const fail = useCallback((error: unknown) => setError(error instanceof Error ? error.message : "操作失败，请重试。"), []);
 
@@ -62,18 +66,18 @@ export function useImageWorkbench() {
     getImageGenerationConfig().then((value) => {
       if (!alive) return;
       setConfig(value); defaultProfileId.current = value.defaultProfileId;
-      if (!id && !formTouched.current) {
+      if (!didHydrate.current && !formTouched.current) {
         const next = emptyForm(value.defaultProfileId); setForm(next); setBaseline(JSON.stringify(next));
       }
     }).catch((error) => { if (alive) fail(error); });
     return () => { alive = false; };
-  }, [fail, id]);
+  }, [fail]);
 
   const refresh = useCallback(async (options: { fresh?: boolean } = {}) => {
     const revision = ++listRevision.current;
     if (options.fresh !== false) invalidateImageRecordsCache();
     try {
-      const data = await getImageRecords();
+      const data = await getImageRecords(0, undefined, listLimit.current);
       if (revision !== listRevision.current) return;
       setRecords(data.records); setTotal(data.total);
     } catch (error) { if (revision === listRevision.current) fail(error); }
@@ -84,15 +88,16 @@ export function useImageWorkbench() {
   const refreshBoard = useCallback(async () => {
     const revision = ++boardRevision.current;
     if (!canvasId) { setBoardRecords([]); setBoardTotal(0); setBoardLoading(false); return; }
+    if (boardLimit.current.canvasId !== canvasId) boardLimit.current = { canvasId, count: 40 };
     setBoardLoading(true);
     try {
-      const data = await getImageRecords(0, canvasId);
+      const data = await getImageRecords(0, canvasId, boardLimit.current.count);
       if (revision !== boardRevision.current) return;
       setBoardRecords(data.records); setBoardTotal(data.total);
     } catch (error) { if (revision === boardRevision.current) fail(error); }
     finally { if (revision === boardRevision.current) setBoardLoading(false); }
   }, [canvasId, fail]);
-  useEffect(() => { void refreshBoard(); }, [taskVersion, refreshBoard]);
+  useEffect(() => { void refreshBoard(); }, [boardTaskVersion, refreshBoard]);
 
   useEffect(() => {
     let alive = true;
@@ -118,22 +123,16 @@ export function useImageWorkbench() {
     router.replace(`/images?recordId=${encodeURIComponent(nextId)}`, { scroll: false });
   }
   function newRecord() {
-    if (uploadLock.current || submitLock.current || !confirmDiscardUnsavedChanges("新建画布会清空当前未生成的输入，是否继续？")) return;
+    if (uploadLock.current || submitLock.current || !confirmDiscardUnsavedChanges("新建画布会清空当前未生成的输入，是否继续？")) return false;
     const next = emptyForm(defaultProfileId.current);
     setBatchIds([]); setActiveId(""); setForm(next); setBaseline(JSON.stringify(next)); setReferences([]); setError("");
     setRecord(null); setRecordReferences([]); setCanvasId(crypto.randomUUID()); setBoardRecords([]); setBoardTotal(0);
     formTouched.current = false; didHydrate.current = true;
     router.replace("/images", { scroll: false });
-  }
-  function reuse(image?: ImageFile) {
-    if (!record || busy || uploading || !confirmDiscardUnsavedChanges("复用参数会替换当前未生成的输入，是否继续？")) return false;
-    const refs = image ? [image] : recordReferences;
-    // A branch starts with only its chosen output; old mention tokens must never point to dropped references.
-    const next: ImageGenerationInput = { profileId: record.profileId, prompt: image ? `基于 ${imageMentionToken(image.id, "来源图片")} 修改：` : refs.reduce((prompt, ref) => appendImageMention(prompt, ref.id, ref.name), record.prompt), size: record.size, quality: record.quality, count: 1, referenceIds: refs.map((ref) => ref.id), parentRecordId: record.id, parentImageId: image?.id, canvasId: record.canvasId || record.id };
-    setForm(next); setReferences(refs); formTouched.current = true; setError(""); return true;
+    return true;
   }
   async function reproduce(recordId: string) {
-    if (submitLock.current || uploadLock.current) return;
+    if (submitLock.current || uploadLock.current || !confirmDiscardUnsavedChanges("复现会替换当前未生成的输入，是否继续？")) return;
     submitLock.current = true; setBusy(true); setError("");
     try {
       const { record: source, references: refs } = await getImageGenerationRecord(recordId);
@@ -176,14 +175,14 @@ export function useImageWorkbench() {
       didHydrate.current = true; formTouched.current = true; setActiveId(started[0]); setCanvasId(targetCanvas);
       setBaseline(JSON.stringify(input)); setRecord(null);
       router.replace(`/images?recordId=${encodeURIComponent(started[0])}`, { scroll: false });
-      await refresh();
       return true;
     } catch (error) { fail(error); return false; }
     finally { submitLock.current = false; setBusy(false); }
   }
-  async function generateFromImage(image: ImageFile, instruction: string, profileId: string, size: string) {
-    const owner = record?.images.some((item) => item.id === image.id) ? record : [...boardRecords, ...records].find((item) => item.thumbnail?.id === image.id);
-    const next: ImageGenerationInput = { ...form, profileId, size, count: 1, canvasId, prompt: `基于 ${imageMentionToken(image.id, "来源图片")} 修改：${instruction}`, referenceIds: [image.id], parentRecordId: owner?.id, parentImageId: owner ? image.id : undefined };
+  async function generateFromImage(image: ImageFile, instruction: string, profileId: string, size: string, ownerRecordId?: string) {
+    if (dirty && !confirmDiscardUnsavedChanges("生成修改图会替换当前未生成的输入，是否继续？")) return false;
+    const ownerId = ownerRecordId || (record?.images.some((item) => item.id === image.id) ? record.id : [...boardRecords, ...records].find((item) => item.thumbnail?.id === image.id)?.id);
+    const next: ImageGenerationInput = { ...form, profileId, size, count: 1, canvasId, prompt: `基于 ${imageMentionToken(image.id, "来源图片")} 修改：${instruction}`, referenceIds: [image.id], parentRecordId: ownerId, parentImageId: ownerId ? image.id : undefined };
     const success = await generate(next);
     if (success) { setForm(next); setReferences([image]); }
     return success;
@@ -221,15 +220,13 @@ export function useImageWorkbench() {
     setForm((current) => ({ ...current, referenceIds: current.referenceIds.filter((ref) => ref !== referenceId), prompt: removeImageMention(current.prompt, referenceId), parentImageId: current.parentImageId === referenceId ? undefined : current.parentImageId }));
     return true;
   }
-  async function cancel(taskId?: string) {
+  async function cancel(taskId: string) {
     if (submitLock.current) return;
     submitLock.current = true;
     setBusy(true); setError("");
     try {
-      const targets = [...new Map([job, ...batchJobs].filter((entry) => entry && (entry.status === "running" || entry.status === "queued")).map((entry) => [entry!.id, entry!])).values()];
-      const results = await Promise.allSettled(targets.filter((entry) => !taskId || entry.id === taskId).map((entry) => cancelTask(entry.id)));
-      const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason instanceof Error ? result.reason.message : "停止任务失败，请在任务中心重试。"] : []);
-      if (errors.length) throw new Error(errors.join("；"));
+      const target = jobs.find((entry) => entry.id === taskId && (entry.status === "running" || entry.status === "queued"));
+      if (target) await cancelTask(target.id);
     } catch (error) { fail(error); } finally { submitLock.current = false; setBusy(false); }
   }
   async function loadMore(board = false) {
@@ -240,6 +237,8 @@ export function useImageWorkbench() {
       const data = await getImageRecords(board ? boardRecords.length : records.length, board ? canvasId : undefined);
       if (revision !== (board ? boardRevision.current : listRevision.current)) return;
       const update = (current: ImageGenerationSummary[]) => [...current, ...data.records.filter((item) => !current.some((existing) => existing.id === item.id))];
+      if (board) boardLimit.current.count = Math.max(boardLimit.current.count, boardRecords.length + data.records.length);
+      else listLimit.current = Math.max(listLimit.current, records.length + data.records.length);
       if (board) { setBoardRecords(update); setBoardTotal(data.total); } else { setRecords(update); setTotal(data.total); }
     } catch (error) { fail(error); } finally { moreLock.current = false; setMoreLoading(false); }
   }
@@ -274,5 +273,5 @@ export function useImageWorkbench() {
       return { ...next, referenceIds, parentImageId: next.parentImageId && referenceIds.includes(next.parentImageId) ? next.parentImageId : undefined };
     });
   }
-  return { submissionKey: batchIds.join("|"), reproduce, addResultReferences, multiModels, setMultiModels, batchJobs, deleting, deletion, deleteRecords, undoDelete, id, canvasId, config, form, setForm: updateForm, references: references.filter((ref) => form.referenceIds.includes(ref.id)), availableReferences: references, recordReferences, records, boardRecords, boardTotal, boardLoading, total, record: record?.id === id ? record : null, job, jobs, error, fail, busy, uploading, loading, detailLoading, moreLoading, dirty, active, select, newRecord, generate, generateFromImage, upload, addReference, removeReference, reuse, cancel, refresh, refreshBoard, loadMore };
+  return { submissionKey: batchIds.join("|"), reproduce, addResultReferences, multiModels, setMultiModels, batchJobs, deleting, deletion, deleteRecords, undoDelete, id, canvasId, config, form, setForm: updateForm, references: references.filter((ref) => form.referenceIds.includes(ref.id)), availableReferences: references, recordReferences, records, boardRecords, boardTotal, boardLoading, total, record: record?.id === id ? record : null, job, jobs, error, fail, busy, uploading, loading, detailLoading, moreLoading, dirty, active, select, newRecord, generate, generateFromImage, upload, addReference, removeReference, cancel, refresh, refreshBoard, loadMore };
 }

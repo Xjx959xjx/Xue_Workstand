@@ -8,7 +8,8 @@ import { ImageControlPopover } from "./ImageControlPopover";
 import { imageFileUrl, type ImageFile } from "@/lib/image-generation-types";
 import { imageModelLabel, imageProfileForModel, imageRatioForSize, imageRatios, imageSizeForProfile, resolutionLabels } from "@/lib/image-profile-options";
 import type { useImageWorkbench } from "../_hooks/useImageWorkbench";
-export function ImagePreview({ image, images = [image], workbench: w, onClose, drafts, onDraftChange }: { image: ImageFile; images?: ImageFile[]; workbench: ReturnType<typeof useImageWorkbench>; onClose: () => void; drafts: Record<string, string>; onDraftChange: (id: string, text: string) => void }) {
+export type PreviewImage = ImageFile & { recordId?: string };
+export function ImagePreview({ image, images = [image], workbench: w, onClose, drafts, onDraftChange }: { image: PreviewImage; images?: PreviewImage[]; workbench: ReturnType<typeof useImageWorkbench>; onClose: () => void; drafts: Record<string, string>; onDraftChange: (id: string, text: string) => void }) {
   const controller = useRef<ControllerRef>(null);
   useEffect(() => {
     const navigate = (event: KeyboardEvent) => {
@@ -59,7 +60,7 @@ export function ImagePreview({ image, images = [image], workbench: w, onClose, d
   return <Lightbox controller={{ ref: controller, closeOnBackdropClick: false }} open close={onClose} index={index} on={{ view: ({ index: next }) => setIndex(next) }} slides={slides.map((item) => ({ src: imageFileUrl(item.id), alt: item.name, download: { url: imageFileUrl(item.id, true), filename: `${item.name}.${item.format}` } }))} plugins={[Zoom, Download]} carousel={{ finite: true }} className="image-edit-lightbox" animation={{ fade: 200, swipe: 220 }} labels={{ Close: "关闭预览", Next: "下一张", Previous: "上一张", "Zoom in": "放大", "Zoom out": "缩小", Download: "下载原图" }} render={{ controls: () => <form className="image-edit-composer" onKeyDown={(event) => { if (event.key !== "Escape" || event.currentTarget.querySelector("[popover]:popover-open")) event.stopPropagation(); }} onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onWheel={(event) => event.stopPropagation()} onSubmit={async (event) => {
     event.preventDefault(); if (disabled || !prompt.trim()) return;
     setSubmitting(true); setAttempted(true);
-    try { if (await w.generateFromImage(current, prompt.trim(), profileId, size)) onClose(); }
+    try { if (await w.generateFromImage(current, prompt.trim(), profileId, size, current.recordId)) { onDraftChange(current.id, ""); onClose(); } }
     finally { setSubmitting(false); }
   }}>
     <label htmlFor="image-edit-instruction">基于这张图继续创作</label>

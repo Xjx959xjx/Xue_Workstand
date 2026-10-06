@@ -106,7 +106,7 @@ function LibraryPageContent() {
     selectedAccountDetailId,
     selectedAccountDetailPlatform,
     setAccountDetail
-  } = useLibraryAccountDetail({ selectedAccountMeta, setStyleDraft });
+  } = useLibraryAccountDetail({ selectedAccountMeta });
   const selectedAccount = accountDetail?.id === selectedAccountMeta?.id ? accountDetail : null;
 
   const {
@@ -269,8 +269,9 @@ function LibraryPageContent() {
 
   useEffect(() => {
     if (!selectedAccount) return;
+    if (openModal === "style" && styleDraft !== (selectedAccount.style || "")) return;
     setStyleDraft(typeof selectedAccount.style === "string" ? selectedAccount.style : "");
-  }, [selectedAccount]);
+  }, [openModal, selectedAccount, styleDraft]);
 
   const openStyleModal = useCallback(async () => {
     if (!selectedAccountDetailId || !selectedAccountDetailPlatform) return;
@@ -698,6 +699,7 @@ function LibraryPageContent() {
           busy={busy}
           panelRef={editModalRef}
           styleDraft={styleDraft}
+          unsavedChanges={Boolean(selectedAccount && styleDraft !== (selectedAccount.style || ""))}
           styleProgress={styleProgress}
           styleStage={styleStage}
           onChange={setStyleDraft}

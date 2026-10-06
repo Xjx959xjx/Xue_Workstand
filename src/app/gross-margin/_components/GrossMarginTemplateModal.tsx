@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { RotateCcw, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
+import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import {
   grossMarginReviewTemplateVariables,
   renderGrossMarginReviewTemplate,
@@ -37,6 +38,8 @@ export function GrossMarginTemplateModal({
     }
   }, [draft, previewValues]);
   const canSave = Boolean(draft.trim()) && !preview.error && !busy;
+  const dirty = draft !== template.content;
+  useUnsavedChangesGuard(dirty, "文案模板还有未保存修改，确定要离开吗？");
   const lineCount = useMemo(() => draft.split("\n").filter((line) => line.trim()).length, [draft]);
 
   function insertVariable(name: string) {
@@ -57,12 +60,24 @@ export function GrossMarginTemplateModal({
     });
   }
 
+  function requestClose() {
+    if (busy) return;
+    if (dirty && !window.confirm("文案模板还有未保存修改，确定关闭吗？")) return;
+    onClose();
+  }
+
+  function resetDraft(value: string) {
+    if (dirty && !window.confirm("当前模板修改尚未保存，确定覆盖吗？")) return;
+    setDraft(value);
+  }
+
   return (
-    <ModalBackdrop onClose={onClose}>
+    <ModalBackdrop disabled={busy} onClose={requestClose}>
       <div
         aria-labelledby="gross-template-modal-title"
         aria-modal="true"
         className="modal-panel gross-template-modal"
+        data-unsaved-changes={dirty ? "true" : undefined}
         role="dialog"
         tabIndex={-1}
       >
@@ -73,7 +88,7 @@ export function GrossMarginTemplateModal({
               {lineCount} 行，{template.customized ? "当前使用永久自定义模板" : "当前使用系统默认模板"}
             </p>
           </div>
-          <button aria-label="关闭文案模板弹窗" className="btn icon-btn icon-only" onClick={onClose} type="button">
+          <button aria-label="关闭文案模板弹窗" className="btn icon-btn icon-only" disabled={busy} onClick={requestClose} type="button">
             <X aria-hidden="true" size={16} />
           </button>
         </header>
@@ -84,6 +99,7 @@ export function GrossMarginTemplateModal({
               <span>模板内容</span>
               <textarea
                 autoComplete="off"
+                disabled={busy}
                 name="grossTemplateContent"
                 ref={textareaRef}
                 rows={18}
@@ -93,7 +109,7 @@ export function GrossMarginTemplateModal({
             </label>
             <div className="gross-template-variable-list" aria-label="可插入变量">
               {grossMarginReviewTemplateVariables.map((variable) => (
-                <button className="btn compact" key={variable.name} onClick={() => insertVariable(variable.name)} type="button">
+                <button className="btn compact" disabled={busy} key={variable.name} onClick={() => insertVariable(variable.name)} type="button">
                   {`{{${variable.name}}}`}
                 </button>
               ))}
@@ -116,14 +132,14 @@ export function GrossMarginTemplateModal({
         </div>
 
         <footer className="button-row gross-template-actions">
-          <button className="btn" disabled={busy} onClick={onClose} type="button">
+          <button className="btn" disabled={busy} onClick={requestClose} type="button">
             取消
           </button>
-          <button className="btn" disabled={busy} onClick={() => setDraft(template.defaultContent)} type="button">
+          <button className="btn" disabled={busy} onClick={() => resetDraft(template.defaultContent)} type="button">
             <RotateCcw aria-hidden="true" size={15} />
             套用默认
           </button>
-          <button className="btn" disabled={busy || !template.customized} onClick={() => void onReset()} type="button">
+          <button className="btn" disabled={busy || !template.customized} onClick={() => { if (!dirty || window.confirm("当前模板修改尚未保存，确定恢复系统默认吗？")) void onReset(); }} type="button">
             <RotateCcw aria-hidden="true" size={15} />
             恢复系统默认
           </button>

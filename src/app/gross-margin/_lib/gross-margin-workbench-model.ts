@@ -1,5 +1,5 @@
 import {
-  formatAmountInput,
+  parseGrossMarginMetric,
   formatThreshold,
   getAbsoluteServiceQuantity,
   getActiveServiceOptions,
@@ -307,26 +307,11 @@ function normalizeOptionHint(value: string) {
     .toLowerCase();
 }
 
-function formatImportedQuantity(rawValue: string, quantityUnit: string) {
-  const metricValue = parseMetricValue(rawValue);
-  if (!metricValue) return "";
-  let quantity = metricValue.value;
-  if (quantityUnit === "万") {
-    quantity = metricValue.unit === "万" ? metricValue.value : metricValue.value / 10000;
-  } else if (quantityUnit === "千") {
-    quantity = metricValue.unit === "万" ? metricValue.value * 10 : metricValue.value / 1000;
-  }
-  return formatAmountInput(quantity);
-}
-
-function parseMetricValue(rawValue: string) {
-  const value = rawValue.trim().replace(/,/g, "");
-  const match = value.match(/([\d.]+)/);
-  if (!match) return null;
-  const number = Number(match[1]);
-  if (!Number.isFinite(number)) return null;
-  const unit = /[wW万]/.test(value) ? "万" : "";
-  return { value: number, unit };
+export function formatImportedQuantity(rawValue: string, quantityUnit: string) {
+  const absolute = parseGrossMarginMetric(rawValue);
+  if (absolute === null) throw new Error(`维护数量「${rawValue}」无效，请填写非负数字及万、千或个单位。`);
+  const divisor = quantityUnit === "万" ? 10000 : quantityUnit === "千" ? 1000 : 1;
+  return String(absolute / divisor);
 }
 
 function normalizeAccountName(value: string) {
@@ -376,9 +361,9 @@ function buildSplitRoundLine(
 
 function formatSplitRoundMetricValue(line: GrossMarginCalculationLine | undefined, ratio: number) {
   if (!line || line.quantity <= 0) return "";
-  if (line.service === "douPlus") return `${formatReviewMoney(roundUpToStep(line.quantity * ratio, 1))}元`;
+  if (line.service === "douPlus") return `${formatReviewMoney(Math.min(line.quantity, roundUpToStep(line.quantity * ratio, 1)))}元`;
   const absoluteValue = toAbsoluteMetricValue(line);
-  const roundedValue = roundUpToStep(absoluteValue * ratio, getSplitRoundStep(line.service));
+  const roundedValue = Math.min(absoluteValue, roundUpToStep(absoluteValue * ratio, getSplitRoundStep(line.service)));
   return formatSplitRoundCount(line.service, roundedValue);
 }
 

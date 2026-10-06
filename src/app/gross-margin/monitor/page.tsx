@@ -37,6 +37,8 @@ import {
   updateGrossMarginMonitorPlayTarget
 } from "@/lib/client";
 import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRecord } from "@/lib/types";
+import { parseGrossMarginMetric } from "@/lib/gross-margin-calculator";
+import { useGrossMarginAccountRefresh } from "../_hooks/useGrossMarginAccountRefresh";
 
 export default function GrossMarginMonitorPage() {
   return (
@@ -56,6 +58,7 @@ function GrossMarginMonitorPageContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [library, setLibrary] = useState<GrossMarginLibrary | null>(null);
+  useGrossMarginAccountRefresh(library, setLibrary);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [accountFilter, setAccountFilter] = useState(() => searchParams.get("q") || "");
@@ -155,6 +158,19 @@ function GrossMarginMonitorPageContent() {
   }, [accountFilter, dateFromFilter, dateToFilter, pathname, platformFilter, projectFilter, router]);
 
   useEffect(() => {
+    const nextAccount = searchParams.get("q") || "";
+    const nextPlatform = parsePlatformFilter(searchParams.get("platform"));
+    const nextProject = searchParams.get("project") || "all";
+    const nextFrom = parseDateFilter(searchParams.get("from"));
+    const nextTo = parseDateFilter(searchParams.get("to"));
+    setAccountFilter((current) => current === nextAccount ? current : nextAccount);
+    setPlatformFilter((current) => current === nextPlatform ? current : nextPlatform);
+    setProjectFilter((current) => current === nextProject ? current : nextProject);
+    setDateFromFilter((current) => current === nextFrom ? current : nextFrom);
+    setDateToFilter((current) => current === nextTo ? current : nextTo);
+  }, [searchParams]);
+
+  useEffect(() => {
     if (!trackedRefreshJob || !["queued", "running"].includes(trackedRefreshJob.status)) return;
     if (!activeRefreshJobId) setActiveRefreshJobId(trackedRefreshJob.id);
     if (!busy) setBusy("refresh-all");
@@ -198,6 +214,10 @@ function GrossMarginMonitorPageContent() {
     setActiveRefreshJobId("");
     setBusy("");
     if (job.status === "completed") {
+      const dataRevision = job.dataRevision || 0;
+      const syncedRevision = syncedRefreshDataRevisionsRef.current.get(job.id) || 0;
+      if (dataRevision > 0 && syncedRevision >= dataRevision) return;
+      if (dataRevision > 0) syncedRefreshDataRevisionsRef.current.set(job.id, dataRevision);
       void refreshGrossMarginLibraryCache()
         .then(setLibrary)
         .catch((error) => notify({ tone: "error", message: error instanceof Error ? error.message : "刷新结果读取失败" }));
@@ -280,6 +300,7 @@ function GrossMarginMonitorPageContent() {
 
   return (
     <div className="page gross-margin-page gross-monitor-page">
+      {library?.accountSourceWarning ? <p className="field-hint warning" role="status">{library.accountSourceWarning}</p> : null}
       <h1 className="sr-only">数据监控</h1>
       <div className="gross-monitor-topbar">
         <div className="page-header-meta gross-monitor-overview" aria-label="监控概览">
@@ -314,58 +335,72 @@ function GrossMarginMonitorPageContent() {
                 value={accountFilter}
               />
             </span>
-            <span className="gross-monitor-filter-group">
-              <select
-                aria-label="按平台筛选"
-                className="gross-monitor-inline-select"
-                id="gross-monitor-platform-filter"
-                onChange={(event) => setPlatformFilter(event.target.value as "all" | GrossMarginMonitorRecord["platform"])}
-                value={platformFilter}
-              >
-                <option value="all">全部平台</option>
-                <option value="bilibili">B站</option>
-                <option value="douyin">抖音</option>
-              </select>
-              <select
-                aria-label="按项目筛选"
-                className="gross-monitor-inline-select gross-monitor-project-select"
-                id="gross-monitor-project-filter"
-                onChange={(event) => setProjectFilter(event.target.value)}
-                value={projectFilter}
-              >
-                <option value="all">全部项目</option>
-                {monitorProjects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}（{project.count}）
-                  </option>
-                ))}
-              </select>
+            <span className="gross-monitor-filter-group" aria-label="范围筛选">
+              <label className="gross-monitor-filter-control">
+                <span>平台</span>
+                <select
+                  aria-label="按平台筛选"
+                  className="gross-monitor-inline-select"
+                  id="gross-monitor-platform-filter"
+                  onChange={(event) => setPlatformFilter(event.target.value as "all" | GrossMarginMonitorRecord["platform"])}
+                  value={platformFilter}
+                >
+                  <option value="all">全部平台</option>
+                  <option value="bilibili">B站</option>
+                  <option value="douyin">抖音</option>
+                </select>
+              </label>
+              <label className="gross-monitor-filter-control gross-monitor-project-control">
+                <span>项目</span>
+                <select
+                  aria-label="按项目筛选"
+                  className="gross-monitor-inline-select gross-monitor-project-select"
+                  id="gross-monitor-project-filter"
+                  onChange={(event) => setProjectFilter(event.target.value)}
+                  value={projectFilter}
+                >
+                  <option value="all">全部项目</option>
+                  {monitorProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}（{project.count}）
+                    </option>
+                  ))}
+                </select>
+              </label>
             </span>
-            <span className="gross-monitor-date-range">
+            <span className="gross-monitor-date-range" aria-label="按发布日期筛选">
               <CalendarRange aria-hidden="true" size={14} />
-              <input
-                aria-label="开始日期"
-                autoComplete="off"
-                className="gross-monitor-inline-date"
-                id="gross-monitor-date-from"
-                name="grossMonitorDateFrom"
-                onChange={(event) => setDateFromFilter(event.target.value)}
-                type="date"
-                value={dateFromFilter}
-              />
+              <label className="gross-monitor-date-segment">
+                <span>开始日期</span>
+                <strong>{formatDateFilterDisplay(dateFromFilter, "不限")}</strong>
+                <input
+                  aria-label="开始日期"
+                  autoComplete="off"
+                  className="gross-monitor-inline-date"
+                  id="gross-monitor-date-from"
+                  name="grossMonitorDateFrom"
+                  onChange={(event) => setDateFromFilter(event.target.value)}
+                  type="date"
+                  value={dateFromFilter}
+                />
+              </label>
               <span className="gross-monitor-inline-date-separator" aria-hidden="true">
-                至
+                →
               </span>
-              <input
-                aria-label="结束日期"
-                autoComplete="off"
-                className="gross-monitor-inline-date"
-                id="gross-monitor-date-to"
-                name="grossMonitorDateTo"
-                onChange={(event) => setDateToFilter(event.target.value)}
-                type="date"
-                value={dateToFilter}
-              />
+              <label className="gross-monitor-date-segment">
+                <span>结束日期</span>
+                <strong>{formatDateFilterDisplay(dateToFilter, "不限")}</strong>
+                <input
+                  aria-label="结束日期"
+                  autoComplete="off"
+                  className="gross-monitor-inline-date"
+                  id="gross-monitor-date-to"
+                  name="grossMonitorDateTo"
+                  onChange={(event) => setDateToFilter(event.target.value)}
+                  type="date"
+                  value={dateToFilter}
+                />
+              </label>
             </span>
             {hasActiveFilters ? (
               <button
@@ -468,6 +503,12 @@ function parseDateFilter(value: string | null) {
   return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
 }
 
+function formatDateFilterDisplay(value: string, emptyLabel: string) {
+  if (!value) return emptyLabel;
+  const [, month, day] = value.split("-");
+  return `${Number(month)}月${Number(day)}日`;
+}
+
 function setOptionalQueryParam(params: URLSearchParams, key: string, value: string) {
   if (value) {
     params.set(key, value);
@@ -510,9 +551,9 @@ function MonitorCard({
   const [editingPlay, setEditingPlay] = useState(false);
   const playMetric = metrics.find((metric) => metric.service === "play");
   const canEditPlayCurrent = record.platform === "douyin";
-  const [playTargetDraft, setPlayTargetDraft] = useState(playMetric ? formatEditableMetricValue(playMetric.target, record.platform) : "");
+  const [playTargetDraft, setPlayTargetDraft] = useState(playMetric ? formatEditableMetricValue(playMetric.target) : "");
   const [playCurrentDraft, setPlayCurrentDraft] = useState(
-    playMetric && typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
+    playMetric && typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current) : ""
   );
   const [playEditError, setPlayEditError] = useState("");
   const playCurrentInputRef = useRef<HTMLInputElement>(null);
@@ -520,9 +561,9 @@ function MonitorCard({
 
   useEffect(() => {
     if (!editingPlay && playMetric) {
-      setPlayTargetDraft(formatEditableMetricValue(playMetric.target, record.platform));
+      setPlayTargetDraft(formatEditableMetricValue(playMetric.target));
       setPlayCurrentDraft(
-        typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current, record.platform) : ""
+        typeof playMetric.current === "number" ? formatEditableMetricValue(playMetric.current) : ""
       );
       setPlayEditError("");
     }
@@ -575,8 +616,8 @@ function MonitorCard({
   }
 
   function resetPlayEdit(metric: GrossMarginMonitorMetric) {
-    setPlayTargetDraft(formatEditableMetricValue(metric.target, record.platform));
-    setPlayCurrentDraft(typeof metric.current === "number" ? formatEditableMetricValue(metric.current, record.platform) : "");
+    setPlayTargetDraft(formatEditableMetricValue(metric.target));
+    setPlayCurrentDraft(typeof metric.current === "number" ? formatEditableMetricValue(metric.current) : "");
     setPlayEditError("");
     setEditingPlay(false);
   }
@@ -1023,23 +1064,13 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatEditableMetricValue(value: number, platform: GrossMarginMonitorRecord["platform"]) {
-  if (value >= 10000) {
-    return `${stripZeros((value / 10000).toFixed(2))}${platform === "bilibili" ? "W" : "万"}`;
-  }
+function formatEditableMetricValue(value: number) {
   return String(Math.round(value));
 }
 
 function parseMetricInput(value: string) {
-  const normalized = value.trim().replace(/,/g, "").toLowerCase();
-  if (!normalized) return 0;
-  const wanMatch = normalized.match(/^(\d+(?:\.\d+)?)(w|万)$/i);
-  if (wanMatch) {
-    return Math.round(Number(wanMatch[1]) * 10000);
-  }
-  const plain = Number(normalized);
-  if (!Number.isFinite(plain)) return 0;
-  return Math.round(plain);
+  const parsed = parseGrossMarginMetric(value);
+  return parsed === null ? null : Math.round(parsed);
 }
 
 function stripZeros(value: string) {

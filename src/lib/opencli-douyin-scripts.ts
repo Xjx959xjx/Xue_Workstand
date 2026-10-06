@@ -840,6 +840,7 @@ export function buildDouyinStatsExtractJs(awemeId: string) {
   const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
   return {
     hasStats,
+    missingFields: ["digg_count", "comment_count", "collect_count", "share_count"].filter((key) => statistics[key] == null || statistics[key] === "" || !Number.isFinite(Number(statistics[key])) || Number(statistics[key]) < 0),
     title: awemeDetail.desc || awemeDetail.title || "",
     likeCount: Number(statistics.digg_count || 0),
     commentCount: Number(statistics.comment_count || 0),
@@ -875,7 +876,8 @@ export function buildDouyinBatchStatsExtractJs(awemeIds: string[]) {
     const hasStats = Boolean(statistics && typeof statistics === "object" && Object.keys(statistics).length);
     return {
       awemeId,
-      hasStats,
+      hasStats: hasStats && !["digg_count", "comment_count", "collect_count", "share_count"].some((key) => statistics[key] == null),
+      missingFields: ["digg_count", "comment_count", "collect_count", "share_count"].filter((key) => statistics[key] == null || statistics[key] === "" || !Number.isFinite(Number(statistics[key])) || Number(statistics[key]) < 0),
       title: awemeDetail.desc || awemeDetail.title || "",
       likeCount: Number(statistics.digg_count || 0),
       commentCount: Number(statistics.comment_count || 0),

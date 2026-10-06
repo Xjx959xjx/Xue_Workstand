@@ -1,4 +1,5 @@
 import type { JobKind, JobRecord, JobStartInput } from "./types";
+import { isTerminalJob } from "./job-sync";
 
 export const DEFAULT_JOB_RESULT_PERSIST_BYTES = 96 * 1024;
 
@@ -20,7 +21,10 @@ export function compactJobForPersistence(
   job: JobRecord,
   maxResultBytes = DEFAULT_JOB_RESULT_PERSIST_BYTES
 ): JobRecord {
-  if (!isTerminalStatus(job.status) || typeof job.result === "undefined") return job;
+  if (!isTerminalJob(job) || typeof job.result === "undefined") return job;
+  // These results have no independent persisted asset to read after a restart.
+  if (job.kind === "single-video-transcribe" || job.kind === "publish-copy" || job.kind === "image-prompt-assist" ||
+    (job.kind === "write-copy" && !hasSavedWriteResult(job.result))) return job;
 
   const resultSizeBytes = Buffer.byteLength(JSON.stringify(job.result), "utf8");
   if (resultSizeBytes <= maxResultBytes) return job;
@@ -34,6 +38,8 @@ export function compactJobForPersistence(
   };
 }
 
-function isTerminalStatus(status: JobRecord["status"]) {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "interrupted";
+function hasSavedWriteResult(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const value = result as { draft?: { id?: string }; results?: unknown[] };
+  return Boolean(value.draft?.id) || Boolean(value.results?.length && value.results.every(hasSavedWriteResult));
 }

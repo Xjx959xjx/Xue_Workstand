@@ -243,7 +243,14 @@ export function parseOpenCliJsonish(stdout: string): unknown {
 }
 
 export function openCliRows(raw: unknown): unknown[] {
-  return asArray(raw);
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") {
+    const object = raw as Record<string, unknown>;
+    for (const key of ["data", "items", "results", "videos", "list", "users", "user_list"]) {
+      if (Array.isArray(object[key])) return object[key] as unknown[];
+    }
+  }
+  throw new Error("OpenCLI 返回了无法解析的列表数据，请检查平台会话或 CLI 版本。");
 }
 
 export function parseJsonish(stdout: string): unknown {

@@ -1,5 +1,6 @@
 import { authenticateBridgeRequest, formatCapabilityBridgeError } from "@/lib/capability-bridge";
 import { relayWorkspaceRequest, workspaceApiPath } from "@/lib/workspace-bridge";
+import { getAppMode } from "@/lib/app-mode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +11,9 @@ async function handle(request: Request) {
       return Response.json({ error: "资料桥仅允许在本机运行。" }, { status: 503 });
     }
     authenticateBridgeRequest(request);
+    if (request.headers.get("x-workspace-app-mode") !== getAppMode()) {
+      return Response.json({ error: "云端与本机运行模式不一致，请将两端 APP_MODE 设置为相同模式后重试。" }, { status: 403 });
+    }
     const url = new URL(request.url);
     const prefix = "/api/capability-bridge/workspace/";
     const apiPath = workspaceApiPath(`/api/${url.pathname.slice(prefix.length)}`);

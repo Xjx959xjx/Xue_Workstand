@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
+import { promisify } from "util";
+import { assertPublicHttpUrl, downloadPublicHttpMedia } from "./public-http-url";
 import {
   buildOpenCliBrowserArgs,
   downloadBilibiliVideo,
@@ -36,6 +38,7 @@ import { cleanTranscriptText } from "./transcript-cleaning";
 import { Account, Platform, Video } from "./types";
 
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
+const execFileAsync = promisify(execFile);
 type Timing = { stage: string; ms: number };
 type AbortableOptions = {
   signal?: AbortSignal;
@@ -130,10 +133,12 @@ export async function transcribeVideo(input: {
   signal?: AbortSignal;
 }) {
   throwIfAborted(input.signal);
+  for (const url of [input.mediaUrl, input.douyinMediaUrl].filter(Boolean) as string[]) await assertPublicHttpUrl(url);
   if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
     if (!hasRemoteCapabilityBridge()) {
       throw new Error("Sites 云端运行时暂不支持本机转写进程；请配置远程 ASR 服务后再转写。");
     }
+    const snapshot = await getTranscriptSnapshot(input.platform, input.accountId, input.videoId);
     const remotePayload = {
       platform: input.platform,
       accountId: input.accountId,
@@ -150,7 +155,7 @@ export async function transcribeVideo(input: {
     if (!remote || typeof remote.text !== "string" || !remote.text.trim()) {
       throw new Error("远程 ASR 服务返回了无效结果，缺少 text。");
     }
-    const snapshot = await getTranscriptSnapshot(input.platform, input.accountId, input.videoId);
+    throwIfAborted(input.signal);
     const saved = await saveTranscript({
       platform: input.platform,
       accountId: input.accountId,
@@ -257,7 +262,7 @@ export async function transcribeVideo(input: {
 
     if (!mediaPath) {
       if (input.platform === "douyin") {
-        const availability = await checkDouyinVideoAvailability(account, video);
+        const availability = await checkDouyinVideoAvailability(account, video, { signal: input.signal });
         if (availability.visible === false) {
           const reason = `没有取得可转写媒体地址：${availability.reason}`;
           await markTranscriptFailed(input.platform, input.accountId, input.videoId, reason);
@@ -319,6 +324,7 @@ export async function transcribeVideo(input: {
       };
     } catch (error) {
       if (isAbortError(error)) throw error;
+      if (error && typeof error === "object" && "statusCode" in error && error.statusCode === 409) throw error;
       const reason = buildProviderErrorReason(input.platform, error, bilibiliSubtitleError);
       await markTranscriptFailed(input.platform, input.accountId, input.videoId, reason);
       throw new Error(reason);
@@ -2093,11 +2099,12 @@ async function runFfmpegDownload(args: string[], target: string, options: Aborta
   try {
     throwIfAborted(options.signal);
     const startedAt = Date.now();
-    await execFileAbortable(ffmpegBin(), args, {
+    await execFileAsync(ffmpegBin(), args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 8,
-      timeout: 20 * 60 * 1000
-    }, options.signal);
+      timeout: 20 * 60 * 1000,
+      signal: options.signal
+    });
     return { filePath: target, ms: Date.now() - startedAt };
   } catch (error) {
     await fs.rm(target, { force: true }).catch(() => undefined);
@@ -2126,18 +2133,19 @@ function formatMediaAttempts(attempts: string[]) {
 }
 
 async function downloadRemoteAudio(url: string, fileName: string, options: AbortableOptions = {}) {
-  const target = path.join(os.tmpdir(), `style-library-${Date.now()}-${fileName}`);
+  throwIfAborted(options.signal);
+  const target = path.join(os.tmpdir(), `style-library-${randomUUID()}-${normalizeTemporaryFileName(fileName)}`);
+  const downloaded = `${target}.media`;
   const args = [
     "-hide_banner",
     "-loglevel",
     "error",
     "-nostdin",
     "-y",
-    "-rw_timeout",
-    "15000000",
-    ...buildFfmpegHeaderArgs(url),
+    "-protocol_whitelist",
+    "file,pipe",
     "-i",
-    url,
+    downloaded,
     "-vn",
     "-map",
     "a:0",
@@ -2155,16 +2163,20 @@ async function downloadRemoteAudio(url: string, fileName: string, options: Abort
   try {
     throwIfAborted(options.signal);
     const startedAt = Date.now();
-    await execFileAbortable(ffmpegBin(), args, {
+    await downloadPublicHttpMedia(url, downloaded, { signal: options.signal, headers: buildRemoteAssetRequestHeaders(url) });
+    await execFileAsync(ffmpegBin(), args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 4,
-      timeout: 10 * 60 * 1000
-    }, options.signal);
+      timeout: 10 * 60 * 1000,
+      signal: options.signal
+    });
     return { mediaPath: target, ms: Date.now() - startedAt };
   } catch (error) {
     await fs.rm(target, { force: true }).catch(() => undefined);
     if (isAbortError(error)) throw error;
     throw new Error(`音频提取失败：${describeFfmpegError(error)}`);
+  } finally {
+    await fs.rm(downloaded, { force: true }).catch(() => undefined);
   }
 }
 
@@ -2195,42 +2207,18 @@ async function extractLocalAudio(mediaPath: string, fileName: string, options: A
   try {
     throwIfAborted(options.signal);
     const startedAt = Date.now();
-    await execFileAbortable(ffmpegBin(), args, {
+    await execFileAsync(ffmpegBin(), args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 4,
-      timeout: 10 * 60 * 1000
-    }, options.signal);
+      timeout: 10 * 60 * 1000,
+      signal: options.signal
+    });
     return { mediaPath: target, ms: Date.now() - startedAt };
   } catch (error) {
     await fs.rm(target, { force: true }).catch(() => undefined);
     if (isAbortError(error)) throw error;
     throw new Error(`音频提取失败：${describeFfmpegError(error)}`);
   }
-}
-
-function execFileAbortable(
-  command: string,
-  args: string[],
-  options: Parameters<typeof execFile>[2],
-  signal?: AbortSignal
-) {
-  return new Promise<void>((resolve, reject) => {
-    throwIfAborted(signal);
-    const child = execFile(command, args, options, (error) => {
-      signal?.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-    const abort = () => {
-      child.kill("SIGTERM");
-      reject(createAbortError());
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) abort();
-  });
 }
 
 function ffmpegBin() {

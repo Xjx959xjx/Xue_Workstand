@@ -2,6 +2,8 @@ import path from "path";
 import { z } from "zod";
 import { styleEvidenceSchema, writerContextSchema } from "../writer-context";
 import { imageGenerationInputSchema } from "../image-generation-types";
+import { jobKinds } from "../types";
+import { startJobSchema } from "../job-validation";
 
 export const STORAGE_SCHEMA_VERSION = 1;
 
@@ -10,6 +12,38 @@ const timestampSchema = z.string().min(1);
 const versionedObject = z.object({
   schemaVersion: z.number().int().nonnegative().optional()
 });
+
+export const douyinHotlistWatchlistSchema = versionedObject.extend({
+  schemaVersion: z.literal(1).optional(), version: z.literal(1), accountIds: z.array(z.string().min(1)),
+  updatedAt: z.string().min(1), lastRefreshedAt: z.string().optional(),
+  lastFullRefreshAttemptAt: z.string().optional(), lastFullRefreshAt: z.string().optional()
+}).passthrough();
+
+const jobStatusSchema = z.enum(["queued", "running", "completed", "failed", "interrupted", "cancelled"]);
+const jobProgressSchema = z.number().finite().min(0).max(100);
+const jobTimeSchema = z.string().datetime({ offset: true });
+const jobSchema = versionedObject.extend({
+  id: z.string().min(1), kind: z.enum(jobKinds), status: jobStatusSchema,
+  title: z.string(), message: z.string(), progress: jobProgressSchema,
+  inputSummary: z.string().optional(), stage: z.string().optional(), href: z.string().optional(),
+  partialText: z.string().optional(), result: z.unknown().optional(),
+  resultRef: z.object({ id: z.string().optional(), href: z.string(), label: z.string() }).passthrough().optional(),
+  resultCompacted: z.boolean().optional(), resultSizeBytes: z.number().int().nonnegative().optional(),
+  events: z.array(z.object({ at: jobTimeSchema, status: jobStatusSchema, stage: z.string().optional(), message: z.string(), progress: jobProgressSchema }).passthrough()).optional(),
+  scope: z.object({
+    canvasId: z.string().optional(),
+    targetType: z.enum(["account", "project", "draft", "engagement", "url", "text", "hotlist", "hotspot", "gross-margin"]).optional(),
+    platform: platformSchema.optional(), accountId: z.string().optional(), projectId: z.string().optional(),
+    videoId: z.string().optional(), draftId: z.string().optional(), engagementRecordId: z.string().optional(), sourceKey: z.string().optional()
+  }).passthrough().optional(),
+  dataRevision: z.number().int().nonnegative().optional(),
+  dataChange: z.object({
+    resource: z.enum(["image-generation", "library-account", "douyin-hotlist", "gross-margin", "hotspots", "drafts", "engagement"]),
+    at: jobTimeSchema, accountId: z.string().optional(), videoId: z.string().optional(), recordId: z.string().optional()
+  }).passthrough().optional(),
+  attempt: z.number().int().nonnegative().optional(), resumedAt: jobTimeSchema.optional(), error: z.string().optional(),
+  createdAt: jobTimeSchema, updatedAt: jobTimeSchema, completedAt: jobTimeSchema.optional()
+}).passthrough();
 
 const accountSchema = versionedObject.extend({
   id: z.string().min(1),
@@ -114,6 +148,8 @@ const engagementRecordSchema = versionedObject.extend({
   title: z.string().min(1),
   platform: z.union([platformSchema, z.literal("unknown")]),
   sourceText: z.string(),
+  sourceDurationSec: z.number().finite().nonnegative().optional(),
+  sourceSegments: z.array(z.object({ startSec: z.number().finite().nonnegative(), endSec: z.number().finite().nonnegative(), text: z.string() })).optional(),
   options: z.object({
     includeComments: z.boolean(),
     commentCount: z.number().int().nonnegative(),
@@ -149,7 +185,43 @@ const styleMetaSchema = versionedObject.extend({
   sampleVideoIds: z.array(z.string()).optional()
 }).passthrough();
 
+const grossMarginAmountSchema = z.number().finite().nonnegative();
+const grossMarginServiceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
+const grossMarginStatsSchema = z.record(grossMarginServiceSchema, grossMarginAmountSchema);
+const grossMarginAccountSchema = z.object({
+  platform: platformSchema, name: z.string().min(1), defaultPrice: grossMarginAmountSchema,
+  secondaryPrice: grossMarginAmountSchema.optional(), priceLabel: z.string().optional(),
+  secondaryPriceLabel: z.string().optional(), douyinId: z.string().optional(),
+  cooperationCode: z.string().optional(), bilibiliUid: z.string().optional(), homepage: z.string().optional()
+}).passthrough();
+const grossMarginAccountsSchema = z.array(grossMarginAccountSchema);
+const grossMarginTableSchema = versionedObject.extend({
+  platform: platformSchema, updatedAt: timestampSchema,
+  items: z.array(z.object({
+    id: z.string().min(1), service: grossMarginServiceSchema, name: z.string(),
+    unitPrice: grossMarginAmountSchema, quantityUnit: z.enum(["万", "千", "个", "元"]),
+    minimumQuantity: grossMarginAmountSchema.nullable().optional(),
+    active: z.boolean().optional(), note: z.string().optional(), updatedAt: timestampSchema.optional()
+  }).passthrough())
+}).passthrough();
+const grossMarginMonitorSchema = versionedObject.extend({
+  id: z.string().min(1), revision: z.number().int().nonnegative().optional(), platform: platformSchema,
+  accountName: z.string(), videoUrl: z.string(), videoKey: z.string(), sourceText: z.string(),
+  targetStats: grossMarginStatsSchema, currentStats: grossMarginStatsSchema.optional(),
+  previousStats: grossMarginStatsSchema.optional(),
+  playSamples: z.array(z.object({ value: grossMarginAmountSchema, capturedAt: timestampSchema, source: z.enum(["manual", "refresh"]) })).optional(),
+  status: z.enum(["pending", "completed", "partial", "failed"]), warnings: z.array(z.string()),
+  createdAt: timestampSchema, updatedAt: timestampSchema
+}).passthrough();
+
 export type StoredRecordKind =
+  | "gross-margin-table"
+  | "gross-margin-template"
+  | "gross-margin-monitor"
+  | "gross-margin-accounts"
+  | "gross-margin-account-cache"
+  | "job"
+  | "job-payload"
   | "image-generation"
   | "image-file"
   | "style-analysis"
@@ -163,6 +235,14 @@ export type StoredRecordKind =
   | "support-document-cache";
 
 const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
+  "gross-margin-table": grossMarginTableSchema,
+  "gross-margin-template": versionedObject.extend({ platform: platformSchema, content: z.string(), updatedAt: timestampSchema }).passthrough(),
+  "gross-margin-monitor": grossMarginMonitorSchema,
+  // 只读兼容旧的账号数组；新对象仍使用统一版本检查。
+  "gross-margin-accounts": z.union([grossMarginAccountsSchema, versionedObject.extend({ accounts: grossMarginAccountsSchema }).transform(value => value.accounts)]),
+  "gross-margin-account-cache": versionedObject.extend({ source: z.enum(["local", "wecom"]), accounts: grossMarginAccountsSchema, fetchedAt: timestampSchema.optional() }).passthrough(),
+  job: jobSchema,
+  "job-payload": versionedObject.extend({ version: z.literal(1), input: startJobSchema }).passthrough(),
   "image-generation": imageGenerationInputSchema.extend({
     schemaVersion: z.literal(STORAGE_SCHEMA_VERSION), id: z.string().min(1), model: z.string().min(1),
     createdAt: timestampSchema, updatedAt: timestampSchema, deletedAt: timestampSchema.optional(),
@@ -185,6 +265,15 @@ export function storedRecordKind(target: string, root: string): StoredRecordKind
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null;
   const segments = relative.split(path.sep);
   const file = segments.at(-1) || "";
+  if (segments[0] === "gross-margin") {
+    if (segments.length === 3 && segments[1] === "monitor-records" && file.endsWith(".json")) return "gross-margin-monitor";
+    if (segments.length === 2) {
+      if (file === "accounts.json") return "gross-margin-accounts";
+      if (file === "accounts.wecom-cache.json") return "gross-margin-account-cache";
+      if (/^(douyin|bilibili)\.template\.json$/.test(file)) return "gross-margin-template";
+      if (/^(douyin|bilibili)\.json$/.test(file)) return "gross-margin-table";
+    }
+  }
   if (segments[0] === "images" && segments.length === 3 && file.endsWith(".json")) {
     if (segments[1] === "records") return "image-generation";
     if (segments[1] === "files") return "image-file";
@@ -223,7 +312,7 @@ export function storedRecordKind(target: string, root: string): StoredRecordKind
 }
 
 export function parseStoredRecord<T>(target: string, value: unknown, kind: StoredRecordKind): T {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!value || typeof value !== "object" || (Array.isArray(value) && kind !== "gross-margin-accounts")) {
     throw new Error(`存储记录结构无效：${target} 必须是 JSON 对象。`);
   }
 
@@ -279,7 +368,7 @@ const radarEventSchema = z.object({
   eventFingerprint: z.string().optional(), updatedAt: z.string().optional(), development: z.string().optional(),
   timeline: z.array(z.object({ signalId: z.string(), title: z.string(), source: z.string(), url: z.string(), publishedAt: z.string().optional() })).max(30).optional(),
   id: z.string(), board: radarBoardSchema, monitorType: radarMonitorSchema, monitorLabel: z.string(), triggerMode: z.string(), thresholdHint: z.string(), actionWindow: z.string(), priorityLabel: z.string(), scopeMatches: strings,
-  title: z.string(), game: z.string(), category: z.string(), status: z.enum(["ready", "watch", "risk"]), score: z.number(), freshness: z.string(), sources: z.number(), summary: z.string(), whyNow: z.string(), playerFocus: strings, angles: strings, evidence: strings, research: strings, risks: strings, accounts: strings, signalIds: strings,
+  title: z.string(), game: z.string(), category: z.string(), status: z.enum(["ready", "watch", "risk"]), score: z.number(), freshness: z.string(), sources: z.number(), summary: z.string(), whyNow: z.string(), playerFocus: strings, angles: strings, evidence: strings, research: strings, risks: strings, accounts: strings, signalIds: strings, sourceIds: strings.optional(),
   gradeLabel: radarGradeSchema.optional(), userRating: radarRatingSchema.optional(), entryPoint: z.string().optional(), commentDirection: z.string().optional(), publishedAt: z.string().optional(), retainedUntil: z.string().optional(),
   displayInfo: z.object({ kind: radarMonitorSchema, subject: z.string(), headline: z.string(), statusLine: z.string(), timeLabel: z.string(), sourceLine: z.string(), facts: strings, primaryAction: z.string() })
 });
@@ -316,12 +405,7 @@ export const hotspotCheckpointSchema = z.object({
   createdAt: z.string().datetime(), result: z.unknown(), fallbackReason: z.string().optional()
 });
 
-export const hotspotRequestCacheSchema = z.object({
-  schemaVersion: z.literal(1), url: z.string(), body: z.string().optional(),
-  etag: z.string().optional(), lastModified: z.string().optional(),
-  checkedAt: z.number(), failures: z.number().int().nonnegative(),
-  nextRetryAt: z.number(), error: z.string().optional()
-});
+
 
 const engagementResearchCount = z.number().int().nonnegative();
 export const commentCollectionAttemptSchema = z.object({
@@ -391,6 +475,12 @@ export const engagementModelCallSchema = z.object({
   messages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string() })),
   retries: z.array(z.object({ at: z.string().datetime(), message: z.string() })),
   responseText: z.string().optional(), error: z.string().optional()
+});
+
+export const danmakuBatchCheckpointSchema = z.object({
+  schemaVersion: z.literal(1), signature: z.string().min(1),
+  index: z.number().int().nonnegative(), texts: z.array(z.string()).min(1).max(16),
+  model: z.string(), attempts: z.number().int().positive().max(2)
 });
 
 export const commentPipelineCheckpointSchema = z.object({

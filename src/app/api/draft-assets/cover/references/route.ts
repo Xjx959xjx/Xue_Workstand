@@ -36,7 +36,7 @@ export async function POST(request: Request) {
           if (!ALLOWED_REFERENCE_IMAGE_TYPES.has(file.type)) {
             throw new Error(`不支持的参考图格式：${file.name || file.type}`);
           }
-          if (file.size > MAX_REFERENCE_FILE_BYTES) {
+          if (!file.size || file.size > MAX_REFERENCE_FILE_BYTES) {
             throw new Error(`单张参考图不能超过 10MB：${file.name || "未命名文件"}`);
           }
           totalBytes += file.size;

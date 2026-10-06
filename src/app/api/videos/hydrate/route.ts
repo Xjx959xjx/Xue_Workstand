@@ -23,12 +23,13 @@ export async function POST(request: Request) {
     const account = records[0].account;
     const videos = records.map((record) => record.video);
     const hydrated = input.platform === "bilibili"
-      ? await Promise.all(videos.map((video) => hydrateBilibiliVideoStats(video)))
-      : await hydrateDouyinVideoStatsBatch(videos);
+      ? await Promise.all(videos.map((video) => hydrateBilibiliVideoStats(video, { signal: request.signal })))
+      : await hydrateDouyinVideoStatsBatch(videos, { signal: request.signal });
+    request.signal.throwIfAborted();
     const saved = await Promise.all(hydrated.map((video) => saveVideo(account, video)));
-    const failedCount = saved.filter((video) => video.statsHydration?.status === "failed").length;
-    if (failedCount === saved.length) {
-      throw new Error(saved[0]?.statsHydration?.error || "没有取得视频统计详情，请确认抖音网页会话仍有效。");
+    const failedCount = saved.filter((video) => video.statsHydration?.status !== "complete").length;
+    if (saved.every((video) => video.statsHydration?.status === "failed")) {
+      throw new Error(saved[0]?.statsHydration?.error || "视频统计未完整补全，请检查平台网页会话后重试。");
     }
     return input.videoId ? { video: saved[0] } : { videos: saved, failedCount };
   }, {

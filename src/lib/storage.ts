@@ -38,13 +38,12 @@ import { ensureDouyinHotlistDirs } from "./storage/douyin-hotlist";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
 import { parseStoredRecord, storedRecordKind, versionStoredRecord } from "./storage/schemas";
 import { runRecoverableLibraryMutation } from "./storage/transactions";
+import { detectImageFormat } from "./storage/images";
 export { libraryRoot } from "./storage/core";
 export { listLibraryTrashOperations, restoreLibraryTrashOperation } from "./storage/transactions";
 export {
   appendGrossMarginPlaySample,
-  deleteGrossMarginCategories,
   deleteGrossMarginMonitorRecord,
-  deleteGrossMarginTier,
   getGrossMarginLibrary,
   getGrossMarginMonitorRecords,
   getGrossMarginReviewTemplate,
@@ -54,9 +53,7 @@ export {
   saveGrossMarginPriceTable,
   saveGrossMarginReviewTemplate,
   updateGrossMarginMonitorRecord,
-  upsertGrossMarginCategory,
   upsertGrossMarginMonitorRecord,
-  upsertGrossMarginTier
 } from "./storage/gross-margin";
 
 const DEFAULT_STYLE = `# 风格卡
@@ -81,7 +78,11 @@ const draftAssetQueues = new Map<string, Promise<unknown>>();
 const engagementRecordQueues = new Map<string, Promise<unknown>>();
 const engagementCacheQueues = new Map<string, Promise<unknown>>();
 const identityMutationQueues = new Map<string, Promise<unknown>>();
-const videoMutationQueues = new Map<string, Promise<unknown>>();
+// ponytail: queues cover one process; multiple writer processes need a filesystem lock.
+const globalStorage = globalThis as typeof globalThis & {
+  __styleWorkbenchVideoMutationQueues?: Map<string, Promise<unknown>>;
+};
+const videoMutationQueues = globalStorage.__styleWorkbenchVideoMutationQueues ||= new Map<string, Promise<unknown>>();
 
 type DetailReadOptions = {
   includeStyle?: boolean;
@@ -789,8 +790,14 @@ export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | 
     const existing = options.idempotencyKey ? await readJson<EngagementRecord>(engagementRecordJsonPath(id)) : null;
     if (existing && (existing.comments?.items.length || 0) >= (input.comments?.items.length || 0)
       && (existing.danmaku?.items.length || 0) >= (input.danmaku?.items.length || 0)) return existing;
+    const comments = existing?.comments && existing.comments.items.length > (input.comments?.items.length || 0)
+      ? existing.comments : input.comments || existing?.comments;
+    const danmaku = existing?.danmaku && existing.danmaku.items.length > (input.danmaku?.items.length || 0)
+      ? existing.danmaku : input.danmaku || existing?.danmaku;
     const record: EngagementRecord = {
       ...input,
+      comments,
+      danmaku,
       id,
       title: makeDraftTitleFromContent(input.title || input.sourceText, "互动素材"),
       sourceText: input.sourceText.trim(),
@@ -1453,7 +1460,7 @@ export async function saveCopySourceStyleAnalysis(sourceId: string, cache: Style
 
 export async function saveDraft(input: DraftInput) {
   const now = nowIso();
-  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(input.content)}`;
+  const id = `${now.replace(/[:.]/g, "-")}-${randomUUID()}`;
   const title = makeDraftTitleFromContent(input.content || input.prompt || input.title, input.title);
 
   if (input.targetType === "project") {
@@ -1568,13 +1575,17 @@ export async function saveUploadedDraftCoverReferences(input: {
   draftId: string;
   files: Array<{ name: string; type: string; data: Buffer }>;
 }) {
+  const formats = input.files.map((file) => {
+    if (!file.data.length || file.data.length > 10 * 1024 * 1024) throw new Error("封面参考图不能为空，且每张不能超过 10MB。");
+    return detectImageFormat(file.data);
+  });
   const resolved = await ensureDraftAssetDir(input.draftId, "references");
   const now = nowIso();
   const references: DraftCoverReference[] = [];
 
-  for (const file of input.files) {
-    const extension = coverExtensionFromMime(file.type, file.name);
-    const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${file.name}-${file.data.length}-${references.length}`)}`;
+  for (const [index, file] of input.files.entries()) {
+    const extension = formats[index] === "jpeg" ? "jpg" : formats[index];
+    const id = randomUUID();
     const filename = `${id}.${extension}`;
     const target = path.join(resolved.dir, filename);
     await writeFileAtomic(target, file.data);
@@ -1607,12 +1618,13 @@ export async function saveGeneratedCoverImage(input: {
   model: string;
   size: string;
   quality: string;
-  format: DraftCoverImage["format"];
 }) {
+  if (!input.bytes.length || input.bytes.length > 40 * 1024 * 1024) throw new Error("封面图片为空或超过 40MB，请降低尺寸后重试。");
+  const format = detectImageFormat(input.bytes);
   const resolved = await ensureDraftAssetDir(input.draftId, "covers");
   const now = nowIso();
-  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.prompt}-${input.referenceIds.join(",")}`)}`;
-  const filename = `${id}.${input.format === "jpeg" ? "jpg" : input.format}`;
+  const id = randomUUID();
+  const filename = `${id}.${format === "jpeg" ? "jpg" : format}`;
   const target = path.join(resolved.dir, filename);
   await writeFileAtomic(target, input.bytes);
 
@@ -1624,7 +1636,7 @@ export async function saveGeneratedCoverImage(input: {
     model: input.model,
     size: input.size,
     quality: input.quality,
-    format: input.format,
+    format,
     createdAt: now
   };
 
@@ -2334,14 +2346,6 @@ function mergeCoverReferences(existing: DraftCoverReference[], incoming: DraftCo
   const byId = new Map(existing.map((reference) => [reference.id, reference]));
   for (const reference of incoming) byId.set(reference.id, reference);
   return [...byId.values()];
-}
-
-function coverExtensionFromMime(mimeType: string, name: string) {
-  if (mimeType === "image/png") return "png";
-  if (mimeType === "image/webp") return "webp";
-  if (mimeType === "image/jpeg" || mimeType === "image/jpg") return "jpg";
-  const extension = path.extname(name).replace(/^\./, "").toLowerCase();
-  return ["jpg", "jpeg", "png", "webp"].includes(extension) ? (extension === "jpeg" ? "jpg" : extension) : "jpg";
 }
 
 function contentTypeFromExtension(file: string) {

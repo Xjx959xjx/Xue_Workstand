@@ -4,7 +4,8 @@ import {
   buildHotlistHref,
   getRefreshJobSettlement,
   getSurgeClass,
-  getVisibleHotlistItems
+  getVisibleHotlistItems,
+  parseSortMode
 } from "../src/app/douyin-hotlist/_lib/douyin-hotlist-model";
 import { buildRefreshLogEntries, buildRefreshLogEntry } from "../src/lib/douyin-hotlist-refresh-log";
 import { getDouyinAccessError } from "../src/lib/douyin-access-errors";
@@ -59,6 +60,21 @@ test("热榜 URL 只更新自身筛选参数并保留其他查询参数", () => 
       pathname: "/douyin-hotlist",
       search: "?account=old&sort=likes&window=3h",
       sort: "heat",
+      window: "3d"
+    }),
+    "/douyin-hotlist?sort=heat"
+  );
+});
+
+test("热榜默认按点赞最高，默认排序不写入 URL", () => {
+  assert.equal(parseSortMode(null), "likes");
+  assert.equal(parseSortMode("unknown"), "likes");
+  assert.equal(
+    buildHotlistHref({
+      account: "all",
+      pathname: "/douyin-hotlist",
+      search: "?sort=heat",
+      sort: "likes",
       window: "3d"
     }),
     "/douyin-hotlist"

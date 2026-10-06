@@ -97,7 +97,7 @@ export async function analyzeRadar(signals: RadarSignal[], feedback: RadarFeedba
   function articlePayload(item: RadarSignal) {
     return { ...payload(item), feedback: feedback.ratings.filter(row => row.hotspotId === (item.eventId || `hotspot:${item.id}`)).map(({ rating }) => rating).slice(-1) };
   }
-  const filtered = coarseFilter(signals);
+  const filtered = options.pipeline ? [] : coarseFilter(signals);
   const limit = Math.max(40, Math.min(160, Number(process.env.HOTSPOT_RADAR_COARSE_LIMIT) || 80));
   const candidates = options.pipeline ? selectUnifiedCandidates(signals, options.pipeline) : (filtered.length ? filtered : signals.filter(item => !isLowValueRoutineSports(item))).slice(0, limit);
   const concurrency = Math.max(1, Math.min(3, Number(process.env.HOTSPOT_RADAR_MODEL_CONCURRENCY) || 2));
@@ -243,7 +243,7 @@ function toEvent(signal: RadarSignal, row: z.infer<typeof fineSchema>["items"][n
     scopeMatches: [], title: row.titleZh, game: row.subject, category: row.type, status, score, freshness: latestDate,
     gradeLabel: row.grade, publishedAt: latestDate, sources: sourceItems.length, summary: row.summaryZh,
     whyNow: row.whyHot, playerFocus: [row.commentDirection], angles: [row.entryPoint], entryPoint: row.entryPoint, commentDirection: row.commentDirection,
-    evidence: sourceItems.map(item => `${item.source}：${item.title}`), research: [], risks: [], accounts: [], signalIds: sourceItems.map(item => item.id),
+    evidence: sourceItems.map(item => `${item.source}：${item.title}`), research: [], risks: [], accounts: [], signalIds: sourceItems.map(item => item.id), sourceIds: [...new Set(sourceItems.map(item => item.sourceId))],
     displayInfo: { kind: monitorType, subject: row.subject, headline: row.titleZh, statusLine: row.grade, timeLabel: latestDate, sourceLine: sourceItems.map(item => item.source).join("、"), facts: [], primaryAction: "送入写作台" }
   };
 }

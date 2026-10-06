@@ -61,7 +61,8 @@ async function main() {
       ...process.env,
       NEXT_TELEMETRY_DISABLED: "1",
       APP_MODE: presetConfig.appMode,
-      APP_START_PATH: presetConfig.startPath
+      APP_START_PATH: presetConfig.startPath,
+      APP_BUILD_ID: releaseName
     }
   });
 
@@ -194,8 +195,7 @@ async function copyProjectSources() {
     "package-lock.json",
     "next.config.mjs",
     "tsconfig.json",
-    "next-env.d.ts",
-    "scripts/collect-xiaoheihe-hotspots.mjs"
+    "next-env.d.ts"
   ];
 
   for (const entry of entries) {
@@ -219,10 +219,6 @@ async function createRuntimePackage() {
     await fs.promises.cp(path.join(stagingRoot, "public"), path.join(releaseRoot, "public"), { recursive: true });
   }
 
-  if (presetConfig.appMode !== "gross-margin") {
-    await fs.promises.mkdir(path.join(releaseRoot, "scripts"), { recursive: true });
-    await fs.promises.copyFile(path.join(stagingRoot, "scripts", "collect-xiaoheihe-hotspots.mjs"), path.join(releaseRoot, "scripts", "collect-xiaoheihe-hotspots.mjs"));
-  }
   await copyReleaseLibrary();
   await bundleWindowsNode();
   await patchWindowsRuntimeNativePackages();
@@ -574,7 +570,7 @@ function launcherFiles() {
 set -euo pipefail
 cd "$(dirname "$0")"
 if ! command -v node >/dev/null 2>&1; then
-  echo "未检测到 Node.js。请先运行 ./install-deps.sh，或安装 Node.js 20+。"
+  echo "未检测到 Node.js。请先运行 ./install-deps.sh，或安装 Node.js 22.19+。"
   exit 1
 fi
 node tools/runtime.mjs start --open "$@"
@@ -607,7 +603,7 @@ if ! command -v node >/dev/null 2>&1; then
     echo "安装 Node.js..."
     brew install node
   else
-    echo "未检测到 Node.js。请先安装 Node.js 20+：https://nodejs.org/"
+    echo "未检测到 Node.js。请先安装 Node.js 22.19+：https://nodejs.org/"
     echo "macOS 推荐先安装 Homebrew，再执行：brew install node"
     exit 1
   fi
@@ -887,7 +883,7 @@ if exist "%NODE_BIN%" (
     where winget >nul 2>nul
     if errorlevel 1 (
       echo 未检测到 Node.js，也没有检测到 winget。
-      echo 请手动安装 Node.js 20+：https://nodejs.org/
+      echo 请手动安装 Node.js 22.19+：https://nodejs.org/
       pause
       exit /b 1
     )
@@ -1128,7 +1124,8 @@ async function main() {
     OPENCLI_SCRIPT: envValue(fileEnv, "OPENCLI_SCRIPT", bundledOpenCliScript()),
     OPENCLI_BROWSER_CONNECT_TIMEOUT: envValue(fileEnv, "OPENCLI_BROWSER_CONNECT_TIMEOUT", "8"),
     OPENCLI_WINDOW: envValue(fileEnv, "OPENCLI_WINDOW", "background"),
-    STYLE_LIBRARY_DIR: envValue(fileEnv, "STYLE_LIBRARY_DIR", "./style-library")
+    STYLE_LIBRARY_DIR: envValue(fileEnv, "STYLE_LIBRARY_DIR", "./style-library"),
+    APP_BUILD_ID: "${releaseName}"
   };
 
   await fs.promises.mkdir(stateDir, { recursive: true });
@@ -1677,6 +1674,7 @@ function versionText() {
     `arch=${process.arch}`,
     `node=${process.version}`,
     `includeLibrary=${includeLibrary ? "true" : "false"}`,
+    `buildId=${releaseName}`,
     ""
   ].join("\n");
 }

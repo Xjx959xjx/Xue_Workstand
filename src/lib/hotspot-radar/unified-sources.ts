@@ -26,7 +26,7 @@ export function videoHotlistSources(feed: DouyinHotlistResponse): CollectedSourc
 
 export async function collectUnifiedSources(config: RadarPipelineConfig, options: RadarRefreshOptions): Promise<CollectedSource[]> {
   const results = await Promise.allSettled([
-    config.sources.some(kind => kind !== "video") ? getTrendRadarFeed(options.signal, undefined, { maxAgeHours: config.maxAgeHours }) : Promise.resolve(null),
+    config.sources.some(kind => kind !== "video") ? getTrendRadarFeed(options.signal, undefined, { maxAgeHours: config.maxAgeHours, kinds: config.sources.filter(kind => kind !== "video") }) : Promise.resolve(null),
     config.sources.includes("video") ? getDouyinHotlist({ windowDays: Math.ceil(config.maxAgeHours / 24) }) : Promise.resolve(null)
   ]);
   options.signal?.throwIfAborted();
@@ -35,7 +35,7 @@ export async function collectUnifiedSources(config: RadarPipelineConfig, options
   const [trend, video] = results;
   if (trend.status === "rejected") collected.push(failed("trendradar", "TrendRadar", trend.reason instanceof Error ? trend.reason.message : "读取 TrendRadar 失败"));
   else if (trend.value) {
-    collected.push(...trendRadarItemsToSources(trend.value.items.filter(item => config.sources.includes(item.kind))));
+    collected.push(...trendRadarItemsToSources(trend.value.items));
     if (trend.value.missing.length || trend.value.warnings.length) collected.push(failed("trendradar-status", "TrendRadar 读取状态", [...trend.value.missing, ...trend.value.warnings].join("；")));
   }
   if (video.status === "rejected") collected.push(failed("video-hotlist", "视频热榜", video.reason instanceof Error ? video.reason.message : "读取视频热榜失败"));

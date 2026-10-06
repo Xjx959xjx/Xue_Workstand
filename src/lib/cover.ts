@@ -1,6 +1,8 @@
 import { resolveAiPolicy } from "./ai-policy-runtime";
 import { callImageApi, imageConfig } from "./image-runtime";
-import { fetch as undiciFetch, ProxyAgent, type RequestInit as UndiciRequestInit } from "undici";
+import { fetch as undiciFetch, ProxyAgent } from "undici";
+import { draftCoverInputSchema, type DraftCoverInput } from "./cover-types";
+import { detectImageFormat } from "./storage/images";
 import { getBilibiliVideoReference } from "./opencli";
 import { normalizeRemoteImageUrl } from "./platform-links";
 import {
@@ -14,12 +16,8 @@ import {
   saveVideoAssetFields,
   updateDraftAssets
 } from "./storage";
-import { Draft, DraftCoverReference } from "./types";
+import { Draft, DraftCoverReference, DraftCoverImage } from "./types";
 import { clampText, nowIso, shortHash } from "./utils";
-
-type FetchInitWithDispatcher = UndiciRequestInit & {
-  dispatcher?: ProxyAgent;
-};
 
 export function getImageRuntimeConfig() {
   const config = imageConfig();
@@ -52,8 +50,8 @@ export async function collectDraftCoverReferences(draftId: string) {
       const existing = video.coverUrl;
       const reference = existing
         ? { thumbnail: existing, title: video.title, bvid: video.id }
-        : await getBilibiliVideoReference(video).catch(() => null);
-      if (!reference?.thumbnail) continue;
+        : await getBilibiliVideoReference(video);
+      if (!reference?.thumbnail) throw new Error(`视频「${video.title}」未返回封面参考图，已有参考图已保留。`);
       if (!existing) {
         await saveVideoAssetFields("bilibili", context.accountId, video.id, {
           coverUrl: reference.thumbnail,
@@ -61,7 +59,7 @@ export async function collectDraftCoverReferences(draftId: string) {
             ...(typeof video.raw === "object" && video.raw ? video.raw : {}),
             coverHydratedAt: nowIso()
           }
-        }).catch(() => undefined);
+        });
       }
       references.push({
         id: `account-${context.accountId}-${video.id}-${shortHash(reference.thumbnail)}`,
@@ -78,11 +76,10 @@ export async function collectDraftCoverReferences(draftId: string) {
   }
 
   const draft = await updateDraftAssets(draftId, (current) => {
-    const uploaded = (current.cover?.references || []).filter((reference) => reference.source === "upload");
     return {
       ...current,
       cover: {
-        references: mergeReferences([...references, ...uploaded]),
+        references: mergeReferences([...(current.cover?.references || []), ...references]),
         images: current.cover?.images || [],
         updatedAt: nowIso()
       }
@@ -96,14 +93,12 @@ export async function collectDraftCoverReferences(draftId: string) {
   };
 }
 
-export async function generateDraftCover(input: {
-  draftId: string;
-  referenceIds: string[];
-  prompt?: string;
-  count: number;
+export async function generateDraftCover(input: DraftCoverInput & {
   signal?: AbortSignal;
-  onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
+  onStage?: (payload: { stage: string; message: string; progress?: number }) => void | Promise<void>;
+  onSaved?: (images: DraftCoverImage[]) => Promise<void>;
 }) {
+  const params = draftCoverInputSchema.parse(input);
   throwIfAborted(input.signal);
   const baseConfig = imageConfig();
   const policy = await resolveAiPolicy("image_cover");
@@ -112,21 +107,25 @@ export async function generateDraftCover(input: {
     throw new Error("未配置 IMAGE_API_KEY，无法生成封面图片。");
   }
 
-  input.onStage?.({ stage: "prepare", message: "正在读取草稿和参考图", progress: 12 });
-  const resolved = await resolveDraft(input.draftId);
+  await input.onStage?.({ stage: "prepare", message: "正在读取草稿和参考图", progress: 12 });
+  const resolved = await resolveDraft(params.draftId);
   const draft = resolved.draft;
   const references = draft.assets?.cover?.references || [];
-  const selected = input.referenceIds.length
-    ? references.filter((reference) => input.referenceIds.includes(reference.id))
+  const selected = params.referenceIds.length
+    ? params.referenceIds.map((id) => {
+      const reference = references.find((entry) => entry.id === id);
+      if (!reference) throw new Error("所选封面参考图不存在，请刷新后重新选择。");
+      return reference;
+    })
     : references.slice(0, 3);
-  const referenceFiles = await prepareReferenceImages(draft.id, selected.slice(0, 6), input.signal);
-  const count = Math.max(1, Math.min(Math.round(input.count || 2), 4));
-  const prompt = buildCoverPrompt(draft, input.prompt, selected);
+  const referenceFiles = await prepareReferenceImages(draft.id, selected, input.signal);
+  const count = params.count;
+  const prompt = buildCoverPrompt(draft, params.prompt, selected);
   const images = [];
 
   for (let index = 0; index < count; index += 1) {
     throwIfAborted(input.signal);
-    input.onStage?.({
+    await input.onStage?.({
       stage: "generate",
       message: `正在生成第 ${index + 1} 张封面`,
       progress: 24 + Math.round((index / count) * 48)
@@ -138,7 +137,7 @@ export async function generateDraftCover(input: {
       signal: input.signal
     });
     throwIfAborted(input.signal);
-    input.onStage?.({
+    await input.onStage?.({
       stage: "save",
       message: `正在保存第 ${index + 1} 张封面`,
       progress: 72 + Math.round((index / count) * 20)
@@ -151,12 +150,12 @@ export async function generateDraftCover(input: {
       model: config.model,
       size: config.size,
       quality: config.quality,
-      format: config.format
     });
     images.push(saved.image);
+    await input.onSaved?.([...images]);
   }
 
-  input.onStage?.({ stage: "done", message: "封面生成完成", progress: 100 });
+  await input.onStage?.({ stage: "done", message: "封面生成完成", progress: 100 });
   const next = await resolveDraft(draft.id);
   return {
     draft: next.draft,
@@ -187,37 +186,52 @@ async function prepareReferenceImages(draftId: string, references: DraftCoverRef
   for (const reference of references) {
     throwIfAborted(signal);
     if (reference.path) {
-      const file = await getDraftAssetFile(draftId, reference.path).catch(() => null);
-      if (file) files.push({ name: `${reference.id}.${extensionFromContentType(file.contentType)}`, bytes: file.bytes, contentType: file.contentType });
+      const file = await getDraftAssetFile(draftId, reference.path).catch(() => { throw new Error(`读取封面参考图「${reference.label}」失败，请检查素材文件是否完整。`); });
+      validateReferenceBytes(file.bytes);
+      files.push({ name: `${reference.id}.${detectImageFormat(file.bytes)}`, bytes: file.bytes, contentType: `image/${detectImageFormat(file.bytes)}` });
       continue;
     }
     if (reference.url) {
-      const remote = await downloadReferenceImage(reference.url, signal).catch((error) => {
-        if (isAbortError(error)) throw error;
-        return null;
-      });
-      if (remote) files.push({ name: `${reference.id}.${extensionFromContentType(remote.contentType)}`, ...remote });
-    }
+      const remote = await downloadReferenceImage(reference.url, signal);
+      files.push({ name: `${reference.id}.${detectImageFormat(remote.bytes)}`, ...remote });
+    } else throw new Error(`封面参考图「${reference.label}」缺少文件路径或地址，请重新采集。`);
   }
   return files;
 }
 
 async function downloadReferenceImage(url: string, signal?: AbortSignal) {
   throwIfAborted(signal);
-  const response = await undiciFetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 style-library"
-    },
-    dispatcher: imageConfig().proxyUrl ? new ProxyAgent(imageConfig().proxyUrl) : undefined,
-    signal
-  } as FetchInitWithDispatcher);
-  if (!response.ok) throw new Error(`下载参考图失败：${response.status}`);
-  throwIfAborted(signal);
-  const arrayBuffer = await response.arrayBuffer();
-  return {
-    bytes: Buffer.from(arrayBuffer),
-    contentType: response.headers.get("content-type")?.split(";")[0] || "image/jpeg"
-  };
+  const proxyUrl = imageConfig().proxyUrl;
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  const timeout = AbortSignal.timeout(30_000);
+  try {
+    const response = await undiciFetch(normalizeImageUrl(url), {
+      headers: { "User-Agent": "Mozilla/5.0 style-library" }, dispatcher,
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
+    });
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`下载封面参考图失败（${response.status}），请重新采集。`); }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("封面参考图未返回图片内容，请重新采集。");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > 10 * 1024 * 1024) throw new Error("封面参考图超过 10MB，请缩小后重新上传。");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel().catch(() => { /* 图片读取已结束，只忽略流清理失败。 */ }); }
+    const bytes = Buffer.concat(chunks);
+    validateReferenceBytes(bytes);
+    return { bytes, contentType: `image/${detectImageFormat(bytes)}` };
+  } catch (error) {
+    throwIfAborted(signal);
+    if (timeout.aborted) throw new Error("下载封面参考图超时，请检查网络后重试。");
+    if (error instanceof TypeError) throw new Error("下载封面参考图失败，请检查图片地址、代理和网络。");
+    throw error;
+  } finally { await dispatcher?.close(); }
 }
 
 function throwIfAborted(signal?: AbortSignal) {
@@ -227,8 +241,9 @@ function throwIfAborted(signal?: AbortSignal) {
   throw error;
 }
 
-function isAbortError(error: unknown) {
-  return error instanceof Error && (error.name === "AbortError" || /aborted|任务已停止/i.test(error.message));
+function validateReferenceBytes(bytes: Buffer) {
+  if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new Error("封面参考图不能为空，且每张不能超过 10MB。");
+  detectImageFormat(bytes);
 }
 
 function buildCoverPrompt(draft: Draft, extraPrompt: string | undefined, references: DraftCoverReference[]) {
@@ -255,10 +270,4 @@ function mergeReferences(references: DraftCoverReference[]) {
 
 function normalizeImageUrl(url: string) {
   return normalizeRemoteImageUrl(url);
-}
-
-function extensionFromContentType(contentType: string) {
-  if (contentType.includes("png")) return "png";
-  if (contentType.includes("webp")) return "webp";
-  return "jpg";
 }

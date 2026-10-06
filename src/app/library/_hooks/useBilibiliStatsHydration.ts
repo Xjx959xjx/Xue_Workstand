@@ -58,7 +58,7 @@ export function useVideoStatsHydration({
       const failedCount = result.failedCount;
       const succeededCount = result.videos.length - failedCount;
       let refreshError: unknown = null;
-      if (succeededCount > 0) {
+      if (result.videos.some((video) => video.statsHydration?.status !== "failed")) {
         try {
           await refresh();
           await reloadSelectedAccountDetail({ force: true });
@@ -82,7 +82,7 @@ export function useVideoStatsHydration({
         };
         notify({
           tone: succeededCount > 0 ? "warning" : "error",
-          title: `${selectedAccount.platform === "bilibili" ? "B站" : "抖音"}统计补全失败`,
+          title: `${selectedAccount.platform === "bilibili" ? "B站" : "抖音"}统计未完整补全`,
           message: buildHydrationFailureMessage(accountName, succeededCount, failedCount, refreshError),
           durationMs: 10000,
           action: {
@@ -143,7 +143,7 @@ function buildHydrationFailureMessage(
     return `「${accountName}」已补全 ${succeededCount} 条，但刷新页面状态失败${reason ? `：${reason}。` : "。"}可稍后重试。`;
   }
   const prefix = succeededCount > 0
-    ? `「${accountName}」已补全 ${succeededCount} 条，仍有 ${failedCount} 条失败`
+    ? `「${accountName}」已补全 ${succeededCount} 条，仍有 ${failedCount} 条未完整补全`
     : `「${accountName}」互动数据未能补全`;
   return `${prefix}${reason ? `：${reason}。` : "。"}可稍后重试。`;
 }

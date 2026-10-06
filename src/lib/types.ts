@@ -1,6 +1,7 @@
 import type { RadarAnalysis, RadarDailyReport, RadarGrade, RadarRating } from "./hotspot-radar/types";
 import type { ImagePromptAssistInput } from "./image-prompt-assist-types";
 import type { ImageGenerationInput } from "./image-generation-types";
+import type { DraftCoverInput } from "./cover-types";
 export const platforms = ["bilibili", "douyin"] as const;
 
 export type Platform = (typeof platforms)[number];
@@ -402,6 +403,7 @@ export type DraftAssets = {
         status: "completed" | "failed";
         attempts: number;
         error?: string;
+        retryable?: boolean;
       }[];
     };
     items: DraftDanmakuAsset[];
@@ -665,6 +667,8 @@ export type EngagementRecord = {
   platform: Platform | "unknown";
   draftId?: string;
   sourceText: string;
+  sourceDurationSec?: number;
+  sourceSegments?: Array<{ startSec: number; endSec: number; text: string }>;
   options: {
     includeComments: boolean;
     commentCount: number;
@@ -735,7 +739,7 @@ export type GrossMarginPriceOption = {
   name: string;
   unitPrice: number;
   quantityUnit: string;
-  minimumQuantity?: number;
+  minimumQuantity?: number | null;
   note?: string;
   active?: boolean;
   updatedAt: string;
@@ -840,6 +844,8 @@ export type GrossMarginLibrary = {
   accountSourceWarning?: string;
   accountSourceFetchedAt?: string;
   accountSourceRefreshing?: boolean;
+  accountSourceFallback?: boolean;
+  accountSourceFallbackReason?: string;
   monitorRecords: GrossMarginMonitorRecord[];
   monitorProjects: Array<{
     id: string;
@@ -857,6 +863,7 @@ export type GrossMarginCalculationInput = {
 };
 
 export type GrossMarginCalculationResult = {
+  errors?: string[];
   originalPrice: number;
   discountPrice: number;
   maintenanceCost: number;
@@ -1087,6 +1094,7 @@ export type HotspotEvent = {
   risks: string[];
   accounts: string[];
   signalIds: string[];
+  sourceIds?: string[];
 };
 
 export type HotspotBoardStat = {
@@ -1216,6 +1224,7 @@ export type BatchTranscribeResult = {
 export const jobKinds = [
   "image-prompt-assist",
   "image-generation",
+  "image-cover",
   "write-copy",
   "account-style",
   "project-style",
@@ -1257,6 +1266,7 @@ export type JobDataChange = {
 };
 
 export type JobScope = {
+  canvasId?: string;
   targetType?: "account" | "project" | "draft" | "engagement" | "url" | "text" | "hotlist" | "hotspot" | "gross-margin";
   platform?: Platform;
   accountId?: string;
@@ -1268,6 +1278,9 @@ export type JobScope = {
 };
 
 export type JobRecord = {
+  schemaVersion?: number;
+  /** 只在读取时附加；保留不兼容恢复参数的原文件。 */
+  recoveryError?: string;
   id: string;
   kind: JobKind;
   status: JobStatus;
@@ -1300,6 +1313,8 @@ export type JobListItem = Omit<JobRecord, "partialText" | "result"> & {
 };
 
 export type JobListResponse = {
+  readErrors?: string[];
+  recoveryErrors?: Record<string, string>;
   jobs: JobListItem[];
   removedJobIds: string[];
   cursor: string;
@@ -1331,6 +1346,7 @@ export type LibraryTrashOperation = {
 export type JobStartInput =
   | { kind: "image-prompt-assist"; title?: string; inputSummary?: string; href?: string; input: ImagePromptAssistInput }
   | { kind: "image-generation"; title?: string; inputSummary?: string; href?: string; input: ImageGenerationInput }
+  | { kind: "image-cover"; title?: string; inputSummary?: string; href?: string; input: DraftCoverInput }
   | {
       kind: "write-copy";
       title?: string;

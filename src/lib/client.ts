@@ -60,16 +60,19 @@ const draftOverrides = new Map<string, Draft>();
 const deletedDraftIds = new Set<string>();
 let copySourcesCache: { sources: CopySource[] } | null = null;
 let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
+let copySourcesCacheRevision = 0;
 let engagementRecordsCache: { records: EngagementRecordSummary[] } | null = null;
 let engagementRecordsRequest: Promise<{ records: EngagementRecordSummary[] }> | null = null;
 let engagementRecordsCacheRevision = 0;
 const engagementRecordOverrides = new Map<string, EngagementRecord>();
 let grossMarginLibraryCache: GrossMarginLibrary | null = null;
 let grossMarginLibraryRequest: Promise<GrossMarginLibrary> | null = null;
+let grossMarginLibraryRequestFresh = false;
 let grossMarginLibraryCacheRevision = 0;
+let grossMarginLibraryCacheExpiresAt = 0;
 const DEFAULT_DOUYIN_HOTLIST_WINDOW_DAYS = 3;
 const DEFAULT_DOUYIN_HOTLIST_WINDOW = "3d";
-const douyinHotlistCache = new Map<string, DouyinHotlistResponse>();
+const douyinHotlistCache = new Map<string, { snapshot: DouyinHotlistResponse; expiresAt: number }>();
 const douyinHotlistRequests = new Map<string, Promise<DouyinHotlistResponse>>();
 let douyinHotlistCacheRevision = 0;
 let hotspotRadarCache: HotspotRadarResponse | null = null;
@@ -409,8 +412,13 @@ export function engagementSummaryFromRecord(record: EngagementRecord): Engagemen
   };
 }
 
-function rememberGrossMarginLibrary(library: GrossMarginLibrary) {
+function rememberGrossMarginLibrary(library: GrossMarginLibrary, invalidatePending = true) {
+  if (invalidatePending) {
+    grossMarginLibraryCacheRevision += 1;
+    grossMarginLibraryRequest = null;
+  }
   grossMarginLibraryCache = library;
+  grossMarginLibraryCacheExpiresAt = Date.now() + 5 * 60 * 1000;
 }
 
 function getDouyinHotlistWindowDays(windowDays?: number) {
@@ -426,7 +434,7 @@ function getDouyinHotlistWindowKey(input: { windowDays?: number; window?: string
 }
 
 function rememberDouyinHotlist(snapshot: DouyinHotlistResponse) {
-  douyinHotlistCache.set(snapshot.summary.windowKey || getDouyinHotlistWindowKey({ windowDays: snapshot.summary.windowDays }), snapshot);
+  douyinHotlistCache.set(snapshot.summary.windowKey || getDouyinHotlistWindowKey({ windowDays: snapshot.summary.windowDays }), { snapshot, expiresAt: Date.now() + 60_000 });
 }
 
 function resetDouyinHotlistCache(snapshot?: DouyinHotlistResponse) {
@@ -483,21 +491,26 @@ export function getLibraryOverview() {
   return requestJson<LibraryOverviewResponse>("/api/library/overview");
 }
 
-export function getGrossMarginLibrary(options: { fresh?: boolean } = {}) {
-  if (!options.fresh && grossMarginLibraryCache) return Promise.resolve(grossMarginLibraryCache);
-  if (grossMarginLibraryRequest) return grossMarginLibraryRequest;
+export function getGrossMarginLibrary(options: { fresh?: boolean; revalidate?: boolean } = {}): Promise<GrossMarginLibrary> {
+  if (!options.fresh && !options.revalidate && grossMarginLibraryCache && !grossMarginLibraryCache.accountSourceRefreshing && Date.now() < grossMarginLibraryCacheExpiresAt) return Promise.resolve(grossMarginLibraryCache);
+  if (grossMarginLibraryRequest && (!options.fresh || grossMarginLibraryRequestFresh)) return grossMarginLibraryRequest;
+  if (options.fresh) grossMarginLibraryCacheRevision += 1;
 
-  const suffix = options.fresh ? "?refreshAccounts=1" : "";
+  const suffix = options.fresh ? "?refreshAccounts=1" : options.revalidate ? "?cachedAccounts=1" : "";
   const cacheRevision = grossMarginLibraryCacheRevision;
   const request = requestJson<GrossMarginLibrary>(`/api/gross-margin${suffix}`)
     .then((library) => {
-      if (cacheRevision === grossMarginLibraryCacheRevision) rememberGrossMarginLibrary(library);
-      return library;
+      if (cacheRevision === grossMarginLibraryCacheRevision) {
+        rememberGrossMarginLibrary(library, false);
+        return library;
+      }
+      return grossMarginLibraryCache ?? getGrossMarginLibrary();
     })
     .finally(() => {
       if (grossMarginLibraryRequest === request) grossMarginLibraryRequest = null;
     });
   grossMarginLibraryRequest = request;
+  grossMarginLibraryRequestFresh = Boolean(options.fresh);
   return grossMarginLibraryRequest;
 }
 
@@ -508,6 +521,7 @@ export function invalidateGrossMarginLibraryCache() {
 }
 
 export function refreshGrossMarginLibraryCache() {
+  if (grossMarginLibraryRequest) return grossMarginLibraryRequest;
   invalidateGrossMarginLibraryCache();
   return getGrossMarginLibrary();
 }
@@ -742,12 +756,14 @@ export function collectAccount(input: {
 
 export function getDouyinHotlist(input: { force?: boolean; windowDays?: number; window?: string } = {}) {
   const windowKey = getDouyinHotlistWindowKey(input);
+  const inFlight = douyinHotlistRequests.get(windowKey);
+  if (input.force && inFlight) return inFlight;
   if (input.force) resetDouyinHotlistCache();
-  const cached = douyinHotlistCache.get(windowKey);
+  const cached = getCachedDouyinHotlist(input);
   if (cached) return Promise.resolve(cached);
 
-  const inFlight = douyinHotlistRequests.get(windowKey);
-  if (inFlight) return inFlight;
+  const pending = douyinHotlistRequests.get(windowKey);
+  if (pending) return pending;
 
   const params = new URLSearchParams();
   params.set("window", windowKey);
@@ -768,7 +784,11 @@ export function getDouyinHotlist(input: { force?: boolean; windowDays?: number; 
 }
 
 export function getCachedDouyinHotlist(input: { windowDays?: number; window?: string } = {}) {
-  return douyinHotlistCache.get(getDouyinHotlistWindowKey(input)) || null;
+  const key = getDouyinHotlistWindowKey(input);
+  const cached = douyinHotlistCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) return cached.snapshot;
+  douyinHotlistCache.delete(key);
+  return null;
 }
 
 export function getDouyinHotlistRefreshLogs(options: { signal?: AbortSignal } = {}) {
@@ -996,22 +1016,25 @@ export function restoreTranscriptVersion(input: {
   });
 }
 
-export function getCopySources() {
+export function getCopySources(): Promise<{ sources: CopySource[] }> {
   if (copySourcesCache) return Promise.resolve(copySourcesCache);
   if (copySourcesRequest) return copySourcesRequest;
 
-  copySourcesRequest = requestJson<{ sources: CopySource[] }>("/api/copy-sources")
+  const revision = copySourcesCacheRevision;
+  const request = requestJson<{ sources: CopySource[] }>("/api/copy-sources");
+  copySourcesRequest = request;
+  return request
     .then((result) => {
-      copySourcesCache = result;
-      return result;
+      if (revision === copySourcesCacheRevision) copySourcesCache = result;
+      return revision === copySourcesCacheRevision ? result : copySourcesCache || getCopySources();
     })
     .finally(() => {
-      copySourcesRequest = null;
+      if (copySourcesRequest === request) copySourcesRequest = null;
     });
-  return copySourcesRequest;
 }
 
 export function refreshCopySources() {
+  copySourcesCacheRevision += 1;
   copySourcesCache = null;
   copySourcesRequest = null;
   return getCopySources();
@@ -1602,12 +1625,14 @@ export async function streamGenerateDraftCover(
     count: number;
   },
   handlers: {
+    signal?: AbortSignal;
     onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
     onResult?: (result: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] }) => void;
   }
 ) {
-  await readNdjsonStream<
-    | { type: "stage"; stage: string; message: string; progress?: number }
+  try {
+    await readNdjsonStream<
+    | { type: "stage"; stage: string; message: string; progress?: number; jobId?: string }
     | { type: "result"; data: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] } }
     | { type: "error"; message: string }
     | { type: "done" }
@@ -1616,7 +1641,7 @@ export async function streamGenerateDraftCover(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input)
+      body: JSON.stringify(input), signal: handlers.signal
     },
     (event) => {
       if (event.type === "stage") handlers.onStage?.(event);
@@ -1625,7 +1650,10 @@ export async function streamGenerateDraftCover(
         handlers.onResult?.(event.data);
       }
     }
-  );
+    );
+  } finally {
+    invalidateDraftsCache();
+  }
 }
 
 export function draftAssetFileUrl(draftId: string, path: string) {
@@ -1772,6 +1800,8 @@ export function updateWriterPreference(input: { action: "remember"; draftId: str
 let imageRecordsCache: ImageGenerationList | null = null;
 let imageRecordsRequest: Promise<ImageGenerationList> | null = null;
 let imageRecordsRevision = 0;
+const imageListRequests = new Map<string, Promise<ImageGenerationList>>();
+const imageDetailRequests = new Map<string, Promise<{ record: ImageGenerationRecord; references: ImageFile[] }>>();
 export function getCachedImageRecords() {
   return imageRecordsCache;
 }
@@ -1779,10 +1809,20 @@ export function invalidateImageRecordsCache() {
   imageRecordsCache = null;
   imageRecordsRequest = null;
   imageRecordsRevision += 1;
+  imageListRequests.clear();
+  imageDetailRequests.clear();
 }
-export function getImageRecords(offset = 0, canvasId?: string) {
-  if (canvasId) return requestJson<ImageGenerationList>(`/api/images?offset=${offset}&canvasId=${encodeURIComponent(canvasId)}`);
-  if (offset) return requestJson<ImageGenerationList>(`/api/images?offset=${offset}`);
+export function getImageRecords(offset = 0, canvasId?: string, limit = 40) {
+  if (canvasId || offset || limit !== 40) {
+    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (canvasId) params.set("canvasId", canvasId);
+    const url = `/api/images?${params}`;
+    const pending = imageListRequests.get(url);
+    if (pending) return pending;
+    const request = requestJson<ImageGenerationList>(url).finally(() => { if (imageListRequests.get(url) === request) imageListRequests.delete(url); });
+    imageListRequests.set(url, request);
+    return request;
+  }
   if (imageRecordsCache) return Promise.resolve(imageRecordsCache);
   if (imageRecordsRequest) return imageRecordsRequest;
   const revision = imageRecordsRevision;
@@ -1797,7 +1837,11 @@ export function getImageGenerationConfig() {
   return requestJson<ImageGenerationConfig>("/api/images/config");
 }
 export function getImageGenerationRecord(id: string) {
-  return requestJson<{ record: ImageGenerationRecord; references: ImageFile[] }>(`/api/images/${encodeURIComponent(id)}`);
+  const pending = imageDetailRequests.get(id);
+  if (pending) return pending;
+  const request = requestJson<{ record: ImageGenerationRecord; references: ImageFile[] }>(`/api/images/${encodeURIComponent(id)}`).finally(() => { if (imageDetailRequests.get(id) === request) imageDetailRequests.delete(id); });
+  imageDetailRequests.set(id, request);
+  return request;
 }
 export async function uploadImageReferences(files: File[]) {
   const form = new FormData();

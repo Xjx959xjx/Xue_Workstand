@@ -249,12 +249,12 @@ function makeCollectPlan(
   hydrateDetails: boolean;
 } {
   const hasDateFilter = Boolean(fromDate || toDate);
-  const needsLocalMetricSort = order === "likes" || order === "comments";
+  const needsLocalMetricSort = order === "likes" || order === "comments" || order === "favorites";
   return {
-    limit: needsLocalMetricSort ? localSortCandidateLimit(platform, limit) : limit,
+    limit: platform === "bilibili" && hasDateFilter ? BILIBILI_CANDIDATE_LIMIT : needsLocalMetricSort ? localSortCandidateLimit(platform, limit) : limit,
     order: platform === "douyin" ? order : hasDateFilter ? "pubdate" : getCollectionOrder(order),
     pageByPubdate: platform === "bilibili" && hasDateFilter,
-    hydrateDetails: false
+    hydrateDetails: platform === "bilibili" && (order === "comments" || order === "favorites")
   };
 }
 
@@ -318,7 +318,7 @@ function shouldStopPaging(videos: Video[], from: Date | null, to: Date | null) {
   const dated = videos.map((video) => parsePublishedAt(video.publishedAt)).filter((date): date is Date => Boolean(date));
   if (!dated.length) return false;
   const oldest = dated.reduce((min, date) => (date < min ? date : min), dated[0]);
-  if (!from) return Boolean(to && oldest <= to);
+  if (!from) return false;
   const hasCandidateInWindow = !to || dated.some((date) => date <= to);
   return hasCandidateInWindow && oldest < from;
 }

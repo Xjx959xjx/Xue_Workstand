@@ -5,7 +5,8 @@ import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } f
 import { createPortal } from "react-dom";
 import { CheckCircle2, ChevronDown, CircleStop, Clock3, ListTodo, Loader2, RefreshCw, X, XCircle } from "lucide-react";
 import { formatJobErrorMessage } from "@/lib/job-messages";
-import { getJobResultHref } from "@/lib/job-links";
+import { defaultJobHref, getJobResultHref } from "@/lib/job-links";
+import { isActiveJob } from "@/lib/job-sync";
 import type { JobRecord } from "@/lib/types";
 import { useOptionalTasks } from "./TaskProvider";
 import { useDialogInteraction } from "./useDialogInteraction";
@@ -175,6 +176,8 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
                     setStoppingJobId(jobId);
                     try {
                       await tasks.cancelTask(jobId);
+                    } catch {
+                      // TaskProvider 已在任务中心展示停止失败的错误。
                     } finally {
                       setStoppingJobId((current) => (current === jobId ? "" : current));
                     }
@@ -314,8 +317,8 @@ function TaskRow({
       </span>
       <div className="task-center-row-controls">
         <span className="task-center-row-meta">
-          <span>{formatJobStatus(job.status)}</span>
-          {job.status === "running" ? <span>{progress}%</span> : null}
+          <span>{job.recoveryError ? "无法恢复" : formatJobStatus(job.status)}</span>
+          {isActiveJob(job) && job.status === "running" ? <span>{progress}%</span> : null}
         </span>
         {!readOnly && isActiveJob(job) ? (
           <button
@@ -334,7 +337,10 @@ function TaskRow({
             {job.kind === "write-copy" ? "查看文案" : job.resultRef?.label || "查看结果"}
           </Link>
         ) : null}
-        {readOnly && (job.status === "failed" || job.status === "interrupted") && onRetry ? (
+        {readOnly && job.recoveryError ? (
+          <Link className="btn small ghost task-center-row-action" href={defaultJobHref(job.kind)} onClick={onNavigate}>重新发起</Link>
+        ) : null}
+        {readOnly && !job.recoveryError && (job.status === "failed" || job.status === "interrupted") && onRetry ? (
           <button
             aria-busy={retrying}
             className="btn small ghost task-center-row-action"
@@ -346,7 +352,7 @@ function TaskRow({
           </button>
         ) : null}
       </div>
-      {job.status === "running" ? (
+      {isActiveJob(job) && job.status === "running" ? (
         <span className="task-center-row-progress" aria-label={`任务进度 ${job.progress}%`}>
           <span style={{ "--progress-scale": `${progress / 100}` } as CSSProperties} />
         </span>
@@ -356,13 +362,10 @@ function TaskRow({
 }
 
 function taskDetail(job: JobRecord) {
+  if (job.recoveryError) return job.recoveryError;
   if (job.status === "queued") return "等待前面的任务完成后自动开始";
   if (job.status === "failed") return formatJobErrorMessage(job.error || job.message);
   return job.message;
-}
-
-function isActiveJob(job: JobRecord) {
-  return job.status === "queued" || job.status === "running";
 }
 
 function clampProgress(progress: number) {

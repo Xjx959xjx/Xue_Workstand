@@ -110,15 +110,9 @@ export function useWriterReferenceDetails({
         error: errors[key]
       }] : [];
     });
-    const activeStyle = styleCards.map((card) => card.style || "").filter(Boolean).join("\n\n");
-
     return {
-      activeStyle,
       activeStyleLoading: loadingKeys.length > 0,
       activeStyleError: Object.keys(errors).length > 0,
-      activeSubtitle: styleCards.length > 1
-        ? `${styleCards.length} 个风格 · 将分别生成 ${styleCards.length} 篇`
-        : styleCards[0]?.subtitle || "",
       activeTitle: styleCards.length > 1 ? `${styleCards.length} 个并发风格` : styleCards[0]?.title,
       styleCards
     };

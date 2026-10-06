@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
+import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import type {
   GrossMarginPriceOption,
   GrossMarginPriceTable,
@@ -49,9 +50,18 @@ export function GrossMarginPriceTableEditorModal({
   onSave: (items: GrossMarginPriceTableSaveItem[]) => Promise<void>;
 }) {
   const [rows, setRows] = useState<DraftPriceOption[]>(() => table.items.map(makeDraftRow));
+  const initialRowsRef = useRef(rows);
   const [error, setError] = useState("");
   const activeCount = useMemo(() => rows.filter((row) => row.active).length, [rows]);
   const inactiveCount = rows.length - activeCount;
+  const dirty = JSON.stringify(rows) !== JSON.stringify(initialRowsRef.current);
+  useUnsavedChangesGuard(dirty, "单价表还有未保存修改，确定要离开吗？");
+
+  function requestClose() {
+    if (busy) return;
+    if (dirty && !window.confirm("单价表还有未保存修改，确定关闭吗？")) return;
+    onClose();
+  }
 
   function updateRow(rowId: string, patch: Partial<DraftPriceOption>) {
     setError("");
@@ -91,11 +101,12 @@ export function GrossMarginPriceTableEditorModal({
   }
 
   return (
-    <ModalBackdrop onClose={onClose}>
+    <ModalBackdrop disabled={busy} onClose={requestClose}>
       <div
         aria-labelledby="gross-price-editor-title"
         aria-modal="true"
         className="modal-panel gross-price-editor-modal"
+        data-unsaved-changes={dirty ? "true" : undefined}
         role="dialog"
         tabIndex={-1}
       >
@@ -106,13 +117,13 @@ export function GrossMarginPriceTableEditorModal({
               {activeCount} 个启用，{inactiveCount} 个停用。停用项不会出现在新维护录入里。
             </p>
           </div>
-          <button aria-label="关闭平台单价表编辑" className="btn icon-btn icon-only" onClick={onClose} type="button">
+          <button aria-label="关闭平台单价表编辑" className="btn icon-btn icon-only" disabled={busy} onClick={requestClose} type="button">
             <X aria-hidden="true" size={16} />
           </button>
         </header>
 
         <div className="gross-price-editor-toolbar">
-          <button className="btn" onClick={addRow} type="button">
+          <button className="btn" disabled={busy} onClick={addRow} type="button">
             <Plus aria-hidden="true" size={15} />
             新增类型
           </button>
@@ -140,6 +151,7 @@ export function GrossMarginPriceTableEditorModal({
                       <input
                         aria-label={`${row.name || "未命名类型"}是否启用`}
                         checked={row.active}
+                        disabled={busy}
                         type="checkbox"
                         onChange={(event) => updateRow(row.id, { active: event.target.checked })}
                       />
@@ -148,6 +160,7 @@ export function GrossMarginPriceTableEditorModal({
                   <td data-label="维护项">
                     <select
                       aria-label="维护项"
+                      disabled={busy}
                       value={row.service}
                       onChange={(event) => updateRow(row.id, { service: event.target.value as GrossMarginServiceKind })}
                     >
@@ -161,6 +174,7 @@ export function GrossMarginPriceTableEditorModal({
                   <td data-label="类型名">
                     <input
                       aria-label="类型名"
+                      disabled={busy}
                       value={row.name}
                       onChange={(event) => updateRow(row.id, { name: event.target.value })}
                       placeholder="例如 普通千川"
@@ -169,6 +183,7 @@ export function GrossMarginPriceTableEditorModal({
                   <td data-label="单价">
                     <input
                       aria-label="单价"
+                      disabled={busy}
                       inputMode="decimal"
                       min={0}
                       type="number"
@@ -180,6 +195,7 @@ export function GrossMarginPriceTableEditorModal({
                   <td data-label="单位">
                     <input
                       aria-label="数量单位"
+                      disabled={busy}
                       value={row.quantityUnit}
                       onChange={(event) => updateRow(row.id, { quantityUnit: event.target.value })}
                       placeholder="万/千/个"
@@ -188,6 +204,7 @@ export function GrossMarginPriceTableEditorModal({
                   <td data-label="起量">
                     <input
                       aria-label="起量"
+                      disabled={busy}
                       inputMode="decimal"
                       min={0}
                       type="number"
@@ -199,6 +216,7 @@ export function GrossMarginPriceTableEditorModal({
                   <td data-label="备注">
                     <input
                       aria-label="备注"
+                      disabled={busy}
                       value={row.note}
                       onChange={(event) => updateRow(row.id, { note: event.target.value })}
                       placeholder="备注"
@@ -206,7 +224,7 @@ export function GrossMarginPriceTableEditorModal({
                   </td>
                   <td data-label="操作">
                     {row.isNew ? (
-                      <button className="btn compact" onClick={() => removeDraftRow(row.id)} type="button">
+                      <button className="btn compact" disabled={busy} onClick={() => removeDraftRow(row.id)} type="button">
                         移除草稿
                       </button>
                     ) : (
@@ -226,7 +244,7 @@ export function GrossMarginPriceTableEditorModal({
         ) : null}
 
         <footer className="button-row gross-price-editor-actions">
-          <button className="btn" disabled={busy} onClick={onClose} type="button">
+          <button className="btn" disabled={busy} onClick={requestClose} type="button">
             取消
           </button>
           <button aria-busy={busy} className="btn primary" disabled={busy} onClick={() => void submit()} type="button">
@@ -260,7 +278,7 @@ function normalizeDraftRows(rows: DraftPriceOption[]): GrossMarginPriceTableSave
     const quantityUnit = row.quantityUnit.trim();
     if (!quantityUnit) throw new Error(`第 ${index + 1} 行缺少数量单位`);
     const unitPrice = Number(row.unitPrice);
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new Error(`第 ${index + 1} 行单价格式不正确`);
+    if (!row.unitPrice.trim() || !Number.isFinite(unitPrice) || unitPrice < 0 || unitPrice > 100_000_000) throw new Error(`第 ${index + 1} 行单价必须是 0 到 1 亿之间的有效数字`);
     const minimumQuantity = row.minimumQuantity.trim() ? Number(row.minimumQuantity) : undefined;
     if (minimumQuantity !== undefined && (!Number.isFinite(minimumQuantity) || minimumQuantity <= 0)) {
       throw new Error(`第 ${index + 1} 行起量必须大于 0`);

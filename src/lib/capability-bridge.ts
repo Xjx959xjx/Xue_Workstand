@@ -1,7 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
-import { promises as dns } from "dns";
 import { promises as fs } from "fs";
-import { isIP } from "net";
+import { assertPublicHttpUrl } from "./public-http-url";
 import { z } from "zod";
 import { publishFeishuDocument, fetchFeishuSupportDocuments } from "./feishu";
 import { analyzeCopySourceMaterial } from "./material-analysis";
@@ -153,6 +152,9 @@ export function formatCapabilityBridgeError(error: unknown) {
   }
   if (error instanceof z.ZodError) {
     return { status: 400, error: "远程能力请求参数不正确。" };
+  }
+  if (error instanceof Error && "statusCode" in error && error.statusCode === 400) {
+    return { status: 400, error: sanitizeBridgeError(error.message) };
   }
   const message = error instanceof Error ? error.message : "远程能力执行失败";
   return { status: 500, error: sanitizeBridgeError(message) || "远程能力执行失败" };
@@ -390,38 +392,6 @@ async function pruneExpiredAssets() {
   const now = Date.now();
   const expired = [...assets.values()].filter((asset) => asset.expiresAt <= now);
   await Promise.all(expired.map(cleanupCapabilityBridgeAsset));
-}
-
-async function assertPublicHttpUrl(value: string) {
-  const parsed = new URL(value);
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new CapabilityBridgeError("远程媒体只支持 HTTP/HTTPS 链接。", 400);
-  }
-  const host = parsed.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
-    throw new CapabilityBridgeError("远程媒体不能指向本机或内网地址。", 400);
-  }
-  const addresses = isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
-    throw new CapabilityBridgeError("远程媒体不能指向本机或内网地址。", 400);
-  }
-}
-
-function isPrivateAddress(address: string) {
-  const normalized = address.toLowerCase();
-  if (normalized.startsWith("::ffff:")) return isPrivateAddress(normalized.slice(7));
-  if (isIP(normalized) === 4) {
-    const [a, b] = normalized.split(".").map(Number);
-    return a === 0 || a === 10 || a === 127 || a >= 224 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168);
-  }
-  if (isIP(normalized) === 6) {
-    return normalized === "::" || normalized === "::1" || /^(?:fc|fd)/.test(normalized) || /^fe[89ab]/.test(normalized);
-  }
-  return true;
 }
 
 function sanitizeBridgeError(value: string) {

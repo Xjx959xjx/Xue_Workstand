@@ -57,8 +57,15 @@ test("TrendRadar 按窗口跨日只读，最新记录去重，保留 RSS 与热�
     assert.equal(history.items.find(item => item.url.endsWith('/yesterday'))?.isNew, false);
     const short = await getTrendRadarFeed(undefined, root, { ...options, maxAgeHours: 6 });
     assert.equal(short.items.some(item => item.url.endsWith('/yesterday')), false);
-    // 新日期的损坏库必须显式失败，不能静默返回空或旧数据。
+    // 损坏库诊断可见，健康库和启用的类型仍可读。
     await writeFile(path.join(root, "news", "2026-01-02.db"), "corrupt");
-    await assert.rejects(getTrendRadarFeed(undefined, root, { ...options, now: Date.parse("2026-01-02T12:00:00+08:00") }), /数据库失败/);
+    const partial = await getTrendRadarFeed(undefined, root, { ...options, now: Date.parse("2026-01-02T12:00:00+08:00") });
+    assert.equal(partial.available, true);
+    assert.ok(partial.items.some(item => item.kind === "rss"));
+    assert.ok(partial.warnings.some(item => item.includes("数据库失败")));
+    const rssOnly = await getTrendRadarFeed(undefined, root, { ...options, kinds: ["rss"] });
+    assert.equal(rssOnly.items.length, 1);
+    assert.deepEqual(rssOnly.missing, []);
+    assert.deepEqual(rssOnly.warnings, []);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

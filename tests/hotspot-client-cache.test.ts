@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getCachedHotspotRadar, getHotspotRadar, invalidateHotspotRadarCache, saveHotspotFeedback } from "../src/lib/client";
+import { getCachedHotspotRadar, getHotspotRadar, invalidateHotspotRadarCache, saveHotspotFeedback, getDouyinHotlist, getCachedDouyinHotlist, invalidateDouyinHotlistCache } from "../src/lib/client";
 
 test("热点快照去重、复用与失效；旧请求不能恢复过期缓存", async () => {
   const previousFetch = globalThis.fetch;
@@ -54,5 +54,31 @@ test("热点评分返回的最新快照直接复用，读取失败仍可重试",
   } finally {
     invalidateHotspotRadarCache();
     globalThis.fetch = previousFetch;
+  }
+});
+
+test("热榜窗口缓存随时间过期，重读本地列表并合并并发请求", async () => {
+  const previousFetch = globalThis.fetch, previousNow = Date.now;
+  let now = previousNow(), requests = 0;
+  invalidateDouyinHotlistCache();
+  try {
+    Date.now = () => now;
+    globalThis.fetch = async (url, options) => {
+      assert.match(String(url), /\/api\/douyin-hotlist\?window=3h/);
+      assert.notEqual(options?.method, "POST");
+      requests++;
+      return Response.json({ items: [], summary: { windowKey: "3h", windowDays: 1 } });
+    };
+    await getDouyinHotlist({ window: "3h" });
+    assert.ok(getCachedDouyinHotlist({ window: "3h" }));
+    await getDouyinHotlist({ window: "3h" });
+    assert.equal(requests, 1);
+    now += 60_001;
+    assert.equal(getCachedDouyinHotlist({ window: "3h" }), null);
+    await Promise.all([getDouyinHotlist({ window: "3h" }), getDouyinHotlist({ window: "3h" })]);
+    assert.equal(requests, 2);
+  } finally {
+    Date.now = previousNow; globalThis.fetch = previousFetch;
+    invalidateDouyinHotlistCache();
   }
 });

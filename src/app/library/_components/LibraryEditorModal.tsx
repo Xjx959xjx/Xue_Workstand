@@ -2,6 +2,7 @@
 
 import { memo, type ReactNode, type RefObject } from "react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
+import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 
 type LibraryEditorModalProps = {
   children: ReactNode;
@@ -10,6 +11,7 @@ type LibraryEditorModalProps = {
   panelClassName?: string;
   panelRef: RefObject<HTMLDivElement | null>;
   unsavedChanges?: boolean;
+  disabled?: boolean;
 };
 
 export const LibraryEditorModal = memo(function LibraryEditorModal({
@@ -18,10 +20,12 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
   onClose,
   panelClassName = "",
   panelRef,
-  unsavedChanges = false
+  unsavedChanges = false,
+  disabled = false
 }: LibraryEditorModalProps) {
+  useUnsavedChangesGuard(unsavedChanges, "编辑器还有未保存修改，确定要离开吗？");
   return (
-    <ModalBackdrop onClose={onClose}>
+    <ModalBackdrop disabled={disabled} onClose={onClose}>
       <div
         aria-labelledby={labelledBy}
         aria-modal="true"

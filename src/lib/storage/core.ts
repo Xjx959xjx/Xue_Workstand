@@ -8,7 +8,7 @@ export function libraryRoot() {
 export function normalizeStorageSegment(value: string, label: string) {
   const normalized = value.trim();
   if (!normalized || normalized === "." || normalized.includes("..") || normalized !== safeSegment(normalized)) {
-    throw new Error(`${label} 不合法`);
+    throw Object.assign(new Error(`${label} 不合法`), { status: 400 });
   }
   return normalized;
 }

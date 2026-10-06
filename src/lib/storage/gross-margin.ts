@@ -1,7 +1,6 @@
 import path from "path";
 import {
   GrossMarginAccountPrice,
-  GrossMarginCategory,
   GrossMarginLibrary,
   GrossMarginMonitorMetric,
   GrossMarginMonitorPlaySample,
@@ -11,8 +10,7 @@ import {
   GrossMarginPriceTable,
   GrossMarginPriceTableSaveItem,
   GrossMarginReviewTemplate,
-  GrossMarginServiceKind,
-  GrossMarginTier
+  GrossMarginServiceKind
 } from "../types";
 import {
   getDefaultGrossMarginReviewTemplate,
@@ -24,6 +22,7 @@ import { fileExists, readJsonFile, storageFs as fs, writeJsonFile } from "./fs";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { runRecoverableLibraryMutation } from "./transactions";
 import { resolveGrossMarginAccounts } from "../wecom-account-source";
+import { parseStoredRecord, storedRecordKind, versionStoredRecord } from "./schemas";
 
 const grossMarginTablePlatforms = ["douyin", "bilibili"] as const;
 const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"] as const;
@@ -46,10 +45,6 @@ function grossMarginMonitorRecordJsonPath(id: string) {
   return path.join(grossMarginMonitorRecordsPath(), id + ".json");
 }
 
-function grossMarginCategoryJsonPath(id: string) {
-  return path.join(grossMarginCategoriesPath(), id + ".json");
-}
-
 function grossMarginPriceTablePath(platform: GrossMarginPriceTable["platform"]) {
   return path.join(grossMarginPath(), platform + ".json");
 }
@@ -64,14 +59,6 @@ function grossMarginAccountsPath() {
 
 function grossMarginWecomAccountsCachePath() {
   return path.join(grossMarginPath(), "accounts.wecom-cache.json");
-}
-
-function normalizeGrossMarginCategoryId(categoryId: string) {
-  return normalizeStorageSegment(categoryId, "毛利类目 ID");
-}
-
-function normalizeGrossMarginTierId(tierId: string) {
-  return normalizeStorageSegment(tierId, "毛利档位 ID");
 }
 
 function normalizeGrossMarginMonitorRecordId(recordId: string) {
@@ -119,14 +106,22 @@ async function exists(target: string) {
 }
 
 async function readJson<T>(target: string): Promise<T | null> {
-  return readJsonFile<T>(target);
+  const value = await readJsonFile<unknown>(target);
+  if (value === null) return null;
+  const kind = storedRecordKind(target, libraryRoot());
+  if (!kind) throw new Error(`毛利存储路径缺少校验规则：${target}`);
+  return parseStoredRecord<T>(target, value, kind);
 }
 
 async function writeJson(target: string, value: unknown) {
-  return writeJsonFile(target, value);
+  const kind = storedRecordKind(target, libraryRoot());
+  if (!kind) throw new Error(`毛利存储路径缺少校验规则：${target}`);
+  const versioned = versionStoredRecord(value);
+  parseStoredRecord(target, versioned, kind);
+  return writeJsonFile(target, versioned);
 }
 
-export async function getGrossMarginLibrary(options: { refreshAccounts?: boolean } = {}): Promise<GrossMarginLibrary> {
+export async function getGrossMarginLibrary(options: { refreshAccounts?: boolean; cachedAccountsOnly?: boolean } = {}): Promise<GrossMarginLibrary> {
   await ensureGrossMarginDirs();
   const tables = await Promise.all(
     grossMarginTablePlatforms.map(async (platform) => {
@@ -143,6 +138,7 @@ export async function getGrossMarginLibrary(options: { refreshAccounts?: boolean
   const accountSource = await resolveGrossMarginAccounts(localAccounts || [], {
     persisted: persistedAccountSource,
     refresh: options.refreshAccounts,
+    cachedOnly: options.cachedAccountsOnly,
     onFresh: (result) => writeJson(grossMarginWecomAccountsCachePath(), result)
   });
 
@@ -155,6 +151,8 @@ export async function getGrossMarginLibrary(options: { refreshAccounts?: boolean
     accountSourceWarning: accountSource.warning,
     accountSourceFetchedAt: accountSource.fetchedAt,
     accountSourceRefreshing: accountSource.refreshing,
+    accountSourceFallback: accountSource.fallback,
+    accountSourceFallbackReason: accountSource.fallbackReason,
     monitorRecords,
     monitorProjects: buildGrossMarginMonitorProjects(monitorRecords)
   };
@@ -171,7 +169,7 @@ export async function getGrossMarginReviewTemplate(
 
 export async function getGrossMarginMonitorRecords() {
   await ensureGrossMarginDirs();
-  const files = await fs.readdir(grossMarginMonitorRecordsPath()).catch(() => []);
+  const files = await fs.readdir(grossMarginMonitorRecordsPath());
   const records = (
     await Promise.all(
       files
@@ -259,7 +257,8 @@ export async function saveGrossMarginMonitorRecord(record: GrossMarginMonitorRec
 
 export async function updateGrossMarginMonitorRecord(
   recordId: string,
-  update: (current: GrossMarginMonitorRecord) => GrossMarginMonitorRecord | Promise<GrossMarginMonitorRecord>
+  update: (current: GrossMarginMonitorRecord) => GrossMarginMonitorRecord | Promise<GrossMarginMonitorRecord>,
+  expectedRevision?: number
 ) {
   await ensureGrossMarginDirs();
   const id = normalizeGrossMarginMonitorRecordId(recordId);
@@ -267,6 +266,9 @@ export async function updateGrossMarginMonitorRecord(
     const currentRaw = await readJson<GrossMarginMonitorRecord>(grossMarginMonitorRecordJsonPath(id));
     if (!currentRaw) throw new Error(`找不到维护监控记录：${id}`);
     const current = normalizeGrossMarginMonitorRecord(currentRaw);
+    if (expectedRevision !== undefined && expectedRevision !== current.revision) {
+      throw createGrossMarginRevisionConflictError(id);
+    }
     const updated = await update(current);
     const normalized = normalizeGrossMarginMonitorRecord({
       ...updated,
@@ -366,128 +368,6 @@ export async function resetGrossMarginReviewTemplate(platformInput: GrossMarginP
   return normalizeGrossMarginReviewTemplate(platform, null);
 }
 
-export async function upsertGrossMarginCategory(input: {
-  categoryId?: string;
-  name: string;
-  description?: string;
-}) {
-  await ensureGrossMarginDirs();
-  const now = nowIso();
-  const fallbackId = safeSegment(input.name, shortHash(input.name));
-  const existing = input.categoryId
-    ? await resolveGrossMarginCategory(input.categoryId)
-    : await readJson<GrossMarginCategory>(grossMarginCategoryJsonPath(fallbackId));
-  const id = existing?.id ?? normalizeGrossMarginCategoryId(fallbackId);
-  const category: GrossMarginCategory = {
-    id,
-    name: input.name.trim() || existing?.name || "未命名类目",
-    description: input.description?.trim() || undefined,
-    tiers: existing?.tiers || [],
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now
-  };
-
-  await writeJson(grossMarginCategoryJsonPath(id), normalizeGrossMarginCategory(category));
-  return normalizeGrossMarginCategory(category);
-}
-
-export async function deleteGrossMarginCategories(categoryIds: string[]) {
-  await ensureGrossMarginDirs();
-  const uniqueIds = [...new Set(categoryIds)].filter(Boolean).map(normalizeGrossMarginCategoryId);
-  const deleted: string[] = [];
-
-  for (const categoryId of uniqueIds) {
-    const target = grossMarginCategoryJsonPath(categoryId);
-    if (!(await exists(target))) continue;
-    await fs.rm(target, { force: true });
-    deleted.push(categoryId);
-  }
-
-  return { deleted };
-}
-
-export async function upsertGrossMarginTier(input: {
-  categoryId: string;
-  tierId?: string;
-  name: string;
-  originalPrice: number;
-  maintenanceCost: number;
-  note?: string;
-}) {
-  await ensureGrossMarginDirs();
-  const now = nowIso();
-  const category = await resolveGrossMarginCategory(input.categoryId);
-  const existingTier = input.tierId
-    ? category.tiers.find((tier) => tier.id === normalizeGrossMarginTierId(input.tierId!))
-    : undefined;
-  if (input.tierId && !existingTier) {
-    throw new Error(`找不到毛利档位：${input.tierId}`);
-  }
-  const id = existingTier?.id ?? safeSegment(`${input.name}-${shortHash(`${input.name}-${now}`)}`);
-  const tier: GrossMarginTier = {
-    id,
-    name: input.name.trim() || existingTier?.name || "未命名档位",
-    originalPrice: normalizeMoney(input.originalPrice),
-    maintenanceCost: normalizeMoney(input.maintenanceCost),
-    note: input.note?.trim() || undefined,
-    createdAt: existingTier?.createdAt ?? now,
-    updatedAt: now
-  };
-  const tiers = category.tiers.filter((item) => item.id !== id);
-  const updated = normalizeGrossMarginCategory({
-    ...category,
-    tiers: [...tiers, tier],
-    updatedAt: now
-  });
-
-  await writeJson(grossMarginCategoryJsonPath(category.id), updated);
-  return { category: updated, tier };
-}
-
-export async function deleteGrossMarginTier(categoryId: string, tierId: string) {
-  await ensureGrossMarginDirs();
-  const category = await resolveGrossMarginCategory(categoryId);
-  const normalizedTierId = normalizeGrossMarginTierId(tierId);
-  const tiers = category.tiers.filter((tier) => tier.id !== normalizedTierId);
-  if (tiers.length === category.tiers.length) {
-    throw new Error(`找不到毛利档位：${normalizedTierId}`);
-  }
-
-  const updated = normalizeGrossMarginCategory({
-    ...category,
-    tiers,
-    updatedAt: nowIso()
-  });
-  await writeJson(grossMarginCategoryJsonPath(category.id), updated);
-  return { category: updated, deleted: normalizedTierId };
-}
-
-async function resolveGrossMarginCategory(categoryId: string) {
-  const id = normalizeGrossMarginCategoryId(categoryId);
-  const category = await readJson<GrossMarginCategory>(grossMarginCategoryJsonPath(id));
-  if (!category) {
-    throw new Error(`找不到毛利类目：${id}`);
-  }
-  return normalizeGrossMarginCategory(category);
-}
-
-function normalizeGrossMarginCategory(category: GrossMarginCategory): GrossMarginCategory {
-  return {
-    ...category,
-    description: category.description?.trim() || undefined,
-    tiers: (category.tiers || [])
-      .map((tier) => ({
-        ...tier,
-        originalPrice: normalizeMoney(tier.originalPrice),
-        maintenanceCost: normalizeMoney(tier.maintenanceCost),
-        note: tier.note?.trim() || undefined
-      }))
-      .sort((a, b) => {
-        if (a.originalPrice !== b.originalPrice) return a.originalPrice - b.originalPrice;
-        return +new Date(a.createdAt) - +new Date(b.createdAt);
-      })
-  };
-}
 
 function normalizeGrossMarginPriceTable(
   platform: GrossMarginPriceTable["platform"],
@@ -510,7 +390,7 @@ function normalizeGrossMarginPriceTable(
       name: legacyName || formatGrossMarginServiceName(service),
       unitPrice: normalizeGrossMarginUnitPrice(item.unitPrice),
       quantityUnit: normalizeGrossMarginQuantityUnit(item.quantityUnit),
-      minimumQuantity: normalizeGrossMarginMinimumQuantity(item.minimumQuantity) ?? defaultItem?.minimumQuantity,
+      minimumQuantity: item.minimumQuantity === null ? null : normalizeGrossMarginMinimumQuantity(item.minimumQuantity) ?? defaultItem?.minimumQuantity,
       note: normalizeLegacyGrossMarginOptionNote(platform, id, item.note) || undefined,
       active: item.active ?? defaultItem?.active ?? true,
       updatedAt: item.updatedAt || now
@@ -580,7 +460,7 @@ function normalizeGrossMarginAccounts(accounts?: GrossMarginAccountPrice[] | nul
         name,
         defaultPrice: normalizeMoney(account.defaultPrice),
         priceLabel: account.priceLabel?.trim() || (platform === "douyin" ? "20-60秒报价" : "定制报价"),
-        secondaryPrice: account.secondaryPrice ? normalizeMoney(account.secondaryPrice) : undefined,
+        secondaryPrice: account.secondaryPrice !== undefined ? normalizeMoney(account.secondaryPrice) : undefined,
         secondaryPriceLabel: account.secondaryPriceLabel?.trim() || undefined,
         douyinId: account.douyinId?.trim() || undefined,
         cooperationCode: account.cooperationCode?.trim() || undefined,
@@ -787,15 +667,16 @@ function normalizeGrossMarginTargetStats(
 function normalizeGrossMarginCurrentStats(stats: Partial<Record<GrossMarginServiceKind, number>> | undefined) {
   const normalized: Partial<Record<GrossMarginServiceKind, number>> = {};
   for (const service of grossMarginServices) {
-    if (!(service in (stats || {}))) continue;
+    if (stats?.[service] === undefined) continue;
     normalized[service] = normalizeGrossMarginMetricValue(stats?.[service]);
   }
   return normalized;
 }
 
 function normalizeGrossMarginMetricValue(value: number | undefined) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.round(Number(value)));
+  if (value === undefined) return 0;
+  if (!Number.isFinite(value) || value < 0) throw new Error("监控指标必须是有效的非负数字");
+  return Math.round(value);
 }
 
 function buildGrossMarginMonitorMetrics(
@@ -1089,19 +970,24 @@ function formatGrossMarginServiceName(service: GrossMarginServiceKind) {
 }
 
 function normalizeMoney(value: number) {
-  return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+  if (!Number.isFinite(value) || value < 0) throw new Error("报价必须是有效的非负数字");
+  return Number(value.toFixed(2));
 }
 
 function normalizeGrossMarginUnitPrice(value: number) {
-  return Number.isFinite(value) ? Number(value.toFixed(6)) : 0;
+  if (!Number.isFinite(value) || value < 0) throw new Error("单价必须是有效的非负数字");
+  return Number(value.toFixed(6));
 }
 
 function normalizeGrossMarginQuantityUnit(value: string | undefined) {
-  return value?.trim() || "个";
+  const unit = value?.trim() || "个";
+  if (!["万", "千", "个", "元"].includes(unit)) throw new Error("数量单位只支持万、千、个或元");
+  return unit;
 }
 
-function normalizeGrossMarginMinimumQuantity(value: number | undefined) {
-  if (!Number.isFinite(value)) return undefined;
+function normalizeGrossMarginMinimumQuantity(value: number | null | undefined) {
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isFinite(value) || value < 0) throw new Error("起量必须是有效的非负数字");
   const safeValue = Number(value);
   if (safeValue <= 0) return undefined;
   return Number(safeValue.toFixed(6));
@@ -1112,6 +998,6 @@ function normalizeIncomingGrossMarginMinimumQuantity(
   currentItem?: GrossMarginPriceOption
 ) {
   if (!("minimumQuantity" in incoming)) return currentItem?.minimumQuantity;
-  if (incoming.minimumQuantity === null) return undefined;
+  if (incoming.minimumQuantity === null) return null;
   return normalizeGrossMarginMinimumQuantity(incoming.minimumQuantity ?? undefined);
 }

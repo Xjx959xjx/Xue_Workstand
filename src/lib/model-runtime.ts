@@ -231,7 +231,9 @@ export function getConfiguredWebResearchConfigs() {
   const dedicated = getWebResearchConfig();
   const configs = [
     ...(isWebResearchConfigConfigured(dedicated) ? [dedicated] : []),
-    ...getConfiguredChatConfigs().filter((config) => config.wireApi !== "chat_completions")
+    ...getConfiguredChatConfigs().filter((config) =>
+      config.wireApi === "responses" || Boolean(config.responsesUrl)
+    )
   ];
   return configs.filter(
     (config, index) => index === configs.findIndex((candidate) => sameChatRuntimeConfig(candidate, config))
@@ -241,7 +243,9 @@ export function getConfiguredWebResearchConfigs() {
 export function getWebResearchRuntimeConfig(): WebResearchRuntimePublicConfig {
   const dedicated = getWebResearchConfig();
   const dedicatedConfigured = isWebResearchConfigConfigured(dedicated);
-  const chatResponses = getConfiguredChatConfigs().find((config) => config.wireApi !== "chat_completions");
+  const chatResponses = getConfiguredChatConfigs().find((config) =>
+    config.wireApi === "responses" || Boolean(config.responsesUrl)
+  );
   const active = dedicatedConfigured ? dedicated : chatResponses || dedicated;
 
   return {

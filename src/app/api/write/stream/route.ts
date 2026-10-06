@@ -12,13 +12,13 @@ import { apiError, parseJsonBody } from "@/lib/api-route";
 import { hasSupportDocumentReference } from "@/lib/support-documents";
 import { extractRewriteSourceMaterial, splitWriterSourceInput } from "@/lib/source-extraction";
 import { createNdjsonStream } from "@/lib/streaming";
-import { writeCopyInputSchema } from "@/lib/write-validation";
+import { directWriteCopyInputSchema } from "@/lib/write-validation";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const input = await parseJsonBody(request, writeCopyInputSchema);
+    const input = await parseJsonBody(request, directWriteCopyInputSchema);
 
     const stream = createNdjsonStream(async (emit, signal) => {
       const isRevision = input.action === "revise";

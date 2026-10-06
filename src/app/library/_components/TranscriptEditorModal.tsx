@@ -31,10 +31,12 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
   const [selectedVersionId, setSelectedVersionId] = useState(versions[0]?.id || "");
   const initialTranscriptRef = useRef(activeTranscript);
   const dirty = activeTranscript !== initialTranscriptRef.current;
+  const disabled = restoring || busy === "save-transcript";
   const handleClose = useCallback(() => {
+    if (disabled) return;
     if (dirty && !window.confirm("转写稿还有未保存修改，确定关闭吗？")) return;
     onClose();
-  }, [dirty, onClose]);
+  }, [disabled, dirty, onClose]);
 
   useEffect(() => {
     if (!versions.some((version) => version.id === selectedVersionId)) {
@@ -48,17 +50,19 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
       panelClassName="transcript-editor-modal"
       panelRef={panelRef}
       unsavedChanges={dirty}
+      disabled={disabled}
       onClose={handleClose}
     >
       <div className="modal-header">
         <h2 id="library-transcript-modal-title">转写稿全文</h2>
-        <button className="btn" onClick={handleClose} type="button">
+        <button className="btn" disabled={disabled} onClick={handleClose} type="button">
           关闭
         </button>
       </div>
       <div className="modal-editor">
         <textarea
           aria-label="转写稿全文"
+          disabled={disabled}
           autoComplete="off"
           name="transcript"
           value={activeTranscript}

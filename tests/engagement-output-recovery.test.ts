@@ -14,6 +14,8 @@ test("完整的逐行 JSON 字符串也可恢复为评论，不把说明或损�
     assert.deepEqual(parseStringArray(text), values);
   }
   assert.deepEqual(parseStringArray('"只剩一条也能补齐"'), ["只剩一条也能补齐"]);
+  assert.deepEqual(parseStringArray(JSON.stringify(["第一槽", "第一槽", "", 42, "第五槽"]), { preservePositions: true }), ["第一槽", "第一槽", "", "", "第五槽"]);
+  assert.deepEqual(parseStringArray('"第一槽"\n"第二槽"', { preservePositions: true }), []);
   assert.deepEqual(parseStringArray('1. 第一条评论\n2. 第二条评论\n3. 第三条评论'), ["第一条评论", "第二条评论", "第三条评论"]);
   for (const text of ["模型异常", '说明内容\n"不能误当成完整列表"', '"一条完整的"\n"第二条没有闭合', '["数组没有结束"', "[]"]) {
     assert.deepEqual(parseStringArray(text), []);

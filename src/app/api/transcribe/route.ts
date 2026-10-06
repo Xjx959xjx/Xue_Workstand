@@ -10,7 +10,7 @@ const schema = z.object({
   platform: z.enum(platforms),
   accountId: z.string().min(1),
   videoId: z.string().min(1),
-  mediaUrl: z.preprocess(createUrlPreprocessor(), z.string().url()).optional(),
+  mediaUrl: z.preprocess(createUrlPreprocessor(), z.string().url().refine((value) => /^https?:\/\//i.test(value), "媒体链接只支持 HTTP/HTTPS")).optional(),
   allowRemoteDownload: z.boolean().optional()
 });
 

@@ -2,39 +2,22 @@
 
 ## 适用范围与规则级别
 
-本文件是仓库根目录的全局 Agent 指南；子目录若有更近的 `AGENTS.md`，以更近者为准。
-
-项目是本地内容运营工作台，核心数据位于 `STYLE_LIBRARY_DIR` 或 `./style-library`。账号、项目、转写稿、草稿、评论 / 弹幕、封面和毛利数据都可能是不可重建的用户资产。
+本文件适用于仓库根目录；子目录有 `AGENTS.md` 时以更近者为准。项目数据位于 `STYLE_LIBRARY_DIR` 或 `./style-library`，其中账号、项目、转写稿、草稿、互动记录、封面和毛利数据可能无法重建。
 
 - **MUST**：数据安全、兼容性和交付边界，必须遵守。
 - **SHOULD**：默认工程方式；有充分理由可以调整，但要说明影响并验证。
-- **REFERENCE**：产品与实现背景，以对应文档和源码为准，不在本文件复制易变细节。
+- **REFERENCE**：易变的产品和实现细节以文档、源码为准。
 
 ## 沟通
 
-- 默认中文回复，称用户为“老大！”，保持短、准、可执行；少量口语和 emoji 可以，但不影响专业判断。
-- 解释复杂架构、排障或验证结果后，追加一小段 `白话版：`。
-- 先给结论和风险，再说明方案；不要把格式偏好写进正式文档、代码注释、错误信息或提交信息。
+- 默认中文回复，称用户为“老大！”，先给结论和风险，保持简短、可执行。解释复杂问题后追加一小段 `白话版：`；不要把回复格式要求写进文档、代码或提交信息。
 
 ## 接手与上下文
 
-涉及仓库操作时先运行 `git status --short` 检查工作树。仅在需要定位文件时，按目标目录或文件类型运行 `rg --files`；已知目标文件时直接读取相关片段。
-
-### MUST
+涉及仓库操作时先运行 `git status --short`。需要定位文件时按目标范围运行 `rg --files`；已知文件则直接读取相关片段。
 
 - 工作树经常包含用户或其他 Agent 的未提交改动。不得回滚、覆盖、重排或格式化无关改动；必须触碰已有改动文件时，先读 diff 再叠加。
-- 只读取当前任务需要的上下文，不要机械展开整个目录或固定通读大型聚合文件。
-
-### SHOULD：按任务路由读取
-
-- 产品与运行：`README.md`、`PRODUCT.md`、`.env.example`。
-- UI 与交互：`DESIGN.md`、目标页面 / 组件 / hook、对应 CSS 和 `src/app/styles/00-tokens.css`。
-- API：目标 `route.ts`、`src/lib/api-route.ts`、相关类型和 `src/lib/client.ts` 中对应片段。
-- 存储：目标存储函数、`src/lib/storage/core.ts`、`fs.ts`、`schemas.ts`，必要时再读 `src/lib/storage.ts` 对应片段。
-- 任务 / 流式：`src/lib/jobs.ts`、`src/lib/job-sync.ts`、`src/lib/streaming.ts` 及目标调用链。
-- 打包 / 远程：目标 `scripts/*.mjs`、README 对应章节和相关环境变量。
-
-用 `rg` 精确定位后读片段。中等以上改动先明确根因、影响文件、热修或结构修、方案和验证。
+- 只读取当前任务需要的上下文。用 `rg` 定位目标调用链后，按需查看 `README.md`、`DESIGN.md`、目标页面 / API、对应的 `src/lib` 模块和测试；不要固定通读大型文件。中等以上改动先明确根因、影响范围、方案和验证。
 
 ## MUST：数据与文件安全
 
@@ -42,7 +25,7 @@
 - 删除账号、视频、项目、素材或草稿必须走现有可恢复删除 / 事务机制，并保持跨引用同步；不得绕过锁、直接递归删除业务目录。
 - JSON、文本和二进制写入复用 `writeJsonFile`、`writeTextFileAtomic`、`writeFileAtomic` 或现有事务封装，保持临时文件 + `rename` 的原子落盘。
 - 所有路径段经过 `normalizeStorageSegment` 或现有 normalize 函数；不得把 URL、标题或用户输入直接拼进路径。
-- 持久化记录保留 `schemaVersion`，读取经过 `src/lib/storage/schemas.ts` 运行时校验。缺失文件可返回空状态；损坏 JSON、路径越界和写入失败必须显式报错。
+- 持久化记录保留 `schemaVersion`，读取经过 `src/lib/storage/schemas.ts` 运行时校验。仅允许首次初始化的可选文件缺失时返回空状态；已有记录或必需文件丢失、损坏 JSON、路径越界和写入失败必须显式报错。
 - 转写覆盖与恢复必须使用 per-video 串行锁和 revision 校验，并保留 `transcripts/.history/<video-id>/` 历史；冲突返回 409，不得覆盖并发编辑。
 - 草稿资产更新走 `updateDraftAssets()` / `withDraftAssetsLock()`；watchlist、身份映射和其他共享文件复用已有串行锁。
 - `npm run check:library:repair` 只在用户明确同意后对真实素材库执行；修复前必须备份，不能自动处理无法安全推导的问题。
@@ -61,11 +44,9 @@
 ## MUST：API 与客户端契约
 
 - 涉及文件系统、环境变量、外部 CLI 或模型的路由使用 Node.js runtime。
-- API 路由优先复用 `apiJson()`、`apiError()`、`parseJsonBody()` 和 `zod` schema，保持 400 校验错误与中文提示。
+- API 路由复用 `apiJson()`、`apiError()`、`parseJsonBody()` 和 `zod` schema，保持 400 校验错误与中文提示。
 - NDJSON 复用 `createNdjsonStream()` / `readNdjsonStream()`，保持 `stage`、`delta`、`result`、`error`、`done` 语义，并传递请求取消信号。
-- 列表 API 只返回摘要类型；正文、research、评论、弹幕和资产等重字段按 ID 懒加载。
-- 新增或修改前端可见 API 时，同步类型、`src/lib/client.ts` 对应客户端函数、缓存失效、页面状态和错误展示。
-- 不引入第二套存储、校验、任务、请求缓存或 fallback 系统；先扩展已有抽象。
+- 修改前端可见 API 时，同步类型、`src/lib/client.ts`、缓存失效、页面状态和错误展示。
 
 ## MUST：运行模式与交付
 
@@ -74,6 +55,11 @@
 - `APP_START_PATH` 影响交付包启动页；调整模式或启动页时同步检查 README、`.env.example` 和 `scripts/package-release.mjs`。
 - 开发服务运行时不要直接在同一 `.next` 上执行 `npm run build`。需要构建时优先使用隔离临时目录（参考发布脚本）；仅在必须中断用户正在使用的服务且尚未获得授权时请求确认。
 - 默认开发服务使用 Turbopack；预热属于可测量的性能实现，不是不可变产品规则。修改时用冷启动 / 路由切换数据验证。
+
+## SHOULD：实现方式
+
+- 列表 API 返回摘要，正文、research、评论、弹幕和资产等重字段按 ID 懒加载；优先扩展现有存储、校验、任务、缓存和 fallback 机制。
+- 并行优化仅用于互不依赖的操作，保留并发上限、串行锁、revision 校验和取消信号；同一资产的读改写不得直接改为 `Promise.all()`。
 
 ## SHOULD：稳定业务不变量
 
@@ -86,7 +72,7 @@
 - `getLibraryOverview()` 保持轻量，不重新塞入全文转写、素材正文、完整草稿或资产列表。
 - 毛利在线账号表普通读取优先返回最后成功缓存并后台刷新；远端解析失败时只允许显式可见的缓存回退，不覆盖可用账号数据。
 
-## SHOULD：前端
+## SHOULD：前端与 React
 
 - `DESIGN.md` 是视觉单一来源；复用 token、primitives、`16-workbench-system.css` 和既有工作台组件，不创建第二套按钮、卡片、状态或动效系统。
 - 根级全局 CSS 只承载 token、基础样式、通用 primitives 和 shell；路由专属布局与响应式样式尽量与页面 / layout 共置，避免所有页面加载全部业务 CSS。
@@ -94,15 +80,9 @@
 - 弹窗统一处理 `role="dialog"`、`aria-modal`、焦点进入 / 恢复、Tab 约束、Escape 和背景滚动。
 - 有未保存内容的页面统一拦截侧栏导航、刷新和关闭；危险操作与主操作区分，并提供确认或可恢复机制。
 - 长列表使用分页、增量渲染、虚拟化或 `content-visibility`。筛选、排序、分页和当前选择等可恢复状态优先写入 URL。
-- 大页面按“页面编排 + controller hook + 业务组件 + 纯函数”拆分；不要仅为拆行数创建无语义组件，也不要为当前本地工作台盲目引入 Redux / Zustand / React Query。
-
-## SHOULD：React Skills 适配
-
-- 编写、审查或优化 React / Next.js 页面、数据请求和渲染性能时，使用 `vercel-react-best-practices`；重构布尔参数膨胀的组件、共享状态或可复用组件接口时，使用 `vercel-composition-patterns`。从当前会话技能目录定位 `SKILL.md`，只读取任务相关的规则文件，不默认展开完整规则集。
-- Skills 的通用建议必须服从本项目的数据安全、API 契约与运行模式。请求去重和缓存扩展现有客户端机制，不因示例引入 SWR 或第二套缓存；持久化长任务继续走 `jobs.ts`，不能以 `after()` 或未等待的 Promise 替代。
-- 并行优化仅用于互不依赖的操作，保留已有并发上限、串行锁、revision 校验和取消信号；不得把同一资产的读改写流程直接改为 `Promise.all()`。
-- 组件组合沿用既有 primitives、controller hook 和 `DESIGN.md`；仅在真实共享状态或复用需求下增加 Context / Provider，不为套用模式创建第二套组件系统。React API 示例须核对项目已安装版本与服务端 / 客户端边界，不批量迁移无关组件。
-- 优化以当前任务的具体瓶颈为依据，按需比较请求次数、耗时或渲染表现；不为满足技能清单扩大重构范围。验证仍按下节的风险分级执行。
+- 大页面按页面编排、controller hook、业务组件和纯函数拆分；不为拆行数或套用模式引入无语义组件、第二套组件系统或状态库。仅在真实共享状态需求下增加 Context / Provider。
+- React / Next.js 工作按需参考 `vercel-react-best-practices`；重构组件接口时参考 `vercel-composition-patterns`，只读相关规则。技能建议服从本项目的数据安全、API 契约和运行模式；核对已安装版本与服务端 / 客户端边界。
+- 优化以测得的瓶颈为依据。请求去重和缓存沿用现有客户端机制；持久化长任务仍走 `jobs.ts`，不能以 `after()` 或未等待的 Promise 替代。
 
 ## 验证
 
@@ -117,12 +97,4 @@
 
 纯文档改动通常执行 `git diff --check` 并人工审查 diff。最终确认没有误改用户资产或无关工作树内容，也没有隐藏真实失败。
 
-## REFERENCE：信息来源
-
-- 产品、启动、环境变量和交付方式：`README.md`、`.env.example`、`PRODUCT.md`。
-- 视觉与交互：`DESIGN.md`。
-- 页面和 API：以 `src/app/**` 当前源码为准。
-- 存储、任务、模型和外部能力：以相关 `src/lib/**` 当前源码与测试为准。
-- 命令：以 `package.json` scripts 为准。
-
-只有稳定、跨模块且难以从源码推断的高风险规则才更新本文件。具体默认值、并发数、提示词策略、页面布局像素和临时实现细节应放在源码、测试、README 或 DESIGN 中。
+只有稳定、跨模块且难以从源码推断的高风险规则才更新本文件。具体配置、命令、布局和实现细节以 `README.md`、`PRODUCT.md`、`DESIGN.md`、`package.json`、相关源码与测试为准。

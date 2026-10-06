@@ -392,7 +392,7 @@ function video(account: Account, id: string, title: string, views: number): Vide
     transcriptStatus: "not_started", updatedAt: new Date().toISOString() };
 }
 
-type ModelReply = string | { status: number; body: string; contentType?: string } | { disconnect: true };
+type ModelReply = string | { status: number; body: string; contentType?: string } | { disconnect: true } | { hold: true };
 test("多稿续改任务分别保存版本，部分失败保留原稿与已完成结果", async () => {
   await fixture(async ({ account, setReply }) => {
     const { createJob, getJob } = await import("../src/lib/jobs");
@@ -422,6 +422,83 @@ test("多稿续改任务分别保存版本，部分失败保留原稿与已完�
   });
 });
 
+test("多卡首稿取消保留已保存结果，落盘期间取消也能登记且不重开任务", async (t) => {
+  const { cancelJob, createJob, getJob } = await import("../src/lib/jobs");
+  for (const cancelDuringSave of [false, true]) await fixture(async ({ account, setReply }) => {
+    const second = await upsertAccount({ platform: "douyin", name: "等待取消的风格", uid: "cancel-style" });
+    await saveStyle(second.platform, second.id, "第二张风格等待取消");
+    setReply(messages => messages.join("\n").includes("第二张风格等待取消") ? { hold: true } : "第一张独立稿件");
+    let jobId = "";
+    let cancelled = false;
+    const rename = fs.rename.bind(fs);
+    const renameMock = cancelDuringSave ? t.mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+      if (!cancelled && String(to).includes(`${path.sep}drafts${path.sep}`)) {
+        cancelled = true;
+        await cancelJob(jobId);
+      }
+      await rename(from, to);
+    }) : null;
+    try {
+      const job = await createJob({ kind: "write-copy", input: { mode: "topic", prompt: "活动", save: true,
+        styleRefs: [account, second].map(item => ({ targetType: "account", platform: item.platform, accountId: item.id })) } });
+      jobId = job.id;
+      let current = await getJob(jobId);
+      for (let attempt = 0; attempt < 200 && !current.dataRevision; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        current = await getJob(jobId);
+      }
+      assert.equal(current.dataRevision, 1, current.error);
+      if (!cancelDuringSave) current = await cancelJob(jobId);
+      assert.equal(current.status, "cancelled");
+      assert.equal(current.stage, "cancelled");
+      assert.equal(current.dataChange?.resource, "drafts");
+      const result = current.result as import("../src/lib/types").WriteBatchResult;
+      assert.equal(result.results.length, 1);
+      const draft = result.results[0].draft!;
+      assert.equal((await resolveDraft(draft.id)).draft.content, "第一张独立稿件");
+      assert.ok(current.resultRef?.href.includes(encodeURIComponent(draft.id)));
+    } finally { renameMock?.mock.restore(); }
+  });
+});
+
+test("单篇续改落盘期间取消仍登记新版本，保留父稿与取消状态", async (t) => {
+  await fixture(async ({ account, setReply }) => {
+    const { cancelJob, createJob, getJob } = await import("../src/lib/jobs");
+    const parent = await saveDraft({ platform: account.platform, accountId: account.id, accountName: account.name,
+      title: "取消测试", mode: "topic", prompt: "活动", content: "原正文",
+      styleRef: { platform: account.platform, accountId: account.id, accountName: account.name } });
+    setReply(() => "已完成的新正文");
+    let jobId = "", cancelled = false;
+    const rename = fs.rename.bind(fs);
+    const mock = t.mock.method(fs, "rename", async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+      if (!cancelled && String(to).includes(`${path.sep}drafts${path.sep}`)) {
+        cancelled = true;
+        await cancelJob(jobId);
+      }
+      await rename(from, to);
+    });
+    try {
+      const job = await createJob({ kind: "write-copy", input: { action: "revise", mode: "topic", prompt: "活动", save: true,
+        parentDraftId: parent.id, currentContent: parent.content, revisionInstruction: "精简" } });
+      jobId = job.id;
+      let current = await getJob(jobId);
+      for (let attempt = 0; attempt < 200 && !current.dataRevision; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        current = await getJob(jobId);
+      }
+      assert.equal(current.status, "cancelled");
+      assert.equal(current.stage, "cancelled");
+      assert.equal(current.dataRevision, 1, current.error);
+      assert.equal(current.dataChange?.resource, "drafts");
+      const draft = (current.result as import("../src/lib/types").WriteResult).draft!;
+      assert.equal(draft.version?.parentDraftId, parent.id);
+      assert.equal((await resolveDraft(draft.id)).draft.content, "已完成的新正文");
+      assert.equal((await resolveDraft(parent.id)).draft.content, "原正文");
+      assert.ok(current.resultRef?.href.includes(encodeURIComponent(draft.id)));
+    } finally { mock.mock.restore(); }
+  });
+});
+
 async function fixture(run: (context: { account: Account; root: string; requests: string[][]; requestBodies: Record<string, unknown>[]; setReply: (fn: (messages: string[]) => ModelReply) => void }) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-context-test-"));
   const original = { ...process.env };
@@ -437,6 +514,7 @@ async function fixture(run: (context: { account: Account; root: string; requests
     requests.push(messages);
     const reply = respond(messages);
     if (typeof reply !== "string") {
+      if ("hold" in reply) return;
       if ("disconnect" in reply) req.socket.destroy();
       else { res.writeHead(reply.status, { "Content-Type": reply.contentType || "application/json" }); res.end(reply.body); }
       return;

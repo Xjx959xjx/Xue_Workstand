@@ -1,5 +1,5 @@
 export type StreamEvent =
-  | { type: "stage"; stage: string; message: string; progress?: number }
+  | { type: "stage"; stage: string; message: string; progress?: number; jobId?: string }
   | { type: "delta"; delta: string }
   | { type: "result"; data: unknown }
   | { type: "error"; message: string }

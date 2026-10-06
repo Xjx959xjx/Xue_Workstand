@@ -15,13 +15,14 @@ const SHARE_INSTRUCTION_PATTERNS = [
 ];
 const SHARE_PREFIX_PATTERN = /^\s*\d+(?:\.\d+)?\s+\d{1,2}\/\d{1,2}\s+.{0,52}?:\/\s*/;
 
-export function buildEngagementTransportGuard(values: Array<string | undefined>): EngagementTransportGuard {
+export function buildEngagementTransportGuard(values: Array<string | undefined>, videoIds: string[] = []): EngagementTransportGuard {
   const blockedDomains = new Set<string>();
-  const blockedTokens = new Set<string>();
+  const blockedTokens = new Set(videoIds.map((id) => id.toLowerCase()));
   let hasTransportSource = false;
 
   for (const value of values) {
     if (!value) continue;
+    for (const token of value.match(/BV[0-9A-Za-z]{10}\b|\b\d{18,20}\b/gi) || []) blockedTokens.add(token.toLowerCase());
     const urls = value.match(URL_MATCH_PATTERN) || [];
     if (urls.length || PLATFORM_DOMAIN_PATTERN.test(value) || hasShareInstruction(value)) {
       hasTransportSource = true;
@@ -33,6 +34,10 @@ export function buildEngagementTransportGuard(values: Array<string | undefined>)
         if (hostname) blockedDomains.add(hostname);
         for (const segment of parsed.pathname.split("/").map(decodeUrlSegment)) {
           if (isTransportToken(segment)) blockedTokens.add(segment.toLowerCase());
+        }
+        for (const key of ["modal_id", "aweme_id", "item_id", "bvid", "video_id"]) {
+          const value = parsed.searchParams.get(key);
+          if (value && isTransportToken(value)) blockedTokens.add(value.toLowerCase());
         }
       } catch {
         // A malformed URL is still removed by the text sanitizer and the direct URL leak check.
@@ -47,13 +52,17 @@ export function buildEngagementTransportGuard(values: Array<string | undefined>)
   };
 }
 
-export function sanitizeEngagementGenerationText(value: string) {
+export function sanitizeEngagementGenerationText(value: string, guard?: EngagementTransportGuard) {
   if (!value) return "";
   const hasShareEnvelope = URL_TEST_PATTERN.test(value) || PLATFORM_DOMAIN_PATTERN.test(value) || hasShareInstruction(value);
   let text = value
     .replace(URL_MATCH_PATTERN, " ")
     .replace(PLATFORM_DOMAIN_GLOBAL_PATTERN, " ");
   for (const pattern of SHARE_INSTRUCTION_PATTERNS) text = text.replace(pattern, " ");
+  for (const token of [...(guard?.blockedTokens || []), ...(guard?.blockedDomains || [])]) {
+    text = text.replace(new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  }
+  text = text.replace(/BV[0-9A-Za-z]{10}\b|\b\d{18,20}\b/gi, " ");
   if (hasShareEnvelope) text = text.replace(SHARE_PREFIX_PATTERN, "");
   return text
     .replace(/(?:^|\n)\s*原始输入[：:]?\s*(?=\n|$)/g, "\n")
@@ -65,6 +74,7 @@ export function sanitizeEngagementGenerationText(value: string) {
 export function containsEngagementTransportLeak(value: string, guard: EngagementTransportGuard) {
   const normalized = value.toLowerCase();
   if (URL_TEST_PATTERN.test(value) || PLATFORM_DOMAIN_PATTERN.test(value)) return true;
+  if (/BV[0-9A-Za-z]{10}\b|\b\d{18,20}\b/i.test(value)) return true;
   if (guard.blockedDomains.some((domain) => normalized.includes(domain))) return true;
   if (guard.blockedTokens.some((token) => normalized.includes(token))) return true;
   if (!guard.hasTransportSource) return false;

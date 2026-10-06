@@ -55,7 +55,11 @@ export function GrossMarginImportModal({
       notify({ tone: "error", message: "没有识别到账号、链接或维护项，请检查模板内容" });
       return;
     }
-    onImport(parsed);
+    try {
+      onImport(parsed);
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "维护模板导入失败" });
+    }
   }
 
   return (

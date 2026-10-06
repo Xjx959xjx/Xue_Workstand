@@ -12,6 +12,8 @@ import { calculateHotlistBaseScore, HOTLIST_SCORE_VERSION } from "../douyin-hotl
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { libraryRoot, normalizeStorageSegment } from "./core";
 import { readJsonFile, storageFs as fs, writeJsonFile } from "./fs";
+import { withMutationLock } from "./mutation-lock";
+import { douyinHotlistWatchlistSchema, parseStoredRecord, versionStoredRecord } from "./schemas";
 
 const HOTLIST_DIR = "douyin-hotlist";
 const ACCOUNTS_DIR = "accounts";
@@ -38,8 +40,7 @@ const globalHotlistStorage = globalThis as typeof globalThis & {
 const hotlistVideoCache = globalHotlistStorage.__styleWorkbenchHotlistVideoCache ?? new Map<string, HotlistVideoCacheEntry>();
 globalHotlistStorage.__styleWorkbenchHotlistVideoCache = hotlistVideoCache;
 
-let hotlistWatchlistQueue: Promise<unknown> = Promise.resolve();
-let hotlistMutationQueue: Promise<unknown> = Promise.resolve();
+const queues = new Map<string, Promise<unknown>>();
 
 function hotlistPath() {
   return path.join(libraryRoot(), HOTLIST_DIR);
@@ -54,7 +55,7 @@ function watchlistPath() {
 }
 
 function hotlistAccountPath(slug: string) {
-  return path.join(hotlistAccountsPath(), slug);
+  return path.join(hotlistAccountsPath(), normalizeStorageSegment(slug, "视频热榜账号 ID"));
 }
 
 function hotlistAccountJsonPath(slug: string) {
@@ -82,8 +83,7 @@ export async function readDouyinHotlistWatchlist(): Promise<DouyinHotlistWatchli
 }
 
 async function readDouyinHotlistWatchlistUnlocked(): Promise<DouyinHotlistWatchlist> {
-  await ensureDouyinHotlistDirs();
-  const file = await readJsonFile<Partial<DouyinHotlistWatchlist>>(watchlistPath());
+  const file = await readJsonFile<unknown>(watchlistPath());
   if (!file) {
     return {
       version: 1,
@@ -92,22 +92,9 @@ async function readDouyinHotlistWatchlistUnlocked(): Promise<DouyinHotlistWatchl
     };
   }
 
-  const migrated = await migrateLegacyWatchlistAccountIds(file.accountIds || []);
-  const next: DouyinHotlistWatchlist = {
-    version: 1,
-    accountIds: normalizeDouyinHotlistAccountIds(migrated.accountIds),
-    updatedAt: file.updatedAt || nowIso(),
-    lastRefreshedAt: file.lastRefreshedAt,
-    lastFullRefreshAttemptAt: file.lastFullRefreshAttemptAt,
-    lastFullRefreshAt: file.lastFullRefreshAt
-  };
-
-  if (migrated.changed || next.accountIds.length !== (file.accountIds || []).length) {
-    next.updatedAt = nowIso();
-    await writeJsonFile(watchlistPath(), next);
-  }
-
-  return next;
+  const parsed = douyinHotlistWatchlistSchema.safeParse(file);
+  if (!parsed.success) throw new Error("视频热榜 watchlist 格式损坏，请备份并检查 douyin-hotlist/watchlist.json；未覆盖原文件");
+  return { ...parsed.data, accountIds: normalizeDouyinHotlistAccountIds(parsed.data.accountIds) };
 }
 
 export async function addDouyinHotlistAccountRef(accountId: string) {
@@ -118,7 +105,7 @@ export async function addDouyinHotlistAccountRef(accountId: string) {
       accountIds: normalizeDouyinHotlistAccountIds([...current.accountIds, accountId]),
       updatedAt: nowIso()
     };
-    await writeJsonFile(watchlistPath(), next);
+    await writeJsonFile(watchlistPath(), versionStoredRecord(next));
     return next;
   });
 }
@@ -132,7 +119,7 @@ export async function removeDouyinHotlistAccountRefs(accountIds: string[]) {
       accountIds: current.accountIds.filter((accountId) => !removed.has(accountId)),
       updatedAt: nowIso()
     };
-    await writeJsonFile(watchlistPath(), next);
+    await writeJsonFile(watchlistPath(), versionStoredRecord(next));
     return next;
   });
 }
@@ -153,32 +140,29 @@ export async function recordDouyinHotlistRefresh(input: {
       ...(input.full ? { lastFullRefreshAttemptAt: attemptedAt } : {}),
       ...(input.full && input.successful ? { lastFullRefreshAt: attemptedAt } : {})
     };
-    await writeJsonFile(watchlistPath(), next);
+    await writeJsonFile(watchlistPath(), versionStoredRecord(next));
     return next;
   });
 }
 
 export function withDouyinHotlistMutationLock<T>(run: () => Promise<T>) {
-  return enqueueSerial("mutation", run);
+  return withMutationLock(queues, hotlistAccountsPath(), run);
 }
 
 export async function resolveDouyinHotlistAccount(accountIdOrSlug: string) {
-  await ensureDouyinHotlistDirs();
-  const slug = normalizeDouyinHotlistAccountSlug(accountIdOrSlug);
-  const account = await readJsonFile<Account>(hotlistAccountJsonPath(slug));
-  if (!account) {
-    throw new Error(`找不到视频热榜账号：${slug}`);
+  if (accountIdOrSlug.includes(":") && !accountIdOrSlug.startsWith("douyin-hotlist:")) {
+    throw new Error(`视频热榜包含旧版账号引用 ${accountIdOrSlug}，请显式迁移到独立热榜账号库；读取不会修改素材`);
   }
-  return account;
+  const slug = normalizeDouyinHotlistAccountSlug(accountIdOrSlug);
+  return readHotlistRecord<Account>(hotlistAccountJsonPath(slug), "account");
 }
 
 export async function findDouyinHotlistAccountByName(platform: Platform, name: string) {
-  await ensureDouyinHotlistDirs();
   const normalizedName = name.trim().toLowerCase();
   if (!normalizedName) return null;
 
   for (const slug of await readDouyinHotlistAccountSlugs()) {
-    const account = await readJsonFile<Account>(hotlistAccountJsonPath(slug));
+    const account = await readHotlistRecord<Account>(hotlistAccountJsonPath(slug), "account");
     if (account?.platform === platform && account.name.trim().toLowerCase() === normalizedName) return account;
   }
 
@@ -186,12 +170,11 @@ export async function findDouyinHotlistAccountByName(platform: Platform, name: s
 }
 
 export async function findDouyinHotlistAccountByUid(platform: Platform, uid: string) {
-  await ensureDouyinHotlistDirs();
   const normalizedUid = uid.trim();
   if (!normalizedUid) return null;
 
   for (const slug of await readDouyinHotlistAccountSlugs()) {
-    const account = await readJsonFile<Account>(hotlistAccountJsonPath(slug));
+    const account = await readHotlistRecord<Account>(hotlistAccountJsonPath(slug), "account");
     if (account?.platform === platform && account.uid === normalizedUid) return account;
   }
 
@@ -225,33 +208,29 @@ export async function upsertDouyinHotlistAccount(input: {
     lastCollectedAt: input.lastCollectedAt ?? existing?.lastCollectedAt
   };
 
-  await writeJsonFile(hotlistAccountJsonPath(slug), account);
+  await writeJsonFile(hotlistAccountJsonPath(slug), versionStoredRecord(account));
   return account;
 }
 
 export async function getDouyinHotlistAccountVideos(account: Account, options: { force?: boolean } = {}) {
-  await ensureDouyinHotlistAccountDirs(account.slug);
   const videosPath = hotlistVideosPath(account.slug);
-  const initialStat = await fs.stat(videosPath);
-  const cached = hotlistVideoCache.get(account.slug);
+  const initialStat = await fs.stat(videosPath).catch(missingDirectory);
+  if (!initialStat) return [];
+  const cached = hotlistVideoCache.get(videosPath);
   if (!options.force && cached?.mtimeMs === initialStat.mtimeMs) return cached.videos;
 
-  let files = await fs.readdir(hotlistVideosPath(account.slug)).catch(() => []);
-  if (!files.some((file) => file.endsWith(".json"))) {
-    await migrateLegacyAccountVideos(account);
-    files = await fs.readdir(hotlistVideosPath(account.slug)).catch(() => []);
-  }
+  const files = await fs.readdir(videosPath);
   const videos = (
     await Promise.all(
       files
         .filter((file) => file.endsWith(".json"))
-        .map((file) => readJsonFile<Video>(path.join(hotlistVideosPath(account.slug), file)))
+        .map((file) => readHotlistRecord<Video>(path.join(videosPath, file), "video"))
     )
   ).filter(Boolean) as Video[];
 
   const sorted = videos.sort((left, right) => right.hotScore - left.hotScore);
   const finalStat = await fs.stat(videosPath);
-  hotlistVideoCache.set(account.slug, { mtimeMs: finalStat.mtimeMs, videos: sorted });
+  if (initialStat.mtimeMs === finalStat.mtimeMs) hotlistVideoCache.set(videosPath, { mtimeMs: initialStat.mtimeMs, videos: sorted });
   return sorted;
 }
 
@@ -265,7 +244,7 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
 
   for (const video of incoming) {
     const id = safeSegment(video.id, shortHash(`${video.title}-${video.url}`));
-    const existing = await readJsonFile<Video>(hotlistVideoJsonPath(account.slug, id));
+    const existing = await readHotlistRecord<Video>(hotlistVideoJsonPath(account.slug, id), "video");
     const mergedStats = mergeVideoStats(existing, video);
     const publishedAt = video.publishedAt || existing?.publishedAt;
     const normalizedVideo = publishedAt === video.publishedAt ? video : { ...video, publishedAt };
@@ -296,11 +275,11 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
       hotlistSurge: resolveHotlistSurgeState(existing?.hotlistSurge, hotlistTrend, existing?.hotlistTrend, updatedAt, nextBase)
     };
 
-    await writeJsonFile(hotlistVideoJsonPath(account.slug, id), next);
+    await writeJsonFile(hotlistVideoJsonPath(account.slug, id), versionStoredRecord(next));
     saved.push(next);
   }
 
-  hotlistVideoCache.delete(account.slug);
+  hotlistVideoCache.delete(hotlistVideosPath(account.slug));
   return {
     videos: saved.sort((left, right) => right.hotScore - left.hotScore),
     changedCount,
@@ -309,7 +288,7 @@ export async function saveDouyinHotlistVideos(account: Account, incoming: Video[
 }
 
 async function readDouyinHotlistAccountSlugs() {
-  const entries = await fs.readdirEntries(hotlistAccountsPath()).catch(() => []);
+  const entries = await fs.readdirEntries(hotlistAccountsPath()).catch(error => missingDirectory(error) ?? []);
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
 
@@ -318,9 +297,9 @@ function normalizeDouyinHotlistAccountIds(accountIds: string[]) {
 }
 
 function normalizeDouyinHotlistAccountId(accountId: string) {
-  const [scope, rawSlug] = accountId.split(":");
-  if (scope !== "douyin-hotlist" || !rawSlug) return "";
-  return `douyin-hotlist:${normalizeStorageSegment(rawSlug, "视频热榜账号 ID")}`;
+  const [scope, rawSlug, extra] = accountId.split(":");
+  if (!["douyin-hotlist", "douyin"].includes(scope) || !rawSlug || extra !== undefined) throw new Error(`视频热榜账号引用无效：${accountId}`);
+  return `${scope}:${normalizeStorageSegment(rawSlug, "视频热榜账号 ID")}`;
 }
 
 function normalizeDouyinHotlistAccountSlug(accountIdOrSlug: string) {
@@ -329,7 +308,7 @@ function normalizeDouyinHotlistAccountSlug(accountIdOrSlug: string) {
 }
 
 function createHotlistSlug(platform: Platform, name: string, uid: string) {
-  return normalizeStorageSegment(`${platform}-${safeSegment(name, shortHash(uid))}`, "视频热榜账号 ID");
+  return normalizeStorageSegment(`${platform}-${safeSegment(name, "account")}-${shortHash(uid)}`, "视频热榜账号 ID");
 }
 
 function mergeVideoStats(existing: Video | null, incoming: Video) {
@@ -423,87 +402,20 @@ function hasMeaningfulVideoChange(existing: Video | null, incoming: Video, stats
 }
 
 function withHotlistWatchlistLock<T>(run: () => Promise<T>) {
-  return enqueueSerial("watchlist", run);
+  return withMutationLock(queues, watchlistPath(), run);
 }
 
-async function enqueueSerial<T>(queue: "watchlist" | "mutation", run: () => Promise<T>) {
-  const previous = queue === "watchlist" ? hotlistWatchlistQueue : hotlistMutationQueue;
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const next = previous.then(() => current, () => current);
-  if (queue === "watchlist") hotlistWatchlistQueue = next;
-  else hotlistMutationQueue = next;
+async function readHotlistRecord<T>(target: string, kind: "account" | "video"): Promise<T | null> {
+  const value = await readJsonFile<unknown>(target);
+  return value === null ? null : parseStoredRecord<T>(target, value, kind);
+}
 
-  try {
-    await previous.catch(() => undefined);
-    return await run();
-  } finally {
-    release();
-    if (queue === "watchlist" && hotlistWatchlistQueue === next) hotlistWatchlistQueue = Promise.resolve();
-    if (queue === "mutation" && hotlistMutationQueue === next) hotlistMutationQueue = Promise.resolve();
-  }
+function missingDirectory(error: unknown): undefined {
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+  throw new Error("读取视频热榜目录失败，请检查目录和读取权限", { cause: error });
 }
 
 function roundTo(value: number, digits: number) {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
-}
-
-async function migrateLegacyWatchlistAccountIds(accountIds: string[]) {
-  const migrated: string[] = [];
-  let changed = false;
-
-  for (const accountId of accountIds) {
-    if (accountId.startsWith("douyin-hotlist:")) {
-      migrated.push(accountId);
-      continue;
-    }
-
-    if (!accountId.startsWith("douyin:")) {
-      changed = true;
-      continue;
-    }
-
-    const legacy = await readLegacyDouyinAccount(accountId);
-    if (!legacy) {
-      changed = true;
-      continue;
-    }
-
-    const account = await upsertDouyinHotlistAccount({
-      platform: "douyin",
-      name: legacy.name,
-      uid: legacy.uid,
-      sourceUrl: legacy.sourceUrl,
-      avatarUrl: legacy.avatarUrl,
-      lastCollectedAt: legacy.lastCollectedAt
-    });
-    migrated.push(account.id);
-    changed = true;
-  }
-
-  return { accountIds: migrated, changed };
-}
-
-async function readLegacyDouyinAccount(accountId: string) {
-  const slug = accountId.includes(":") ? accountId.split(":").at(-1)! : accountId;
-  const normalizedSlug = normalizeStorageSegment(slug, "抖音账号 ID");
-  return readJsonFile<Account>(path.join(libraryRoot(), "douyin", normalizedSlug, "account.json"));
-}
-
-async function migrateLegacyAccountVideos(account: Account) {
-  const legacyVideosPath = path.join(libraryRoot(), "douyin", account.slug, "videos");
-  const files = await fs.readdir(legacyVideosPath).catch(() => []);
-  const videos = (
-    await Promise.all(
-      files
-        .filter((file) => file.endsWith(".json"))
-        .map((file) => readJsonFile<Video>(path.join(legacyVideosPath, file)))
-    )
-  ).filter(Boolean) as Video[];
-
-  if (!videos.length) return;
-  await saveDouyinHotlistVideos(account, videos);
 }

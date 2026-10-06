@@ -28,15 +28,19 @@ import {
   getVideoComparableKey,
   normalizeVideoUrlInput
 } from "@/lib/platform-links";
-import { safeSegment, shortHash, toNumber } from "@/lib/utils";
+import { safeSegment, shortHash } from "@/lib/utils";
+import { parseGrossMarginAmount, parseGrossMarginMetric } from "@/lib/gross-margin-calculator";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const platformSchema = z.enum(["douyin", "bilibili"]);
 const serviceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
-const amountSchema = z.coerce.number().finite().min(0, "金额不能小于 0").max(100_000_000, "金额过大，请检查输入");
-const minimumQuantitySchema = z.coerce.number().finite().gt(0, "起量必须大于 0").max(100_000_000, "起量过大，请检查输入");
+const amountSchema = z.preprocess(
+  value => typeof value === "string" && value.trim() ? parseGrossMarginAmount(value) : value,
+  z.number({ invalid_type_error: "请填写有效的非负数字" }).finite().min(0, "金额不能小于 0").max(100_000_000, "金额过大，请检查输入")
+);
+const minimumQuantitySchema = amountSchema.refine(value => value > 0, "起量必须大于 0");
 const mutationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("savePriceTable"),
@@ -47,7 +51,7 @@ const mutationSchema = z.discriminatedUnion("action", [
         service: serviceSchema,
         name: z.string().trim().min(1, "请填写单价项名称").max(40, "单价项名称太长"),
         unitPrice: amountSchema,
-        quantityUnit: z.string().trim().min(1, "请填写数量单位").max(12, "数量单位太长"),
+        quantityUnit: z.enum(["万", "千", "个", "元"], { errorMap: () => ({ message: "数量单位只支持万、千、个或元" }) }),
         minimumQuantity: minimumQuantitySchema.nullish(),
         note: z.string().trim().max(120, "备注太长").optional(),
         active: z.boolean().optional()
@@ -73,7 +77,7 @@ const mutationSchema = z.discriminatedUnion("action", [
     accountName: z.string().trim().optional(),
     videoUrl: z.string().trim().min(1, "请填写视频链接"),
     sourceText: z.string().min(1, "监控记录缺少维护目标文案"),
-    targetStats: z.record(serviceSchema, z.coerce.number().finite().min(0)).optional()
+    targetStats: z.record(serviceSchema, amountSchema).optional()
   }),
   z.object({
     action: z.literal("bulkSaveMonitorRecords"),
@@ -92,12 +96,12 @@ const mutationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("updateMonitorPlayTarget"),
     recordId: z.string().trim().min(1, "缺少监控记录 ID"),
-    target: z.coerce.number().finite().gt(0, "播放量目标必须大于 0").max(100_000_000, "播放量目标过大，请检查输入")
+    target: amountSchema.refine(value => value > 0, "播放量目标必须大于 0")
   }),
   z.object({
     action: z.literal("updateMonitorPlayCurrent"),
     recordId: z.string().trim().min(1, "缺少监控记录 ID"),
-    current: z.coerce.number().finite().min(0, "当前播放量不能小于 0").max(100_000_000, "当前播放量过大，请检查输入")
+    current: amountSchema
   }),
   z.object({
     action: z.literal("deleteMonitorRecord"),
@@ -106,8 +110,10 @@ const mutationSchema = z.discriminatedUnion("action", [
 ]);
 
 export async function GET(request: Request) {
-  const refreshAccounts = new URL(request.url).searchParams.get("refreshAccounts") === "1";
-  return apiJson(() => getGrossMarginLibrary({ refreshAccounts }), {
+  const params = new URL(request.url).searchParams;
+  const refreshAccounts = params.get("refreshAccounts") === "1";
+  const cachedAccountsOnly = params.get("cachedAccounts") === "1";
+  return apiJson(() => getGrossMarginLibrary({ refreshAccounts, cachedAccountsOnly }), {
     fallbackMessage: "读取毛利单价表失败",
     status: 500,
     formatError: formatGrossMarginError
@@ -287,7 +293,11 @@ function parseMaintenanceTemplate(template: string) {
     for (const pattern of rule.patterns) {
       const match = normalized.match(pattern);
       if (!match?.[1]) continue;
-      stats[rule.service] = toNumber(match[1].trim());
+      const raw = match[1].trim();
+      if (raw === "/") break;
+      const value = parseGrossMarginMetric(raw);
+      if (value === null) throw new Error(`模板中的${rule.service}数量无效，请检查数字和单位。`);
+      stats[rule.service] = Math.round(value);
       break;
     }
   }

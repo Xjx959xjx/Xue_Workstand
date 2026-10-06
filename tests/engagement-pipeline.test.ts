@@ -4,10 +4,40 @@ import { runCommentPipeline, type CommentPipelineCheckpoint } from "../src/lib/e
 import { collectCommentSources, createCommentCollectionBudget } from "../src/lib/engagement-source-selection";
 import { selectRelatedCommentVideos } from "../src/lib/opencli-normalizers";
 import { isResumableJobKind } from "../src/lib/job-persistence";
+import { selectCommentSamples } from "../src/lib/engagement";
+import { buildEngagementTransportGuard } from "../src/lib/engagement-transport";
+import { findTaskJob } from "../src/app/assets/_hooks/useEngagementGeneration";
+import type { JobRecord } from "../src/lib/types";
 
 function checkpoint() {
   return { rounds: [], batches: [], exhausted: false } as unknown as CommentPipelineCheckpoint;
 }
+
+test("旧终态任务不挡住同范围的新任务与快速完成的重试", () => {
+  const failed = { id: "old", kind: "engagement", status: "failed", createdAt: "2026-10-06T00:00:00Z" } as JobRecord;
+  const running = { ...failed, id: "new", status: "running", createdAt: "2026-10-06T00:01:00Z" } as JobRecord;
+  assert.equal(findTaskJob([failed, running], failed.id, "engagement", () => true)?.id, running.id);
+  assert.equal(findTaskJob([failed, { ...running, status: "completed" }], failed.id, "engagement", () => true)?.id, running.id);
+  assert.equal(findTaskJob([failed, running], running.id, "engagement", () => false)?.id, running.id);
+});
+
+test("旧检查点恢复先过滤污染与重复，再按实际缺口补写", async () => {
+  const state = checkpoint();
+  const candidates = ["价格有点高", "屏幕确实大", "屏幕确实大", "https://example.com"];
+  state.rounds = [{ requestedCount: 4, batchIds: [0] }];
+  state.batches = [{ index: 0, requestedCount: 4, model: "fixture", attempts: 1, candidates, review: candidates.map((text) => ({ text, keep: true })) }];
+  const generated: number[] = [];
+  const guard = buildEngagementTransportGuard([]);
+  const result = await runCommentPipeline({ state, count: 4, save: async () => {},
+    select: (values, reviewed) => selectCommentSamples(values, guard, 4, reviewed).items,
+    async generate(batch) {
+      generated.push(batch.requestedCount);
+      return { candidates: ["续航能撑多久", "铰链手感不错"], model: "fixture", attempts: 1 };
+    }
+  });
+  assert.deepEqual(generated, [2]);
+  assert.deepEqual(result, ["价格有点高", "屏幕确实大", "续航能撑多久", "铰链手感不错"]);
+});
 
 test("无审核和筛选的正式模式直接保存原始候选，补量与恢复保留重复", async () => {
   const state = checkpoint();

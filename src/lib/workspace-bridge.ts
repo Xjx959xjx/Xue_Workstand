@@ -1,3 +1,5 @@
+import { getAppMode } from "./app-mode";
+
 const requestHeaders = ["accept", "content-type", "range", "if-range", "if-none-match", "if-modified-since"];
 const responseHeaders = ["content-type", "content-disposition", "content-range", "accept-ranges", "etag", "last-modified", "retry-after"];
 
@@ -21,7 +23,11 @@ export async function relayWorkspaceRequest(request: Request, target: string, to
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  if (token) headers.set("authorization", `Bearer ${token}`);
+  if (token) {
+    headers.set("authorization", `Bearer ${token}`);
+    // 覆盖来访请求的同名头；只有通过认证的资料桥可以信任运行模式。
+    headers.set("x-workspace-app-mode", getAppMode());
+  }
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const init: RequestInit & { duplex?: "half" } = {
     method: request.method, headers, signal: request.signal, redirect: "manual",

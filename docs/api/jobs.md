@@ -2,7 +2,7 @@
 
 任务中心 API 用于提交需要在后台执行的长任务，并通过轮询任务状态获取进度、结果、失败原因或取消任务。接口与当前网页同源，默认开发地址为 `http://localhost:3000`。
 
-接口实现位于 `src/app/api/jobs/route.ts` 和 `src/app/api/jobs/[jobId]/route.ts`；请求校验以这两个路由中的 Zod schema 为准。
+接口实现位于 `src/app/api/jobs/route.ts` 和 `src/app/api/jobs/[jobId]/route.ts`；创建请求与任务恢复输入共用 `src/lib/job-validation.ts` 中的 Zod schema。
 
 ## 通用约定
 
@@ -57,11 +57,23 @@
   ],
   "removedJobIds": [],
   "cursor": "7a4f6b0e-7f2f-4c0f-9d25-000000000001.12",
-  "reset": false
+  "reset": false,
+  "readErrors": [],
+  "recoveryErrors": {}
 }
 ```
 
 列表项是 `JobListItem`：不会内嵌 `partialText` 或 `result`，而是用 `hasPartialText`、`hasResult` 表示详情中是否存在对应字段。`removedJobIds` 表示客户端应从本地缓存删除的任务。
+
+列表保留全部活跃任务，另保留最近 80 条历史；客户端合并增量响应时沿用此规则。`recoveryErrors` 按任务 ID 返回当前恢复错误，即使 `jobs` 没有增量也须同步；摘要和详情的 `recoveryError` 不写回原记录。带此字段的任务不应显示为运行中，任务中心提供重新发起入口。
+
+`readErrors` 是读取失败的中文提示列表，客户端应显示这些提示；旧服务端可能不返回此字段，按空数组处理。单条损坏、未知类型或未来版本记录不阻断其他任务读取，详情读取仍显式报错。
+
+任务记录和恢复载荷新增 `schemaVersion: 1`。没有该字段的旧记录仍可读，恢复载荷保留原有 `version: 1`；未来版本、无效输入或与任务类型不一致的载荷不会执行或改写原记录。合法旧任务继续沿用原恢复策略，图片任务重启后标记中断，不自动重新调用模型。兼容性检查不迁移旧文件，也不保证旧程序能读取未来新增的任务类型。
+
+批量转写在第一条转写前保存固定候选 ID，后续恢复只处理这一批；显式 `videoIds: []` 表示空批次。已启动的旧批次若没有固定候选，会中断并提示确认范围后重新发起。每条转写结果落盘后同步递增 `dataRevision`，不必等待整个批次完成。
+
+云端按 D1 中未到期的租约统一执行 `JOB_MAX_ACTIVE`；存活租约不会被其他实例恢复，执行器定期续租并检查取消。取消后仍占用容量直到执行器退出，租约失效的旧执行器不能覆盖新状态。未启动的云端排队任务可被其他实例接手；已启动任务仍按对应类型的恢复规则处理。
 
 推荐的同步算法：
 
@@ -120,7 +132,7 @@ type StartJobRequest = {
 | `account-style` | `platform`、`accountId` |
 | `project-style` | `name`；`projectId`、`description`、`sourceAccountIds`、`sourceMaterialIds` 可选。 |
 | `transcribe-video` | `platform`、`accountId`、`videoId`；`mediaUrl`（完整 `http(s)` URL）、`allowRemoteDownload` 可选。 |
-| `batch-transcribe` | `platform`、`accountId`、`limit`（正整数或 `all`，默认 `5`）；`videoIds`（非空数组）、`updateStyle` 可选。 |
+| `batch-transcribe` | `platform`、`accountId`、`limit`（正整数或 `all`，默认 `5`）；`videoIds`（数组，空数组表示不选视频）、`updateStyle` 可选。 |
 | `engagement` | `sourceType` 为 `draft`、`text`、`url` 或 `record`。分别需要 `draftId`、`text`、`url` 或 `recordId`。公共选项：`includeComments` 默认 `true`、`commentCount` 1-200 默认 `50`、`includeDanmaku` 默认 `false`、`danmakuCount` 1-300 默认 `50`、`targetPlatform` 可选。评论统一先执行全网调研，不再提供生成模式切换。 |
 | `hotlist-refresh` | 必填 `window`；`accountIds`（非空数组）、`limit` 1-120、`automatic` 可选。 |
 | `collect-account` | `platform`、`name`、`limit` 1-50、`order`（`views` / `likes` / `favorites` / `comments` / `pubdate`）；`uidOrUrl`、`fromDate`、`toDate` 可选。 |

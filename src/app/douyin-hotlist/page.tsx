@@ -64,14 +64,24 @@ function DouyinHotlistPageContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tasks = useScopedTasks({ href: "/douyin-hotlist", kinds: ["hotlist-refresh"] });
+  const { startTask, loading: tasksLoading } = tasks;
   const { notify } = useFeedback();
   const initialWindowFilter = parseWindowFilter(searchParams.get("window"));
   const [snapshot, setSnapshot] = useState<DouyinHotlistResponse | null>(() => getCachedDouyinHotlist({ window: initialWindowFilter }));
   const [query, setQuery] = useState("");
   const [accountPlatform, setAccountPlatform] = useState<Platform>("douyin");
-  const [selectedAccountId, setSelectedAccountId] = useState<AccountSelection>(() => searchParams.get("account") || "all");
-  const [sortMode, setSortMode] = useState<SortMode>(() => parseSortMode(searchParams.get("sort")));
-  const [windowFilter, setWindowFilter] = useState<WindowFilter>(() => initialWindowFilter);
+  const selectedAccountId: AccountSelection = searchParams.get("account") || "all";
+  const sortMode = parseSortMode(searchParams.get("sort"));
+  const windowFilter = parseWindowFilter(searchParams.get("window"));
+  const setSelection = useCallback((values: { account?: AccountSelection; sort?: SortMode; window?: WindowFilter }) => {
+    router.replace(buildHotlistHref({
+      account: values.account ?? selectedAccountId, sort: values.sort ?? sortMode,
+      window: values.window ?? windowFilter, pathname, search: searchParams.toString()
+    }), { scroll: false });
+  }, [pathname, router, searchParams, selectedAccountId, sortMode, windowFilter]);
+  const setSelectedAccountId = useCallback((account: AccountSelection) => setSelection({ account }), [setSelection]);
+  const setSortMode = (sort: SortMode) => setSelection({ sort });
+  const setWindowFilter = (window: WindowFilter) => setSelection({ window });
   const [busy, setBusy] = useState<BusyState>(() => getCachedDouyinHotlist({ window: initialWindowFilter }) ? "" : "load");
   const [error, setError] = useState("");
   const [removeTarget, setRemoveTarget] = useState<DouyinHotlistAccount | null>(null);
@@ -94,7 +104,10 @@ function DouyinHotlistPageContent() {
   const latestTerminalRefreshSignature = latestTerminalRefreshJobId
     ? `${latestTerminalRefreshJobId}:${latestTerminalRefreshJobUpdatedAt}:${latestTerminalRefreshDataRevision}`
     : "";
-  const refreshing = Boolean(activeRefreshJob);
+  const [startingRefresh, setStartingRefresh] = useState(false);
+  const startingRefreshRef = useRef(false);
+  const automaticAttemptAtRef = useRef(0);
+  const refreshing = Boolean(activeRefreshJob) || startingRefresh;
 
   const loadRefreshLogs = useCallback(async (options: { signal?: AbortSignal } = {}) => {
     const requestId = refreshLogRequestIdRef.current + 1;
@@ -128,26 +141,28 @@ function DouyinHotlistPageContent() {
   }, [activeRefreshJob]);
 
   const loadHotlist = useCallback(async (options: { force?: boolean } = {}) => {
+    const requestId = ++loadRequestIdRef.current;
     const cached = options.force ? null : getCachedDouyinHotlist({ window: windowFilter });
     if (cached) {
       setSnapshot(cached);
       busyRef.current = "";
       setBusy("");
-      return;
+      setError("");
+      return cached;
     }
 
-    const requestId = loadRequestIdRef.current + 1;
-    loadRequestIdRef.current = requestId;
     busyRef.current = "load";
     setBusy("load");
     setError("");
     try {
       const next = await getDouyinHotlist({ force: options.force, window: windowFilter });
       if (loadRequestIdRef.current === requestId) setSnapshot(next);
+      return next;
     } catch (err) {
       if (loadRequestIdRef.current === requestId) {
         setError(err instanceof Error ? err.message : "读取视频热榜失败");
       }
+      return null;
     } finally {
       if (loadRequestIdRef.current === requestId) {
         busyRef.current = "";
@@ -169,27 +184,14 @@ function DouyinHotlistPageContent() {
   }, [activeRefreshJob, loadHotlist]);
 
   useEffect(() => {
-    if (!snapshot || selectedAccountId === "all") return;
+    if (!snapshot || snapshot.summary.windowKey !== windowFilter || selectedAccountId === "all") return;
     if (getSelectionPlatform(selectedAccountId)) return;
     if (snapshot.accounts.some((account) => account.id === selectedAccountId)) return;
     setSelectedAccountId("all");
-  }, [selectedAccountId, snapshot]);
+  }, [selectedAccountId, setSelectedAccountId, snapshot, windowFilter]);
 
   const selectedPlatform = useMemo(() => getSelectionPlatform(selectedAccountId), [selectedAccountId]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const nextHref = buildHotlistHref({
-      account: selectedAccountId,
-      pathname,
-      search: window.location.search,
-      sort: sortMode,
-      window: windowFilter
-    });
-    if (`${window.location.pathname}${window.location.search}` !== nextHref) {
-      router.replace(nextHref, { scroll: false });
-    }
-  }, [pathname, router, selectedAccountId, sortMode, windowFilter]);
 
   const selectedAccount = useMemo(
     () => getSelectedAccount(snapshot, selectedAccountId, selectedPlatform),
@@ -258,23 +260,26 @@ function DouyinHotlistPageContent() {
     }
   }
 
-  const refreshHotlist = useCallback(async () => {
-    if (!snapshot?.accounts.length || activeRefreshJobRef.current || busyRef.current) return;
+  const refreshHotlist = useCallback(async (automatic = false) => {
+    if (!snapshot?.accounts.length || tasksLoading || activeRefreshJobRef.current || busyRef.current || startingRefreshRef.current) return;
+    startingRefreshRef.current = true;
+    setStartingRefresh(true);
+    if (automatic) automaticAttemptAtRef.current = Date.now();
 
     setError("");
     try {
-      const job = await tasks.startTask({
+      const job = await startTask({
         kind: "hotlist-refresh",
         href: "/douyin-hotlist",
         input: {
-          accountIds: selectedAccount
+          accountIds: automatic ? undefined : selectedAccount
             ? [selectedAccount.id]
             : selectedPlatform
               ? selectedPlatformAccounts.map((account) => account.id)
               : undefined,
-          automatic: false,
+          automatic,
           limit: REFRESH_LIMIT,
-          window: windowFilter
+          window: automatic ? "3d" : windowFilter
         }
       });
       activeRefreshJobRef.current = job;
@@ -287,8 +292,31 @@ function DouyinHotlistPageContent() {
       } else {
         notify({ tone: "error", message: errorMessage });
       }
+    } finally {
+      startingRefreshRef.current = false;
+      setStartingRefresh(false);
     }
-  }, [notify, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, tasks, windowFilter]);
+  }, [notify, selectedAccount, selectedPlatform, selectedPlatformAccounts, snapshot?.accounts.length, startTask, tasksLoading, windowFilter]);
+
+  useEffect(() => {
+    const check = async () => {
+      if (document.visibilityState !== "visible") return;
+      const current = await loadHotlist();
+      if (!current?.accounts.length || document.visibilityState !== "visible") return;
+      const lastCheck = Math.max(
+        Date.parse(current.summary.lastFullRefreshAttemptAt || current.summary.lastFullRefreshAt || "") || 0,
+        automaticAttemptAtRef.current
+      );
+      if (Date.now() - lastCheck >= 3 * 60 * 60 * 1000) void refreshHotlist(true);
+    };
+    void check();
+    const timer = window.setInterval(check, 60_000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [loadHotlist, refreshHotlist, snapshot?.summary.lastFullRefreshAttemptAt, snapshot?.summary.lastFullRefreshAt]);
 
   useEffect(() => {
     if (tasks.loading) return;
@@ -417,7 +445,7 @@ function DouyinHotlistPageContent() {
           {initialLoading ? (
             <HotlistLoadingRows />
           ) : visibleItems.length ? (
-            <HotlistTable items={visibleItems} showGlobalRank={selectedAccountId !== "all"} />
+            <HotlistTable items={visibleItems} showGlobalRank={Boolean(selectedAccount)} />
           ) : (
             <EmptyHotlist hasAccounts={Boolean(snapshot?.accounts.length)} selectedAccount={selectedAccount?.name} windowLabel={windowLabel} />
           )}

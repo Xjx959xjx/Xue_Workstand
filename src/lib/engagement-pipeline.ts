@@ -9,7 +9,7 @@ export function pipelineKept(state: CommentPipelineCheckpoint, count: number) {
   return state.batches.flatMap((batch) => batch.review?.filter((row) => row.keep).map((row) => row.text) || []).slice(0, count);
 }
 
-/** 整组生成并保存；可选审核仅供历史恢复和离线诊断使用。 */
+/** 整组生成、基础筛选并保存；可选审核供历史恢复和离线诊断使用。 */
 export async function runCommentPipeline(input: {
   state: CommentPipelineCheckpoint; count: number; signal?: AbortSignal;
   save: () => Promise<void>;
@@ -23,6 +23,16 @@ export async function runCommentPipeline(input: {
   state.roundLimit ??= 2;
   if (state.exhausted) state.roundLimit = state.rounds.length + 1;
   state.exhausted = false;
+  if (input.select) {
+    const reviewed: string[] = [];
+    for (const batch of state.batches) {
+      if (!batch.review) continue;
+      const selected = input.select(batch.review.filter((row) => row.keep).map((row) => row.text), reviewed);
+      batch.reviewCandidates = selected;
+      batch.review = selected.map((text) => ({ text, keep: true }));
+      reviewed.push(...selected);
+    }
+  }
   const kept = () => pipelineKept(state, count);
   await input.save();
   while (kept().length < count) {
@@ -49,7 +59,7 @@ export async function runCommentPipeline(input: {
       }
       signal.throwIfAborted();
       const reviewed = state.batches.flatMap((row) => row.review?.map((item) => item.text) || []);
-      batch.reviewCandidates ??= input.select ? input.select(batch.candidates!, reviewed) : [...batch.candidates!];
+      batch.reviewCandidates = input.select ? input.select(batch.candidates!, reviewed) : batch.reviewCandidates ?? [...batch.candidates!];
       await input.save();
       await input.onProgress?.(kept(), input.review ? `候选已保存，正在整组质检 ${batch.reviewCandidates.length} 条` : `正在保存 ${batch.reviewCandidates.length} 条生成评论`);
       if (batch.reviewCandidates.length) batch.review = input.review

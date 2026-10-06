@@ -332,6 +332,18 @@ test("旧写作历史恢复时会移除内部素材包装", () => {
   }), "原始输入\n\n\n保留三个换行");
 });
 
+test("支持文档超限拒绝，部分读取失败不能继续生成", async () => {
+  const links = Array.from({ length: 5 }, (_, index) => `https://example.com/brief-${index}`);
+  await assert.rejects(fetchSupportDocuments(links.join("\n")), /一次最多读取 4 份支持文档/);
+  await assert.rejects(fetchSupportDocuments(Array.from({ length: 5 }, (_, index) => `docxcnLimitTest${index}123456`).join("\n")), /一次最多读取 4 份支持文档/);
+  await withTemporaryLibrary(async () => {
+    for (const url of links.slice(0, 4)) await writeSupportDocumentCache({ url, provider: "web", content: "已缓存支持资料" });
+    assert.equal((await fetchSupportDocuments(links.slice(0, 4).join("\n"))).length, 4);
+    await assert.rejects(prepareWriteCopyContext({ platform: "douyin", accountId: "unused", mode: "topic", prompt: "写活动",
+      supportDocLinks: `${links[0]}\nhttps://127.0.0.1/denied` }), /支持文档读取失败.*127\.0\.0\.1.*内网/);
+  });
+});
+
 test("视频刷新会修复失效转写状态", async () => {
   await withTemporaryLibrary(async () => {
     const account = await upsertAccount({ platform: "bilibili", name: "测试账号", uid: "uid-stale" });

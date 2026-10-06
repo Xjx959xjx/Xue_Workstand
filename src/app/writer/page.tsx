@@ -44,6 +44,7 @@ import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
+import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import {
   getWriterHistoryDraft,
@@ -280,6 +281,14 @@ function WriterPageContent() {
     targetType,
     useWebResearch
   });
+  useUnsavedChangesGuard(
+    hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()),
+    "当前写作内容尚未保存，确定要离开吗？"
+  );
+
+  useEffect(() => {
+    if (lastDraftId) loadedDraftParamRef.current = lastDraftId;
+  }, [lastDraftId]);
 
   const { feishuResult, handlePublishFeishu, setFeishuResult } = useFeishuPublish({
     activeTitle,

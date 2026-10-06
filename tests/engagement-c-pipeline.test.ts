@@ -52,11 +52,13 @@ test("C 正式入口双平台各取200条，固定参考补足150条且不重跑
     assert.equal(plans, 1);
     assert.equal(prompts.length, 2, "模型少返回三条时仅补一次缺口");
     assert.equal(reviewCalls, 0, "正式入口不得调用生成后 AI 审核");
-    assert.match(prompts[1], /补足缺少的 3 条评论/);
+    assert.match(prompts[1], /补足缺少的 9 条评论/);
     const priorComments = JSON.parse(prompts[1].split("<已生成评论>\n")[1].split("\n</已生成评论>")[0]);
-    assert.deepEqual(priorComments, result.record.comments.items.slice(0, 147).map((item) => item.text), "补量接收完整原始评论，包括重复和短句");
-    assert.deepEqual(result.record.comments.items.slice(0, 7).map((item) => item.text), ["啊", "[赞]", "https://example.com/test", "@张三", "很".repeat(150), "相同原句", "相同原句"], "模型输出不得经过内容、长度、链接、表情或重复筛选");
-    assert.ok(result.record.comments.items.some((item) => item.text.includes("<br>")), "保留原始表达，不进行 HTML 清洗");
+    assert.deepEqual(priorComments, result.record.comments.items.slice(0, 141).map((item) => item.text), "补量只接收已筛选的可用评论");
+    assert.equal(result.record.comments.items.filter((item) => item.text === "相同原句").length, 1);
+    assert.ok(result.record.comments.items.every((item) => !/https?:|@|<br>/.test(item.text) && item.text.length <= 140));
+    assert.equal(result.record.comments.diagnostics?.generation?.transportRejectedCount, 1);
+    assert.equal(result.record.comments.diagnostics?.generation?.nearDuplicateRejectedCount, 1);
     assert.equal(result.record.comments.diagnostics?.generation?.outputReview, undefined);
     assert.ok(prompts[0].includes("<当前视频>"));
     assert.ok(!prompts[0].includes("<已生成评论>"));

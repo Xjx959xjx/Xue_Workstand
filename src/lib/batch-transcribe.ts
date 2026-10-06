@@ -30,10 +30,11 @@ export type BatchTranscribeVideoEvent = {
 };
 
 export type BatchTranscribeHooks = {
+  onCandidates?: (videoIds: string[]) => Promise<void>;
   onPrepare?: () => void;
   onMediaPreloadStart?: (payload: { total: number }) => void;
   onVideoStart?: (payload: { index: number; total: number; video: Video }) => void;
-  onVideoResult?: (payload: BatchTranscribeVideoEvent) => void;
+  onVideoResult?: (payload: BatchTranscribeVideoEvent) => void | Promise<void>;
   onTranscribeComplete?: (payload: Pick<BatchTranscribeResult, "completed" | "skipped" | "failed">) => void | Promise<void>;
   onStyleStart?: () => void;
   onFinalize?: () => void;
@@ -54,6 +55,8 @@ export async function runBatchTranscribe(
   const account = await resolveAccount(input.platform, input.accountId);
   const summary = await getAccountSummary(account);
   const candidates = selectCandidates(summary.videos, input);
+  await hooks.onCandidates?.(candidates.map((video) => video.id));
+  throwIfAborted(hooks.signal);
 
   const result: BatchTranscribeResult = {
     account: summary,
@@ -104,14 +107,15 @@ export async function runBatchTranscribe(
 }
 
 function selectCandidates(videos: Video[], input: BatchTranscribeInput) {
-  if (input.videoIds?.length) {
+  if (input.videoIds !== undefined) {
     const requestedIds = [...new Set(input.videoIds)];
     const byId = new Map(videos.map((video) => [video.id, video]));
     const missingIds = requestedIds.filter((videoId) => !byId.has(videoId));
     if (missingIds.length) {
       throw new Error(`有 ${missingIds.length} 条视频不属于当前账号，请刷新列表后重试。`);
     }
-    return requestedIds.map((videoId) => byId.get(videoId)!);
+    const pending = requestedIds.map((videoId) => byId.get(videoId)!).filter((video) => !videoHasTranscript(video));
+    return input.limit === "all" ? pending : pending.slice(0, Math.max(0, input.limit));
   }
 
   const pendingVideos = videos.filter((video) => !videoHasTranscript(video));
@@ -135,18 +139,27 @@ async function processVideos(
   douyinMediaUrls = await preloadDouyinMediaUrls(account, candidates, result, hooks.signal);
   }
   let nextIndex = 0;
+  let stopped = false;
 
   async function worker() {
-    while (nextIndex < candidates.length) {
-      throwIfAborted(hooks.signal);
-      const index = nextIndex;
-      nextIndex += 1;
-      const video = candidates[index];
-      await processVideo(input, hooks, result, video, index, candidates.length, douyinMediaUrls.get(video.id));
+    try {
+      while (!stopped && nextIndex < candidates.length) {
+        throwIfAborted(hooks.signal);
+        const index = nextIndex;
+        nextIndex += 1;
+        const video = candidates[index];
+        await processVideo(input, hooks, result, video, index, candidates.length, douyinMediaUrls.get(video.id));
+      }
+    } catch (error) {
+      stopped = true;
+      throw error;
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker));
+  // Wait for in-flight saves before the job releases its concurrency slot.
+  const workers = await Promise.allSettled(Array.from({ length: Math.min(concurrency, candidates.length) }, worker));
+  const failure = workers.find((worker) => worker.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
 }
 
 async function preloadDouyinMediaUrls(
@@ -197,10 +210,11 @@ async function processVideo(
       source: video.transcriptSource || "existing"
     });
     appendVideoResult(result, event);
-    hooks.onVideoResult?.(event);
+    await hooks.onVideoResult?.(event);
     return;
   }
 
+  let event: BatchTranscribeVideoEvent;
   try {
     const startedAt = Date.now();
     throwIfAborted(hooks.signal);
@@ -214,29 +228,27 @@ async function processVideo(
     });
     const timings = "timings" in transcribed ? transcribed.timings : undefined;
     result.completed += 1;
-    const event = buildVideoEvent(result, {
+    event = buildVideoEvent(result, {
       video,
       status: "completed",
       source: transcribed.video.transcriptSource || transcribed.usedProvider,
       timings: timings || [{ stage: "total", ms: Date.now() - startedAt }]
     });
-    appendVideoResult(result, event);
-    hooks.onVideoResult?.(event);
   } catch (error) {
     if (isAbortError(error)) throw error;
     result.failed += 1;
     const message = error instanceof Error ? error.message : "转写失败";
-    if (input.platform === "douyin") {
-      await markTranscriptFailed(input.platform, input.accountId, video.id, message).catch(() => undefined);
+    if (input.platform === "douyin" && !(error && typeof error === "object" && "statusCode" in error && error.statusCode === 409)) {
+      await markTranscriptFailed(input.platform, input.accountId, video.id, message);
     }
-    const event = buildVideoEvent(result, {
+    event = buildVideoEvent(result, {
       video,
       status: "failed",
       error: message
     });
-    appendVideoResult(result, event);
-    hooks.onVideoResult?.(event);
   }
+  appendVideoResult(result, event);
+  await hooks.onVideoResult?.(event);
 }
 
 function throwIfAborted(signal?: AbortSignal) {

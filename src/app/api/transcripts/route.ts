@@ -2,13 +2,14 @@ import { z } from "zod";
 import { apiJson, parseJsonBody } from "@/lib/api-route";
 import { deleteTranscript, getTranscriptSnapshot, restoreTranscriptVersion, saveTranscript } from "@/lib/storage";
 import { platforms } from "@/lib/types";
+import { safeSegment } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
 const schema = z.object({
   platform: z.enum(platforms),
-  accountId: z.string().min(1),
-  videoId: z.string().min(1)
+  accountId: z.string().refine(isSafeAccountId, "账号标识不合法"),
+  videoId: z.string().refine(isSafeSegment, "视频标识不合法")
 });
 
 const updateSchema = schema.extend({
@@ -17,9 +18,20 @@ const updateSchema = schema.extend({
 });
 
 const restoreSchema = schema.extend({
-  versionId: z.string().min(1),
+  versionId: z.string().refine(isSafeSegment, "版本标识不合法"),
   expectedRevision: z.string().nullable()
 });
+
+function isSafeSegment(value: string) {
+  const normalized = value.trim();
+  return normalized.length <= 128 && normalized === safeSegment(normalized) && !normalized.includes("..");
+}
+
+function isSafeAccountId(value: string) {
+  const normalized = value.trim();
+  const slug = normalized.includes(":") ? normalized.split(":").at(-1) || "" : normalized;
+  return normalized.length <= 160 && isSafeSegment(slug) && normalized.split(":").length <= 2;
+}
 
 export async function GET(request: Request) {
   return apiJson(async () => {
