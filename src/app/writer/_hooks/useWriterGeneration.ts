@@ -479,9 +479,7 @@ export function useWriterGeneration({
     if (lastDraftId && lastSavedContent === lastContent) return { draftId: lastDraftId, draft: null };
 
     const version = nextManualDraftVersion(lastDraftBase, lastDraftId);
-    const payload: DraftSaveInput = lastDraftBase.targetType === "project"
-      ? { ...lastDraftBase, version, content: lastContent }
-      : { ...lastDraftBase, version, content: lastContent };
+    const payload: DraftSaveInput = { ...lastDraftBase, version, content: lastContent };
     const draft = await saveDraft(payload);
     setLastDraftId(draft.id);
     setLastSavedContent(lastContent);

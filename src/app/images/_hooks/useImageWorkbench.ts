@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTasks } from "@/components/TaskProvider";
 import { confirmDiscardUnsavedChanges } from "@/components/UnsavedChangesGuard";
-import { deleteImageGenerationRecords, restoreLibraryTrashOperation, getImageGenerationConfig, getImageGenerationRecord, getImageRecords, invalidateImageRecordsCache, uploadImageReferences } from "@/lib/client";
+import { deleteImageGenerationRecords, restoreLibraryTrashOperation, getImageGenerationConfig, getImageGenerationRecord, getCachedImageRecords, getImageRecords, invalidateImageRecordsCache, uploadImageReferences } from "@/lib/client";
 import { imageGenerationInputSchema, type ImageFile, type ImageGenerationConfig, type ImageGenerationInput, type ImageGenerationRecord, type ImageGenerationSummary } from "@/lib/image-generation-types";
 import { imageMentionToken, imageMentionPattern, resolveImageMentions, appendImageMention, removeImageMention } from "@/lib/image-mentions";
 
@@ -22,9 +22,9 @@ export function useImageWorkbench() {
   const [baseline, setBaseline] = useState(() => JSON.stringify(emptyForm()));
   const [references, setReferences] = useState<ImageFile[]>([]);
   const [recordReferences, setRecordReferences] = useState<ImageFile[]>([]);
-  const [records, setRecords] = useState<ImageGenerationSummary[]>([]);
+  const [records, setRecords] = useState<ImageGenerationSummary[]>(() => getCachedImageRecords()?.records || []);
   const [boardRecords, setBoardRecords] = useState<ImageGenerationSummary[]>([]);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState(() => getCachedImageRecords()?.total || 0);
   const [boardTotal, setBoardTotal] = useState(0);
   const [canvasId, setCanvasId] = useState("");
   const [record, setRecord] = useState<ImageGenerationRecord | null>(null);
@@ -34,7 +34,7 @@ export function useImageWorkbench() {
   const deleteLock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedImageRecords());
   const [boardLoading, setBoardLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [moreLoading, setMoreLoading] = useState(false);
@@ -69,9 +69,9 @@ export function useImageWorkbench() {
     return () => { alive = false; };
   }, [fail, id]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options: { fresh?: boolean } = {}) => {
     const revision = ++listRevision.current;
-    invalidateImageRecordsCache();
+    if (options.fresh !== false) invalidateImageRecordsCache();
     try {
       const data = await getImageRecords();
       if (revision !== listRevision.current) return;
@@ -79,7 +79,8 @@ export function useImageWorkbench() {
     } catch (error) { if (revision === listRevision.current) fail(error); }
     finally { if (revision === listRevision.current) setLoading(false); }
   }, [fail]);
-  useEffect(() => { void refresh(); }, [taskVersion, refresh]);
+  // TaskProvider invalidates changed image data; entering this page can reuse the existing list.
+  useEffect(() => { void refresh({ fresh: false }); }, [taskVersion, refresh]);
   const refreshBoard = useCallback(async () => {
     const revision = ++boardRevision.current;
     if (!canvasId) { setBoardRecords([]); setBoardTotal(0); setBoardLoading(false); return; }

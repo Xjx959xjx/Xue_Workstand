@@ -41,6 +41,7 @@ export type RunOpenCliOptions = OpenCliTimingOptions & {
 
 export type SharedOpenCliBrowserOptions = {
   signal?: AbortSignal;
+  session?: string;
 };
 
 export function opencliBin() {
@@ -134,7 +135,7 @@ export function withSharedOpenCliBrowserSession<T>(
 ) {
   // Keep one leased background tab for the server lifetime. Releasing it after
   // every read makes the Browser Bridge create a new Chrome tab group next time.
-  const session = sharedOpenCliBrowserSession();
+  const session = options.session || sharedOpenCliBrowserSession();
   return enqueueOpenCliBrowserOperation(`browser:${session}`, () => operation(session), options.signal);
 }
 

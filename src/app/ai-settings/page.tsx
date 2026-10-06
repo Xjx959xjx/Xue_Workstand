@@ -60,7 +60,7 @@ export default function AiSettingsPage() {
     {w.loading ? <div className="panel ai-loading" role="status">正在读取模型配置…</div> : w.saved ? <div className="panel ai-settings-list" aria-busy={w.saving}>
       {AI_GROUPS.slice(1).map((group) => <section className="ai-settings-group" key={group} aria-label={group}>
         <div className="ai-group-heading"><h2>{group}</h2><span>模型</span><span>推理强度</span><span className="sr-only">操作</span></div>
-        {AI_POLICIES.filter((policy) => policy.group === group).map((policy) => <PolicyRow key={policy.id} policy={policy} w={w}/>)}
+        {AI_POLICIES.filter((policy) => policy.group === group && !("retired" in policy && policy.retired)).map((policy) => <PolicyRow key={policy.id} policy={policy} w={w}/>)}
       </section>)}
       <p className="ai-service-note">语音转写：{w.saved.services.asr}，无需设置推理强度。转写稿模型清洗{w.saved.services.transcriptCleaning ? "已开启" : "默认关闭"}。</p>
     </div> : null}

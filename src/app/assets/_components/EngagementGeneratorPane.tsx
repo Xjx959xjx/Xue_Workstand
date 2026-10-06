@@ -67,7 +67,7 @@ export function EngagementGeneratorPane({
             <span>精准采样</span>
             <span>语料审查</span>
             <span>AI 创作</span>
-            <span>去重质检</span>
+            <span>保存结果</span>
           </div>
           <div className="engagement-mode-row">
             <span className="field-label">目标平台</span>
@@ -173,7 +173,7 @@ function progressStageLabel(stage: string) {
   if (stage === "brief") return "提取人物、事件与桥段";
   if (stage === "research") return "采集并检查平台语料";
   if (stage === "generate") return "按真实语料补齐";
-  if (stage === "filter") return "去重与反人机质检";
+  if (stage === "filter") return "保存生成结果";
   return "评论生成中";
 }
 

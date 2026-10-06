@@ -10,7 +10,7 @@ export function useAiSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const dirtyIds = AI_POLICIES.filter((p) => JSON.stringify(overrides[p.id]) !== JSON.stringify(saved?.overrides[p.id])).map((p) => p.id);
+  const dirtyIds = AI_POLICIES.filter((p) => !("retired" in p && p.retired) && JSON.stringify(overrides[p.id]) !== JSON.stringify(saved?.overrides[p.id])).map((p) => p.id);
   const dirty = dirtyIds.length > 0;
   const load = useCallback(async () => {
     setLoading(true); setError("");

@@ -7,10 +7,10 @@ import { deleteDrafts, draftSummaryFromDraft, getCachedDrafts, getWriterHistoryD
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import type { Draft, DraftSummary } from "@/lib/types";
 
-export function useWriterHistory(loading: boolean, setNotice: (message: string) => void) {
+export function useWriterHistory(setNotice: (message: string) => void) {
   const [draftSummaries, setDraftSummaries] = useState<DraftSummary[] | null>(() => getCachedDrafts()?.drafts ?? null);
+  const [historyLoading, setHistoryLoading] = useState(() => !getCachedDrafts());
   const allDrafts = useMemo(() => draftSummaries || [], [draftSummaries]);
-  const historyLoading = loading || draftSummaries === null;
   const historyDrafts = useMemo(() => [...allDrafts].sort(compareCreatedAtDesc), [allDrafts]);
 
   const handleDraftSaved = useCallback(
@@ -31,6 +31,9 @@ export function useWriterHistory(loading: boolean, setNotice: (message: string) 
       })
       .catch((err) => {
         if (!ignore) setNotice(err instanceof Error ? err.message : "读取历史记录失败");
+      })
+      .finally(() => {
+        if (!ignore) setHistoryLoading(false);
       });
 
     return () => {

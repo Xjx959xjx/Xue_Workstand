@@ -1,5 +1,5 @@
 import path from "path";
-import { AI_POLICIES, type AiSettings } from "../ai-policy-catalog";
+import { AI_POLICIES, RETIRED_AI_POLICY_IDS, type AiSettings } from "../ai-policy-catalog";
 import { libraryRoot } from "./core";
 import { readJsonFile, writeJsonFile } from "./fs";
 import { aiSettingsSchema } from "./schemas";
@@ -11,6 +11,8 @@ export function validateAiSettings(value: unknown): AiSettings {
   const result = aiSettingsSchema.safeParse(value);
   if (!result.success) throw new Error(`AI 配置格式无效：${result.error.issues[0]?.message}`);
   for (const [id, config] of Object.entries(result.data.overrides)) {
+    // 保留历史配置原值，但停用节点不再出现在设置页或参与请求。
+    if (RETIRED_AI_POLICY_IDS.some((retired) => retired === id)) continue;
     const definition = AI_POLICIES.find((entry) => entry.id === id);
     if (!definition) throw new Error(`AI 配置包含未知链路：${id}`);
     if ("kind" in definition && config.effort !== "none") throw new Error("图片模型不支持对话推理等级");

@@ -104,6 +104,26 @@ test("分页游标不推进时显式失败，不能重复取同一页", async ()
   assert.match(result.rows[0].error, /游标未推进/);
 });
 
+test("空页仍有后续、缺结束标记和分页上限都显式失败，保留分页诊断", async () => {
+  for (const payload of [
+    { comments: [], cursor: 1, has_more: 1 },
+    { comments: [], cursor: 0 }
+  ]) {
+    const result = await run(async () => response(payload));
+    assert.match(result.rows[0].error, /空页|结束标记/);
+    assert.equal(result.rows[0].stopReason, "failed");
+  }
+  let page = 0;
+  const limited = await run(async () => response({ comments: [{ text: "评论" + ++page }], cursor: page, has_more: 1 }));
+  assert.match(limited.rows[0].error, /分页上限/);
+  assert.equal(limited.rows[0].pageTrace.length, 6);
+  assert.equal(limited.rows[0].comments.length, 0);
+  const ended = await run(async () => response({ comments: [{ text: "唯一原评" }], cursor: 1, has_more: 0 }));
+  assert.equal(ended.rows[0].stopReason, "exhausted");
+  assert.equal(ended.rows[0].pageTrace[0].returnedCount, 1);
+  assert.equal(ended.rows[0].pageTrace[0].nextCursor, 1);
+});
+
 test("非作品页只请求会话初始化，不发送评论请求", async () => {
   for (const location of [
     { origin: "null", pathname: "blank" },
@@ -133,7 +153,7 @@ test("常驻隐藏的验证 iframe 不拦截评论，真正显示的验证窗口
   assert.equal(vm.runInNewContext(DOUYIN_VERIFICATION_CHECK_JS, context), true);
 });
 
-async function withFakeCli(runTest: (events: () => Promise<string[]>) => Promise<void>, cold = false) {
+async function withFakeCli(runTest: (events: () => Promise<string[]>) => Promise<void>, cold = false, unknownCounts = false) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "douyin-comments-test-"));
   const fixture = path.join(dir, "cli.mjs");
   const eventFile = path.join(dir, "events.ndjson");
@@ -146,8 +166,8 @@ const event = (value) => fs.appendFileSync(${JSON.stringify(eventFile)}, value +
 if (args[0] === "douyin") {
   event("search");
   console.log(JSON.stringify([
-    { id: "1111111111111111111", desc: "小米17 手机评测", likes: 100000 },
-    { id: "2222222222222222222", desc: "小米17 手机体验", likes: 90000 }
+    { id: "1111111111111111111", desc: "小米17 手机评测", likes: 100000, comment_count: ${unknownCounts ? "undefined" : "300"} },
+    { id: "2222222222222222222", desc: "小米17 手机体验", likes: 90000, comment_count: ${unknownCounts ? "undefined" : "400"} }
   ]));
 } else if (args.includes("open")) {
   event("open");
@@ -162,6 +182,7 @@ if (args[0] === "douyin") {
     fetch: async (url) => {
       const parsed = new URL(url);
       event(parsed.pathname);
+      if (parsed.pathname.endsWith("/aweme/detail/")) return { ok: true, json: async () => ({ aweme_detail: { statistics: { comment_count: 300 } } }) };
       return parsed.searchParams.get("aweme_id") === "2222222222222222222"
         ? { ok: false, status: 500 }
         : { ok: true, text: async () => JSON.stringify({ comments: [{ text: "小米17 评论", digg_count: 9 }], has_more: 0 }) };
@@ -200,13 +221,13 @@ test("直接入口冷启动只初始化一次，后续调用复用会话且不�
   }, true);
 });
 
-test("调研入口保留同批成功评论并传递每个失败视频的原因", async () => {
+test("调研入口保留成功评论并传递每个失败视频的原因", async () => {
   await withFakeCli(async (events) => {
     const result = await getDouyinRelatedTopicComments("小米17", { videoLimit: 2, commentLimit: 12 });
     assert.equal(result.commentSamples.length, 1);
     assert.match(result.errors![0], /2222222222222222222.*HTTP 500/);
     const calls = await events();
-    assert.equal(calls.filter((call) => call === "eval").length, 1);
+    assert.equal(calls.filter((call) => call === "eval").length, 2);
     assert.equal(calls.includes("open"), false);
   });
 });
@@ -216,4 +237,17 @@ test("直接入口拒绝错误 ID，取消后的请求不进入浏览器队列",
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(getDouyinComments({ id: "1111111111111111111", url: "" }, 12, { signal: controller.signal }), { name: "AbortError" });
+});
+
+
+test("调研详情核验冷启动先初始化抖音会话，后续视频复用页面", async () => {
+  await withFakeCli(async (events) => {
+    const result = await getDouyinRelatedTopicComments("小米17", { videoLimit: 2, commentLimit: 12 });
+    assert.equal(result.videos[0].commentCount, 300);
+    assert.equal(result.commentSamples.length, 1);
+    const calls = await events();
+    assert.equal(calls.filter(call => call === "open").length, 1);
+    assert.ok(calls.indexOf("open") < calls.indexOf("/aweme/v1/web/aweme/detail/"));
+    assert.equal(calls.filter(call => call === "/aweme/v1/web/aweme/detail/").length, 2);
+  }, true, true);
 });

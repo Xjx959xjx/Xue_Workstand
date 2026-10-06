@@ -1,4 +1,4 @@
-import type { JobKind, JobRecord } from "./types";
+import type { JobKind, JobRecord, JobStartInput } from "./types";
 
 export const DEFAULT_JOB_RESULT_PERSIST_BYTES = 96 * 1024;
 
@@ -11,8 +11,9 @@ const resumableJobKinds = new Set<JobKind>([
   "gross-margin-refresh"
 ]);
 
-export function isResumableJobKind(kind: JobKind) {
-  return resumableJobKinds.has(kind);
+export function isResumableJobKind(kind: JobKind, input?: JobStartInput) {
+  return resumableJobKinds.has(kind) || (kind === "engagement" && input?.kind === "engagement"
+    && Boolean(input.checkpointId) && input.input.includeComments === true && !input.input.includeDanmaku);
 }
 
 export function compactJobForPersistence(

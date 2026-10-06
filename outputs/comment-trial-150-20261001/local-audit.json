@@ -1,0 +1,65 @@
+[
+  {
+    "id": "game",
+    "variant": "A",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "game",
+    "variant": "B",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "game",
+    "variant": "C",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "tech",
+    "variant": "B",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "tech",
+    "variant": "C",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "tech",
+    "variant": "A",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "story",
+    "variant": "C",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "story",
+    "variant": "A",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  },
+  {
+    "id": "story",
+    "variant": "B",
+    "count": 0,
+    "exactDuplicates": 0,
+    "lengths": {}
+  }
+]

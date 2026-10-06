@@ -6,6 +6,7 @@ import { readJsonFile, storageFs, writeFileAtomic, writeJsonFile } from "./fs";
 import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "./schemas";
 import type { ImageFile, ImageGenerationRecord, ImageGenerationSummary } from "../image-generation-types";
 import { imagePromptLabel } from "../image-mentions";
+import { mapWithConcurrency } from "../concurrency";
 
 function recordPath(id: string) {
   return path.join(libraryRoot(), "images", "records", `${normalizeStorageSegment(id, "生图记录 ID")}.json`);
@@ -65,12 +66,13 @@ export async function listImageRecords(offset = 0, limit = 40, canvasId?: string
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return { records: [], total: 0 };
     throw new Error("读取生图历史失败，请检查素材库目录权限。");
   }
-  const records: ImageGenerationSummary[] = [];
   // Bounded reads avoid opening every historical asset concurrently; image bytes stay lazy.
-  for (const entry of entries.filter((name) => name.endsWith(".json"))) {
+  const summaries = await mapWithConcurrency(entries.filter((name) => name.endsWith(".json")), 6, async (entry): Promise<ImageGenerationSummary | null> => {
     const record = await getImageRecord(entry.slice(0, -5));
-    if (record && !record.deletedAt && (!canvasId || (record.canvasId || record.id) === canvasId)) records.push({ id: record.id, canvasId: record.canvasId || record.id, parentRecordId: record.parentRecordId, parentImageId: record.parentImageId, referenceIds: record.referenceIds, model: record.model, size: record.size, count: record.count, createdAt: record.createdAt, updatedAt: record.updatedAt, title: imagePromptLabel(record.prompt).slice(0, 60), imageCount: record.images.length, thumbnail: record.images[0] });
-  }
+    if (!record || record.deletedAt || (canvasId && (record.canvasId || record.id) !== canvasId)) return null;
+    return { id: record.id, canvasId: record.canvasId || record.id, parentRecordId: record.parentRecordId, parentImageId: record.parentImageId, referenceIds: record.referenceIds, model: record.model, size: record.size, count: record.count, createdAt: record.createdAt, updatedAt: record.updatedAt, title: imagePromptLabel(record.prompt).slice(0, 60), imageCount: record.images.length, thumbnail: record.images[0] };
+  });
+  const records = summaries.filter((record): record is ImageGenerationSummary => record !== null);
   records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return { records: records.slice(offset, offset + limit), total: records.length };
 }

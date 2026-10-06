@@ -1,8 +1,6 @@
 import { z } from "zod";
-import { shortHash } from "./utils";
 
 export { STYLE_ANALYSIS_VERSION, WRITER_PROMPT_VERSION, styleAnalysisInstruction } from "./writer-prompts";
-export const WRITER_REFERENCE_BUDGET = 14_000;
 const text = z.string().trim().min(1);
 const evidence = z.object({ quote: text, action: text, when: text, avoid: z.string() });
 const narrativeSchema = z.object({
@@ -61,8 +59,6 @@ export const writerContextSchema = z.object({
 });
 export type WriterContextSnapshot = z.infer<typeof writerContextSchema>;
 
-export type WriterCandidate = { id: string; title: string; transcript: string; analysis: StyleEvidence };
-
 export function parseModelJson(value: string, label: string): unknown {
   try {
     return JSON.parse(value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
@@ -120,10 +116,6 @@ export function styleEvidencePassages(analysis: StyleEvidence, transcript: strin
   return [...new Set([...quotes, ...merged.map(range => transcript.slice(range.start, range.end))])];
 }
 
-export function referenceSelectionInstruction() {
-  return "目的和讲法分别匹配：推广可以用吃瓜、趣事或悬念切入，不能仅因genre或开头是争议就排除整篇。结合purposes、narrative.beats及bridges判断具体可借鉴段落、怎样转入游戏或活动。借用衔接前核对requires与本次真实资料；无依据不能编造爆料、玩家反应或亲历。纯争议稿也可借鉴适用的局部表达，但不能把提到同一游戏视为推广依据。";
-}
-
 export type StyleCardEvidence = { sourceId: string; quote: string; workHash?: string };
 
 export function validateStyleCardCitations(
@@ -153,78 +145,6 @@ export function validateStyleCardCitations(
     if (verifiedEnd < 0) throw invalidCitation();
     marker.lastIndex = verifiedEnd + 1;
   }
-}
-
-export function candidateIndex(candidate: WriterCandidate) {
-  return { id: candidate.id, title: candidate.title, chars: candidate.transcript.length, ...candidate.analysis };
-}
-
-// Every candidate reaches selection; large libraries are screened in bounded batches.
-export function batchCandidates(candidates: WriterCandidate[], budget = 20_000) {
-  const batches: WriterCandidate[][] = [];
-  let batch: WriterCandidate[] = [];
-  let chars = 0;
-  for (const candidate of candidates) {
-    const size = JSON.stringify(candidateIndex(candidate)).length;
-    if (batch.length && chars + size > budget) { batches.push(batch); batch = []; chars = 0; }
-    batch.push(candidate); chars += size;
-  }
-  if (batch.length) batches.push(batch);
-  return batches;
-}
-
-export function validateWriterPlan(value: unknown, candidates: WriterCandidate[], factsContext: string): WriterPlan {
-  const parsed = writerPlanSchema.safeParse(value);
-  if (!parsed.success) throw new Error("写作任务解析结构不完整，请重试；已有稿件未被替换。");
-  const plan = parsed.data;
-  const byId = new Map(candidates.map(c => [c.id, c]));
-  if (new Set(plan.selected.map(s => s.id)).size !== plan.selected.length || plan.selected.some(s => !byId.has(s.id))) {
-    throw new Error("参考选择包含重复或不属于本风格的样本，请重新生成。");
-  }
-  const quotes = [...plan.task.facts, ...plan.task.mustKeep, ...plan.task.forbiddenTerms].map(v => v.quote);
-  if (plan.task.length) quotes.push(plan.task.length.quote);
-  if (quotes.some(quote => !factsContext.includes(quote))) throw new Error("任务要求或事实引句无法在本次资料中定位，请重试。");
-  if (!plan.selected.length && !plan.notes.length) throw new Error("没有选出适用参考，模型也未说明原因，请重试。");
-  return plan;
-}
-
-export function referenceText(candidate: WriterCandidate, budget: number) {
-  if (candidate.transcript.length <= budget) return candidate.transcript;
-  // Keep a bridge's intervening text together; do not splice its endpoints into a false transition.
-  const spans = (candidate.analysis.narrative?.bridges || []).map(bridge => {
-    const start = candidate.transcript.indexOf(bridge.before);
-    const after = candidate.transcript.indexOf(bridge.after, start + bridge.before.length);
-    return { start, end: after < 0 ? -1 : after + bridge.after.length };
-  });
-  for (const quote of styleEvidenceQuotes(candidate.analysis)) {
-    const start = candidate.transcript.indexOf(quote);
-    spans.push({ start, end: start + quote.length });
-  }
-  const prefix = "【原文过长，以下为已核验的连续证据段落，非全文】\n";
-  const separator = "\n\n【另一个原文片段】\n";
-  const chosen: Array<{ start: number; end: number }> = [];
-  let remaining = budget - prefix.length;
-  for (const span of spans) {
-    if (span.start < 0 || span.end <= span.start || chosen.some(s => span.start < s.end && span.end > s.start)) continue;
-    const cost = span.end - span.start + (chosen.length ? separator.length : 0);
-    if (cost > remaining) continue;
-    chosen.push(span); remaining -= cost;
-  }
-  chosen.sort((a, b) => a.start - b.start);
-  return chosen.length ? prefix + chosen.map(s => candidate.transcript.slice(s.start, s.end)).join(separator) : "";
-}
-
-export function snapshotReferences(candidates: WriterCandidate[], plan: WriterPlan) {
-  const samples: WriterContextSnapshot["samples"] = [];
-  let remaining = WRITER_REFERENCE_BUDGET;
-  for (const selection of plan.selected) {
-    const candidate = candidates.find(c => c.id === selection.id)!;
-    const content = referenceText(candidate, remaining);
-    if (!content) continue;
-    samples.push({ id: candidate.id, title: candidate.title, text: content, hash: shortHash(content), reason: selection.reason });
-    remaining -= content.length;
-  }
-  return samples;
 }
 
 export function checkWriterConstraints(content: string, task?: WriterTask | null) {

@@ -12,10 +12,11 @@ export function EngagementResearchDetails({ research }: { research: Research }) 
   const rows = (review?.decisions || []).filter((row) => filter === "all" || row.keep === (filter === "kept"));
   return (
     <details className="engagement-research-details">
-      <summary>查看采集与 AI 筛选依据{review ? ` · 已审 ${review.reviewedCount}/${review.candidateCount}` : " · 历史记录未保存逐条依据"}</summary>
+      <summary>{review ? `查看历史原评审核 · 已审 ${review.reviewedCount}/${review.candidateCount}` : "查看采集与表达参考"}</summary>
       <p>{research.voiceReferences ? `本次使用 ${research.voiceReferences.length} 条自然表达学习语气；语境不匹配的样本只参考说话方式，来源人物与事实不进入新评论。` : "原生评论用于学习平台语气与讨论方式，新生成的评论围绕当前文案创作。"}</p>
       {typeof research.capturedCommentCount === "number" ? <p>去重采集 {research.capturedCommentCount} 条，整组隔离 {research.quarantinedCommentCount || 0} 条。</p> : null}
       {review ? <p role="status">语境筛选{review.status === "completed" ? "全部完成" : "部分完成"}：保留 {review.reviewedCount - review.rejectedCount}，拒绝 {review.rejectedCount}，未审 {review.unreviewedCount}。未审评论不进入参考。</p> : null}
+      {!review && research.voiceReferences ? <p>原评按来源、长短和点赞轮转选择，参考 JSON 最多 12,000 字符，不限制 80 条或每视频 20 条。只学习表达；新生成评论直接保存，不再执行 AI 审核或本地内容筛选。</p> : null}
       {research.summaryError ? <p className="notice">{research.summaryError}</p> : null}
       <ul>
         {(research.searchPlan || []).map((source) => <li key={source.query}><strong>{source.query}</strong> · {source.videoType}<br />{source.discussion}</li>)}
@@ -36,6 +37,11 @@ export function EngagementResearchDetails({ research }: { research: Research }) 
             ))}
           </ol>
           {rows.length > limit ? <button className="btn compact" type="button" onClick={() => setLimit((value) => value + 20)}>再显示 20 条（共 {rows.length} 条）</button> : null}
+        </>
+      ) : research.voiceReferences ? (
+        <>
+          <ol>{research.voiceReferences.slice(0, limit).map((text, index) => <li key={`${index}:${text}`}>{text}</li>)}</ol>
+          {research.voiceReferences.length > limit ? <button className="btn compact" type="button" onClick={() => setLimit((value) => value + 20)}>再显示 20 条（共 {research.voiceReferences.length} 条）</button> : null}
         </>
       ) : null}
     </details>

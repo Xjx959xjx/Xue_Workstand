@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "sourceHashes": {
+    "src/lib/engagement.ts": {
+      "expected": "02a1a84aac5185aa3bda5bc294277607bcbe5078d81fc878426b8eacccf50b0e",
+      "current": "02a1a84aac5185aa3bda5bc294277607bcbe5078d81fc878426b8eacccf50b0e",
+      "unchanged": true
+    },
+    "src/lib/engagement-research.ts": {
+      "expected": "27b0718d1a593feab015d5ff8a27e2c14b5f08e398a814e85790eb6e44f7f8b5",
+      "current": "27b0718d1a593feab015d5ff8a27e2c14b5f08e398a814e85790eb6e44f7f8b5",
+      "unchanged": true
+    },
+    "src/lib/ai.ts": {
+      "expected": "ade30f93805182f05a943982a113d6cc558a330832763d00febb76ac818a933a",
+      "current": "ade30f93805182f05a943982a113d6cc558a330832763d00febb76ac818a933a",
+      "unchanged": true
+    }
+  },
+  "allUnchanged": true
+}

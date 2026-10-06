@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "revision": 8,
+  "updatedAt": "2026-09-30T12:01:29.980Z",
+  "overrides": {
+    "publish_plan": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "publish_generate": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "comment_plan": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "writer_generate": {
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh"
+    },
+    "account_sample": {
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    },
+    "account_style": {
+      "model": "gpt-6-astra",
+      "effort": "high"
+    },
+    "writer_revise": {
+      "model": "",
+      "effort": "high"
+    },
+    "web_research": {
+      "model": "",
+      "effort": "high"
+    },
+    "comment_review": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "comment_output_review": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "comment_generate": {
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    },
+    "vision": {
+      "model": "",
+      "effort": "high"
+    }
+  }
+}

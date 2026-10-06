@@ -5,9 +5,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  parseStyleEvidence, validateWriterPlan, snapshotReferences, batchCandidates,
-  checkWriterConstraints, validateStyleCardCitations, referenceText, candidateIndex,
-  type StyleEvidence, type WriterCandidate, type WriterPlan
+  parseStyleEvidence, checkWriterConstraints, validateStyleCardCitations,
+  type StyleEvidence, type WriterPlan
 } from "../src/lib/writer-context";
 import { parseStoredRecord } from "../src/lib/storage/schemas";
 import { prepareWriteCopyContext, prepareWriteCopyBatchContext, resolveWriteBatchOutcome, completePreparedWriteCopy, prepareAccountStyleContext, completePreparedAccountStyle, prepareProjectStyleContext, completePreparedProjectStyle } from "../src/lib/ai";
@@ -32,7 +31,6 @@ const task: WriterPlan["task"] = {
   forbiddenTerms: [{ text: "联名", quote: "不用联名" }], length: { min: 4, max: 20, quote: "4—20字" }
 };
 const inputText = "活动可试驾，不用联名，4—20字。原框架仅供参考。";
-const candidate: WriterCandidate = { id: "event", title: "低热度活动", transcript: quote, analysis: evidence };
 const styleCard = (sourceId = "event", excerpt = quote) => `# 活动风格卡
 ## 风格概览
 用现场内容引入。
@@ -49,13 +47,9 @@ const styleCard = (sourceId = "event", excerpt = quote) => `# 活动风格卡
 单篇支持，不代表全部作品。`;
 const plan = (id = "event"): WriterPlan => ({ task, selected: [{ id, reason: "活动用途相符，借鉴现场切入" }], applicableStyle: ["先讲具体活动，再解释规则"], notes: [] });
 
-test("风格引句与任务事实必须来自各自原文，跨账号ID不能混入", () => {
+test("风格分析引句和风格卡引用必须来自各自原文", () => {
   assert.deepEqual(parseStyleEvidence(JSON.stringify(evidence), quote, "样本"), evidence);
   assert.throws(() => parseStyleEvidence(JSON.stringify(evidence), "另一篇原文", "样本"), /原文定位/);
-  assert.throws(() => validateWriterPlan(plan("other-account"), [candidate], inputText), /不属于本风格/);
-  assert.throws(() => validateWriterPlan({ ...plan(), task: { ...task, facts: [{ text: "销量高", quote: "旧案例销量高" }] } }, [candidate], inputText), /引句/);
-  assert.throws(() => validateWriterPlan({ ...plan(), selected: [plan().selected[0], plan().selected[0]] }, [candidate], inputText), /重复/);
-  assert.equal(validateWriterPlan(plan(), [candidate], inputText).selected.length, 1);
   validateStyleCardCitations("以自然叙述推进，评价融入细节。", [{ sourceId: "event", quote }]);
   assert.throws(() => validateStyleCardCitations(`[[other]]「${quote}」`, [{ sourceId: "event", quote }]), /引用/);
   validateStyleCardCitations(`[[event]]「${quote}」`, [{ sourceId: "event", quote }]);
@@ -75,16 +69,7 @@ test("风格卡允许同一证据的连续摘录，但拒绝改字、拼接或�
   assert.throws(() => validateStyleCardCitations(`[[other]]「${excerpt}」`, quotes), /引用/);
 });
 
-test("参考按总预算保留全文或完整证据，不截掉长文结尾也不固定篇数", () => {
-  const long = { ...candidate, transcript: "前文".repeat(9000) + quote };
-  const reference = snapshotReferences([long], plan())[0];
-  assert.match(reference.text, /非全文/);
-  assert.ok(reference.text.includes(quote));
-  assert.ok(reference.text.length < 14_000);
-  const candidates = Array.from({ length: 10 }, (_, i) => ({ ...candidate, id: String(i) }));
-  assert.equal(batchCandidates(candidates, 1000).flat().length, 10);
-  const selected = candidates.map(c => ({ id: c.id, reason: "用途相符" }));
-  assert.equal(snapshotReferences(candidates, { ...plan(), selected }).length, 10);
+test("成稿保留字数和禁用词检查", () => {
   assert.deepEqual(checkWriterConstraints("活动可试驾", task), []);
   assert.ok(checkWriterConstraints("联名", task).length === 2);
 });
@@ -107,7 +92,6 @@ const mixedEventEvidence: StyleEvidence = {
 test("目的与讲法可并存，段落和衔接引句必须按原文顺序定位", () => {
   const parsed = parseStyleEvidence(JSON.stringify(mixedEventEvidence), mixedEventText, "吃瓜推广");
   assert.deepEqual(parsed.purposes, ["讲述玩家趣事", "介绍版本活动"]);
-  assert.deepEqual(candidateIndex({ ...candidate, analysis: parsed }).narrative, parsed.narrative);
   const narrative = mixedEventEvidence.narrative!;
   assert.throws(() => parseStyleEvidence(JSON.stringify({ ...mixedEventEvidence, narrative: { ...narrative, beats: [...narrative.beats].reverse() } }), mixedEventText, "倒序"), /段落顺序/);
   assert.throws(() => parseStyleEvidence(JSON.stringify({ ...mixedEventEvidence, narrative: { ...narrative, bridges: [{ ...narrative.bridges[0], before: eventAfter, after: eventBefore }] } }), mixedEventText, "倒接"), /前后顺序/);
@@ -116,17 +100,6 @@ test("目的与讲法可并存，段落和衔接引句必须按原文顺序定�
   assert.doesNotThrow(() => parseStoredRecord("旧缓存", { schemaVersion: 1, version: 1, cacheKey: "old", kind: "account-video", sourceId: "old",
     title: "旧分析", inputChars: quote.length, analysis: JSON.stringify(legacy), evidence: legacy, usedModel: "fixture", reasoningEffort: "high", generatedAt: new Date().toISOString() }, "style-analysis"));
   assert.throws(() => parseStyleEvidence(JSON.stringify(legacy), quote, "旧分析"), /讲述方式与段落衔接/);
-});
-
-test("长文优先保留衔接两端之间的原文，片段有分隔且不超预算", () => {
-  const middle = "关于玩家 ID 成为景点这件事呢，他们给出的解释是这样子的啊。";
-  const transcript = "前面的其他事件。".repeat(100) + `${eventBefore}\n${middle}\n${eventAfter}\n${eventRule}`;
-  const sample = { ...candidate, transcript, analysis: mixedEventEvidence };
-  const text = referenceText(sample, 300);
-  assert.ok(text.includes(`${eventBefore}\n${middle}\n${eventAfter}`), "不能直接拼接两个端点、删除中间的原文");
-  assert.match(text, /另一个原文片段/);
-  assert.ok(text.indexOf(eventBefore) < text.indexOf(eventRule));
-  for (const budget of [0, 20, 70, 150, 300]) assert.ok(referenceText(sample, budget).length <= budget);
 });
 
 test("原作衔接用于风格学习，默认首稿不自动附带原作", async () => {

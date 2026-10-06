@@ -42,7 +42,9 @@
 .radar-discovery-page > header, .radar-discovery-page > nav { flex-shrink: 0; }
 .newsnow-discovery { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 10px; }
 .newsnow-toolbar, .newsnow-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.newsnow-frame { width: 100%; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.newsnow-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+/* Replace inherited zoom with a transform so WebKit does not shrink the iframe viewport twice. */
+.newsnow-frame { position: absolute; inset: 0; width: calc(100% / var(--app-ui-scale)); height: calc(100% / var(--app-ui-scale)); zoom: calc(1 / var(--app-ui-scale)); transform: scale(var(--app-ui-scale)); transform-origin: top left; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .newsnow-placeholder { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .radar-header-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .radar-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }

@@ -76,7 +76,7 @@ export function EngagementResultsPane({
             {typeof generation.nativeEmoteCount === "number" ? <span>含表情 {generation.nativeEmoteCount}</span> : null}
             {relatedResearch?.relatedVideoCount ? <span>相关视频 {relatedResearch.relatedVideoCount}</span> : null}
             {typeof relatedResearch?.targetPlatformCommentCount === "number" ? <span>目标平台可用参考 {relatedResearch.targetPlatformCommentCount}</span> : null}
-            {typeof relatedResearch?.freshCommentCount === "number" ? <span>已审可用参考 {relatedResearch.freshCommentCount}</span> : null}
+            {typeof relatedResearch?.freshCommentCount === "number" ? <span>{relatedResearch.review ? "已审可用参考" : "精选表达参考"} {relatedResearch.freshCommentCount}</span> : null}
             {typeof relatedResearch?.matchedLibraryCommentCount === "number" && relatedResearch.matchedLibraryCommentCount > 0
               ? <span>历史语义命中 {relatedResearch.matchedLibraryCommentCount}</span>
               : null}
@@ -89,7 +89,7 @@ export function EngagementResultsPane({
             ) : null}
             {generation.reusedRelatedCommentCount ? <span>相关原评 {generation.reusedRelatedCommentCount}</span> : null}
             {generation.aiGeneratedCount ? <span>AI 生成 {generation.aiGeneratedCount}</span> : null}
-            {generation.outputReview ? <span>本轮新评论质检拒绝 {generation.outputReview.rejectedCount}/{generation.outputReview.reviewedCount}</span> : null}
+            {generation.outputReview ? <span>历史 AI 审核拒绝 {generation.outputReview.rejectedCount}/{generation.outputReview.reviewedCount}</span> : null}
             {relatedResearch?.sampleLibraryCount ? <span>样本库 {relatedResearch.sampleLibraryCount}</span> : null}
             {relatedResearch?.replySampleCount ? <span>回复讨论 {relatedResearch.replySampleCount}</span> : null}
             {relatedResearch?.sourceStats?.some((source) => source.status !== "completed")
@@ -127,7 +127,7 @@ export function EngagementResultsPane({
               <Download aria-hidden="true" size={16} />
             </button>
           )}
-          title={`评论 ${activeComments.length}${missingCommentCount && !isGenerating ? `/${requestedCommentCount}` : ""}${isGenerating && previewComments.length ? " · 生成与质检中" : ""}`}
+          title={`评论 ${activeComments.length}${missingCommentCount && !isGenerating ? `/${requestedCommentCount}` : ""}${isGenerating && previewComments.length ? " · 生成与保存中" : ""}`}
           onCopy={() => onCopyText(activeComments.map((item) => item.text).join("\n"), "评论已复制。")}
           onPublish={() =>
             onPublishAssetText(

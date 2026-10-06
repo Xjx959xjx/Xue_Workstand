@@ -199,7 +199,7 @@ function WriterPageContent() {
     ? library?.projects.find((project) => project.id === primaryStyleRef.projectId) || null
     : null, [library?.projects, primaryStyleRef]);
 
-  const { historyDrafts, historyLoading, handleDraftSaved, setDraftSummaries } = useWriterHistory(loading, setNotice);
+  const { historyDrafts, historyLoading, handleDraftSaved, setDraftSummaries } = useWriterHistory(setNotice);
 
   const { activeStyleLoading, activeStyleError, activeTitle, styleCards } = useWriterReferenceDetails({
     accounts: library?.accounts || EMPTY_ACCOUNTS,

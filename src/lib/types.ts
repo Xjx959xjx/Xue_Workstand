@@ -1249,7 +1249,7 @@ export type JobEvent = {
 };
 
 export type JobDataChange = {
-  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin" | "hotspots" | "drafts";
+  resource: "image-generation" | "library-account" | "douyin-hotlist" | "gross-margin" | "hotspots" | "drafts" | "engagement";
   at: string;
   accountId?: string;
   videoId?: string;
@@ -1476,6 +1476,7 @@ export type JobStartInput =
     }
   | {
       kind: "engagement";
+      checkpointId?: string;
       title?: string;
       inputSummary?: string;
       href?: string;

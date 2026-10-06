@@ -44,18 +44,6 @@ export function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean))];
 }
 
-export function selectFallbackMetricThreshold(
-  metrics: number[],
-  preferred: number,
-  fallbackTiers: number[]
-) {
-  const tiers = [...new Set([preferred, ...fallbackTiers, 0])]
-    .map((value) => Math.max(0, Math.round(value)))
-    .filter((value) => value <= preferred)
-    .sort((left, right) => right - left);
-  return tiers.find((threshold) => metrics.some((metric) => metric >= threshold)) ?? 0;
-}
-
 export function isRelatedVideoRelevant(title: string, query: string) {
   const normalizedTitle = normalizeSearchComparableText(title);
   if (!normalizedTitle) return false;
@@ -71,6 +59,35 @@ export function isExcludedRelatedVideo(videoId: string, excludedVideoIds: string
   const key = videoId.trim().toLowerCase();
   if (!key) return false;
   return (excludedVideoIds || []).some((value) => value.trim().toLowerCase() === key);
+}
+
+/** 保留平台搜索名次，兼顾检索方向和作者差异；热度只用于同名次的比较。 */
+export function selectRelatedCommentVideos<T extends { id: string; title: string; author?: string }>(
+  groups: Array<{ query: string; videos: T[] }>, limit: number, compareHeat: (a: T, b: T) => number
+): Array<T & { query: string }> {
+  const merged = new Map<string, { video: T; rank: number; queries: string[] }>();
+  for (const group of groups) group.videos.forEach((video, rank) => {
+    const previous = merged.get(video.id);
+    if (previous) { previous.rank = Math.min(previous.rank, rank); if (!previous.queries.includes(group.query)) previous.queries.push(group.query); }
+    else merged.set(video.id, { video, rank, queries: [group.query] });
+  });
+  const candidates = [...merged.values()];
+  const usedQueries = new Set<string>();
+  const authors = new Set<string>();
+  const titles = new Set<string>();
+  const selected: Array<T & { query: string }> = [];
+  while (selected.length < limit && candidates.length) {
+    candidates.sort((a, b) =>
+      Number(b.queries.some((q) => !usedQueries.has(q))) - Number(a.queries.some((q) => !usedQueries.has(q)))
+      || Number(Boolean(a.video.author && authors.has(a.video.author))) - Number(Boolean(b.video.author && authors.has(b.video.author)))
+      || Number(titles.has(a.video.title)) - Number(titles.has(b.video.title))
+      || a.rank - b.rank || compareHeat(a.video, b.video));
+    const next = candidates.shift()!;
+    const query = next.queries.find((q) => !usedQueries.has(q)) || next.queries[0];
+    selected.push({ ...next.video, query }); usedQueries.add(query);
+    if (next.video.author) authors.add(next.video.author); titles.add(next.video.title);
+  }
+  return selected;
 }
 
 function extractRelatedSearchTerms(query: string) {

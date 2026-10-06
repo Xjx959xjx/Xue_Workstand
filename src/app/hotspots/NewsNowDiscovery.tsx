@@ -92,7 +92,9 @@ export function NewsNowDiscovery({ navigation }: { navigation: ReactNode }) {
     {workbench?.storageError ? <p className="newsnow-feedback" role="alert">{workbench.storageError}</p> : null}
     {status?.available ? <>
       {slow ? <p className="subtle" role="status">内嵌页面加载较慢。若内容空白，请尝试重新连接或独立打开。</p> : null}
-      <iframe ref={frame} key={attempt} className="newsnow-frame" src={NEWSNOW_URL} title="NewsNow 实时资讯" onLoad={() => { setLoaded(true); setSlow(false); command("connect"); }} onError={() => setStatus({ available: false, message: "NewsNow 页面加载失败，请重新连接或独立打开。" })} />
+      <div className="newsnow-viewport">
+        <iframe ref={frame} key={attempt} className="newsnow-frame" src={NEWSNOW_URL} title="NewsNow 实时资讯" onLoad={() => { setLoaded(true); setSlow(false); command("connect"); }} onError={() => setStatus({ available: false, message: "NewsNow 页面加载失败，请重新连接或独立打开。" })} />
+      </div>
     </> : <div className="newsnow-placeholder" aria-busy={!status}>
       <h2>{status ? "暂时无法打开资讯发现" : "正在打开资讯发现"}</h2>
       <p role={status ? "alert" : "status"}>{status?.message || "正在检查本机 NewsNow 服务…"}</p>

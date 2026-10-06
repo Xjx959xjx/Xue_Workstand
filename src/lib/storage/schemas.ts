@@ -323,19 +323,106 @@ export const hotspotRequestCacheSchema = z.object({
   nextRetryAt: z.number(), error: z.string().optional()
 });
 
-export const engagementReviewDecisionSchema = z.object({
-  id: z.number().int().nonnegative(), keep: z.boolean(),
-  natural: z.boolean(), contextComplete: z.boolean(),
-  reason: z.string().trim().min(1).max(500),
-  articleEvidence: z.string().trim().max(500)
+const engagementResearchCount = z.number().int().nonnegative();
+export const commentCollectionAttemptSchema = z.object({
+  videoId: z.string().min(1), requestedCount: engagementResearchCount, collectedCount: engagementResearchCount,
+  acceptedCount: engagementResearchCount.optional(), elapsedMs: z.number().nonnegative(),
+  stopReason: z.enum(["target_reached", "exhausted", "failed", "cancelled"]), error: z.string().optional(),
+  pages: z.array(z.object({
+    cursor: engagementResearchCount, nextCursor: engagementResearchCount,
+    returnedCount: engagementResearchCount, addedCount: engagementResearchCount, hasMore: z.boolean()
+  }))
 });
-
-export const engagementReviewCacheSchema = z.object({
+const engagementSampleSchema = z.object({
+  platform: platformSchema, query: z.string(), videoId: z.string(), videoTitle: z.string(),
+  videoMetric: z.number(), videoPublishedAt: z.string().optional(), text: z.string(),
+  likes: z.number(), replies: z.number(), collectedAt: z.string(), sourceKind: z.enum(["related_video", "library"]).optional()
+});
+export const engagementResearchCacheSchema = z.object({
   schemaVersion: z.literal(1), engineVersion: z.string().min(1), cachedAt: z.string().datetime(),
-  decisions: z.array(engagementReviewDecisionSchema).max(60)
+  research: z.object({
+    capturedSamples: z.array(engagementSampleSchema).optional(),
+    referenceSamples: z.array(engagementSampleSchema).optional(),
+    referenceTextChars: engagementResearchCount.optional(),
+    collectionCoverage: z.object({ target: engagementResearchCount, uniqueCount: engagementResearchCount,
+      attemptedVideoCount: engagementResearchCount, targetReached: z.boolean() }).optional(),
+    collectionSources: z.array(z.object({
+      collectionAttempts: z.array(commentCollectionAttemptSchema).optional(),
+      source: platformSchema, query: z.string(), elapsedMs: z.number().nonnegative().optional(),
+      videos: z.array(z.object({ id: z.string(), title: z.string(), query: z.string().optional(), commentCount: z.number().int().nonnegative().optional(), metric: z.number(), publishedAt: z.string().optional() })),
+      comments: z.array(engagementSampleSchema), replyCommentCount: engagementResearchCount, error: z.string().optional()
+    })).optional(),
+    usedQueries: strings.min(1).max(2), searchAnchors: strings, searchEventTerms: strings, failedQueries: strings,
+    searchPlan: z.array(z.object({ query: z.string(), videoType: z.string(), discussion: z.string() })).optional(),
+    capturedCommentCount: engagementResearchCount, relatedVideoCount: engagementResearchCount,
+    relatedCommentCount: engagementResearchCount, freshCommentCount: engagementResearchCount,
+    targetPlatformCommentCount: engagementResearchCount, matchedLibraryCommentCount: engagementResearchCount,
+    replySampleCount: engagementResearchCount, longCommentCount: engagementResearchCount,
+    lengthBuckets: z.object({ short: engagementResearchCount, medium: engagementResearchCount, long: engagementResearchCount }),
+    intentBuckets: z.record(engagementResearchCount),
+    sourceStats: z.array(z.object({
+      source: platformSchema, status: z.enum(["completed", "partial", "failed"]),
+      videoCount: engagementResearchCount, commentCount: engagementResearchCount, error: z.string().optional()
+    })),
+    quarantinedVideoCount: engagementResearchCount, quarantinedCommentCount: engagementResearchCount,
+    quarantinedSources: z.array(z.object({
+      platform: platformSchema, videoId: z.string(), videoTitle: z.string(),
+      commentCount: engagementResearchCount, detection: z.literal("heuristic"), reasons: strings
+    })),
+    quarantineClassifierStatus: z.literal("not_needed"),
+    hotComments: strings.min(1), reusableComments: strings.length(0), sampleLibraryCount: z.literal(0),
+    themes: strings, phrases: strings, questions: strings, objections: strings, recentTopics: strings,
+    legacyTopics: strings, playerLifeAngles: strings, platformAngles: strings, replyAngles: strings,
+    longCommentPatterns: strings, chatterAngles: strings, summaryError: z.string().optional()
+  }).passthrough()
 });
 
 export const writerResearchCacheSchema = z.object({
   schemaVersion: z.literal(1), cacheKey: z.string().regex(/^[a-f0-9]{64}$/),
   fetchedAt: z.number().int().nonnegative(), content: z.string().trim().min(1)
+});
+
+export const engagementModelCallSchema = z.object({
+  schemaVersion: z.literal(1), scope: z.string(), policy: z.string().optional(),
+  startedAt: z.string().datetime(), completedAt: z.string().datetime().optional(), elapsedMs: z.number().nonnegative().optional(),
+  status: z.enum(["running", "completed", "failed", "cancelled"]),
+  configured: z.object({ model: z.string(), effort: z.string() }).optional(),
+  actual: z.object({ model: z.string(), wireApi: z.string().optional(), reasoningEffort: z.string().optional() }).optional(),
+  messages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string() })),
+  retries: z.array(z.object({ at: z.string().datetime(), message: z.string() })),
+  responseText: z.string().optional(), error: z.string().optional()
+});
+
+export const commentPipelineCheckpointSchema = z.object({
+  schemaVersion: z.literal(1), signature: z.string().min(1), referenceSignature: z.string().min(1),
+  updatedAt: z.string().datetime(), research: engagementResearchCacheSchema.shape.research,
+  rounds: z.array(z.object({ requestedCount: z.number().int().positive(), batchIds: z.array(z.number().int().nonnegative()) })),
+  batches: z.array(z.object({
+    index: z.number().int().nonnegative(), requestedCount: z.number().int().positive().max(200),
+    candidates: strings.max(200).optional(), model: z.string(), attempts: z.number().int().nonnegative(),
+    reviewCandidates: strings.max(200).optional(),
+    error: z.string().optional(),
+    review: z.array(z.object({ text: z.string(), keep: z.boolean(), reason: z.string().optional() })).max(200).optional()
+  })),
+  roundLimit: z.number().int().positive().optional(),
+  exhausted: z.boolean()
+}).superRefine((state, context) => {
+  const ids = state.rounds.flatMap((round) => round.batchIds);
+  if (ids.length !== state.batches.length || ids.some((id, index) => id !== index)) {
+    context.addIssue({ code: "custom", message: "评论检查点批次顺序不完整", path: ["rounds"] });
+  }
+  for (const round of state.rounds) {
+    if (round.batchIds.reduce((sum, id) => sum + (state.batches[id]?.requestedCount || 0), 0) !== round.requestedCount) {
+      context.addIssue({ code: "custom", message: "评论检查点轮次数量不匹配", path: ["rounds"] });
+    }
+  }
+  state.batches.forEach((batch, index) => {
+    const savedTexts = batch.review?.map((row) => row.text).sort();
+    const candidateTexts = batch.reviewCandidates?.slice().sort();
+    if (batch.index !== index || (batch.reviewCandidates && !batch.candidates)
+      || (batch.review && (!batch.reviewCandidates || batch.review.length !== batch.reviewCandidates.length
+        || savedTexts?.some((text, textIndex) => candidateTexts?.[textIndex] !== text)))) {
+      context.addIssue({ code: "custom", message: "评论检查点保存结果不匹配", path: ["batches", index] });
+    }
+  });
 });

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useScopedTasks } from "@/components/TaskProvider";
-import { getHotspotRadar, getHotspotDetail, getRadarSignals, invalidateHotspotRadarCache, saveHotspotFeedback } from "@/lib/client";
+import { getCachedHotspotRadar, getHotspotRadar, getHotspotDetail, getRadarSignals, saveHotspotFeedback } from "@/lib/client";
 import type { HotspotEvent, HotspotRadarResponse, HotspotSignal } from "@/lib/types";
 import type { RadarRating } from "@/lib/hotspot-radar/types";
 
@@ -26,12 +26,12 @@ export function useRadarController() {
   const category = params.get("category") || "";
   const page = Math.max(1, Math.floor(Number(params.get("page")) || 1));
   const selectedId = params.get("item") || "";
-  const [snapshot, setSnapshot] = useState<HotspotRadarResponse | null>(null);
+  const [snapshot, setSnapshot] = useState<HotspotRadarResponse | null>(getCachedHotspotRadar);
   const [feed, setFeed] = useState<{ items: HotspotSignal[]; total: number }>({ items: [], total: 0 });
   const [detail, setDetail] = useState<{ topic?: HotspotEvent; signals: HotspotSignal[] } | null>(null);
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedHotspotRadar() || view === "news");
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -57,7 +57,7 @@ export function useRadarController() {
   useEffect(() => {
     if (!jobKey || jobKey === previousJobKey.current) return;
     previousJobKey.current = jobKey;
-    invalidateHotspotRadarCache();
+    // TaskProvider invalidates changed data; remounting with the same job can reuse the snapshot.
     setRevision(value => value + 1);
   }, [jobKey]);
   useEffect(() => {

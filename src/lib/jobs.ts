@@ -353,7 +353,7 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
         : await readJson<JobRecord>(summary.filePath);
       if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
       const input = await readJobPayload(job.id);
-      if (input && input.kind === job.kind && isResumableJobKind(job.kind)) {
+      if (input && input.kind === job.kind && isResumableJobKind(job.kind, input)) {
         await writeJob({
           ...job,
           status: "queued",
@@ -506,6 +506,7 @@ export async function getJob(jobId: string) {
 export async function createJob(input: JobStartInput) {
   assertJobKindAllowedForAppMode(input.kind);
   await ensureInitialized();
+  if (input.kind === "engagement") input = { ...input, checkpointId: input.checkpointId || randomUUID() };
   const now = nowIso();
   const job: JobRecord = {
     id: makeJobId(input.kind),
@@ -1224,10 +1225,11 @@ async function runEngagementJob(jobId: string, start: Extract<JobStartInput, { k
     progress: 18
   });
   const result = await generateEngagement(start.input, {
+    checkpointId: start.checkpointId,
     signal: getJobAbortSignal(jobId),
     async onProgress(progress) {
       throwIfCancelled(jobId);
-      await patchTransientJob(jobId, {
+      const patch = {
         stage: progress.stage,
         message: progress.message,
         progress: progress.progress,
@@ -1237,7 +1239,9 @@ async function runEngagementJob(jobId: string, start: Extract<JobStartInput, { k
             requestedCount: start.input.commentCount
           }
         } : {})
-      });
+      };
+      if (progress.checkpointSaved) await patchJobWithDataChange(jobId, patch, { resource: "engagement" });
+      else await patchTransientJob(jobId, patch);
     }
   });
   throwIfCancelled(jobId);
@@ -1443,7 +1447,7 @@ export async function cancelJob(jobId: string) {
     error: undefined,
     completedAt: nowIso()
   });
-  await removeJobPayload(jobId);
+  if (current.kind !== "engagement") await removeJobPayload(jobId);
   await pruneJobHistory();
   pumpJobQueue();
   return next;

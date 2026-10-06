@@ -144,6 +144,7 @@ export function buildDouyinCommentsExtractJs(options: { awemeIds: string[]; comm
   if (location.origin !== "https://www.douyin.com" || !/^\\/video\\/\\d+/.test(location.pathname)) return { needsSession: true, rows: [] };
   const awemeIds = ${JSON.stringify(options.awemeIds)};
   const commentLimit = ${Math.max(1, Math.min(Math.trunc(options.commentLimit), 200))};
+  let lastRequestAt = 0;
   let accessError = "";
   const fetchOne = async (awemeId) => {
     const startedAt = Date.now();
@@ -153,9 +154,15 @@ export function buildDouyinCommentsExtractJs(options: { awemeIds: string[]; comm
     let cursor = 0;
     let hasMore = true;
     let pages = 0;
+    const pageTrace = [];
     try {
-      while (comments.length < commentLimit && hasMore && pages < 6) {
+      while (comments.length < commentLimit && hasMore && pages < (commentLimit > 50 ? 20 : 6)) {
         if (accessError) throw new Error("本轮剩余抖音评论请求已暂停：" + accessError);
+        if (commentLimit > 50) {
+          const wait = Math.max(0, 500 - (Date.now() - lastRequestAt));
+          if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+          lastRequestAt = Date.now();
+        }
         if (Date.now() >= deadline) throw new Error("抖音评论接口超过 15 秒，请重试或缩小采集数量");
         const url = new URL("https://www.douyin.com/aweme/v1/web/comment/list/");
         for (const [key, value] of Object.entries({
@@ -191,29 +198,36 @@ export function buildDouyinCommentsExtractJs(options: { awemeIds: string[]; comm
         }
         if (!Array.isArray(payload.comments)) throw new Error("抖音评论接口缺少评论列表，请检查网页会话后重试");
         pages += 1;
+        const before = comments.length;
         for (const item of payload.comments) {
           const text = String(item?.text || item?.content || "").replace(/\\s+/g, " ").trim();
           if (!text || seen.has(text)) continue;
           seen.add(text);
           comments.push({ text, likes: Number(item.digg_count || 0), replies: Number(item.reply_comment_total || 0) });
         }
-        const nextCursor = Number(payload.cursor || 0);
-        hasMore = Boolean(payload.has_more) && payload.comments.length > 0;
-        if (hasMore && (!Number.isFinite(nextCursor) || nextCursor === cursor)) {
+        if (![0, 1, false, true].includes(payload.has_more)) throw new Error("抖音评论分页缺少有效结束标记");
+        const nextCursor = Number(payload.cursor ?? 0);
+        hasMore = Boolean(payload.has_more);
+        if (!Number.isSafeInteger(nextCursor) || nextCursor < 0) throw new Error("抖音评论分页游标无效，采集未完成");
+        pageTrace.push({ cursor, nextCursor, returnedCount: payload.comments.length, addedCount: comments.length - before, hasMore });
+        if (hasMore && !payload.comments.length) throw new Error("抖音评论返回空页但仍有后续，采集未完成");
+        if (hasMore && (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor)) {
           throw new Error("抖音评论分页游标未推进，请重试");
         }
         cursor = nextCursor;
       }
-      return { awemeId, comments: comments.slice(0, commentLimit), pages, hasMore, ms: Date.now() - startedAt };
+      if (hasMore && comments.length < commentLimit) throw new Error("抖音评论达到分页上限但仍有后续，采集未完成");
+      return { awemeId, comments: comments.slice(0, commentLimit), pages, pageTrace, hasMore,
+        stopReason: comments.length >= commentLimit ? "target_reached" : "exhausted", ms: Date.now() - startedAt };
     } catch (error) {
       // 失败视频不伪装成成功的部分结果；同批其他视频的成功结果由调用方保留并展示失败原因。
-      return { awemeId, comments: [], pages, hasMore, ms: Date.now() - startedAt,
+      return { awemeId, comments: [], pages, pageTrace, hasMore, stopReason: "failed", ms: Date.now() - startedAt,
         error: error?.name === "TimeoutError" ? "抖音评论接口超过 15 秒，请重试或缩小采集数量" : String(error?.message || error) };
     }
   };
   const rows = new Array(awemeIds.length);
   let nextIndex = 0;
-  await Promise.all(Array.from({ length: Math.min(2, awemeIds.length) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(commentLimit > 50 ? 1 : 2, awemeIds.length) }, async () => {
     while (nextIndex < awemeIds.length) {
       const index = nextIndex++;
       rows[index] = await fetchOne(awemeIds[index]);
@@ -807,6 +821,8 @@ export function buildDouyinDetailExtractJs(options: { awemeId: string; commentLi
 export function buildDouyinStatsExtractJs(awemeId: string) {
   return `
 (async () => {
+  if (location.origin !== "https://www.douyin.com") return { needsSession: true };
+  if (${DOUYIN_VERIFICATION_CHECK_JS}) throw new Error("抖音详情核验遇到验证码，请在 Chrome 完成验证后重试。");
   const detailUrl = new URL("https://www.douyin.com/aweme/v1/web/aweme/detail/");
   detailUrl.searchParams.set("aweme_id", ${JSON.stringify(awemeId)});
   detailUrl.searchParams.set("aid", "6383");

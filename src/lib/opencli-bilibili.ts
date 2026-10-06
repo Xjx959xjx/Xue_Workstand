@@ -1,4 +1,6 @@
+import { selectEligibleCommentSources, sourceCommentCount, collectCommentSources, type CommentCollectionAttempt, type CommentCollectionBudget } from "./engagement-source-selection";
 import { mapWithConcurrency } from "./concurrency";
+import { getBilibiliSourceCommentCount, getBilibiliExpandedComments } from "./opencli-bilibili-comments";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -20,7 +22,7 @@ import {
   containsPlatformUserMention,
   firstNumber,
   isExcludedRelatedVideo,
-  isRelatedVideoRelevant,
+  selectRelatedCommentVideos,
   normalizeCommentText,
   normalizeTimestamp,
   uniqueStrings
@@ -29,7 +31,6 @@ import {
 const BILIBILI_FETCH_TIMEOUT_MS = 15_000;
 const BILIBILI_OPENCLI_VIDEO_TIMEOUT_MS = 45_000;
 const BILIBILI_DETAIL_CONCURRENCY = 6;
-const BILIBILI_COMMENT_CONCURRENCY = 6;
 
 export type BilibiliCommentSample = {
   rank: number;
@@ -51,6 +52,8 @@ export type BilibiliVideoReference = {
 
 export type BilibiliRelatedCommentVideo = {
   id: string;
+  commentCount?: number;
+  query?: string;
   title: string;
   author: string;
   score: number;
@@ -66,12 +69,14 @@ export type BilibiliRelatedCommentSample = BilibiliCommentSample & {
 };
 
 export type BilibiliRelatedCommentResult = {
+  collectionAttempts?: CommentCollectionAttempt[];
   query: string;
   videos: BilibiliRelatedCommentVideo[];
   comments: string[];
   commentSamples: BilibiliRelatedCommentSample[];
   replyCommentCount: number;
   appliedMinViews: number;
+  errors?: string[];
 };
 
 export type BilibiliVideoStatsResult = {
@@ -183,50 +188,78 @@ export async function collectBilibiliVideos(input: {
 }
 
 export async function getBilibiliRelatedTopicComments(
-  query: string,
+  query: string | string[],
   options: {
     videoLimit?: number;
+    maxVideoAttempts?: number;
+    collectionBudget?: CommentCollectionBudget;
     commentLimit?: number;
     replyLimit?: number;
-    minViews?: number;
     excludedVideoIds?: string[];
     signal?: AbortSignal;
   } = {}
 ): Promise<BilibiliRelatedCommentResult> {
-  const cleanQuery = query.replace(/\s+/g, " ").trim();
+  const queries = [...new Set((Array.isArray(query) ? query : [query]).map((value) => value.replace(/\s+/g, " ").trim()).filter(Boolean))].slice(0, 2);
+  const cleanQuery = queries.join(" / ");
   if (!cleanQuery) {
     return { query: "", videos: [], comments: [], commentSamples: [], replyCommentCount: 0, appliedMinViews: 0 };
   }
 
   const videoLimit = Math.max(1, Math.min(options.videoLimit || 4, 8));
-  const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 100));
+  const commentLimit = Math.max(1, Math.min(options.commentLimit || 20, 200));
   const replyLimit = Math.max(0, Math.min(options.replyLimit ?? 8, 20));
-  const stdout = await runPersistentOpenCliBrowserAdapter([
-    "bilibili",
-    "search",
-    cleanQuery,
-    "--type",
-    "video",
-    "--limit",
-    String(Math.max(videoLimit * 8, 24)),
-    "-f",
-    "json"
-  ], { timeout: 30_000, signal: options.signal });
-  const candidates = asArray(parseJsonish(stdout))
-    .map(normalizeBilibiliRelatedVideo)
-    .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
-    .filter((video) => !isExcludedRelatedVideo(video.id, options.excludedVideoIds))
-    .filter((video) => isRelatedVideoRelevant(video.title, cleanQuery));
-  const videos = candidates.sort(compareBilibiliRelatedVideos).slice(0, videoLimit);
-  const appliedMinViews = videos.length ? Math.min(...videos.map((video) => video.views)) : 0;
+  const groups: Array<{ query: string; videos: BilibiliRelatedCommentVideo[] }> = [];
+  const searchErrors: string[] = [];
+  for (const phrase of queries) {
+    try {
+      const stdout = await runPersistentOpenCliBrowserAdapter([
+        "bilibili", "search", phrase, "--type", "video", "--limit", String(Math.max(videoLimit * 8, 24)), "-f", "json"
+      ], { timeout: 30_000, signal: options.signal });
+      const videos = asArray(parseJsonish(stdout)).map(normalizeBilibiliRelatedVideo)
+        .filter((video): video is BilibiliRelatedCommentVideo => Boolean(video?.id))
+        .filter((video) => !isExcludedRelatedVideo(video.id, options.excludedVideoIds));
+      groups.push({ query: phrase, videos });
+      if (!videos.length) searchErrors.push(`B站搜索「${phrase}」没有可采集的视频`);
+    } catch (error) {
+      if (isAbortError(error, options.signal)) throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      searchErrors.push(`B站搜索「${phrase}」失败：${detail}`);
+      if (/401|403|412|429|验证码|登录|风控/.test(detail)) break;
+    }
+  }
+  const rankedCandidates = selectRelatedCommentVideos(groups, groups.reduce((sum, group) => sum + group.videos.length, 0), compareBilibiliRelatedVideos);
+  const candidateLimit = Math.max(videoLimit, Math.min(options.maxVideoAttempts || videoLimit, 8));
+  if (!rankedCandidates.length) throw new Error(searchErrors.join("；") || `B站搜索「${cleanQuery}」没有可采集的视频`);
 
-  const videoCommentResults = await mapWithConcurrency(videos, BILIBILI_COMMENT_CONCURRENCY, async (video) => {
+  const eligible = await selectEligibleCommentSources(rankedCandidates, candidateLimit,
+    (video) => getBilibiliSourceCommentCount(video.id, options.signal), options.signal);
+  const candidates = eligible.videos;
+  searchErrors.push(...eligible.errors);
+  if (!candidates.length) throw new Error(`B站没有评论总数至少 300 条的可用视频：${searchErrors.join("；")}`);
+  const commentErrors: string[] = [...searchErrors];
+  const collectionAttempts: CommentCollectionAttempt[] = [];
+  let accessError = "";
+  const collected = await collectCommentSources<BilibiliRelatedCommentVideo, {
+    comments: string[];
+    commentSamples: BilibiliRelatedCommentSample[];
+    replyCommentCount: number;
+  }>({
+    candidates, sourceTarget: videoLimit, signal: options.signal, budget: options.collectionBudget,
+    shouldStop: () => Boolean(accessError), count: (result) => result.commentSamples.length,
+    read: async (video) => {
+    if (accessError) {
+      commentErrors.push(`${video.id}：本轮剩余 B站采集已暂停：${accessError}`);
+      return { comments: [], commentSamples: [], replyCommentCount: 0 };
+    }
     const rows = await getBilibiliComments(
       { id: video.id, url: video.url, raw: video.url },
       commentLimit,
-      { signal: options.signal }
+      { signal: options.signal, expanded: commentLimit > 50, onCollection: (trace) => collectionAttempts.push(trace) }
     ).catch((error) => {
       if (isAbortError(error, options.signal)) throw error;
+      const reason = error instanceof Error ? error.message : "评论采集失败";
+      commentErrors.push(`${video.id}：${reason}`);
+      if (/401|403|412|429|登录|验证/.test(reason)) accessError = reason;
       return [];
     });
     const usableRows = rows.filter((comment) => !containsPlatformUserMention(comment.text));
@@ -239,6 +272,7 @@ export async function getBilibiliRelatedTopicComments(
     if (replyLimit && replyRoot?.rpid) {
       const replies = await getBilibiliCommentReplies(video.id, replyRoot.rpid, replyLimit, options.signal).catch((error) => {
         if (isAbortError(error, options.signal)) throw error;
+        commentErrors.push(`${video.id}：回复采集失败：${error instanceof Error ? error.message : "未知错误"}`);
         return [];
       });
       const usableReplies = replies.filter((comment) => !containsPlatformUserMention(comment.text));
@@ -246,19 +280,28 @@ export async function getBilibiliRelatedTopicComments(
       comments.push(...usableReplies.map((comment) => comment.text).filter(Boolean));
       commentSamples.push(...usableReplies.map((comment) => ({ ...comment, videoId: video.id, videoTitle: video.title })));
     }
+    const trace = collectionAttempts.find((attempt) => attempt.videoId === video.id);
+    if (trace) trace.acceptedCount = commentSamples.length;
+    options.collectionBudget?.add(comments);
     return { comments, commentSamples, replyCommentCount };
+    }
   });
+  const videos = collected.videos;
+  const videoCommentResults = collected.results;
+  const appliedMinViews = videos.length ? Math.min(...videos.map((video) => video.views)) : 0;
   const comments = videoCommentResults.flatMap((result) => result.comments);
   const commentSamples = videoCommentResults.flatMap((result) => result.commentSamples);
   const replyCommentCount = videoCommentResults.reduce((sum, result) => sum + result.replyCommentCount, 0);
 
   return {
     query: cleanQuery,
+    collectionAttempts,
     videos,
     comments: uniqueStrings(comments),
     commentSamples: dedupeBilibiliCommentSamples(commentSamples),
     replyCommentCount,
-    appliedMinViews
+    appliedMinViews,
+    ...(commentErrors.length ? { errors: commentErrors } : {})
   };
 }
 
@@ -307,12 +350,13 @@ export async function getBilibiliSubtitle(video: Video, options: { signal?: Abor
 export async function getBilibiliComments(
   video: Pick<Video, "id" | "url" | "raw">,
   limit = 50,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal; expanded?: boolean; onCollection?: (trace: CommentCollectionAttempt) => void } = {}
 ) {
   const bvid = extractBvid(video.url || video.id || String(video.raw ?? ""));
   if (!bvid) return [];
 
   const normalizedLimit = Math.max(1, Math.min(limit, 200));
+  if (options.expanded && normalizedLimit > 50) return getBilibiliExpandedComments(bvid, normalizedLimit, options.signal, options.onCollection);
   return resolveBilibiliCommentRows(
     () => getBilibiliPublicComments(bvid, normalizedLimit, options.signal),
     async () => {
@@ -579,6 +623,7 @@ function normalizeBilibiliRelatedVideo(row: unknown): BilibiliRelatedCommentVide
   return {
     id,
     title,
+    commentCount: sourceCommentCount(object.review, object.comment_count, object.comments, (object.stat as Record<string, unknown> | undefined)?.reply),
     author: String(object.author || object.owner || object.uname || ""),
     score: toNumber(object.views || object.play || object.view) + toNumber(object.likes || object.like) * 2,
     views: toNumber(object.views || object.play || object.view),

@@ -25,6 +25,20 @@ test("详情接口非 JSON 和业务错误不可伪装成无数据", async () =>
     const rows = await vm.runInNewContext(buildDouyinBatchStatsExtractJs(["1"]), { URL, fetch: async () => response });
     assert.equal(rows[0].hasStats, false);
     assert.match(rows[0].error, expected);
-    await assert.rejects(vm.runInNewContext(buildDouyinStatsExtractJs("1"), { URL, fetch: async () => response }), expected);
+    await assert.rejects(vm.runInNewContext(buildDouyinStatsExtractJs("1"), {
+      URL, location: { origin: "https://www.douyin.com" },
+      document: { title: "抖音", querySelectorAll: () => [] }, fetch: async () => response
+    }), expected);
+  }
+});
+
+test("空白或其他站点页面的详情核验不发请求，先要求初始化", async () => {
+  for (const origin of ["null", "https://www.bilibili.com"]) {
+    let calls = 0;
+    const result = await vm.runInNewContext(buildDouyinStatsExtractJs("1"), {
+      location: { origin }, fetch: async () => { calls++; throw new Error("不应请求"); }
+    });
+    assert.equal(result.needsSession, true);
+    assert.equal(calls, 0);
   }
 });

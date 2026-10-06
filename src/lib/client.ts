@@ -837,6 +837,10 @@ export function getHotspotRadar() {
   return hotspotRadarRequest;
 }
 
+export function getCachedHotspotRadar() {
+  return hotspotRadarCache;
+}
+
 export function invalidateHotspotRadarCache() {
   hotspotRadarCacheRevision += 1;
   hotspotRadarCache = null;
@@ -854,6 +858,7 @@ export function getHotspotDetail(id: string) {
 export async function saveHotspotFeedback(hotspotId: string, rating: import("./hotspot-radar/types").RadarRating) {
   const result = await requestJson<HotspotRadarResponse>("/api/hotspots/feedback", { method: "POST", body: JSON.stringify({ hotspotId, rating }) });
   invalidateHotspotRadarCache();
+  hotspotRadarCache = result;
   return result;
 }
 
@@ -1767,6 +1772,9 @@ export function updateWriterPreference(input: { action: "remember"; draftId: str
 let imageRecordsCache: ImageGenerationList | null = null;
 let imageRecordsRequest: Promise<ImageGenerationList> | null = null;
 let imageRecordsRevision = 0;
+export function getCachedImageRecords() {
+  return imageRecordsCache;
+}
 export function invalidateImageRecordsCache() {
   imageRecordsCache = null;
   imageRecordsRequest = null;

@@ -87,7 +87,7 @@ type DetailReadOptions = {
   includeStyle?: boolean;
 };
 
-export type EngagementCacheKind = "source" | "brief" | "research" | "samples";
+export type EngagementCacheKind = "source" | "brief" | "research" | "samples" | "pipeline" | "model-calls";
 
 export type AccountStyleMeta = {
   sampleHash: string;
@@ -781,20 +781,25 @@ export async function deleteCopySources(sourceIds: string[]) {
   return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
-export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | "createdAt" | "updatedAt">) {
+export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | "createdAt" | "updatedAt">, options: { idempotencyKey?: string } = {}) {
   await ensureLibrary();
   const now = nowIso();
-  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.sourceType}-${input.title}-${input.sourceText}`)}`;
-  const record: EngagementRecord = {
-    ...input,
-    id,
-    title: makeDraftTitleFromContent(input.title || input.sourceText, "互动素材"),
-    sourceText: input.sourceText.trim(),
-    createdAt: now,
-    updatedAt: now
-  };
-  await writeJson(engagementRecordJsonPath(id), record);
-  return record;
+  const id = options.idempotencyKey ? `run-${shortHash(options.idempotencyKey)}` : `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.sourceType}-${input.title}-${input.sourceText}`)}`;
+  return withEngagementRecordLock(id, async () => {
+    const existing = options.idempotencyKey ? await readJson<EngagementRecord>(engagementRecordJsonPath(id)) : null;
+    if (existing && (existing.comments?.items.length || 0) >= (input.comments?.items.length || 0)
+      && (existing.danmaku?.items.length || 0) >= (input.danmaku?.items.length || 0)) return existing;
+    const record: EngagementRecord = {
+      ...input,
+      id,
+      title: makeDraftTitleFromContent(input.title || input.sourceText, "互动素材"),
+      sourceText: input.sourceText.trim(),
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    await writeJson(engagementRecordJsonPath(id), record);
+    return record;
+  });
 }
 
 export async function updateEngagementRecord(
@@ -834,14 +839,19 @@ export async function updateEngagementCache<T>(
   update: (current: T | null) => T | Promise<T>
 ) {
   await ensureLibrary();
-  const queueKey = `${kind}:${normalizeStorageSegment(cacheKey, "评论缓存键")}`;
-  const previous = engagementCacheQueues.get(queueKey) || Promise.resolve();
-  const next = previous.catch(() => undefined).then(async () => {
+  return withEngagementCacheLock(kind, cacheKey, async () => {
     const current = await readJson<T>(engagementCacheJsonPath(kind, cacheKey));
     const value = await update(current);
     await writeJson(engagementCacheJsonPath(kind, cacheKey), value);
     return value;
   });
+}
+
+export async function withEngagementCacheLock<T>(kind: EngagementCacheKind, cacheKey: string, run: () => Promise<T>) {
+  const queueKey = `${kind}:${normalizeStorageSegment(cacheKey, "评论缓存键")}`;
+  const previous = engagementCacheQueues.get(queueKey) || Promise.resolve();
+  // 上一调用的错误已交还调用者，不阻塞后续任务获取同一把锁。
+  const next = previous.catch(() => undefined).then(run);
   engagementCacheQueues.set(queueKey, next);
   try {
     return await next;
