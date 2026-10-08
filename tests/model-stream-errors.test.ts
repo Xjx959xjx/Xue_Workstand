@@ -15,6 +15,78 @@ test("本地请求超时及流式包装错误均保留超时分类", () => {
   }
 });
 
+test("写作流真实超时会重试，已输出半篇时保留超时原因并拒绝保存", async (t) => {
+  const original = { ...process.env };
+  const root = await mkdtemp(path.join(tmpdir(), "writer-stream-timeout-"));
+  let calls = 0;
+  let partial = false;
+  let wireApi = "chat_completions";
+  const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+  const server = createServer((req, res) => {
+    calls++;
+    req.resume();
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.flushHeaders();
+    if (!partial && calls === 1) {
+      // Advance the real request deadline without waiting or calling an external model.
+      setImmediate(() => t.mock.timers.tick(300_001));
+      return;
+    }
+    const text = partial ? "半篇" : "完整稿件";
+    res.write(wireApi === "responses"
+      ? event({ type: "response.output_text.delta", delta: text })
+      : event({ choices: [{ delta: { content: text } }] }));
+    if (!partial) res.end(wireApi === "responses"
+      ? event({ type: "response.completed", response: { status: "completed" } })
+      : "data: [DONE]\n\n");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_MODEL: "fixture",
+    CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, CHAT_FALLBACK_ENABLED: "0" });
+  try {
+    for (wireApi of ["chat_completions", "responses"]) {
+      process.env.CHAT_WIRE_API = wireApi;
+      calls = 0;
+      partial = false;
+      const retries: string[] = [];
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      const recovered = await streamResponseTextWithFallback({ policy: "writer_generate",
+        messages: [{ role: "user", content: "测试" }], onDelta() {},
+        onRetry(message) { retries.push(message); t.mock.timers.reset(); } });
+      assert.equal(recovered.text, "完整稿件");
+      assert.equal(calls, 2);
+      assert.equal(retries.length, 1);
+      assert.match(retries[0], /超时/);
+
+      calls = 0;
+      partial = true;
+      let received = "";
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      const interrupted = await streamResponseTextWithFallback({ policy: "writer_revise",
+        messages: [{ role: "user", content: "测试" }],
+        onDelta(text) { received += text; t.mock.timers.tick(300_001); } });
+      t.mock.timers.reset();
+      assert.equal(received, "半篇");
+      assert.equal(interrupted.ok, false);
+      assert.equal(interrupted.errorKind, "timeout");
+      assert.equal(calls, 1, "半篇稿件不得与重试输出拼接");
+      await assert.rejects(completePreparedWriteCopy({ prepared: { messages: [], contextFingerprint: "fixture",
+        sourceDigest: { materialCount: 0, linkCount: 0, textMaterialCount: 0, onlyLinkCount: 0 } },
+        result: interrupted, save: true }), /超时/);
+    }
+  } finally {
+    t.mock.timers.reset();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
+    Object.assign(process.env, original);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("写作临时故障只重试一次；参数错误、部分输出和取消不追加请求", async () => {
   const original = { ...process.env };
   const root = await mkdtemp(path.join(tmpdir(), "writer-retry-"));
