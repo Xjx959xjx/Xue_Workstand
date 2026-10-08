@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { memo } from "react";
 import { ArrowDown, ArrowUp, ListChecks, Download, Search, Trash2, WandSparkles, X } from "lucide-react";
 import { formatNumber } from "@/components/Formatters";
@@ -118,12 +120,12 @@ export const VideoTable = memo(function VideoTable({
               value={videoFilter}
             />
           </div>
-          <select className="filter-select" aria-label="筛选转写状态" onChange={(event) => onVideoStatusFilterChange(event.target.value as VideoStatusFilter)} value={videoStatusFilter}>
+          <WorkbenchSelect className="filter-select" aria-label="筛选转写状态" onValueChange={(value) => onVideoStatusFilterChange(value as VideoStatusFilter)} value={videoStatusFilter}>
             <option value="all">全部状态</option>
             <option value="pending">待转写</option>
             <option value="completed">已转写</option>
             <option value="failed">失败</option>
-          </select>
+          </WorkbenchSelect>
           <button
             className="btn compact"
             aria-label={videoManageMode ? "退出视频选择" : "批量选择视频"}

@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { useEffect, useState } from "react";
 import { ExternalLink, RefreshCw, Rss, Sparkles } from "lucide-react";
 import { getTrendRadarFeed } from "@/lib/client";
@@ -45,8 +47,8 @@ export function TrendRadarCandidates({ busy, onAnalyze }: { busy: boolean; onAna
       </div>
     </div>
     <div className="trend-candidates-meta">
-      <label>范围<select value={scope} onChange={e => { setScope(e.target.value); setPage(0); }}><option value="all">全部候选</option><option value="new">本轮新增</option></select></label>
-      <label>类型<select value={kind} onChange={e => { setKind(e.target.value); setPage(0); }}><option value="all">热榜与 RSS</option><option value="hotlist">热榜</option><option value="rss">RSS</option></select></label>
+      <label>范围<WorkbenchSelect aria-label="候选范围" value={scope} onValueChange={value => { setScope(value); setPage(0); }}><option value="all">全部候选</option><option value="new">本轮新增</option></WorkbenchSelect></label>
+      <label>类型<WorkbenchSelect aria-label="候选类型" value={kind} onValueChange={value => { setKind(value); setPage(0); }}><option value="all">热榜与 RSS</option><option value="hotlist">热榜</option><option value="rss">RSS</option></WorkbenchSelect></label>
       <label className="trend-candidate-search">搜索<input value={query} placeholder="标题或来源" onChange={e => { setQuery(e.target.value); setPage(0); }} /></label>
       {feed ? <span>{feed.counts.hotlist} 条热榜 · {feed.counts.rss} 条 RSS · 本轮新增 {feed.counts.newItems} 条{feed.generatedAt ? ` · 最近采集 ${feed.generatedAt}（北京时间）` : ""}</span> : null}
     </div>

@@ -1,6 +1,8 @@
 "use client";
 
-import { memo, useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { History, Save } from "lucide-react";
 import type { TranscriptVersion } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
@@ -8,7 +10,6 @@ import { LibraryEditorModal } from "./LibraryEditorModal";
 type TranscriptEditorModalProps = {
   activeTranscript: string;
   busy: string;
-  panelRef: RefObject<HTMLDivElement | null>;
   restoring: boolean;
   versions: TranscriptVersion[];
   onChange: (value: string) => void;
@@ -20,7 +21,6 @@ type TranscriptEditorModalProps = {
 export const TranscriptEditorModal = memo(function TranscriptEditorModal({
   activeTranscript,
   busy,
-  panelRef,
   restoring,
   versions,
   onChange,
@@ -48,7 +48,6 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
     <LibraryEditorModal
       labelledBy="library-transcript-modal-title"
       panelClassName="transcript-editor-modal"
-      panelRef={panelRef}
       unsavedChanges={dirty}
       disabled={disabled}
       onClose={handleClose}
@@ -73,9 +72,9 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
           <div className="transcript-history-toolbar">
             <div className="field">
               <label htmlFor="transcript-history-version">历史版本</label>
-              <select
+              <WorkbenchSelect aria-label="历史版本"
                 id="transcript-history-version"
-                onChange={(event) => setSelectedVersionId(event.target.value)}
+                onValueChange={(value) => setSelectedVersionId(value)}
                 value={selectedVersionId}
               >
                 {versions.map((version) => (
@@ -83,7 +82,7 @@ export const TranscriptEditorModal = memo(function TranscriptEditorModal({
                     {formatVersionLabel(version)}
                   </option>
                 ))}
-              </select>
+              </WorkbenchSelect>
             </div>
             <button
               className="btn"

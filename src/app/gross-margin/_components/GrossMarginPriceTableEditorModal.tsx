@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { useMemo, useRef, useState } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
@@ -101,15 +103,13 @@ export function GrossMarginPriceTableEditorModal({
   }
 
   return (
-    <ModalBackdrop disabled={busy} onClose={requestClose}>
-      <div
-        aria-labelledby="gross-price-editor-title"
-        aria-modal="true"
-        className="modal-panel gross-price-editor-modal"
-        data-unsaved-changes={dirty ? "true" : undefined}
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      disabled={busy}
+      onClose={requestClose}
+      aria-labelledby="gross-price-editor-title"
+      className="modal-panel gross-price-editor-modal"
+      data-unsaved-changes={dirty ? "true" : undefined}
+    >
         <header className="gross-price-editor-header">
           <div>
             <h2 id="gross-price-editor-title">{platformLabel}平台单价表</h2>
@@ -158,18 +158,18 @@ export function GrossMarginPriceTableEditorModal({
                     </label>
                   </td>
                   <td data-label="维护项">
-                    <select
+                    <WorkbenchSelect
                       aria-label="维护项"
                       disabled={busy}
                       value={row.service}
-                      onChange={(event) => updateRow(row.id, { service: event.target.value as GrossMarginServiceKind })}
+                      onValueChange={(value) => updateRow(row.id, { service: value as GrossMarginServiceKind })}
                     >
                       {serviceOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
-                    </select>
+                    </WorkbenchSelect>
                   </td>
                   <td data-label="类型名">
                     <input
@@ -252,7 +252,6 @@ export function GrossMarginPriceTableEditorModal({
             {busy ? "保存中" : "保存整体编辑"}
           </button>
         </footer>
-      </div>
     </ModalBackdrop>
   );
 }

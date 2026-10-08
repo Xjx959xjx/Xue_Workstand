@@ -24,7 +24,7 @@
     "capability:setup": "node scripts/capability-bridge-service.mjs setup",
     "capability:status": "node scripts/capability-bridge-service.mjs status",
     "build": "next build",
-    "build:sites": "vinext build && node scripts/prepare-sites-output.mjs",
+    "build:sites": "node scripts/build-sites.mjs",
     "start:sites": "wrangler dev --config dist/server/wrangler.json",
     "check:sites": "node scripts/check-sites-compatibility.mjs",
     "check:sites:release": "node scripts/check-sites-release.mjs",
@@ -43,6 +43,7 @@
     "engagement:refresh-style": "node scripts/refresh-engagement-comment-benchmarks.mjs"
   },
   "dependencies": {
+    "@internationalized/date": "^3.12.4",
     "@tiptap/extension-mention": "^3.31.3",
     "@tiptap/pm": "^3.31.3",
     "@tiptap/react": "^3.31.3",
@@ -56,6 +57,7 @@
     "pdfjs-dist": "^6.3.289",
     "pino": "^10.3.1",
     "react": "19.2.6",
+    "react-aria-components": "^1.21.1",
     "react-dom": "19.2.6",
     "react-server-dom-webpack": "19.2.6",
     "undici": "^8.10.0",

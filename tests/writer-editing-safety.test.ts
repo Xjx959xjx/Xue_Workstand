@@ -73,8 +73,8 @@ test("保存期间继续编辑，切换独立稿件后保留新增正文与保�
   assert.equal(current.lastDraftVersion?.parentDraftId, "a");
 });
 
-test("首稿启动失败、生成失败和取消都恢复全部独立稿件的未保存编辑", async () => {
-  for (const outcome of ["start", "failed", "cancelled"] as const) {
+test("首稿启动失败、生成失败、取消和中断都恢复全部独立稿件的未保存编辑", async () => {
+  for (const outcome of ["start", "failed", "cancelled", "interrupted"] as const) {
     const state = writer(async () => { throw new Error("Unexpected save"); });
     state.render().loadDraftResult(draft("a"), [draft("a"), draft("b")]);
     state.render().handleContentChange("A未保存");
@@ -114,33 +114,35 @@ test("编号视频素材仍解析待转写链接，已解析的长文稿不重�
   assert.equal(calls, 1);
 });
 
-test("取消时已保存的续改同步显示，取消后晚到的版本只登记历史且保留当前编辑", async () => {
-  for (const delayed of [false, true]) {
-    const state = writer(async () => { throw new Error("Unexpected save"); });
-    const saved: string[] = [];
-    state.input.onDraftSaved = item => { saved.push(item.id); };
-    state.render().loadDraftResult(draft("a"));
-    state.render().handleContentChange("未保存编辑");
-    const job: JobRecord = { id: "revision", kind: "write-copy", status: "queued", title: "续改", message: "准备", progress: 0,
-      createdAt: "2026-10-06T00:00:00Z", updatedAt: "2026-10-06T00:00:00Z" };
-    state.input.startTask = async () => job;
-    await state.render().handleRevise();
-    const child = { ...draft("child", "已保存新正文"), version: { ...draft("a").version!, origin: "revision" as const, parentDraftId: "a", revision: 2 } };
-    const result = { draft: child, content: child.content, usedModel: "mock", fallback: false };
-    state.input.recentJobs = [{ ...job, status: "cancelled", ...(delayed ? {} : { dataRevision: 1, result }) }];
-    state.render(); state.syncJob();
-    if (delayed) {
-      assert.equal(state.render().lastContent, "未保存编辑");
-      state.render().handleContentChange("取消后继续输入");
-      state.input.recentJobs = [{ ...job, status: "cancelled", dataRevision: 1, result }];
+test("取消或中断时已保存的续改同步显示，晚到版本只登记历史且保留当前编辑", async () => {
+  for (const status of ["cancelled", "interrupted"] as const) {
+    for (const delayed of [false, true]) {
+      const state = writer(async () => { throw new Error("Unexpected save"); });
+      const saved: string[] = [];
+      state.input.onDraftSaved = item => { saved.push(item.id); };
+      state.render().loadDraftResult(draft("a"));
+      state.render().handleContentChange("未保存编辑");
+      const job: JobRecord = { id: "revision", kind: "write-copy", status: "queued", title: "续改", message: "准备", progress: 0,
+        createdAt: "2026-10-06T00:00:00Z", updatedAt: "2026-10-06T00:00:00Z" };
+      state.input.startTask = async () => job;
+      await state.render().handleRevise();
+      const child = { ...draft("child", "已保存新正文"), version: { ...draft("a").version!, origin: "revision" as const, parentDraftId: "a", revision: 2 } };
+      const result = { draft: child, content: child.content, usedModel: "mock", fallback: false };
+      state.input.recentJobs = [{ ...job, status, ...(delayed ? {} : { dataRevision: 1, result }) }];
       state.render(); state.syncJob();
-      assert.equal(state.render().lastContent, "取消后继续输入");
-      assert.equal(state.render().lastDraftId, "a");
-    } else {
-      assert.equal(state.render().lastContent, "已保存新正文");
-      assert.equal(state.render().lastDraftId, "child");
+      if (delayed) {
+        assert.equal(state.render().lastContent, "未保存编辑");
+        state.render().handleContentChange("取消后继续输入");
+        state.input.recentJobs = [{ ...job, status, dataRevision: 1, result }];
+        state.render(); state.syncJob();
+        assert.equal(state.render().lastContent, "取消后继续输入");
+        assert.equal(state.render().lastDraftId, "a");
+      } else {
+        assert.equal(state.render().lastContent, "已保存新正文");
+        assert.equal(state.render().lastDraftId, "child");
+      }
+      assert.deepEqual(saved, ["child"]);
     }
-    assert.deepEqual(saved, ["child"]);
   }
 });
 

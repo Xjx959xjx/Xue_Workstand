@@ -1,6 +1,5 @@
 "use client";
 
-import { MoreHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/components/Formatters";
@@ -71,10 +70,12 @@ export function EngagementHistoryPane({
 
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleScroll);
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleScroll);
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [contextMenu]);
@@ -83,11 +84,12 @@ export function EngagementHistoryPane({
     if (!contextMenu) return undefined;
     const menuWidth = 172;
     const menuHeight = 96;
-    const viewportWidth = typeof window === "undefined" ? contextMenu.x + menuWidth : window.innerWidth;
-    const viewportHeight = typeof window === "undefined" ? contextMenu.y + menuHeight : window.innerHeight;
+    const zoom = typeof window === "undefined" ? 1 : Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const viewportWidth = typeof window === "undefined" ? contextMenu.x + menuWidth : window.innerWidth / zoom;
+    const viewportHeight = typeof window === "undefined" ? contextMenu.y + menuHeight : window.innerHeight / zoom;
     return {
-      left: Math.max(8, Math.min(contextMenu.x, viewportWidth - menuWidth - 8)),
-      top: Math.max(8, Math.min(contextMenu.y, viewportHeight - menuHeight - 8))
+      left: Math.max(8, Math.min(contextMenu.x / zoom, viewportWidth - menuWidth - 8)),
+      top: Math.max(8, Math.min(contextMenu.y / zoom, viewportHeight - menuHeight - 8))
     };
   }, [contextMenu]);
 
@@ -128,6 +130,7 @@ export function EngagementHistoryPane({
                   onClick={() => void onSelectRecord(record)}
                   onContextMenu={(event) => {
                     event.preventDefault();
+                    contextTriggerRef.current = event.currentTarget;
                     setContextMenu({ record, x: event.clientX, y: event.clientY });
                   }}
                   ref={resultRecord?.id === record.id ? selectedRecordRef : undefined}
@@ -139,12 +142,6 @@ export function EngagementHistoryPane({
                   </span>
                   <span className="status-pill done">{openingRecordId === record.id ? "读取中" : `${record.commentCount}/${record.danmakuCount}`}</span>
                 </button>
-                <button
-                  aria-label={`打开 ${record.title} 的操作菜单`}
-                  className="btn icon-btn icon-only engagement-history-menu-trigger"
-                  onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); contextTriggerRef.current = event.currentTarget; setContextMenu({ record, x: rect.right - 172, y: rect.bottom + 4 }); }}
-                  type="button"
-                ><MoreHorizontal aria-hidden="true" size={16} /></button>
               </div>
             ))
           ) : (

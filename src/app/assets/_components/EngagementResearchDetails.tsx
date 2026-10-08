@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { useState } from "react";
 import type { EngagementRecord } from "@/lib/types";
 
@@ -23,9 +25,9 @@ export function EngagementResearchDetails({ research }: { research: Research }) 
       </ul>
       {review ? (
         <>
-          <label>筛选明细 <select value={filter} onChange={(event) => { setFilter(event.target.value); setLimit(20); }}>
+          <label>筛选明细 <WorkbenchSelect aria-label="筛选明细" value={filter} onValueChange={(value) => { setFilter(value); setLimit(20); }}>
             <option value="all">全部</option><option value="kept">保留</option><option value="rejected">拒绝</option>
-          </select></label>
+          </WorkbenchSelect></label>
           <ol>
             {rows.slice(0, limit).map((row, index) => (
               <li key={`${row.platform}:${row.videoId}:${index}`}>

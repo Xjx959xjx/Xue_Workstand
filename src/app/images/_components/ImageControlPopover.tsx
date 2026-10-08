@@ -28,12 +28,21 @@ export function ImageControlPopover({ label, trigger, children, width = 280, pla
     };
     const viewportWidth = window.innerWidth / rootZoom;
     const viewportHeight = window.innerHeight / rootZoom;
-    const available = placement === "above" ? rect.top - 20 : viewportHeight - rect.bottom - 20;
     surface.style.width = `${Math.min(width === "composer" ? rect.width : width, viewportWidth - 24)}px`;
-    surface.style.maxHeight = `${Math.min(560, Math.max(140, available))}px`;
+    surface.style.maxHeight = `${Math.min(560, viewportHeight - 24)}px`;
+    const above = Math.max(0, rect.top - 22);
+    const below = Math.max(0, viewportHeight - rect.bottom - 22);
+    const preferredSpace = placement === "above" ? above : below;
+    const oppositeSpace = placement === "above" ? below : above;
+    const resolvedPlacement = preferredSpace < surface.offsetHeight && oppositeSpace > preferredSpace
+      ? placement === "above" ? "below" : "above"
+      : placement;
+    surface.dataset.placement = resolvedPlacement;
+    surface.style.maxHeight = `${Math.max(0, Math.min(560, resolvedPlacement === "above" ? above : below))}px`;
     const size = { width: surface.offsetWidth, height: surface.offsetHeight };
     surface.style.left = `${Math.max(12, Math.min(rect.left, viewportWidth - size.width - 12))}px`;
-    surface.style.top = `${placement === "above" ? Math.max(12, rect.top - size.height - 10) : rect.bottom + 10}px`;
+    const top = resolvedPlacement === "above" ? rect.top - size.height - 10 : rect.bottom + 10;
+    surface.style.top = `${Math.max(12, Math.min(top, viewportHeight - size.height - 12))}px`;
   }, [width, placement]);
   useEffect(() => {
     if (autoOpen) { panel.current?.showPopover(); position(); }

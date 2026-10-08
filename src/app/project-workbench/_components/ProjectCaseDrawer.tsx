@@ -71,8 +71,12 @@ export function ProjectCaseDrawer({
         : "只在需要补充长期口吻时选择账号";
 
   return (
-    <ModalBackdrop disabled={locked} onClose={onClose}>
-      <div aria-labelledby="project-case-dialog-title" aria-modal="true" className="modal-panel project-case-modal" role="dialog" tabIndex={-1}>
+    <ModalBackdrop
+      disabled={locked}
+      onClose={onClose}
+      aria-labelledby="project-case-dialog-title"
+      className="modal-panel project-case-modal"
+    >
         <div className="modal-header">
           <div>
             <h2 id="project-case-dialog-title">{activeTitle}</h2>
@@ -169,7 +173,6 @@ export function ProjectCaseDrawer({
             </>
           )}
         </div>
-      </div>
     </ModalBackdrop>
   );
 }

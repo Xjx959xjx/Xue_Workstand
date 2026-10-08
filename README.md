@@ -138,6 +138,7 @@ npm run dev
 - `STYLE_LIBRARY_DIR`：本地风格库目录，默认 `./style-library`。
 - `NEXT_PUBLIC_STIRLING_PDF_URL`：工具台里的 Stirling-PDF 地址，默认 `http://localhost:8080`。本地 Docker 可直接使用；地址只用于打开自托管 Web UI，PDF 文件不会经过本项目转发。
 - `SITES_STORAGE_MODE`：Sites 云端运行时由构建配置设为 `cloud`；本地文件模式留空。
+- `npm run build:sites`：在临时目录构建，完成后将产物放回 `dist/`；不会覆盖本地 Next.js 的 `.next/` 或 `next-env.d.ts`，不复制 `.env` 和真实素材库。构建环境变量仍由调用进程提供。
 - `SITES_EXTERNAL_CAPABILITY_URL`、`SITES_EXTERNAL_CAPABILITY_TOKEN`：可选的受鉴权 HTTP 能力桥。云端 OpenCLI、FFmpeg 抽帧、ASR/链接转写、媒体下载、飞书和企业微信文档调用会以 `{ operation, payload }` POST 到该地址；令牌只放在部署环境变量中，不要提交到仓库。
 - `SITES_CAPABILITY_BRIDGE_TOKEN`、`SITES_CAPABILITY_BRIDGE_PUBLIC_URL`：能力提供方主机使用。将本地工作台通过受保护的 HTTPS 反向代理暴露到 `/api/capability-bridge`，令牌至少 32 个字符；Sites 端的 `SITES_EXTERNAL_CAPABILITY_*` 使用同一地址和令牌。该入口在 Sites Worker 内会强制关闭，媒体文件通过短期、一次性下载凭证传输，不会返回本机路径。
 - 当前 Mac 常驻模式会从 macOS 钥匙串读取能力桥令牌，并把 `SITES_CAPABILITY_BRIDGE_PUBLIC_URL` 指向独立的 Tailscale Funnel `8443` 窄网关；不要把令牌复制进仓库或聊天。

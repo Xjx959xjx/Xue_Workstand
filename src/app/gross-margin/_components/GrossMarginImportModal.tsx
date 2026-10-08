@@ -63,14 +63,11 @@ export function GrossMarginImportModal({
   }
 
   return (
-    <ModalBackdrop onClose={onClose}>
-      <div
-        aria-labelledby="gross-import-modal-title"
-        aria-modal="true"
-        className="modal-panel gross-import-modal"
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      onClose={onClose}
+      aria-labelledby="gross-import-modal-title"
+      className="modal-panel gross-import-modal"
+    >
         <header className="gross-import-header">
           <div>
             <h2 id="gross-import-modal-title">导入维护模板</h2>
@@ -133,7 +130,6 @@ export function GrossMarginImportModal({
             导入到本次维护
           </button>
         </footer>
-      </div>
     </ModalBackdrop>
   );
 }

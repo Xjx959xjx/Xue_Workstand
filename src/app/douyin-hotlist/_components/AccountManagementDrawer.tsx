@@ -60,14 +60,13 @@ export function AccountManagementDrawer({
   const platformSelection = getPlatformAccountSelection(accountPlatform);
 
   return (
-    <ModalBackdrop closeLabel="点击空白处关闭账号管理" disabled={locked} onClose={onClose} initialFocusRef={inputRef}>
-      <aside
-        aria-labelledby="douyin-hotlist-account-drawer-title"
-        aria-modal="true"
-        className="douyin-hotlist-account-drawer"
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      disabled={locked}
+      onClose={onClose}
+      initialFocusRef={inputRef}
+      aria-labelledby="douyin-hotlist-account-drawer-title"
+      className="douyin-hotlist-account-drawer"
+    >
         <header className="douyin-hotlist-account-drawer-header">
           <div>
             <h2 id="douyin-hotlist-account-drawer-title">管理账号</h2>
@@ -130,7 +129,6 @@ export function AccountManagementDrawer({
             </div>
           )}
         </div>
-      </aside>
     </ModalBackdrop>
   );
 }

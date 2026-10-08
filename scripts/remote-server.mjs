@@ -458,13 +458,19 @@ async function bootstrapLaunchAgent() {
 
 async function assertNoActiveJobs() {
   const result = await fetchJson("http://127.0.0.1:3000/api/jobs", 5_000);
-  if (!result.ok) throw new Error(`无法确认任务状态，已停止切换：${result.error || "任务接口不可用"}`);
-  const jobs = Array.isArray(result.data?.jobs) ? result.data.jobs : [];
-  const active = jobs.filter((job) =>
-    ["queued", "running"].includes(job?.status) ||
-    (Array.isArray(job?.readErrors) && job.readErrors.length > 0) ||
-    (Array.isArray(job?.recoveryErrors) && job.recoveryErrors.length > 0)
-  );
+  if (!result.ok) {
+    // A refused connection confirms a stopped service; an open or unresponsive port is unsafe to switch.
+    if (result.connectionRefused && !await isTcpPortOpen(3000)) return;
+    throw new Error(`无法确认任务状态，已停止切换：${result.error || "任务接口不可用"}`);
+  }
+  const data = result.data;
+  if (!Array.isArray(data?.jobs) || !Array.isArray(data.readErrors) ||
+      !data.recoveryErrors || typeof data.recoveryErrors !== "object" || Array.isArray(data.recoveryErrors) ||
+      data.readErrors.length || Object.keys(data.recoveryErrors).length ||
+      data.jobs.some((job) => !job || !["queued", "running", "completed", "failed", "cancelled", "interrupted"].includes(job.status))) {
+    throw new Error("任务记录读取或恢复异常，无法确认完整任务状态，已停止切换，请先检查任务中心。");
+  }
+  const active = data.jobs.filter((job) => ["queued", "running"].includes(job.status));
   if (active.length) {
     throw new Error(`当前有 ${active.length} 个运行或排队任务，请等待完成或手动停止后再继续。`);
   }
@@ -495,7 +501,7 @@ async function fetchJson(url, timeoutMs) {
       ? { ok: true, data }
       : { ok: false, error: data?.error || `HTTP ${response.status}` };
   } catch (error) {
-    return { ok: false, error: describeError(error) };
+    return { ok: false, error: describeError(error), connectionRefused: error?.cause?.code === "ECONNREFUSED" };
   } finally {
     clearTimeout(timeout);
   }

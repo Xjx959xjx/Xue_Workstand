@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 
@@ -25,15 +25,13 @@ export function ConfirmDialog({
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <ModalBackdrop disabled={busy} onClose={onCancel} initialFocusRef={confirmButtonRef}>
-      <div
-        aria-labelledby="confirm-dialog-title"
-        aria-modal="true"
-        className="modal-panel confirm-panel"
-        onKeyDown={(event) => handleConfirmKeyDown(event, busy, onConfirm)}
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      disabled={busy}
+      onClose={onCancel}
+      initialFocusRef={confirmButtonRef}
+      aria-labelledby="confirm-dialog-title"
+      className="modal-panel confirm-panel"
+    >
         <div className="confirm-dialog-body">
           <div className="confirm-dialog-icon" aria-hidden="true">
             <AlertTriangle aria-hidden="true" size={20} />
@@ -51,17 +49,6 @@ export function ConfirmDialog({
             {busy ? "删除中…" : confirmLabel}
           </button>
         </div>
-      </div>
     </ModalBackdrop>
   );
-}
-
-function handleConfirmKeyDown(event: KeyboardEvent<HTMLDivElement>, busy: boolean, onConfirm: () => void) {
-  if (event.key === "Enter" && !busy && !event.nativeEvent.isComposing) {
-    const target = event.target;
-    if (!(target instanceof HTMLButtonElement) || target.type !== "button") {
-      event.preventDefault();
-      onConfirm();
-    }
-  }
 }

@@ -64,7 +64,6 @@
 .image-gallery-caption time { color: var(--muted); font-size: var(--text-caption); }
 .image-more-records { padding: var(--space-2); text-align: center; background: var(--panel); }
 .image-compare { width: min(1400px, 94vw); max-width: 94vw; max-height: calc(var(--app-dvh) * 94); padding: var(--space-4); background: var(--panel); color: var(--text); border: 1px solid var(--line); overflow: auto; }
-.image-compare::backdrop { background: var(--overlay); }
 .image-compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
 .image-compare-grid figure { margin: 0; min-width: 0; }
 .image-compare-grid img { width: 100%; height: min(calc(var(--app-dvh) * 50), 500px); object-fit: contain; background: var(--panel-soft); }

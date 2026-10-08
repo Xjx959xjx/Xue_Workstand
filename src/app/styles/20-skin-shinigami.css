@@ -663,7 +663,7 @@ html[data-skin="shinigami"] table tbody tr:hover {
   box-shadow: inset 3px 0 0 color-mix(in oklch, var(--accent-strong) 72%, transparent);
 }
 
-html[data-skin="shinigami"] :is(.btn, .skin-toggle, input, textarea, select) {
+html[data-skin="shinigami"] :is(.btn, .skin-toggle, input, textarea, select, .workbench-select-trigger) {
   backdrop-filter: saturate(0.88);
   -webkit-backdrop-filter: saturate(0.88);
 }
@@ -744,14 +744,14 @@ html[data-skin="shinigami"] .btn.primary:hover::after {
   transform: translateX(-10px) rotate(-7deg) scaleX(1.18);
 }
 
-html[data-skin="shinigami"] :is(.field input, .field select, .field textarea, .writer-ref-select, .writer-textarea, .project-style-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input) {
+html[data-skin="shinigami"] :is(.field input, .field :is(select, .workbench-select-trigger), .field textarea, .writer-ref-select, .writer-textarea, .project-style-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input) {
   border-color: color-mix(in oklch, var(--accent) 16%, var(--line-strong));
   background:
     linear-gradient(90deg, color-mix(in oklch, var(--accent-soft) 14%, transparent), transparent 18%),
     color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
 }
 
-html[data-skin="shinigami"] :is(.field input, .field select, .field textarea, .writer-ref-select, .writer-textarea, .project-style-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input):focus {
+html[data-skin="shinigami"] :is(.field input, .field :is(select, .workbench-select-trigger), .field textarea, .writer-ref-select, .writer-textarea, .project-style-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input):focus {
   border-color: color-mix(in oklch, var(--accent-strong) 72%, var(--line-strong));
   box-shadow:
     0 0 0 2px color-mix(in oklch, var(--accent) 24%, transparent),
@@ -927,8 +927,8 @@ html[data-skin="shinigami"] .douyin-hotlist-page .douyin-hotlist-rank-pane .pane
 html[data-skin="shinigami"] .douyin-hotlist-page :is(
   .douyin-hotlist-window-filter,
   .douyin-hotlist-platform-filter,
-  .douyin-hotlist-account-filter select,
-  .douyin-hotlist-sort select
+  .douyin-hotlist-account-filter :is(select, .workbench-select-trigger),
+  .douyin-hotlist-sort :is(select, .workbench-select-trigger)
 ) {
   border-color: var(--line-strong);
   background: color-mix(in oklch, var(--panel-soft) 72%, var(--panel-raised));

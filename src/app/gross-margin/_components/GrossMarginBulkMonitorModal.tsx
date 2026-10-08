@@ -44,14 +44,12 @@ export function GrossMarginBulkMonitorModal({
   }, [canCreateProject, createProjectTouched]);
 
   return (
-    <ModalBackdrop disabled={busy} onClose={onClose}>
-      <div
-        aria-labelledby="gross-bulk-monitor-modal-title"
-        aria-modal="true"
-        className="modal-panel gross-bulk-monitor-modal"
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      disabled={busy}
+      onClose={onClose}
+      aria-labelledby="gross-bulk-monitor-modal-title"
+      className="modal-panel gross-bulk-monitor-modal"
+    >
         <header className="gross-bulk-monitor-header">
           <div>
             <h2 id="gross-bulk-monitor-modal-title">一键监控</h2>
@@ -151,7 +149,6 @@ export function GrossMarginBulkMonitorModal({
             {busy ? "添加中" : canCreateProject && createProject ? "添加为项目" : "添加监控"}
           </button>
         </footer>
-      </div>
     </ModalBackdrop>
   );
 }

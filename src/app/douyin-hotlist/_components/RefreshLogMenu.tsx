@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
 import { ChevronDown, Clock3 } from "lucide-react";
 import {
   formatLogTime,
@@ -20,26 +21,30 @@ export function RefreshLogMenu({
   const latestLog = logs[0];
 
   return (
-    <details className="douyin-hotlist-refresh-log">
-      <summary aria-label="查看刷新日志" className="btn douyin-hotlist-refresh-log-trigger">
-        <Clock3 aria-hidden="true" size={13} />
-        <span>{latestLog ? formatLogTime(latestLog.at) : "刷新日志"}</span>
-      </summary>
-      <div className="douyin-hotlist-refresh-log-panel" role="log" aria-label="刷新日志">
-        <div className="douyin-hotlist-refresh-log-head">
-          <strong>刷新日志</strong>
-          <span>所有浏览器共享抓取结果，失败会保留明细</span>
-        </div>
-        {error ? <p className="douyin-hotlist-refresh-log-error" role="alert">{error}</p> : null}
-        {logs.length ? (
-          <ol>
-            {logs.map((log) => <RefreshLogItem key={log.id} log={log} />)}
-          </ol>
-        ) : !error ? (
-          <p>{loading ? "正在读取共享刷新日志…" : "暂无记录，下一次手动抓取后会写在这里。"}</p>
-        ) : null}
-      </div>
-    </details>
+    <div className="douyin-hotlist-refresh-log">
+      <DialogTrigger>
+        <Button aria-label="查看刷新日志" className="btn douyin-hotlist-refresh-log-trigger">
+          <Clock3 aria-hidden="true" size={13} />
+          <span>{latestLog ? formatLogTime(latestLog.at) : "刷新日志"}</span>
+        </Button>
+        <Popover className="workbench-select-popover douyin-hotlist-log-popover" placement="bottom end" offset={8}>
+          <Dialog className="douyin-hotlist-refresh-log-panel" aria-label="刷新日志">
+            <div className="douyin-hotlist-refresh-log-head">
+              <strong>刷新日志</strong>
+              <span>所有浏览器共享抓取结果，失败会保留明细</span>
+            </div>
+            {error ? <p className="douyin-hotlist-refresh-log-error" role="alert">{error}</p> : null}
+            {logs.length ? (
+              <ol>
+                {logs.map((log) => <RefreshLogItem key={log.id} log={log} />)}
+              </ol>
+            ) : !error ? (
+              <p>{loading ? "正在读取共享刷新日志…" : "暂无记录，下一次手动抓取后会写在这里。"}</p>
+            ) : null}
+          </Dialog>
+        </Popover>
+      </DialogTrigger>
+    </div>
   );
 }
 

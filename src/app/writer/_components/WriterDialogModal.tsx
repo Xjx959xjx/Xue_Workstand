@@ -17,16 +17,12 @@ export function WriterDialogModal({
   panelClassName = ""
 }: WriterDialogModalProps) {
   return (
-    <ModalBackdrop onClose={onClose}>
-      <div
-        aria-labelledby={labelledBy}
-        aria-modal="true"
-        className={`modal-panel ${panelClassName}`}
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      onClose={onClose}
+      aria-labelledby={labelledBy}
+      className={`modal-panel ${panelClassName}`}
+    >
         {children}
-      </div>
     </ModalBackdrop>
   );
 }

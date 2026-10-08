@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { parseDate } from "@internationalized/date";
 import { calculateGrossMargin, makeEmptyQuantityInputs, parseGrossMarginAmount, parseGrossMarginMetric } from "../src/lib/gross-margin-calculator";
 import { buildGrossMarginTemplateValues, formatImportedQuantity } from "../src/app/gross-margin/_lib/gross-margin-workbench-model";
 import { getGrossMarginLibrary, invalidateGrossMarginLibraryCache, saveGrossMarginPriceTable as saveClientTable } from "../src/lib/client";
@@ -72,6 +73,48 @@ function accountSource(command: () => Promise<{ stdout: string }>, fallback = "1
 function response(markdown: string) {
   return { stdout: JSON.stringify({ result: { content: [{ type: "text", text: JSON.stringify({ task_done: true, content: markdown }) }] } }) };
 }
+
+test("连续筛选合并最新 URL，清空时保留无关参数", () => {
+  const source = ts.createSourceFile("monitor.tsx", readFileSync("src/app/gross-margin/monitor/page.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const functions: string[] = [];
+  const collect = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && ["updateFilters", "setOptionalQueryParam"].includes(node.name?.text || "")) functions.push(node.getText(source));
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  const location = { pathname: "/gross-margin/monitor", search: "?keep=1" };
+  const update = vm.runInNewContext(ts.transpileModule(`${functions.join("\n")}\nupdateFilters`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+    URLSearchParams, pathname: location.pathname, window: { location, history: { replaceState: (_state: unknown, _title: string, href: string) => { location.search = new URL(href, "http://localhost").search; } } }
+  });
+  update({ from: "2026-09-01" });
+  update({ platform: "bilibili" });
+  update({ to: "2026-09-30", q: "测试" });
+  assert.equal(new URLSearchParams(location.search).get("from"), "2026-09-01");
+  assert.equal(new URLSearchParams(location.search).get("platform"), "bilibili");
+  update({ q: "", platform: "", project: "", from: "", to: "" });
+  assert.equal(location.search, "?keep=1");
+});
+
+test("日历筛选忽略 URL 中不存在的日期，保留合法闰日", () => {
+  const source = ts.createSourceFile("monitor.tsx", readFileSync("src/app/gross-margin/monitor/page.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const node = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "parseDateFilter")!;
+  const parse = vm.runInNewContext(ts.transpileModule(`${node.getText(source)}\nparseDateFilter`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, { parseDate });
+  for (const value of [null, "", "2026-02-29", "2026-13-01", "2026-10-00", "wrong"]) assert.equal(parse(value), "");
+  assert.equal(parse("2024-02-29"), "2024-02-29");
+});
+
+test("企业微信授权过期保留成功缓存，并显示中文处理方式", async () => {
+  const source = accountSource(async () => ({ stdout: JSON.stringify({ result: { content: [{ type: "text", text: JSON.stringify({
+    errcode: 851014, errmsg: "authorization expired, hint: [123], from ip: 192.0.2.1"
+  }) }] } }) }));
+  const persisted: AccountSourceResult = { accounts: source.parseWecomAccountSheet(sheet("30")), source: "wecom", fetchedAt: timestamp };
+  const result = await source.resolveGrossMarginAccounts([], { persisted, refresh: true });
+  assert.equal(result.accounts[1].defaultPrice, 30);
+  assert.equal(result.fallback, true);
+  assert.equal(result.fallbackReason, "企业微信授权已过期，请重新运行 wecom-cli init");
+  assert.match(result.warning || "", /上次成功缓存.*企业微信授权已过期/);
+  assert.doesNotMatch(result.warning || "", /authorization expired|192\.0\.2\.1|hint/);
+});
 
 test("账号表单飞刷新，落盘前保持旧缓存；部分解析/落盘失败显式回退且冷却", async () => {
   const pending = deferred<{ stdout: string }>();

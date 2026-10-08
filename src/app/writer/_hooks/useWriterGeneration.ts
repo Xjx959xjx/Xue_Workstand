@@ -312,10 +312,11 @@ export function useWriterGeneration({
       return;
     }
 
-    if (activeWriteJob.status === "failed") {
+    if (activeWriteJob.status === "failed" || activeWriteJob.status === "interrupted") {
       restoreGenerationState();
-      setNotice(activeWriteJob.error || "生成失败，请检查模型配置、代理或输入内容后重试。");
-      setGenerateStage("生成失败");
+      const interrupted = activeWriteJob.status === "interrupted";
+      setNotice(activeWriteJob.error || (interrupted ? "生成任务已中断，已恢复生成前的编辑内容，请重试。" : "生成失败，请检查模型配置、代理或输入内容后重试。"));
+      setGenerateStage(interrupted ? "生成已中断" : "生成失败");
       return;
     }
 

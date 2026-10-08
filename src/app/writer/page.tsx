@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { Suspense, type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -896,11 +898,11 @@ function WriterPageContent() {
                     </WriterActionMenu> : null}
                     <label className="writer-revision-mode">
                       <span className="sr-only">修改方式</span>
-                      <select className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
-                        onChange={(event) => setRevisionMode(event.target.value as "edit" | "recalibrate")}>
+                      <WorkbenchSelect className="writer-ref-select" aria-label="修改方式" aria-describedby="writer-revision-mode-help" disabled={busy === "generate"} value={revisionMode}
+                        onValueChange={(value) => setRevisionMode(value as "edit" | "recalibrate")}>
                         <option value="edit">按要求微调</option>
                         <option value="recalibrate">重新校准风格</option>
-                      </select>
+                      </WorkbenchSelect>
                     </label>
                     <WriterActionMenu label="快捷修改要求" icon={<Sparkles size={16} aria-hidden="true" />}>
                       {[

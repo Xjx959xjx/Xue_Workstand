@@ -499,12 +499,6 @@
   flex: 1 1 auto;
 }
 
-.engagement-history-menu-trigger {
-  flex: 0 0 32px;
-  align-self: stretch;
-  min-height: 0;
-}
-
 .asset-list-block {
   display: grid;
   gap: 8px;

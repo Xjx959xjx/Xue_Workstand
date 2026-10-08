@@ -100,7 +100,7 @@
 
 .gross-price-option input,
 .gross-maintenance-table input,
-.gross-maintenance-table select {
+.gross-maintenance-table :is(select, .workbench-select-trigger) {
   width: 100%;
   min-height: 32px;
   padding: 6px 8px;
@@ -116,9 +116,14 @@
     box-shadow var(--motion-base) var(--ease-apple);
 }
 
+.gross-maintenance-table .workbench-select,
+.gross-price-editor-table .workbench-select {
+  width: 100%;
+}
+
 .gross-price-option input:focus,
 .gross-maintenance-table input:focus,
-.gross-maintenance-table select:focus {
+.gross-maintenance-table :is(select, .workbench-select-trigger):focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus);
 }
@@ -183,54 +188,6 @@
 
 .gross-account-toggle[aria-expanded="true"] svg {
   transform: rotate(180deg);
-}
-
-.gross-account-options {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 6px);
-  right: 0;
-  left: 0;
-  display: grid;
-  max-height: 224px;
-  padding: 5px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--panel-raised);
-  box-shadow: var(--shadow-lift);
-}
-
-.gross-account-option {
-  display: flex;
-  width: 100%;
-  min-height: 36px;
-  padding: 7px 10px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-
-.gross-account-option:hover,
-.gross-account-option.active {
-  color: var(--accent-strong);
-  background: var(--accent-tint);
-}
-
-.gross-account-option span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .gross-rate-input {
@@ -1121,7 +1078,7 @@
 }
 
 .gross-price-editor-table input,
-.gross-price-editor-table select {
+.gross-price-editor-table :is(select, .workbench-select-trigger) {
   width: 100%;
   min-height: var(--control-height-md);
   padding: 8px 10px;
@@ -1135,7 +1092,7 @@
 }
 
 .gross-price-editor-table input:focus,
-.gross-price-editor-table select:focus {
+.gross-price-editor-table :is(select, .workbench-select-trigger):focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus);
 }
@@ -1326,10 +1283,6 @@
   padding-top: 0;
 }
 
-.gross-monitor-page:has(> .field-hint.warning) {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
 .gross-monitor-topbar {
   position: static;
   container-name: gross-monitor-topbar;
@@ -1338,9 +1291,8 @@
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  min-height: 96px;
   align-content: start;
-  padding: 8px;
+  padding: 12px;
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-lg);
   background: color-mix(in oklch, var(--panel-raised) 96%, var(--panel-soft));
@@ -1415,10 +1367,10 @@
 }
 
 .gross-monitor-inline-filters {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto auto;
   align-items: center;
   justify-content: flex-start;
-  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -1426,8 +1378,7 @@
 .gross-monitor-search-field {
   position: relative;
   display: flex;
-  width: 228px;
-  min-width: 190px;
+  min-width: 0;
 }
 
 .gross-monitor-search-field > svg {
@@ -1455,13 +1406,8 @@
 }
 
 .gross-monitor-date-range {
-  grid-template-columns: 14px minmax(100px, 1fr) auto minmax(100px, 1fr);
-  min-height: 42px;
-  padding: 4px 6px 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: color-mix(in oklch, var(--panel-soft) 82%, var(--panel-raised));
-  color: var(--muted);
+  width: 280px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .gross-monitor-filter-control {
@@ -1479,19 +1425,6 @@
   font-weight: 700;
   line-height: 1;
   pointer-events: none;
-}
-
-.gross-monitor-filter-control::after {
-  position: absolute;
-  top: 18px;
-  right: 11px;
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  content: "";
-  pointer-events: none;
-  transform: rotate(45deg);
 }
 
 .gross-monitor-project-control {
@@ -1538,67 +1471,13 @@
   min-width: 0;
   max-width: 124px;
   padding-top: 16px;
-  padding-right: 30px;
+  padding-right: 10px;
   appearance: none;
 }
 
 .gross-monitor-project-select {
   width: 176px;
   max-width: 176px;
-}
-
-.gross-monitor-date-segment {
-  position: relative;
-  display: grid;
-  align-content: center;
-  min-width: 100px;
-  height: 34px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    background var(--motion-fast) var(--ease-out),
-    border-color var(--motion-fast) var(--ease-out);
-}
-
-.gross-monitor-date-segment:hover,
-.gross-monitor-date-segment:focus-within {
-  border-color: var(--line-strong);
-  background: var(--panel-raised);
-}
-
-.gross-monitor-date-segment > span {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.gross-monitor-date-segment > strong {
-  color: var(--text-strong);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
-.gross-monitor-inline-date {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.gross-monitor-inline-date-separator {
-  color: var(--line-strong);
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .gross-monitor-card-grid {
@@ -2294,7 +2173,7 @@
   }
 
   .gross-monitor-filter-control,
-  .gross-monitor-filter-control select {
+  .gross-monitor-filter-control .workbench-select-trigger {
     width: 100%;
     min-width: 0;
     max-width: none;
@@ -2306,12 +2185,11 @@
 
   .gross-monitor-date-range {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .gross-monitor-inline-input,
-  .gross-monitor-inline-select,
-  .gross-monitor-inline-date {
+  .gross-monitor-inline-select {
     width: 100%;
     min-width: 0;
     max-width: none;
@@ -2339,9 +2217,9 @@
   }
 
   .gross-monitor-inline-filters {
-    grid-template-columns: 184px auto minmax(0, 1fr);
+    grid-template-columns: minmax(160px, 1fr) auto auto;
     grid-template-areas:
-      "search scope ."
+      "search scope scope"
       "date date clear";
   }
 
@@ -2394,7 +2272,7 @@
   }
 
   .gross-monitor-filter-control,
-  .gross-monitor-filter-control select {
+  .gross-monitor-filter-control .workbench-select-trigger {
     width: 100%;
     min-width: 0;
     max-width: none;
@@ -2406,12 +2284,11 @@
 
   .gross-monitor-date-range {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .gross-monitor-inline-input,
-  .gross-monitor-inline-select,
-  .gross-monitor-inline-date {
+  .gross-monitor-inline-select {
     width: 100%;
     min-width: 0;
     max-width: none;
@@ -2421,3 +2298,23 @@
     justify-self: start;
   }
 }
+
+.gross-monitor-date-trigger { min-height: 42px; gap: 10px; padding: 5px 12px; }
+.gross-monitor-date-trigger > span { display: grid; flex: 1; gap: 2px; }
+.gross-monitor-date-trigger small { color: var(--muted); font-size: 10px; line-height: 1.2; }
+.gross-monitor-date-trigger strong { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.gross-monitor-calendar-popover { width: 324px; padding: 14px; }
+.gross-monitor-calendar-dialog { outline: none; }
+.gross-monitor-calendar-presets { display: flex; gap: 6px; margin-bottom: 12px; }
+.gross-monitor-calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.gross-monitor-calendar-header h2 { margin: 0; font-size: 14px; }
+.gross-monitor-calendar-popover table { width: 100%; border-collapse: collapse; }
+.gross-monitor-calendar-popover th { color: var(--muted); font-size: 11px; font-weight: 500; padding: 4px 0 8px; }
+.gross-monitor-calendar-popover td { padding: 2px 0; border: 0; }
+.gross-monitor-calendar-day { display: grid; place-items: center; height: 36px; border-radius: 6px; font-size: 13px; outline: none; cursor: pointer; }
+.gross-monitor-calendar-day[data-hovered], .gross-monitor-calendar-day[data-selected] { background: var(--accent-tint); }
+.gross-monitor-calendar-day[data-selection-start], .gross-monitor-calendar-day[data-selection-end] { background: var(--text-strong); color: var(--panel-raised); }
+.gross-monitor-calendar-day[data-focus-visible] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gross-monitor-calendar-day[data-outside-month] { color: var(--muted); opacity: .45; }
+.gross-monitor-calendar-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.gross-monitor-calendar-footer > span { color: var(--muted); font-size: 10px; }

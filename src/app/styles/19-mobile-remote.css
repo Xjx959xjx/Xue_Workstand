@@ -577,7 +577,7 @@
     background: var(--accent-tint);
   }
 
-  .writer-page :is(input, textarea, select) {
+  .writer-page :is(input, textarea, select, .workbench-select-trigger) {
     font-size: 16px;
   }
 
@@ -798,10 +798,10 @@
 
   .mobile-home input,
   .mobile-home textarea,
-  .mobile-home select,
+  .mobile-home :is(select, .workbench-select-trigger),
   .mobile-more input,
   .mobile-more textarea,
-  .mobile-more select {
+  .mobile-more :is(select, .workbench-select-trigger) {
     font-size: 16px;
   }
 }

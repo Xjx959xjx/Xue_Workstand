@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { useEffect, useState } from "react";
 import { ArrowLeft, Columns3, LayoutGrid, Loader2, RefreshCw, Search, Settings2 } from "lucide-react";
 import { useRadarController } from "./useRadarController";
@@ -38,7 +40,7 @@ export default function RadarAnalysis() {
         <input id="radar-search" placeholder="标题、游戏或人物" value={query} onChange={event => setQuery(event.target.value)} />
         <button className="btn compact icon-btn" aria-label="搜索选题"><Search size={15} /></button>
       </form>
-      {c.view === "topics" ? <label className="radar-inline-field" htmlFor="radar-category">分类<select id="radar-category" value={c.category} onChange={event => filter("category", event.target.value)}><option value="">全部分类</option>{radarCategories.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label> : <button className="btn compact" onClick={() => c.setFilter({ view: "topics", page: "", item: "" })}><ArrowLeft size={14} />返回选题</button>}
+      {c.view === "topics" ? <label className="radar-inline-field" htmlFor="radar-category">分类<WorkbenchSelect aria-label="分类" id="radar-category" value={c.category} onValueChange={value => filter("category", value)}><option value="">全部分类</option>{radarCategories.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</WorkbenchSelect></label> : <button className="btn compact" onClick={() => c.setFilter({ view: "topics", page: "", item: "" })}><ArrowLeft size={14} />返回选题</button>}
       <div className="radar-view-switch" role="group" aria-label="查看方式">
         <button className="btn compact" aria-pressed={c.layout === "cards"} onClick={() => c.setLayout("cards")}><LayoutGrid size={15} />卡片</button>
         <button className="btn compact" aria-pressed={c.layout === "overview"} onClick={() => c.setLayout("overview")}><Columns3 size={15} />分类总览</button>
@@ -60,9 +62,9 @@ export default function RadarAnalysis() {
 
     {settings ? <section className="radar-settings" id="radar-settings" aria-label="选题设置">
       <div className="radar-settings-controls">
-        <label className="radar-inline-field" htmlFor="radar-grade">优先级<select id="radar-grade" value={c.grade} onChange={event => filter("grade", event.target.value)}><option value="">全部优先级</option>{radarGrades.map(grade => <option key={grade}>{grade}</option>)}</select></label>
-        <label className="radar-inline-field" htmlFor="radar-source">来源<select id="radar-source" value={c.source} onChange={event => filter("source", event.target.value)}><option value="">全部来源</option>{scouts.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label className="radar-inline-field" htmlFor="radar-sort">排序<select id="radar-sort" value={c.sort} onChange={event => filter("sort", event.target.value)}><option value="latest">最新优先</option><option value="priority">优先级最高</option></select></label>
+        <label className="radar-inline-field" htmlFor="radar-grade">优先级<WorkbenchSelect aria-label="优先级" id="radar-grade" value={c.grade} onValueChange={value => filter("grade", value)}><option value="">全部优先级</option>{radarGrades.map(grade => <option key={grade}>{grade}</option>)}</WorkbenchSelect></label>
+        <label className="radar-inline-field" htmlFor="radar-source">来源<WorkbenchSelect aria-label="来源" id="radar-source" value={c.source} onValueChange={value => filter("source", value)}><option value="">全部来源</option>{scouts.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</WorkbenchSelect></label>
+        <label className="radar-inline-field" htmlFor="radar-sort">排序<WorkbenchSelect aria-label="排序" id="radar-sort" value={c.sort} onValueChange={value => filter("sort", value)}><option value="latest">最新优先</option><option value="priority">优先级最高</option></WorkbenchSelect></label>
       </div>
       <div className="radar-settings-actions">
         {canContinue ? <button className="btn compact" disabled={busy} onClick={() => void c.refresh(false, true)}>继续上轮分析</button> : null}

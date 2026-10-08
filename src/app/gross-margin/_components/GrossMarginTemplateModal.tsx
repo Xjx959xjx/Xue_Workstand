@@ -72,15 +72,13 @@ export function GrossMarginTemplateModal({
   }
 
   return (
-    <ModalBackdrop disabled={busy} onClose={requestClose}>
-      <div
-        aria-labelledby="gross-template-modal-title"
-        aria-modal="true"
-        className="modal-panel gross-template-modal"
-        data-unsaved-changes={dirty ? "true" : undefined}
-        role="dialog"
-        tabIndex={-1}
-      >
+    <ModalBackdrop
+      disabled={busy}
+      onClose={requestClose}
+      aria-labelledby="gross-template-modal-title"
+      className="modal-panel gross-template-modal"
+      data-unsaved-changes={dirty ? "true" : undefined}
+    >
         <header className="gross-template-header">
           <div>
             <h2 id="gross-template-modal-title">{platformLabel}文案模板</h2>
@@ -154,7 +152,6 @@ export function GrossMarginTemplateModal({
             {busy ? "保存中" : "保存模板"}
           </button>
         </footer>
-      </div>
     </ModalBackdrop>
   );
 }

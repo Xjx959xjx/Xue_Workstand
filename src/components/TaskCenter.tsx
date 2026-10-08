@@ -2,14 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
-import { createPortal } from "react-dom";
 import { CheckCircle2, ChevronDown, CircleStop, Clock3, ListTodo, Loader2, RefreshCw, X, XCircle } from "lucide-react";
 import { formatJobErrorMessage } from "@/lib/job-messages";
 import { defaultJobHref, getJobResultHref } from "@/lib/job-links";
 import { isActiveJob } from "@/lib/job-sync";
 import type { JobRecord } from "@/lib/types";
 import { useOptionalTasks } from "./TaskProvider";
-import { useDialogInteraction } from "./useDialogInteraction";
+import { ModalBackdrop } from "./ModalBackdrop";
 
 const RECENT_COLLAPSED_COUNT = 4;
 
@@ -24,8 +23,6 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
   const drawerId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const panelRef = useRef<HTMLElement>(null);
-  const closeDialog = useDialogInteraction(panelRef, { active: open && Boolean(tasks), onClose: () => setOpen(false) });
   const [recentExpanded, setRecentExpanded] = useState(false);
   const [drawerPosition, setDrawerPosition] = useState<TaskDrawerPosition>();
   const [stoppingJobId, setStoppingJobId] = useState("");
@@ -36,8 +33,7 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
   const visibleRecentJobs = recentExpanded ? recentJobs : recentJobs.slice(0, RECENT_COLLAPSED_COUNT);
   const activeCount = activeJobs.length;
   const primaryJob = activeJobs[0] || null;
-  const latestRecentJob = recentJobs[0] || null;
-  const displayJob = primaryJob || latestRecentJob;
+  const displayJob = primaryJob;
   const progress = clampProgress(displayJob?.progress ?? 0);
   const progressStyle = {
     "--progress-scale": `${progress / 100}`
@@ -53,15 +49,20 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
     if (!trigger) return;
 
     const triggerRect = trigger.getBoundingClientRect();
+    // DOMRect uses visual pixels; fixed positioning still inherits the page zoom.
+    const zoom = Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const viewportWidth = window.innerWidth / zoom;
+    const viewportHeight = window.innerHeight / zoom;
+    const triggerRight = triggerRect.right / zoom;
     const viewportEdge = 16;
     const triggerGap = 12;
-    const availableWidth = window.innerWidth - triggerRect.right - triggerGap - viewportEdge;
+    const availableWidth = viewportWidth - triggerRight - triggerGap - viewportEdge;
     const width = Math.min(420, Math.max(320, availableWidth));
     const left = Math.max(
       viewportEdge,
-      Math.min(triggerRect.right + triggerGap, window.innerWidth - width - viewportEdge)
+      Math.min(triggerRight + triggerGap, viewportWidth - width - viewportEdge)
     );
-    const bottom = Math.max(viewportEdge, window.innerHeight - triggerRect.bottom);
+    const bottom = Math.max(viewportEdge, viewportHeight - triggerRect.bottom / zoom);
 
     setDrawerPosition({
       "--task-drawer-bottom": `${Math.round(bottom)}px`,
@@ -117,29 +118,25 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
         >
           <span className="task-center-trigger-copy">
             <strong>任务中心</strong>
-            <small>{displayJob ? displayJob.message : "没有进行中的任务"}</small>
+            <small>{displayJob ? displayJob.message : "暂无运行任务 · 查看记录"}</small>
           </span>
-          <span aria-hidden="true" className="task-center-rail">
+          {primaryJob ? <span aria-hidden="true" className="task-center-rail">
             <span className="task-center-rail-fill" style={progressStyle} />
-          </span>
-          <span className="task-center-trigger-meta">
+          </span> : null}
+          {primaryJob ? <span className="task-center-trigger-meta">
             <span>{activeCount}</span>
-            <small>{primaryJob ? `${clampProgress(primaryJob.progress)}%` : latestRecentJob ? formatJobStatus(latestRecentJob.status) : "0%"}</small>
-          </span>
+            <small>{primaryJob.status === "queued" ? "排队中" : `${clampProgress(primaryJob.progress)}%`}</small>
+          </span> : <ChevronDown aria-hidden="true" size={14} />}
         </button>
       )}
 
-      {open && typeof document !== "undefined" ? createPortal((
-        <>
-          <button className="task-center-backdrop" aria-label="关闭任务中心" onClick={closeDialog} tabIndex={-1} type="button" />
-          <aside
-            ref={panelRef}
-            tabIndex={-1}
-            aria-modal="true"
+      {open ? (
+          <ModalBackdrop
+            backdropClassName="task-center-backdrop"
+            onClose={() => setOpen(false)}
             aria-label="任务中心"
             className="task-center-drawer"
             id={drawerId}
-            role="dialog"
             style={drawerPosition}
           >
             <header className="task-center-drawer-header">
@@ -216,9 +213,8 @@ export function TaskCenter({ variant = "sidebar" }: { variant?: "sidebar" | "mob
                 <p className="task-center-more">最近没有任务记录。</p>
               ) : null}
             </div>
-          </aside>
-        </>
-      ), document.body) : null}
+          </ModalBackdrop>
+      ) : null}
     </div>
   );
 }

@@ -167,7 +167,7 @@ async function fetchLingxiDocument(
   const referer = `${docsOrigin}/lingxi/${encodeURIComponent(identity)}`;
   const jar = new MemoryCookieJar();
 
-  const accessResponse = await fetchWithCookieJar(
+  const accessPayload = await fetchWithCookieJar(
     `${docsOrigin}/api/bs-doc/v1/access/url`,
     jar,
     {
@@ -175,18 +175,18 @@ async function fetchLingxiDocument(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ itemType: 0, itemId: identity })
     },
-    { ...options, referer }
+    { ...options, referer },
+    (response) => readJsonObject(response, "灵犀访客授权失败")
   );
-  const accessPayload = await readJsonObject(accessResponse, "灵犀访客授权失败", options.signal);
   assertLingxiSuccess(accessPayload, "灵犀访客授权失败");
 
-  const metadataResponse = await fetchWithCookieJar(
+  const metadata = await fetchWithCookieJar(
     `${docsOrigin}/api/bs-doc/v1/document/get/${encodeURIComponent(identity)}?share_token=`,
     jar,
     {},
-    { ...options, referer }
+    { ...options, referer },
+    (response) => readJsonObject(response, "灵犀文档信息读取失败")
   );
-  const metadata = await readJsonObject(metadataResponse, "灵犀文档信息读取失败", options.signal);
   assertLingxiSuccess(metadata, "灵犀文档信息读取失败");
   const metadataData = asObject(metadata.data);
   const title = stringValue(metadataData.name || metadataData.title);
@@ -199,13 +199,13 @@ async function fetchLingxiDocument(
     traceparent,
     fragment: ""
   }).toString();
-  const loginResponse = await fetchWithCookieJar(
+  const loginPayload = await fetchWithCookieJar(
     `${docsOrigin}/api/bs-user/v1/disposable/login/third?type=lingxi_doc&additionalParam=${encodeURIComponent(additionalParam)}`,
     jar,
     {},
-    { ...options, referer }
+    { ...options, referer },
+    (response) => readJsonObject(response, "灵犀正文访问票据获取失败")
   );
-  const loginPayload = await readJsonObject(loginResponse, "灵犀正文访问票据获取失败", options.signal);
   assertLingxiSuccess(loginPayload, "灵犀正文访问票据获取失败");
   const loginUrl = stringValue(asObject(loginPayload.data).url);
   if (!loginUrl || new URL(loginUrl).hostname.toLowerCase() !== "office.netease.com") {
@@ -216,19 +216,20 @@ async function fetchLingxiDocument(
     loginUrl,
     jar,
     { headers: { accept: "text/html,application/xhtml+xml" } },
-    { ...options, referer }
+    { ...options, referer },
+    async (response) => { await response.body?.cancel(); }
   );
   if (!jar.hasCookieForHost("office.netease.com")) {
     throw new Error("灵犀访客会话建立失败");
   }
 
-  const latestResponse = await fetchWithCookieJar(
+  const latestPayload = await fetchWithCookieJar(
     `${officeOrigin}/api/admin/cowork/view-doc-latest-history?identity=${encodeURIComponent(identity)}&docType=doc&serverType=GEZHI`,
     jar,
     {},
-    { ...options, referer: `${officeOrigin}/doc/?identity=${encodeURIComponent(identity)}` }
+    { ...options, referer: `${officeOrigin}/doc/?identity=${encodeURIComponent(identity)}` },
+    (response) => readJsonObject(response, "灵犀正文读取失败")
   );
-  const latestPayload = await readJsonObject(latestResponse, "灵犀正文读取失败", options.signal);
   const latestData = asObject(latestPayload.data);
   if (Number(latestPayload.code) !== 0 || typeof latestData.content !== "string") {
     throw new Error(stringValue(latestPayload.message) || "灵犀没有返回可用正文");
@@ -491,11 +492,12 @@ class MemoryCookieJar {
   }
 }
 
-async function fetchWithCookieJar(
+async function fetchWithCookieJar<T>(
   url: string,
   jar: MemoryCookieJar,
   init: RequestInit,
-  options: FetchSupportDocumentOptions & { referer: string }
+  options: FetchSupportDocumentOptions & { referer: string },
+  readResponse: (response: Response) => Promise<T>
 ) {
   const parsed = new URL(url);
   const headers = new Headers(init.headers);
@@ -504,16 +506,22 @@ async function fetchWithCookieJar(
   const cookie = jar.headerForHost(parsed.hostname);
   if (cookie) headers.set("cookie", cookie);
 
-  const response = await fetchWithTimeout(url, {
+  return fetchWithTimeout(url, {
     ...init,
     redirect: "manual",
     headers
+  }, async (response) => {
+    jar.capture(parsed.hostname, response.headers);
+    return readResponse(response);
   }, options.signal);
-  jar.capture(parsed.hostname, response.headers);
-  return response;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, parentSignal?: AbortSignal) {
+async function fetchWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  readResponse: (response: Response) => Promise<T>,
+  parentSignal?: AbortSignal
+) {
   throwIfAborted(parentSignal);
   const controller = new AbortController();
   let timedOut = false;
@@ -526,10 +534,9 @@ async function fetchWithTimeout(url: string, init: RequestInit, parentSignal?: A
 
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
-    // Keep the same deadline active while the body is read by callers.
-    // The response carries the scoped signal through its body stream.
-    return response;
+    return await readResponse(response);
   } catch (error) {
+    throwIfAborted(parentSignal);
     if (timedOut) throw new Error("文档服务响应超时");
     throw error;
   } finally {
@@ -538,34 +545,11 @@ async function fetchWithTimeout(url: string, init: RequestInit, parentSignal?: A
   }
 }
 
-async function readJsonObject(response: Response, fallbackMessage: string, parentSignal?: AbortSignal) {
+async function readJsonObject(response: Response, fallbackMessage: string) {
   if (!response.ok) throw new Error(`${fallbackMessage}（HTTP ${response.status}）`);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  try {
-    const body = response.text();
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        void response.body?.cancel().catch(() => undefined);
-        reject(new Error("文档服务正文读取超时"));
-      }, REMOTE_FETCH_TIMEOUT_MS);
-    });
-    const cancelled = new Promise<never>((_, reject) => {
-      abort = () => {
-        void response.body?.cancel().catch(() => undefined);
-        reject(new Error("任务已停止"));
-      };
-      parentSignal?.addEventListener("abort", abort, { once: true });
-      if (parentSignal?.aborted) abort();
-    });
-    const text = await Promise.race([body, timeout, cancelled]);
-    const payload = asObject(parseJson(text));
-    if (!Object.keys(payload).length) throw new Error(`${fallbackMessage}：返回内容无法解析`);
-    return payload;
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (abort) parentSignal?.removeEventListener("abort", abort);
-  }
+  const payload = asObject(parseJson(await response.text()));
+  if (!Object.keys(payload).length) throw new Error(`${fallbackMessage}：返回内容无法解析`);
+  return payload;
 }
 
 function assertLingxiSuccess(payload: Record<string, unknown>, message: string) {

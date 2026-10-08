@@ -87,7 +87,7 @@
   border-left: 0;
 }
 
-.library-page .inline-sort-control select {
+.library-page .inline-sort-control :is(select, .workbench-select-trigger) {
   width: 104px;
   min-height: 30px;
   padding: 5px 26px 5px 8px;
@@ -107,12 +107,12 @@
   color: var(--accent-strong);
 }
 
-.library-page .inline-sort-control select:focus {
+.library-page .inline-sort-control :is(select, .workbench-select-trigger):focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus);
 }
 
-.library-page .inline-sort-control select:focus-visible {
+.library-page .inline-sort-control :is(select, .workbench-select-trigger):focus-visible {
   outline-color: var(--accent);
 }
 
@@ -436,7 +436,7 @@
     align-items: center;
   }
 
-  .library-page .video-header-tools .inline-sort-control select {
+  .library-page .video-header-tools .inline-sort-control :is(select, .workbench-select-trigger) {
     width: 100%;
   }
 
@@ -540,12 +540,12 @@
   gap: 6px;
 }
 
-.library-page .account-filter-row select {
+.library-page .account-filter-row :is(select, .workbench-select-trigger) {
   width: 100%;
   min-width: 0;
 }
 
-.library-page .account-filter-row select:last-child {
+.library-page .account-filter-row :is(select, .workbench-select-trigger):last-child {
   grid-column: 1 / -1;
 }
 
@@ -599,8 +599,9 @@
   font-size: var(--text-caption);
 }
 
-.library-page .video-header-tools select {
+.library-page .video-header-tools > .workbench-select {
   width: 106px;
+  flex-shrink: 0;
 }
 
 .library-page .video-selection-toolbar {
@@ -658,7 +659,7 @@
   min-width: 0;
 }
 
-.transcript-history-toolbar select {
+.transcript-history-toolbar :is(select, .workbench-select-trigger) {
   width: 100%;
 }
 
@@ -1005,13 +1006,13 @@
   padding: 10px;
 }
 
-.library-page .inline-sort-control select,
+.library-page .inline-sort-control :is(select, .workbench-select-trigger),
 .library-page .list-button {
   border-radius: var(--radius-md);
 }
 
 .library-page .btn,
-.library-page .inline-sort-control select,
+.library-page .inline-sort-control :is(select, .workbench-select-trigger),
 .library-page .pane-search input,
 .library-page .account-list-button,
 .library-page .detail-section,
@@ -1494,7 +1495,7 @@
   padding: 0 10px;
 }
 
-.library-quick-fields :is(input, select),
+.library-quick-fields :is(input, :is(select, .workbench-select-trigger), .workbench-select-trigger),
 .library-quick-fields .input-with-icon input {
   height: 38px;
   min-height: 38px;
@@ -1502,13 +1503,13 @@
   background-color: color-mix(in oklch, var(--panel-raised) 92%, transparent);
 }
 
-.library-quick-fields :is(input, select):hover,
+.library-quick-fields :is(input, :is(select, .workbench-select-trigger), .workbench-select-trigger):hover,
 .library-quick-fields .input-with-icon input:hover {
   border-color: color-mix(in oklch, var(--accent) 24%, var(--line-strong));
   background-color: var(--panel-raised);
 }
 
-.library-quick-fields :is(input, select):focus,
+.library-quick-fields :is(input, :is(select, .workbench-select-trigger), .workbench-select-trigger):focus,
 .library-quick-fields .input-with-icon input:focus {
   border-color: color-mix(in oklch, var(--accent) 54%, var(--line-strong));
   background-color: var(--panel-raised);

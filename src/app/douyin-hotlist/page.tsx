@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -425,16 +427,16 @@ function DouyinHotlistPageContent() {
               />
               <label className="inline-sort-control douyin-hotlist-sort">
                 <span>排序</span>
-                <select
+                <WorkbenchSelect
                   aria-label="榜单排序"
                   disabled={operationBusy}
-                  onChange={(event) => setSortMode(event.target.value as SortMode)}
+                  onValueChange={(value) => setSortMode(value as SortMode)}
                   value={sortMode}
                 >
                   {sortOptions.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
-                </select>
+                </WorkbenchSelect>
               </label>
               <span className={`status-pill ${initialLoading || refreshing ? "pending" : "completed"}`}>
                 {initialLoading ? "读取中" : refreshing ? `刷新 ${Math.round(activeRefreshJob?.progress || 0)}%` : `${visibleItems.length} 条`}

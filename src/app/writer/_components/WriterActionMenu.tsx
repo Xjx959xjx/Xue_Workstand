@@ -10,8 +10,10 @@ export function WriterActionMenu({ label, icon, children, text, disabled = false
   useEffect(() => {
     if (!open) return;
     const dismiss = () => panel.current?.hidePopover();
+    const onScroll = (event: Event) => { if (!panel.current?.contains(event.target as Node)) dismiss(); };
     window.addEventListener("resize", dismiss);
-    return () => window.removeEventListener("resize", dismiss);
+    window.addEventListener("scroll", onScroll, true);
+    return () => { window.removeEventListener("resize", dismiss); window.removeEventListener("scroll", onScroll, true); };
   }, [open]);
   function close() { panel.current?.hidePopover(); trigger.current?.focus(); }
   function show() {

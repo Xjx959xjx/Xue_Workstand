@@ -226,20 +226,12 @@
 }
 
 .writer-reference-menu {
-  position: absolute;
-  z-index: 40;
-  top: calc(100% + 6px);
-  left: 0;
   display: grid;
-  width: 100%;
   max-height: min(420px, calc(var(--app-vh) * 50));
   gap: 10px;
   padding: 10px;
   overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--panel-raised);
-  box-shadow: var(--shadow-float);
+  outline: none;
 }
 
 .writer-reference-picker-group {
@@ -309,7 +301,7 @@
 }
 
 .writer-reference-option-copy > span {
-  font-size: 12px;
+  font-size: inherit;
   font-weight: 650;
 }
 
@@ -1371,7 +1363,7 @@
   font-size: var(--text-meta);
 }
 
-.writer-revision-mode select {
+.writer-revision-mode :is(select, .workbench-select-trigger) {
   width: auto;
   min-height: 30px;
   padding-block: 3px;
@@ -1531,7 +1523,7 @@
 .writer-reference-control { gap: var(--space-2); }
 .writer-revision-options { min-width: 0; }
 .writer-revision-options .writer-revision-mode { margin: 0; }
-.writer-revision-options select { border-radius: var(--radius-pill, 999px); background-color: var(--panel-soft); border-color: transparent; }
+.writer-revision-options :is(select, .workbench-select-trigger) { border-radius: var(--radius-pill, 999px); background-color: var(--panel-soft); border-color: transparent; }
 .writer-revision-help { font-size: var(--text-caption); padding-inline: var(--space-2); }
 .writer-revision-head { padding-inline: var(--space-2); }
 .writer-revision-head h3 { font-size: var(--text-meta); font-weight: var(--font-weight-label); }

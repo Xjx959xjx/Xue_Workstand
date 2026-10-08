@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
+import { Button, Dialog, DialogTrigger } from "react-aria-components";
+import { WorkbenchSelectPopover } from "@/components/WorkbenchSelect";
 import { Check, ChevronDown } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import { writeStyleReferenceKey } from "@/lib/write-references";
@@ -30,8 +32,6 @@ export function WriterReferencePicker({
   projects,
   references
 }: WriterReferencePickerProps) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
   const options = useMemo<ReferenceOption[]>(() => [
     ...projects.map((project) => ({
       key: writeStyleReferenceKey({ targetType: "project", projectId: project.id }),
@@ -54,22 +54,6 @@ export function WriterReferencePicker({
   const summary = selectedOptions.length > 1
     ? `已选 ${selectedOptions.length} 个风格 · 分别生成`
     : selectedOptions[0]?.label || "选择参考风格";
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
 
   const toggleReference = (option: ReferenceOption) => {
     const accountReferences = references.filter((reference) => reference.targetType === "account");
@@ -111,25 +95,27 @@ export function WriterReferencePicker({
   ) : null;
 
   return (
-    <div className="writer-reference-picker" ref={rootRef}>
-      <button
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        className="writer-reference-picker-trigger"
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        type="button"
-      >
-        <span>{summary}</span>
-        {selectedOptions.length > 1 ? <small>{selectedOptions.length}</small> : null}
-        <ChevronDown aria-hidden="true" size={15} />
-      </button>
-      {open ? (
-        <div aria-label="选择参考风格" aria-multiselectable="true" className="writer-reference-menu" role="listbox">
-          {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account"))}
-          <p>最多选 8 个账号，每个风格单独生成一篇。</p>
-        </div>
-      ) : null}
+    <div className="writer-reference-picker">
+      <DialogTrigger>
+        <Button
+          aria-label="选择参考风格"
+          className="writer-reference-picker-trigger"
+          isDisabled={disabled}
+          type="button"
+        >
+          <span>{summary}</span>
+          {selectedOptions.length > 1 ? <small>{selectedOptions.length}</small> : null}
+          <ChevronDown aria-hidden="true" size={15} />
+        </Button>
+        <WorkbenchSelectPopover placement="bottom start" offset={6}>
+          <Dialog aria-label="选择参考风格" className="writer-reference-menu">
+            <div aria-label="账号风格" aria-multiselectable="true" role="listbox">
+              {renderGroup("账号风格", options.filter((option) => option.reference.targetType === "account"))}
+            </div>
+            <p>最多选 8 个账号，每个风格单独生成一篇。</p>
+          </Dialog>
+        </WorkbenchSelectPopover>
+      </DialogTrigger>
     </div>
   );
 }

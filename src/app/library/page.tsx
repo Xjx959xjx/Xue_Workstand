@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, FileText, Plus, RefreshCw, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AccountSidebar } from "./_components/AccountSidebar";
@@ -73,7 +73,6 @@ function LibraryPageContent() {
   const [collectPanelOpen, setCollectPanelOpen] = useState(true);
   const [lastCollect, setLastCollect] = useState<CollectResult | null>(null);
   const [activeCollectJobId, setActiveCollectJobId] = useState("");
-  const editModalRef = useRef<HTMLDivElement>(null);
   const setMobileView = useCallback((view: "accounts" | "videos" | "detail") => {
     const next = new URLSearchParams(searchParams.toString());
     if (view === "accounts") next.delete("mv");
@@ -685,7 +684,6 @@ function LibraryPageContent() {
         <TranscriptEditorModal
           activeTranscript={activeTranscript}
           busy={busy}
-          panelRef={editModalRef}
           restoring={transcriptRestoring}
           versions={transcriptVersions}
           onChange={updateTranscriptDraft}
@@ -697,7 +695,6 @@ function LibraryPageContent() {
       {openModal === "style" ? (
         <AccountStyleEditorModal
           busy={busy}
-          panelRef={editModalRef}
           styleDraft={styleDraft}
           unsavedChanges={Boolean(selectedAccount && styleDraft !== (selectedAccount.style || ""))}
           styleProgress={styleProgress}

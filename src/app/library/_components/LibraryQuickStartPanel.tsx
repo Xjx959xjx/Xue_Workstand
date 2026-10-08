@@ -1,6 +1,7 @@
 "use client";
 
 import { Monitor, Music2, Play, Search } from "lucide-react";
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
 import type { CollectOrder, Platform } from "@/lib/types";
 import { timeRangeOptions, type TimeRange } from "./library-collect-utils";
 
@@ -170,15 +171,15 @@ function CollectControls({
           </div>
           <div className="field">
             <label htmlFor="collect-order">采集排序</label>
-            <select id="collect-order" name="order" onChange={(event) => onOrderChange(event.target.value as CollectOrder)} value={order}>
+            <WorkbenchSelect aria-label="采集排序" id="collect-order" name="order" onValueChange={(value) => onOrderChange(value as CollectOrder)} value={order}>
               {activeOrderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            </WorkbenchSelect>
           </div>
           <div className="field">
             <label htmlFor="collect-time-range">采集时间</label>
-            <select id="collect-time-range" name="timeRange" onChange={(event) => onTimeRangeChange(event.target.value as TimeRange)} value={timeRange}>
+            <WorkbenchSelect aria-label="采集时间" id="collect-time-range" name="timeRange" onValueChange={(value) => onTimeRangeChange(value as TimeRange)} value={timeRange}>
               {timeRangeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            </WorkbenchSelect>
           </div>
           {timeRange === "custom" ? (
             <>

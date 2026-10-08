@@ -36,8 +36,11 @@ export function ProjectPickerModal({
   const formTitle = selectedProjectId ? "编辑当前项目" : "新建项目";
 
   return (
-    <ModalBackdrop onClose={onClose}>
-      <div aria-labelledby="project-picker-title" aria-modal="true" className="modal-panel project-picker-modal" role="dialog" tabIndex={-1}>
+    <ModalBackdrop
+      onClose={onClose}
+      aria-labelledby="project-picker-title"
+      className="modal-panel project-picker-modal"
+    >
         <div className="modal-header">
           <div>
             <h2 id="project-picker-title">选择项目</h2>
@@ -91,7 +94,6 @@ export function ProjectPickerModal({
             </div>
           </div>
         </div>
-      </div>
     </ModalBackdrop>
   );
 }

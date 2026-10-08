@@ -1,38 +1,40 @@
 "use client";
 
-import { useRef, type ReactNode, type RefObject } from "react";
-import { useDialogInteraction } from "./useDialogInteraction";
+import { useEffect, type ReactNode, type RefObject } from "react";
+import { Dialog, I18nProvider, Modal, ModalOverlay, type DialogProps } from "react-aria-components";
 
-type ModalBackdropProps = {
+type ModalBackdropProps = Omit<DialogProps, "children"> & {
   children: ReactNode;
-  closeLabel?: string;
   disabled?: boolean;
   onClose: () => void;
+  backdropClassName?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
-  returnFocusRef?: RefObject<HTMLElement | null>;
 };
 
 export function ModalBackdrop({
   children,
-  closeLabel = "关闭弹窗",
   disabled = false,
   onClose,
+  backdropClassName = "modal-backdrop",
   initialFocusRef,
-  returnFocusRef
+  ...dialogProps
 }: ModalBackdropProps) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const close = useDialogInteraction(rootRef, { onClose, disabled, initialFocusRef, returnFocusRef });
   return (
-    <div className="modal-backdrop" ref={rootRef}>
-      <button
-        aria-label={closeLabel}
-        className="modal-backdrop-dismiss"
-        disabled={disabled}
-        onClick={close}
-        tabIndex={-1}
-        type="button"
-      />
-      {children}
-    </div>
+    <I18nProvider locale="zh-CN">
+      <ModalOverlay className={backdropClassName} isOpen isDismissable={!disabled}
+        isKeyboardDismissDisabled={disabled} onOpenChange={open => { if (!open && !disabled) onClose(); }}>
+        <Modal className="workbench-modal">
+          <Dialog {...dialogProps} aria-modal="true">
+            <InitialFocus target={initialFocusRef} />
+            {children}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+    </I18nProvider>
   );
+}
+
+function InitialFocus({ target }: { target?: RefObject<HTMLElement | null> }) {
+  useEffect(() => { target?.current?.focus({ preventScroll: true }); }, [target]);
+  return null;
 }

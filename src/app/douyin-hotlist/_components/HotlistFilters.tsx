@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import type { DouyinHotlistAccount, Platform } from "@/lib/types";
 import {
   getPlatformAccountSelection,
@@ -23,14 +25,14 @@ export function AccountFilter({
   return (
     <label className="inline-sort-control douyin-hotlist-account-filter">
       <span>账号</span>
-      <select aria-label="筛选对标账号" disabled={disabled} onChange={(event) => onChange(event.target.value)} value={value}>
+      <WorkbenchSelect aria-label="筛选对标账号" disabled={disabled} onValueChange={(value) => onChange(value)} value={value}>
         <option value="all">全部账号</option>
         <option value={getPlatformAccountSelection("douyin")}>全部抖音账号</option>
         <option value={getPlatformAccountSelection("bilibili")}>全部 B站账号</option>
         {accounts.map((account) => (
           <option key={account.id} value={account.id}>{getPlatformLabel(account.platform)} · {account.name}</option>
         ))}
-      </select>
+      </WorkbenchSelect>
     </label>
   );
 }

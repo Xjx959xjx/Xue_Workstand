@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowUpRight, Check, FileText, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
@@ -86,9 +85,15 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
     finally { setBusy(""); }
   }
 
-  return createPortal(<>
-    <ModalBackdrop onClose={onClose} disabled={locked || deleting.length > 0} initialFocusRef={searchRef}>
-      <section className="modal-panel writer-library" role="dialog" aria-modal="true" aria-labelledby="writer-library-title" tabIndex={-1} aria-busy={locked || loading}>
+  return <>
+    <ModalBackdrop
+      onClose={onClose}
+      disabled={locked || deleting.length > 0}
+      initialFocusRef={searchRef}
+      className="modal-panel writer-library"
+      aria-labelledby="writer-library-title"
+      aria-busy={locked || loading}
+    >
         <header className="writer-library-heading">
           <div className="writer-library-heading-copy">
             {current ? <button className="btn ghost icon-only" aria-label="返回全部稿件" disabled={locked} onClick={() => changeView("")} type="button"><ArrowLeft size={18} /></button> : <FileText size={20} aria-hidden="true" />}
@@ -132,10 +137,9 @@ export const WriterHistoryPanel = memo(function WriterHistoryPanel({
           {!current && visible.length > limit ? <button className="btn ghost writer-library-load" type="button" onClick={() => setLimit((value) => value + 30)}>加载更多 · 还有 {visible.length - limit} 篇</button> : null}
         </div>
         {manage ? <footer className="writer-library-selection"><span>{current ? "选择要删除的版本" : "选择稿件会包含其所有版本"}</span><button className="btn danger compact" type="button" disabled={locked || !selected.length} onClick={() => setDeleting(selected)}>删除所选{selected.length ? `（${selected.length} 个版本）` : ""}</button></footer> : null}
-      </section>
     </ModalBackdrop>
     {deleting.length ? <ConfirmDialog title={current ? "删除版本" : "删除稿件"} body={`确认删除“${deleting[0].title}”${deleting.length > 1 ? `等 ${deleting.length} 个版本` : ""}？未选中的稿件和版本会保留。`} confirmLabel="删除" busy={busy === "delete"} onCancel={() => { if (!locked) setDeleting([]); }} onConfirm={() => void remove()} /> : null}
-  </>, document.body);
+  </>;
 });
 
 function reference(draft: DraftSummary) {

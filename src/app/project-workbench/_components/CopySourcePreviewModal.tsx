@@ -14,8 +14,11 @@ export function CopySourcePreviewModal({ source, onClose }: CopySourcePreviewMod
   const analysis = source.materialAnalysis;
 
   return (
-    <ModalBackdrop onClose={onClose}>
-      <div aria-labelledby="copy-source-preview-title" aria-modal="true" className="modal-panel copy-source-preview-modal" role="dialog" tabIndex={-1}>
+    <ModalBackdrop
+      onClose={onClose}
+      aria-labelledby="copy-source-preview-title"
+      className="modal-panel copy-source-preview-modal"
+    >
         <div className="modal-header">
           <div>
             <h2 id="copy-source-preview-title">{source.title}</h2>
@@ -68,7 +71,6 @@ export function CopySourcePreviewModal({ source, onClose }: CopySourcePreviewMod
             <div className="project-workbench-empty compact">这份素材还没有画面描述或文本线索。</div>
           )}
         </div>
-      </div>
     </ModalBackdrop>
   );
 }

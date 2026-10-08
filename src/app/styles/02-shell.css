@@ -938,6 +938,16 @@
   transform: translateY(0) scale(0.99);
 }
 
+.task-center-trigger:not(.active) {
+  grid-template-areas: "copy meta";
+  min-height: 54px;
+}
+
+.task-center-trigger > svg {
+  grid-area: meta;
+  color: var(--muted);
+}
+
 .task-center-trigger-copy {
   grid-area: copy;
   min-width: 0;

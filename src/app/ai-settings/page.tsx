@@ -1,5 +1,7 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
+
 import { Save } from "lucide-react";
 import { AI_EFFORTS, AI_GROUPS, AI_POLICIES, type AiEffort } from "@/lib/ai-policy-catalog";
 import { useAiSettings } from "./useAiSettings";
@@ -28,16 +30,16 @@ function PolicyRow({ policy, w }: { policy: Policy; w: SettingsController }) {
     <div className="ai-model-field">
       <label className="ai-field">
         <span className="ai-column-label">模型</span>
-        <select aria-label={`${policy.title}模型`} value={model} onChange={(event) => w.change([policy.id], { model: event.target.value })}>
+        <WorkbenchSelect aria-label={`${policy.title}模型`} disabled={w.saving} value={model} onValueChange={(value) => w.change([policy.id], { model: value })}>
           {models.map((model) => <option key={model} value={model}>{model}</option>)}
-        </select>
+        </WorkbenchSelect>
       </label>
     </div>
     <label className="ai-field">
       <span className="ai-column-label">推理强度</span>
-      <select aria-label={`${policy.title}推理强度`} disabled={isImage} value={isImage ? "none" : effort} onChange={(event) => w.change([policy.id], { effort: event.target.value as AiEffort })}>
+      <WorkbenchSelect aria-label={`${policy.title}推理强度`} disabled={isImage || w.saving} value={isImage ? "none" : effort} onValueChange={(value) => w.change([policy.id], { effort: value as AiEffort })}>
         {isImage ? <option value="none">图片模型不适用</option> : effortOptions.map((effort) => <option value={effort} key={effort}>{effortLabels[effort]}</option>)}
-      </select>
+      </WorkbenchSelect>
     </label>
     <button type="button" className="btn compact ai-reset" aria-label={`恢复${policy.title}默认`} disabled={!w.overrides[policy.id]} onClick={() => w.change([policy.id], null)}>恢复默认</button>
   </fieldset>;

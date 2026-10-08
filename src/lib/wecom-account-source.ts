@@ -77,7 +77,7 @@ export async function resolveGrossMarginAccounts(
   }
 
   void refreshGrossMarginAccounts(url, options.onFresh).catch((error) => {
-    lastRefreshError = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
+    lastRefreshError = formatWecomError(error);
     lastRefreshFailedAt = Date.now();
     console.warn(`[gross-margin-accounts] 在线账号表后台同步失败：${lastRefreshError}`);
   });
@@ -128,7 +128,7 @@ function refreshGrossMarginAccounts(
 }
 
 function resolveRefreshFailure(error: unknown, localAccounts: GrossMarginAccountPrice[], recordFailure = true): AccountSourceResult {
-  const detail = sanitizeWecomError(error instanceof Error ? error.message : "未知错误");
+  const detail = formatWecomError(error);
   lastRefreshError = detail;
   if (recordFailure) lastRefreshFailedAt = Date.now();
   if (process.env.WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL === "0") {
@@ -207,7 +207,7 @@ async function callWecomDoc(input: Record<string, unknown>): Promise<WecomRespon
     throw new Error("wecom-cli 返回了无法解析的表格响应");
   }
   if (response.errcode && response.errcode !== 0) {
-    throw new Error(response.errmsg ? sanitizeWecomError(response.errmsg) : `企业微信接口错误 ${response.errcode}`);
+    throw new Error(response.errmsg ? formatWecomError(response.errmsg) : `企业微信接口错误 ${response.errcode}`);
   }
   return response;
 }

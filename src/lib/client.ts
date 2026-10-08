@@ -1021,9 +1021,7 @@ export function getCopySources(): Promise<{ sources: CopySource[] }> {
   if (copySourcesRequest) return copySourcesRequest;
 
   const revision = copySourcesCacheRevision;
-  const request = requestJson<{ sources: CopySource[] }>("/api/copy-sources");
-  copySourcesRequest = request;
-  return request
+  const request = requestJson<{ sources: CopySource[] }>("/api/copy-sources")
     .then((result) => {
       if (revision === copySourcesCacheRevision) copySourcesCache = result;
       return revision === copySourcesCacheRevision ? result : copySourcesCache || getCopySources();
@@ -1031,6 +1029,8 @@ export function getCopySources(): Promise<{ sources: CopySource[] }> {
     .finally(() => {
       if (copySourcesRequest === request) copySourcesRequest = null;
     });
+  copySourcesRequest = request;
+  return request;
 }
 
 export function refreshCopySources() {

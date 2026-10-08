@@ -1,10 +1,10 @@
 "use client";
 
+import { WorkbenchSelect } from "@/components/WorkbenchSelect";
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
-  CalendarRange,
   CalendarClock,
   CheckCircle2,
   Copy,
@@ -38,6 +38,8 @@ import {
 } from "@/lib/client";
 import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRecord } from "@/lib/types";
 import { parseGrossMarginMetric } from "@/lib/gross-margin-calculator";
+import { parseDate } from "@internationalized/date";
+import { MonitorDateFilter } from "../_components/MonitorDateFilter";
 import { useGrossMarginAccountRefresh } from "../_hooks/useGrossMarginAccountRefresh";
 
 export default function GrossMarginMonitorPage() {
@@ -54,18 +56,17 @@ function GrossMarginMonitorPageContent() {
     href: "/gross-margin/monitor",
     kinds: ["gross-margin-refresh"]
   });
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [library, setLibrary] = useState<GrossMarginLibrary | null>(null);
   useGrossMarginAccountRefresh(library, setLibrary);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
-  const [accountFilter, setAccountFilter] = useState(() => searchParams.get("q") || "");
-  const [platformFilter, setPlatformFilter] = useState<"all" | GrossMarginMonitorRecord["platform"]>(() => parsePlatformFilter(searchParams.get("platform")));
-  const [projectFilter, setProjectFilter] = useState(() => searchParams.get("project") || "all");
-  const [dateFromFilter, setDateFromFilter] = useState(() => parseDateFilter(searchParams.get("from")));
-  const [dateToFilter, setDateToFilter] = useState(() => parseDateFilter(searchParams.get("to")));
+  const accountFilter = searchParams.get("q") || "";
+  const platformFilter = parsePlatformFilter(searchParams.get("platform"));
+  const projectFilter = searchParams.get("project") || "all";
+  const dateFromFilter = parseDateFilter(searchParams.get("from"));
+  const dateToFilter = parseDateFilter(searchParams.get("to"));
   const [deleteTarget, setDeleteTarget] = useState<GrossMarginMonitorRecord | null>(null);
   const [activeRefreshJobId, setActiveRefreshJobId] = useState("");
   const syncedRefreshDataRevisionsRef = useRef<Map<string, number>>(new Map());
@@ -142,33 +143,15 @@ function GrossMarginMonitorPageContent() {
     };
   }, [notify]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  function updateFilters(updates: Partial<Record<"q" | "platform" | "project" | "from" | "to", string>>) {
     const params = new URLSearchParams(window.location.search);
-    setOptionalQueryParam(params, "q", accountFilter.trim());
-    setOptionalQueryParam(params, "platform", platformFilter === "all" ? "" : platformFilter);
-    setOptionalQueryParam(params, "project", projectFilter === "all" ? "" : projectFilter);
-    setOptionalQueryParam(params, "from", dateFromFilter);
-    setOptionalQueryParam(params, "to", dateToFilter);
+    for (const [key, value] of Object.entries(updates)) setOptionalQueryParam(params, key, value);
     const queryString = params.toString();
     const nextHref = queryString ? `${pathname}?${queryString}` : pathname;
     if (`${window.location.pathname}${window.location.search}` !== nextHref) {
-      router.replace(nextHref, { scroll: false });
+      window.history.replaceState(null, "", nextHref);
     }
-  }, [accountFilter, dateFromFilter, dateToFilter, pathname, platformFilter, projectFilter, router]);
-
-  useEffect(() => {
-    const nextAccount = searchParams.get("q") || "";
-    const nextPlatform = parsePlatformFilter(searchParams.get("platform"));
-    const nextProject = searchParams.get("project") || "all";
-    const nextFrom = parseDateFilter(searchParams.get("from"));
-    const nextTo = parseDateFilter(searchParams.get("to"));
-    setAccountFilter((current) => current === nextAccount ? current : nextAccount);
-    setPlatformFilter((current) => current === nextPlatform ? current : nextPlatform);
-    setProjectFilter((current) => current === nextProject ? current : nextProject);
-    setDateFromFilter((current) => current === nextFrom ? current : nextFrom);
-    setDateToFilter((current) => current === nextTo ? current : nextTo);
-  }, [searchParams]);
+  }
 
   useEffect(() => {
     if (!trackedRefreshJob || !["queued", "running"].includes(trackedRefreshJob.status)) return;
@@ -300,7 +283,6 @@ function GrossMarginMonitorPageContent() {
 
   return (
     <div className="page gross-margin-page gross-monitor-page">
-      {library?.accountSourceWarning ? <p className="field-hint warning" role="status">{library.accountSourceWarning}</p> : null}
       <h1 className="sr-only">数据监控</h1>
       <div className="gross-monitor-topbar">
         <div className="page-header-meta gross-monitor-overview" aria-label="监控概览">
@@ -329,7 +311,7 @@ function GrossMarginMonitorPageContent() {
                 className="gross-monitor-inline-input"
                 id="gross-monitor-account-filter"
                 name="grossMonitorAccountFilter"
-                onChange={(event) => setAccountFilter(event.target.value)}
+                onChange={(event) => updateFilters({ q: event.target.value })}
                 placeholder="账号 / 标题 / 链接"
                 type="search"
                 value={accountFilter}
@@ -338,25 +320,25 @@ function GrossMarginMonitorPageContent() {
             <span className="gross-monitor-filter-group" aria-label="范围筛选">
               <label className="gross-monitor-filter-control">
                 <span>平台</span>
-                <select
+                <WorkbenchSelect
                   aria-label="按平台筛选"
                   className="gross-monitor-inline-select"
                   id="gross-monitor-platform-filter"
-                  onChange={(event) => setPlatformFilter(event.target.value as "all" | GrossMarginMonitorRecord["platform"])}
+                  onValueChange={(value) => updateFilters({ platform: value === "all" ? "" : value })}
                   value={platformFilter}
                 >
                   <option value="all">全部平台</option>
                   <option value="bilibili">B站</option>
                   <option value="douyin">抖音</option>
-                </select>
+                </WorkbenchSelect>
               </label>
               <label className="gross-monitor-filter-control gross-monitor-project-control">
                 <span>项目</span>
-                <select
+                <WorkbenchSelect
                   aria-label="按项目筛选"
                   className="gross-monitor-inline-select gross-monitor-project-select"
                   id="gross-monitor-project-filter"
-                  onChange={(event) => setProjectFilter(event.target.value)}
+                  onValueChange={(value) => updateFilters({ project: value === "all" ? "" : value })}
                   value={projectFilter}
                 >
                   <option value="all">全部项目</option>
@@ -365,53 +347,14 @@ function GrossMarginMonitorPageContent() {
                       {project.name}（{project.count}）
                     </option>
                   ))}
-                </select>
+                </WorkbenchSelect>
               </label>
             </span>
-            <span className="gross-monitor-date-range" aria-label="按发布日期筛选">
-              <CalendarRange aria-hidden="true" size={14} />
-              <label className="gross-monitor-date-segment">
-                <span>开始日期</span>
-                <strong>{formatDateFilterDisplay(dateFromFilter, "不限")}</strong>
-                <input
-                  aria-label="开始日期"
-                  autoComplete="off"
-                  className="gross-monitor-inline-date"
-                  id="gross-monitor-date-from"
-                  name="grossMonitorDateFrom"
-                  onChange={(event) => setDateFromFilter(event.target.value)}
-                  type="date"
-                  value={dateFromFilter}
-                />
-              </label>
-              <span className="gross-monitor-inline-date-separator" aria-hidden="true">
-                →
-              </span>
-              <label className="gross-monitor-date-segment">
-                <span>结束日期</span>
-                <strong>{formatDateFilterDisplay(dateToFilter, "不限")}</strong>
-                <input
-                  aria-label="结束日期"
-                  autoComplete="off"
-                  className="gross-monitor-inline-date"
-                  id="gross-monitor-date-to"
-                  name="grossMonitorDateTo"
-                  onChange={(event) => setDateToFilter(event.target.value)}
-                  type="date"
-                  value={dateToFilter}
-                />
-              </label>
-            </span>
+            <MonitorDateFilter from={dateFromFilter} to={dateToFilter} onChange={(from, to) => updateFilters({ from, to })} />
             {hasActiveFilters ? (
               <button
                 className="btn subtle compact"
-                onClick={() => {
-                  setAccountFilter("");
-                  setPlatformFilter("all");
-                  setProjectFilter("all");
-                  setDateFromFilter("");
-                  setDateToFilter("");
-                }}
+                onClick={() => updateFilters({ q: "", platform: "", project: "", from: "", to: "" })}
                 type="button"
               >
                 清空
@@ -500,13 +443,9 @@ function parsePlatformFilter(value: string | null): "all" | GrossMarginMonitorRe
 }
 
 function parseDateFilter(value: string | null) {
-  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
-}
-
-function formatDateFilterDisplay(value: string, emptyLabel: string) {
-  if (!value) return emptyLabel;
-  const [, month, day] = value.split("-");
-  return `${Number(month)}月${Number(day)}日`;
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+  try { return parseDate(value).toString(); }
+  catch { return ""; } // URL 中非法日期忽略，避免日历解析异常。
 }
 
 function setOptionalQueryParam(params: URLSearchParams, key: string, value: string) {

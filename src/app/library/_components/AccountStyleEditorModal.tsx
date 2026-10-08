@@ -1,12 +1,11 @@
 "use client";
 
-import { memo, type RefObject } from "react";
+import { memo } from "react";
 import { Save, Sparkles } from "lucide-react";
 import { LibraryEditorModal } from "./LibraryEditorModal";
 
 type AccountStyleEditorModalProps = {
   busy: string;
-  panelRef: RefObject<HTMLDivElement | null>;
   styleDraft: string;
   styleProgress: number;
   styleStage: string;
@@ -19,7 +18,6 @@ type AccountStyleEditorModalProps = {
 
 export const AccountStyleEditorModal = memo(function AccountStyleEditorModal({
   busy,
-  panelRef,
   styleDraft,
   styleProgress,
   styleStage,
@@ -35,7 +33,7 @@ export const AccountStyleEditorModal = memo(function AccountStyleEditorModal({
     onClose();
   };
   return (
-    <LibraryEditorModal labelledBy="library-style-modal-title" panelRef={panelRef} disabled={Boolean(busy)} unsavedChanges={unsavedChanges} onClose={handleClose}>
+    <LibraryEditorModal labelledBy="library-style-modal-title" disabled={Boolean(busy)} unsavedChanges={unsavedChanges} onClose={handleClose}>
       <div className="modal-header">
         <h2 id="library-style-modal-title">账号风格卡</h2>
         <button className="btn" disabled={Boolean(busy)} onClick={handleClose} type="button">

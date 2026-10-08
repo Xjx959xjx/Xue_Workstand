@@ -37,18 +37,7 @@
   overscroll-behavior: contain;
 }
 
-.modal-backdrop-dismiss {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: transparent;
-  cursor: default;
-}
-
-.modal-backdrop-dismiss:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -6px;
-}
+.workbench-modal { display: contents; }
 
 .modal-panel {
   position: relative;
