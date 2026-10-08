@@ -522,6 +522,7 @@ export async function streamResponseText(input: {
   maxOutputTokens?: number;
   signal?: AbortSignal;
   onDelta: (delta: string) => void;
+  onRetry?: (message: string) => void | Promise<void>;
 }) {
   throwIfAborted(input.signal);
   const configs = await applyAiPolicy(configuredChatConfigs(), input.policy);
@@ -532,11 +533,31 @@ export async function streamResponseText(input: {
 
   let lastError: unknown;
   for (const config of configs) {
-    try {
-      return await streamResponseTextForConfig(config, { ...input, requireCompleted: true });
-    } catch (error) {
-      if (isAbortError(error) || error instanceof StreamResponseTextError) throw error;
-      lastError = error;
+    const attempts = input.policy === "writer_generate" || input.policy === "writer_revise" ? 2 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      throwIfAborted(input.signal);
+      try {
+        const result = await streamResponseTextForConfig(config, { ...input, requireCompleted: true });
+        return config !== configs[0] && lastError
+          ? { ...result, fallback: true, fallbackReason: `${classifyModelFailure(lastError).userMessage}，已使用备用对话模型节点。` }
+          : result;
+      } catch (error) {
+        throwIfAborted(input.signal);
+        if (isAbortError(error)) throw error;
+        lastError = error;
+        const failure = classifyModelFailure(error);
+        // Partial output must not be concatenated with a new request or saved as a complete draft.
+        const retry = !(error instanceof StreamResponseTextError) && attempt + 1 < attempts &&
+          ["network", "timeout", "rate_limit", "server"].includes(failure.kind);
+        logPipelineEvent("model.stream-failure", {
+          model: config.model, wireApi: config.wireApi, kind: failure.kind,
+          diagnostic: modelFailureDiagnostic(error), attempt: attempt + 1, retry
+        });
+        if (error instanceof StreamResponseTextError) throw error;
+        if (!retry) break;
+        await input.onRetry?.(`${failure.userMessage}，正在自动重试 1/1`);
+        await delay(1000, undefined, { signal: input.signal });
+      }
     }
   }
 
@@ -822,6 +843,7 @@ export async function streamResponseTextWithFallback(input: {
   maxOutputTokens?: number;
   signal?: AbortSignal;
   onDelta: (delta: string) => void;
+  onRetry?: (message: string) => void | Promise<void>;
 }) {
   throwIfAborted(input.signal);
   try {
@@ -838,9 +860,12 @@ export async function streamResponseTextWithFallback(input: {
         ok: false,
         reasoningEffort: input.reasoningEffort,
         errorKind: failure.kind,
-        userMessage: failure.userMessage,
+        userMessage: input.policy === "writer_generate" || input.policy === "writer_revise" ? formatStrictChatError(error) : failure.userMessage,
         rawErrorMessage: failure.rawMessage
       };
+    }
+    if (input.policy === "writer_generate" || input.policy === "writer_revise") {
+      throw new Error(formatStrictChatError(error), { cause: error });
     }
     try {
       return await chatCompleteWithEffort(input.messages, input.reasoningEffort, input.tools, {

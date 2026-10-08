@@ -54,6 +54,7 @@ export async function POST(request: Request) {
           messages: prepared.messages,
           reasoningEffort: WRITE_COPY_REASONING_EFFORT,
           signal,
+          onRetry(message) { emit({ type: "stage", stage: "generate", message }); },
           onDelta(delta) {
             emit({ type: "delta", delta });
           }
@@ -95,6 +96,9 @@ export async function POST(request: Request) {
             messages: variant.prepared.messages,
             reasoningEffort: WRITE_COPY_REASONING_EFFORT,
             signal,
+            onRetry(message) {
+              emit({ type: "stage", stage: "generate", message: `${variant.styleTitle}：${message}` });
+            },
             onDelta(delta) {
               if (variantCount === 1) emit({ type: "delta", delta });
             }

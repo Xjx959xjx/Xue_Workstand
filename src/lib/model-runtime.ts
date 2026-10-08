@@ -532,7 +532,7 @@ export function classifyModelFailure(error: unknown): {
     causeMessage
   ].join(" ");
 
-  if (/524\b|响应超时|a timeout occurred|timeout|timed out|AbortError|TimeoutError|aborted|UND_ERR_HEADERS_TIMEOUT/i.test(message)) {
+  if (/524\b|超时|a timeout occurred|timeout|timed out|AbortError|TimeoutError|aborted|UND_ERR_HEADERS_TIMEOUT/i.test(message)) {
     return { kind: "timeout", userMessage: "对话模型服务超时", rawMessage: compactErrorMessage(message) };
   }
   if (/402\b|insufficient[_\s-]*(?:user[_\s-]*)?quota|insufficient[_\s-]*balance|quota[_\s-]*exceeded|billing|payment[_\s-]*required|credit|余额|额度|预扣费|扣费/i.test(message)) {

@@ -8,6 +8,7 @@ import ts from "typescript";
 import { compactJobForPersistence, isResumableJobKind } from "../src/lib/job-persistence";
 import { applyJobListResponse, isActiveJob, isTerminalJob, selectJobList } from "../src/lib/job-sync";
 import { CloudJobConflictError } from "../src/lib/jobs-cloud";
+import { resolveWriteBatchOutcome, writeVariantFailure } from "../src/lib/ai";
 import { startJobSchema } from "../src/lib/job-validation";
 import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "../src/lib/storage/schemas";
 import type { JobRecord } from "../src/lib/types";
@@ -49,10 +50,35 @@ function localJobs(mocks: Record<string, unknown> = {}) {
     "./concurrency": { mapWithConcurrency: async (items: unknown[], _limit: number, run: (item: unknown) => unknown) => Promise.all(items.map(run)) },
     "./observability": { logJobTransition: () => {} },
     ...mocks
-  }, "exports.audit = { runtime, patchJob, patchJobWithDataChange, recoverStaleDiskJobs, runBatchTranscribeJob };" );
+  }, "exports.audit = { runtime, patchJob, patchJobWithDataChange, recoverStaleDiskJobs, runBatchTranscribeJob, runWriteCopyJob };" );
   jobs.audit.runtime.initialized = true;
   return { jobs, disk, fail: () => { failing = true; } };
 }
+
+test("多风格保持原有并发，失败仅汇总一次且不污染准备失败列表", async () => {
+  let active = 0, peak = 0;
+  const batch = { variants: Array.from({ length: 4 }, (_, i) => ({ styleKey: String(i), styleTitle: `风格${i}`, prepared: { messages: [] } })), preparationFailures: [] };
+  const { jobs } = localJobs({
+    "./source-extraction": { splitWriterSourceInput: () => ({}), extractRewriteSourceMaterial: () => ({ pendingLinkCount: 0 }) },
+    "./support-documents": { hasSupportDocumentReference: () => false },
+    "./ai": { WRITE_COPY_REASONING_EFFORT: "medium", resolveWriteBatchOutcome, writeVariantFailure,
+      prepareWriteCopyBatchContext: async () => batch,
+      streamResponseTextWithFallback: async () => {
+        active++; peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+        throw new Error("对话模型服务超时");
+      }
+    }
+  });
+  jobs.audit.runtime.records.set("write", { ...record("write"), kind: "write-copy" });
+  await assert.rejects(jobs.audit.runWriteCopyJob("write", { kind: "write-copy", input: { mode: "topic", prompt: "测试", save: false } }), (error: Error) => {
+    assert.equal((error.message.match(/对话模型服务超时/g) || []).length, 4);
+    return true;
+  });
+  assert.equal(peak, 4);
+  assert.deepEqual(batch.preparationFailures, []);
+});
 
 test("状态写入失败不发布假终态或增量版本；已取消任务仍记录已保存资产", async () => {
   const { jobs, disk, fail } = localJobs();

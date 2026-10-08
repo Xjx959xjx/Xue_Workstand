@@ -878,7 +878,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
     stage: "generate", message: "正在生成正文", progress: text => Math.min(86, 55 + Math.floor(text.length / 120))
   });
   let completedCount = 0;
-  const partialResult: WriteBatchResult = { kind: "write-batch", results: [], failures: batch.preparationFailures || [], research: batch.research, sourceDigest: batch.sourceDigest };
+  const partialResult: WriteBatchResult = { kind: "write-batch", results: [], failures: [...(batch.preparationFailures || [])], research: batch.research, sourceDigest: batch.sourceDigest };
   const outcomes = await Promise.all(batch.variants.map(async (variant) => {
     try {
       const result = await streamResponseTextWithFallback({
@@ -886,6 +886,9 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
         messages: variant.prepared.messages,
         reasoningEffort: WRITE_COPY_REASONING_EFFORT,
         signal: getJobAbortSignal(jobId),
+        async onRetry(message) {
+          await patchTransientJob(jobId, { stage: "generate", message: `${variant.styleTitle}：${message}` });
+        },
         onDelta(delta) {
           if (variantCount === 1) {
             partialText += delta;
@@ -964,7 +967,8 @@ async function runWriteBatchRevisionJob(jobId: string, start: Extract<JobStartIn
     try {
       const prepared = await prepareWriteCopyContext({ ...start.input, ...target, revisionScope: "full", selectedText: undefined }, { signal: getJobAbortSignal(jobId) });
       const result = await streamResponseTextWithFallback({ policy: "writer_revise", messages: prepared.messages,
-        reasoningEffort: WRITE_COPY_REASONING_EFFORT, signal: getJobAbortSignal(jobId), onDelta() {} });
+        reasoningEffort: WRITE_COPY_REASONING_EFFORT, signal: getJobAbortSignal(jobId), onDelta() {},
+        async onRetry(message) { await patchTransientJob(jobId, { stage: "generate", message: `${styleTitle}：${message}` }); } });
       throwIfCancelled(jobId);
       const completed = await completePreparedWriteCopy({ prepared, result, save: true, signal: getJobAbortSignal(jobId) });
       batch.results.push({ ...completed, styleKey: target.parentDraftId, styleTitle, styleReference });
@@ -999,6 +1003,7 @@ async function runWriteRevisionJob(jobId: string, start: Extract<JobStartInput, 
     messages: prepared.messages,
     reasoningEffort: WRITE_COPY_REASONING_EFFORT,
     signal: getJobAbortSignal(jobId),
+    async onRetry(message) { await patchTransientJob(jobId, { stage: "generate", message }); },
     onDelta(delta) {
       partialText += delta;
       partialUpdater.update(partialText);
