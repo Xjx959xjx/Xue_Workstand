@@ -15,10 +15,12 @@ export const grossMarginReviewTemplateVariables = [
   { name: "favoriteValue", label: "收藏数" },
   { name: "shareValue", label: "分享/转发数" },
   { name: "douPlusValue", label: "抖加金额" },
+  { name: "mustFireValue", label: "必火金额" },
   { name: "coinValue", label: "投币数" },
   { name: "danmakuValue", label: "弹幕数" },
   { name: "blueLinkLine", label: "蓝链点击行" },
   { name: "maintenanceCost", label: "维护成本" },
+  { name: "grossProfit", label: "集团毛利" },
   { name: "grossMarginRate", label: "毛利率" },
   { name: "splitRoundLine", label: "分轮投放行" },
   { name: "reviewFooter", label: "审核尾巴" }
@@ -44,8 +46,10 @@ export function getDefaultGrossMarginReviewTemplate(platform: GrossMarginPriceTa
       "评论：{{commentValue}}",
       "分享：{{shareValue}}",
       "弹幕：{{danmakuValue}}",
+      "必火：{{mustFireValue}}",
       "{{blueLinkLine}}",
       "维护成本：{{maintenanceCost}}元，维护后毛利率{{grossMarginRate}}",
+      "集团毛利：{{grossProfit}}元",
       "{{splitRoundLine}}",
       "{{reviewFooter}}"
     ].join("\n");
@@ -64,6 +68,7 @@ export function getDefaultGrossMarginReviewTemplate(platform: GrossMarginPriceTa
     "转发：{{shareValue}}",
     "抖加：{{douPlusValue}}",
     "维护成本预计：{{maintenanceCost}}元，维护后毛利率{{grossMarginRate}}",
+    "集团毛利：{{grossProfit}}元",
     "{{splitRoundLine}}",
     "{{reviewFooter}}"
   ].join("\n");

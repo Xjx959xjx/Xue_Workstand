@@ -33,7 +33,7 @@ function ImageWorkbench() {
   function openReferencePreview(image: ImageFile) { setPreviewImages([...new Map([...w.references, ...w.recordReferences, image].map((item) => [item.id, item])).values()]); setPreview(image); }
   const [previewDrafts, setPreviewDrafts] = useState<Record<string, string>>({});
   const dirty = w.dirty || Object.values(previewDrafts).some((text) => text.trim());
-  useUnsavedChangesGuard(dirty, "图片工作台有未生成的输入，离开会丢失这些内容，是否继续？");
+  useUnsavedChangesGuard(dirty);
   const [compared, setCompared] = useState<ImageFile[]>([]);
   const [comparing, setComparing] = useState(false);
   const [draggedImage, setDraggedImage] = useState<ImageFile | null>(null);

@@ -2,7 +2,6 @@
 
 import type { AppMode } from "@/lib/app-mode";
 import { GrossMarginBulkMonitorModal } from "./GrossMarginBulkMonitorModal";
-import { GrossMarginHeader } from "./GrossMarginHeader";
 import { GrossMarginImportModal } from "./GrossMarginImportModal";
 import { GrossMarginMaintenancePane } from "./GrossMarginMaintenancePane";
 import { GrossMarginPricePane } from "./GrossMarginPricePane";
@@ -16,9 +15,7 @@ export function GrossMarginWorkbench({ appMode }: { appMode: AppMode }) {
   const controller = useGrossMarginWorkbench();
 
   return (
-    <div className="page gross-margin-page">
-      <GrossMarginHeader {...controller} />
-
+    <div className="page gross-margin-page gross-margin-workbench-page">
       <section className="panel three-pane gross-margin-workspace" aria-label="数据维护工作区">
         <GrossMarginPricePane {...controller} />
         <GrossMarginMaintenancePane {...controller} />

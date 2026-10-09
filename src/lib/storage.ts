@@ -12,8 +12,6 @@ import {
   CopySource,
   Draft,
   DraftAssets,
-  DraftCoverImage,
-  DraftCoverReference,
   DraftInput,
   DraftSummary,
   EngagementRecord,
@@ -21,7 +19,6 @@ import {
   LibraryOverviewResponse,
   Platform,
   Project,
-  ProjectDetail,
   ProjectDraft,
   ProjectListItem,
   ProjectSummary,
@@ -32,13 +29,12 @@ import {
   platforms
 } from "./types";
 import { makeDraftTitleFromContent, nowIso, safeSegment, shortHash } from "./utils";
-import { fileExists, readJsonFile, storageFs as fs, writeFileAtomic, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
+import { fileExists, readJsonFile, storageFs as fs, writeJsonFile, writeTextFileAtomic } from "./storage/fs";
 import { libraryRoot, normalizeStorageSegment, toLibraryRelativePath } from "./storage/core";
 import { ensureDouyinHotlistDirs } from "./storage/douyin-hotlist";
 import { ensureGrossMarginDirs } from "./storage/gross-margin";
 import { parseStoredRecord, storedRecordKind, versionStoredRecord } from "./storage/schemas";
 import { runRecoverableLibraryMutation } from "./storage/transactions";
-import { detectImageFormat } from "./storage/images";
 export { libraryRoot } from "./storage/core";
 export { listLibraryTrashOperations, restoreLibraryTrashOperation } from "./storage/transactions";
 export {
@@ -99,30 +95,6 @@ export type AccountStyleMeta = {
   sampleVideoIds: string[];
   sampleCount: number;
   generationMode: "full" | "incremental";
-  usedModel: string;
-  fallback?: boolean;
-  fallbackReason?: string;
-  updatedAt: string;
-};
-
-export type ProjectStyleMeta = {
-  sampleHash: string;
-  sourceAccountIds: string[];
-  sourceMaterialIds: string[];
-  accountFingerprints: Array<{
-    accountId: string;
-    styleHash: string;
-    sampleFingerprints: Array<{
-      videoId: string;
-      hash: string;
-    }>;
-  }>;
-  materialFingerprints: Array<{
-    sourceId: string;
-    hash: string;
-  }>;
-  sampleCount: number;
-  materialCount: number;
   usedModel: string;
   fallback?: boolean;
   fallbackReason?: string;
@@ -192,10 +164,6 @@ function copySourceJsonPath(id: string) {
   return path.join(copySourcesPath(), `${id}.json`);
 }
 
-function copySourceStyleAnalysisPath(id: string) {
-  return path.join(copySourcesPath(), `${id}.style-analysis.json`);
-}
-
 function copySourceTranscriptPath(id: string) {
   return path.join(copySourcesPath(), `${id}.txt`);
 }
@@ -210,10 +178,6 @@ function projectJsonPath(slug: string) {
 
 function projectStylePath(slug: string) {
   return path.join(projectPath(slug), "style.md");
-}
-
-function projectStyleMetaPath(slug: string) {
-  return path.join(projectPath(slug), "style.meta.json");
 }
 
 function projectDraftsPath(slug: string) {
@@ -319,19 +283,6 @@ async function createAvailableAccountSlug(platform: Platform, name: string, uid:
   throw new Error(`无法为账号「${name}」分配唯一目录，请检查现有账号目录。`);
 }
 
-async function createAvailableProjectSlug(name: string) {
-  const base = createStorageSlug(name, shortHash(name), "项目 ID");
-  if (!(await exists(projectPath(base)))) return base;
-
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const suffix = shortHash(`${name}-${randomUUID()}`);
-    const candidate = createStorageSlug(`${base}-${suffix}`, suffix, "项目 ID");
-    if (!(await exists(projectPath(candidate)))) return candidate;
-  }
-
-  throw new Error(`无法为项目「${name}」分配唯一目录，请检查现有项目目录。`);
-}
-
 function isFsErrorCode(error: unknown, code: string) {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === code);
 }
@@ -370,10 +321,6 @@ async function statIfExists(target: string) {
     if (isFsErrorCode(error, "ENOENT")) return null;
     throw new Error(`读取文件状态失败：${target}。${error instanceof Error ? error.message : "文件系统异常"}`);
   }
-}
-
-function uniqueTrimmedStrings(values: string[]) {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function normalizeEngagementRecordId(recordId: string) {
@@ -438,8 +385,6 @@ export async function ensureLibrary() {
   await fs.mkdir(libraryRoot(), { recursive: true });
   await Promise.all([
     ...platforms.map((platform) => fs.mkdir(platformPath(platform), { recursive: true })),
-    fs.mkdir(projectsPath(), { recursive: true }),
-    fs.mkdir(copySourcesPath(), { recursive: true }),
     fs.mkdir(engagementPath(), { recursive: true }),
     ensureDouyinHotlistDirs(),
     ensureGrossMarginDirs()
@@ -556,172 +501,6 @@ export async function deleteAccounts(accountIds: string[]) {
   return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
-export async function upsertProject(input: {
-  name: string;
-  description?: string;
-  sourceAccountIds?: string[];
-  sourceMaterialIds?: string[];
-  projectId?: string;
-}) {
-  await ensureLibrary();
-  return withIdentityMutationLock("projects", async () => {
-    const existing = input.projectId ? await resolveProject(input.projectId) : null;
-    const now = nowIso();
-    const slug = existing?.slug
-      ? normalizeProjectSlug(existing.slug)
-      : await createAvailableProjectSlug(input.name);
-    if (input.sourceAccountIds) {
-      await assertAccountsExist(input.sourceAccountIds);
-    }
-    if (input.sourceMaterialIds) {
-      await assertCopySourcesExist(input.sourceMaterialIds);
-    }
-    const sourceAccountIds = input.sourceAccountIds ? normalizeProjectAccountRefs(input.sourceAccountIds) : existing?.sourceAccountIds ?? [];
-    const sourceMaterialIds = input.sourceMaterialIds
-      ? uniqueTrimmedStrings(input.sourceMaterialIds).map(normalizeCopySourceId)
-      : existing?.sourceMaterialIds ?? [];
-
-    const project: Project = {
-      id: `project:${slug}`,
-      slug,
-      name: input.name || existing?.name || "未命名项目",
-      description: input.description ?? existing?.description,
-      sourceAccountIds,
-      sourceMaterialIds,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now
-    };
-
-    await writeJson(projectJsonPath(slug), project);
-    await ensureProjectDirs(slug);
-    if (input.sourceMaterialIds) {
-      await syncCopySourceProjectRefs(project.id, sourceMaterialIds);
-    }
-    return project;
-  });
-}
-
-export async function deleteProjects(projectIds: string[]) {
-  await ensureLibrary();
-  const uniqueIds = [...new Set(projectIds)].filter(Boolean);
-  const deleted: string[] = [];
-  const targets: string[] = [];
-
-  for (const projectId of uniqueIds) {
-    const slug = normalizeProjectSlug(projectId);
-    const target = projectPath(slug);
-    if (!(await exists(target))) continue;
-    targets.push(target);
-    deleted.push(`project:${slug}`);
-  }
-
-  if (!deleted.length) return { deleted };
-  const backupTargets = [
-    ...(await collectCopySourceJsonPaths()),
-    ...(await collectAllDraftJsonPaths())
-  ];
-  const transaction = await runRecoverableLibraryMutation({
-    kind: "delete-projects",
-    targets,
-    backupTargets,
-    run: async () => {
-      await removeCopySourceProjectRefs(deleted);
-      await updateAllDraftStyleRefs((styleRefs) => removeDeletedProjectsFromStyleRefs(styleRefs, new Set(deleted)));
-      return deleted;
-    }
-  });
-
-  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
-}
-
-export async function saveCopySource(input: {
-  title?: string;
-  platform: CopySource["platform"];
-  url: string;
-  resolvedUrl?: string;
-  transcript: string;
-  source: CopySource["source"];
-  status?: CopySource["status"];
-  error?: string;
-  fallback?: boolean;
-  fallbackReason?: string;
-  materialAnalysis?: CopySource["materialAnalysis"];
-}) {
-  await ensureLibrary();
-  const now = nowIso();
-  const id = `${now.replace(/[:.]/g, "-")}-${shortHash(`${input.url}-${input.transcript}`)}`;
-  const transcript = input.transcript.trim();
-  const title = makeDraftTitleFromContent(
-    input.title || transcript || input.url,
-    input.platform === "unknown" ? "链接素材" : `${formatPlatformName(input.platform)}素材`
-  );
-  const transcriptFile = copySourceTranscriptPath(id);
-
-  await writeTextFileAtomic(transcriptFile, transcript);
-
-  const source: CopySource = {
-    id,
-    title,
-    platform: input.platform,
-    url: input.url,
-    resolvedUrl: input.resolvedUrl,
-    transcript,
-    transcriptPath: toLibraryRelativePath(transcriptFile),
-    source: input.source,
-    status: input.status || "completed",
-    error: input.error,
-    fallback: input.fallback,
-    fallbackReason: input.fallbackReason,
-    materialAnalysis: input.materialAnalysis,
-    projectIds: [],
-    createdAt: now,
-    updatedAt: now
-  };
-
-  try {
-    await writeJson(copySourceJsonPath(id), source);
-  } catch (error) {
-    await fs.rm(transcriptFile, { force: true }).catch(() => undefined);
-    throw error;
-  }
-  return source;
-}
-
-export async function updateCopySourceMaterialAnalysis(
-  sourceId: string,
-  materialAnalysis: CopySource["materialAnalysis"]
-) {
-  await ensureLibrary();
-  const source = await resolveCopySource(sourceId);
-  const updated: CopySource = {
-    ...source,
-    materialAnalysis,
-    updatedAt: nowIso()
-  };
-  await writeJson(copySourceJsonPath(updated.id), updated);
-  return updated;
-}
-
-export async function createCopySourceProject(input: {
-  name: string;
-  description?: string;
-  sourceMaterialIds: string[];
-}) {
-  if (!input.sourceMaterialIds.length) {
-    throw new Error("请选择至少一份转写文案");
-  }
-
-  const sources = await assertCopySourcesExist(input.sourceMaterialIds);
-  const project = await upsertProject({
-    name: input.name,
-    description: input.description,
-    sourceAccountIds: [],
-    sourceMaterialIds: sources.map((source) => source.id)
-  });
-
-  return getProjectSummary(project);
-}
-
 export async function getCopySources() {
   await ensureLibrary();
   const files = await readDirNamesIfExists(copySourcesPath());
@@ -746,40 +525,6 @@ export async function resolveCopySource(sourceId: string) {
     throw new Error(`找不到文案素材：${id}`);
   }
   return normalizeCopySource(source);
-}
-
-export async function deleteCopySources(sourceIds: string[]) {
-  await ensureLibrary();
-  const uniqueIds = [...new Set(sourceIds)].filter(Boolean).map(normalizeCopySourceId);
-  const deleted: string[] = [];
-  const targets: string[] = [];
-
-  for (const sourceId of uniqueIds) {
-    const jsonFile = copySourceJsonPath(sourceId);
-    const transcriptFile = copySourceTranscriptPath(sourceId);
-    const styleAnalysisFile = copySourceStyleAnalysisPath(sourceId);
-    const hasJson = await exists(jsonFile);
-    const hasTranscript = await exists(transcriptFile);
-    const hasStyleAnalysis = await exists(styleAnalysisFile);
-    if (!hasJson && !hasTranscript && !hasStyleAnalysis) continue;
-    targets.push(jsonFile, transcriptFile, styleAnalysisFile);
-    deleted.push(sourceId);
-  }
-
-  if (!deleted.length) return { deleted };
-  const backupTargets = await collectProjectAndDraftJsonPaths();
-  const transaction = await runRecoverableLibraryMutation({
-    kind: "delete-copy-sources",
-    targets,
-    backupTargets,
-    run: async () => {
-      await removeCopySourcesFromProjects(deleted);
-      await updateAllDraftStyleRefs((styleRefs) => removeDeletedMaterialsFromStyleRefs(styleRefs, new Set(deleted)));
-      return deleted;
-    }
-  });
-
-  return { deleted: transaction.result, trashOperationId: transaction.operation.id };
 }
 
 export async function saveEngagementRecord(input: Omit<EngagementRecord, "id" | "createdAt" | "updatedAt">, options: { idempotencyKey?: string } = {}) {
@@ -1405,59 +1150,6 @@ export async function saveAccountStyleSampleAnalysis(
   return cache;
 }
 
-export async function saveProjectStyle(projectId: string, content: string, expectedStyleHash?: string) {
-  const project = await resolveProject(projectId);
-  await ensureProjectDirs(project.slug);
-  await withIdentityMutationLock(`style:${project.id}`, async () => {
-    const target = projectStylePath(project.slug);
-    const previous = await readTextOrDefaultIfMissing(target, "");
-    if (expectedStyleHash && shortHash((previous || DEFAULT_STYLE).trim()) !== expectedStyleHash) {
-      throw Object.assign(new Error("项目风格卡在生成期间已被修改，已保留当前版本，请重试。"), { statusCode: 409 });
-    }
-    if (previous.trim() && previous.trimEnd() !== content.trimEnd()) {
-      await writeTextFileAtomic(path.join(projectPath(project.slug), ".style-history", `${shortHash(previous)}.md`), previous);
-    }
-    await writeTextFileAtomic(target, content.trimEnd() + "\n");
-  });
-  return content.trimEnd();
-}
-
-export async function readProjectStyle(projectId: string) {
-  const project = await resolveProject(projectId);
-  await ensureProjectDirs(project.slug);
-  return readTextOrDefaultIfMissing(projectStylePath(project.slug), DEFAULT_STYLE);
-}
-
-export async function readProjectStyleMeta(projectId: string) {
-  const project = await resolveProject(projectId);
-  await ensureProjectDirs(project.slug);
-  return readJson<ProjectStyleMeta>(projectStyleMetaPath(project.slug));
-}
-
-export async function saveProjectStyleMeta(projectId: string, meta: Omit<ProjectStyleMeta, "updatedAt">) {
-  const project = await resolveProject(projectId);
-  await ensureProjectDirs(project.slug);
-  const next: ProjectStyleMeta = {
-    ...meta,
-    updatedAt: nowIso()
-  };
-  await writeJson(projectStyleMetaPath(project.slug), next);
-  return next;
-}
-
-export async function readCopySourceStyleAnalysis(sourceId: string) {
-  await ensureLibrary();
-  const id = normalizeCopySourceId(sourceId);
-  return readJson<StyleSampleAnalysisCache>(copySourceStyleAnalysisPath(id));
-}
-
-export async function saveCopySourceStyleAnalysis(sourceId: string, cache: StyleSampleAnalysisCache) {
-  await ensureLibrary();
-  const id = normalizeCopySourceId(sourceId);
-  await writeJson(copySourceStyleAnalysisPath(id), cache);
-  return cache;
-}
-
 export async function saveDraft(input: DraftInput) {
   const now = nowIso();
   const id = `${now.replace(/[:.]/g, "-")}-${randomUUID()}`;
@@ -1569,87 +1261,6 @@ export async function ensureDraftAssetDir(draftId: string, kind = "") {
     dir: target,
     baseDir: base
   };
-}
-
-export async function saveUploadedDraftCoverReferences(input: {
-  draftId: string;
-  files: Array<{ name: string; type: string; data: Buffer }>;
-}) {
-  const formats = input.files.map((file) => {
-    if (!file.data.length || file.data.length > 10 * 1024 * 1024) throw new Error("封面参考图不能为空，且每张不能超过 10MB。");
-    return detectImageFormat(file.data);
-  });
-  const resolved = await ensureDraftAssetDir(input.draftId, "references");
-  const now = nowIso();
-  const references: DraftCoverReference[] = [];
-
-  for (const [index, file] of input.files.entries()) {
-    const extension = formats[index] === "jpeg" ? "jpg" : formats[index];
-    const id = randomUUID();
-    const filename = `${id}.${extension}`;
-    const target = path.join(resolved.dir, filename);
-    await writeFileAtomic(target, file.data);
-    references.push({
-      id,
-      source: "upload",
-      label: file.name || `上传参考图 ${references.length + 1}`,
-      path: path.relative(resolved.baseDir, target),
-      createdAt: now
-    });
-  }
-
-  const draft = await updateDraftAssets(input.draftId, (current) => ({
-    ...current,
-    cover: {
-      references: mergeCoverReferences(current.cover?.references || [], references),
-      images: current.cover?.images || [],
-      updatedAt: nowIso()
-    }
-  }));
-
-  return { draft, references };
-}
-
-export async function saveGeneratedCoverImage(input: {
-  draftId: string;
-  bytes: Buffer;
-  prompt: string;
-  referenceIds: string[];
-  model: string;
-  size: string;
-  quality: string;
-}) {
-  if (!input.bytes.length || input.bytes.length > 40 * 1024 * 1024) throw new Error("封面图片为空或超过 40MB，请降低尺寸后重试。");
-  const format = detectImageFormat(input.bytes);
-  const resolved = await ensureDraftAssetDir(input.draftId, "covers");
-  const now = nowIso();
-  const id = randomUUID();
-  const filename = `${id}.${format === "jpeg" ? "jpg" : format}`;
-  const target = path.join(resolved.dir, filename);
-  await writeFileAtomic(target, input.bytes);
-
-  const image: DraftCoverImage = {
-    id,
-    path: path.relative(resolved.baseDir, target),
-    prompt: input.prompt,
-    referenceIds: input.referenceIds,
-    model: input.model,
-    size: input.size,
-    quality: input.quality,
-    format,
-    createdAt: now
-  };
-
-  const draft = await updateDraftAssets(input.draftId, (current) => ({
-    ...current,
-    cover: {
-      references: current.cover?.references || [],
-      images: [...(current.cover?.images || []), image],
-      updatedAt: nowIso()
-    }
-  }));
-
-  return { draft, image, file: target };
 }
 
 export async function getDraftAssetFile(draftId: string, assetPath: string) {
@@ -1819,39 +1430,6 @@ export async function getProjectSummary(project: Project): Promise<ProjectSummar
     ...project,
     sourceMaterialIds: project.sourceMaterialIds || [],
     style,
-    sourceAccounts,
-    sourceMaterials,
-    sourceMaterialCount: sourceMaterials.length
-  };
-}
-
-export async function getProjectDetail(
-  projectIdOrSlug: string,
-  options: DetailReadOptions = {}
-): Promise<ProjectDetail> {
-  const project = await resolveProject(projectIdOrSlug);
-  await ensureProjectDirs(project.slug);
-  const [style, libraryAccounts, sourceMaterials] = await Promise.all([
-    options.includeStyle
-      ? readTextOrDefaultIfMissing(projectStylePath(project.slug), DEFAULT_STYLE)
-      : Promise.resolve<string | undefined>(undefined),
-    getAllAccountListItems(),
-    getProjectCopySources(project.sourceMaterialIds || [])
-  ]);
-  const sourceAccounts = libraryAccounts
-    .filter((account) => project.sourceAccountIds.includes(account.id))
-    .map((account) => ({
-      id: account.id,
-      name: account.name,
-      platform: account.platform,
-      videoCount: account.videoCount,
-      transcriptCount: account.transcriptCount
-    }));
-
-  return {
-    ...project,
-    sourceMaterialIds: project.sourceMaterialIds || [],
-    ...(style !== undefined ? { style } : {}),
     sourceAccounts,
     sourceMaterials,
     sourceMaterialCount: sourceMaterials.length
@@ -2048,42 +1626,6 @@ function getDraftAssetBase(draft: Draft) {
   return draftAssetsPath(draft.platform, normalizeAccountSlug(draft.accountId), draft.id);
 }
 
-async function assertCopySourcesExist(sourceIds: string[]) {
-  const uniqueIds = [...new Set(sourceIds)].filter(Boolean).map(normalizeCopySourceId);
-  const sources: CopySource[] = [];
-
-  for (const sourceId of uniqueIds) {
-    sources.push(await resolveCopySource(sourceId));
-  }
-
-  return sources;
-}
-
-async function assertAccountsExist(accountIds: string[]) {
-  const uniqueIds = normalizeProjectAccountRefs(accountIds);
-  const accounts: Account[] = [];
-
-  for (const accountId of uniqueIds) {
-    const [platform, slug] = accountId.split(":") as [Platform, string];
-    if (!platforms.includes(platform) || !slug?.trim()) {
-      throw new Error(`账号引用不合法：${accountId}`);
-    }
-    accounts.push(await resolveAccount(platform, slug));
-  }
-
-  return accounts;
-}
-
-function normalizeProjectAccountRefs(accountIds: string[]) {
-  return uniqueTrimmedStrings(accountIds).map((accountId) => {
-    const [platform, slug] = accountId.split(":") as [Platform, string];
-    if (!platforms.includes(platform) || !slug?.trim()) {
-      throw new Error(`账号引用不合法：${accountId}`);
-    }
-    return `${platform}:${normalizeAccountSlug(slug)}`;
-  });
-}
-
 async function getProjectCopySources(sourceIds: string[]) {
   const uniqueIds = [...new Set(sourceIds)].filter(Boolean);
   const sources = await Promise.all(
@@ -2094,45 +1636,6 @@ async function getProjectCopySources(sourceIds: string[]) {
     })
   );
   return sources.filter(Boolean) as CopySource[];
-}
-
-async function syncCopySourceProjectRefs(projectId: string, nextSourceIds: string[]) {
-  const sources = await getCopySources();
-  const nextSet = new Set(nextSourceIds.map(normalizeCopySourceId));
-
-  await Promise.all(
-    sources.map(async (source) => {
-      const projectIds = new Set(source.projectIds || []);
-      const shouldHaveProject = nextSet.has(source.id);
-      const hadProject = projectIds.has(projectId);
-      if (shouldHaveProject) projectIds.add(projectId);
-      if (!shouldHaveProject) projectIds.delete(projectId);
-      if (projectIds.has(projectId) === hadProject && shouldHaveProject === hadProject) return;
-      await writeJson(copySourceJsonPath(source.id), {
-        ...source,
-        projectIds: [...projectIds],
-        updatedAt: nowIso()
-      });
-    })
-  );
-}
-
-async function removeCopySourceProjectRefs(projectIds: string[]) {
-  const deleted = new Set(projectIds);
-  const sources = await getCopySources();
-
-  await Promise.all(
-    sources.map(async (source) => {
-      const projectRefs = source.projectIds || [];
-      const nextProjectIds = projectRefs.filter((projectId) => !deleted.has(projectId));
-      if (nextProjectIds.length === projectRefs.length) return;
-      await writeJson(copySourceJsonPath(source.id), {
-        ...source,
-        projectIds: nextProjectIds,
-        updatedAt: nowIso()
-      });
-    })
-  );
 }
 
 async function removeDeletedAccountsFromProjects(accountIds: string[]) {
@@ -2170,40 +1673,6 @@ async function removeDeletedAccountsFromProjects(accountIds: string[]) {
   );
 }
 
-async function removeCopySourcesFromProjects(sourceIds: string[]) {
-  const deleted = new Set(sourceIds);
-  const entries = await readDirEntriesIfExists(projectsPath());
-
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory())
-      .map(async (entry) => {
-        const project = await readJson<Project>(projectJsonPath(entry.name));
-        const updateProject = async () => {
-          const sourceMaterialIds = filterRemovedIds(project?.sourceMaterialIds, deleted);
-          if (!project || !sourceMaterialIds) return;
-          await writeJson(projectJsonPath(entry.name), {
-            ...project,
-            sourceMaterialIds: sourceMaterialIds.length ? sourceMaterialIds : undefined,
-            updatedAt: nowIso()
-          });
-        };
-
-        await Promise.all([
-          updateProject(),
-          updateProjectDraftRefs(entry.name, (draft) => {
-            const sourceMaterialIds = filterRemovedIds(draft.styleRef.sourceMaterialIds, deleted);
-            if (!sourceMaterialIds) return null;
-            return {
-              ...draft.styleRef,
-              sourceMaterialIds: sourceMaterialIds.length ? sourceMaterialIds : undefined
-            };
-          })
-        ]);
-      })
-  );
-}
-
 function filterRemovedIds(ids: string[] | undefined, deleted: Set<string>) {
   if (!ids?.length) return null;
   const nextIds = ids.filter((id) => !deleted.has(id));
@@ -2222,23 +1691,6 @@ function removeDeletedAccountsFromStyleRefs(styleRefs: WriteStyleReference[], de
     if (!reference.sourceAccountIds || sourceAccountIds?.length === reference.sourceAccountIds.length) return [reference];
     changed = true;
     return [{ ...reference, sourceAccountIds: sourceAccountIds?.length ? sourceAccountIds : undefined }];
-  });
-  return changed ? next : null;
-}
-
-function removeDeletedProjectsFromStyleRefs(styleRefs: WriteStyleReference[], deleted: Set<string>) {
-  const next = styleRefs.filter((reference) => reference.targetType !== "project" || !deleted.has(reference.projectId));
-  return next.length === styleRefs.length ? null : next;
-}
-
-function removeDeletedMaterialsFromStyleRefs(styleRefs: WriteStyleReference[], deleted: Set<string>) {
-  let changed = false;
-  const next = styleRefs.map((reference) => {
-    if (reference.targetType !== "project" || !reference.sourceMaterialIds?.length) return reference;
-    const sourceMaterialIds = reference.sourceMaterialIds.filter((sourceId) => !deleted.has(sourceId));
-    if (sourceMaterialIds.length === reference.sourceMaterialIds.length) return reference;
-    changed = true;
-    return { ...reference, sourceMaterialIds: sourceMaterialIds.length ? sourceMaterialIds : undefined };
   });
   return changed ? next : null;
 }
@@ -2287,12 +1739,6 @@ async function collectProjectJsonPaths() {
     .map((project) => projectJsonPath(project.name));
 }
 
-async function collectCopySourceJsonPaths() {
-  return (await readDirNamesIfExists(copySourcesPath()))
-    .filter((file) => file.endsWith(".json") && !file.endsWith(".style-analysis.json"))
-    .map((file) => path.join(copySourcesPath(), file));
-}
-
 async function collectProjectAndDraftJsonPaths() {
   return [
     ...(await collectProjectJsonPaths()),
@@ -2334,18 +1780,6 @@ function normalizeCopySource(source: CopySource): CopySource {
     materialAnalysis: source.materialAnalysis,
     projectIds: source.projectIds || []
   };
-}
-
-function formatPlatformName(platform: CopySource["platform"]) {
-  if (platform === "bilibili") return "B站";
-  if (platform === "douyin") return "抖音";
-  return "链接";
-}
-
-function mergeCoverReferences(existing: DraftCoverReference[], incoming: DraftCoverReference[]) {
-  const byId = new Map(existing.map((reference) => [reference.id, reference]));
-  for (const reference of incoming) byId.set(reference.id, reference);
-  return [...byId.values()];
 }
 
 function contentTypeFromExtension(file: string) {

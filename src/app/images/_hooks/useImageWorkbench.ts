@@ -10,7 +10,7 @@ import { imageGenerationInputSchema, type ImageFile, type ImageGenerationConfig,
 import { imageMentionToken, imageMentionPattern, resolveImageMentions, appendImageMention, removeImageMention } from "@/lib/image-mentions";
 
 function emptyForm(profileId?: string): ImageGenerationInput {
-  return { profileId: profileId && profileId !== "default" ? profileId : undefined, prompt: "", size: "1920x1080", quality: "auto", count: 1, referenceIds: [] };
+  return { profileId: profileId && profileId !== "default" ? profileId : undefined, prompt: "", size: "auto", quality: "auto", count: 1, referenceIds: [] };
 }
 export function useImageWorkbench() {
   const router = useRouter();

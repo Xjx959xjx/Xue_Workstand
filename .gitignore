@@ -19,3 +19,11 @@ style-library
 .remote-server
 .playwright-cli
 .promptfoo
+
+# 本地实验、验收和文档预览产物
+/outputs/
+/.codex-artifacts/
+/.codex-docx-qc/
+/.impeccable/critique/
+/.tmp/
+/tmp/

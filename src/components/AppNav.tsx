@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { TaskCenter } from "./TaskCenter";
 import { SkinToggle } from "./SkinToggle";
+import { ServiceModeControl } from "./ServiceModeControl";
 import type { AppMode } from "@/lib/app-mode";
 
 type NavItem = {
@@ -216,6 +217,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
       <div className="sidebar-bottom">
         <SkinToggle />
         <TaskCenter />
+        {!grossMarginMode ? <ServiceModeControl /> : null}
         {!grossMarginMode ? <Link prefetch={false} href="/ai-settings" className={`nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""}`} aria-current={activeHref === "/ai-settings" ? "page" : undefined}
           onClick={(event) => handleNavClick(event, "/ai-settings")} onFocus={() => void prewarmRoute("/ai-settings")} onPointerLeave={cancelPrewarm}
         onBlur={cancelPrewarm}

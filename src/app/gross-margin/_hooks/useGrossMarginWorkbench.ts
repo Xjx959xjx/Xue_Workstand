@@ -52,7 +52,7 @@ type VideoAccountLookupState = {
   message: string;
 };
 
-const pricePanelServiceConfigs = GROSS_MARGIN_SERVICE_CONFIGS.filter((config) => config.service !== "douPlus");
+const pricePanelServiceConfigs = GROSS_MARGIN_SERVICE_CONFIGS.filter((config) => config.service !== "douPlus" && config.service !== "mustFire");
 
 export function useGrossMarginWorkbench() {
   const { notify } = useFeedback();

@@ -15,6 +15,47 @@ test("本地请求超时及流式包装错误均保留超时分类", () => {
   }
 });
 
+test("写作仍在生成时允许超过两分钟，不误判半篇为超时", async (t) => {
+  const original = { ...process.env };
+  const root = await mkdtemp(path.join(tmpdir(), "writer-slow-stream-"));
+  let calls = 0;
+  const server = createServer((req, res) => {
+    calls++;
+    req.resume();
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write('data: {"type":"response.output_text.delta","delta":"开头"}\n\n');
+    setImmediate(() => {
+      t.mock.timers.tick(130_000);
+      res.end('data: {"type":"response.output_text.delta","delta":"结尾"}\n\ndata: {"type":"response.completed","response":{}}\n\n');
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_MODEL: "fixture",
+    CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, CHAT_WIRE_API: "responses", CHAT_FALLBACK_ENABLED: "0" });
+  try {
+    for (const policy of ["writer_generate", "writer_revise"] as const) {
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      const result = await streamResponseTextWithFallback({ policy,
+        messages: [{ role: "user", content: "测试" }], onDelta() {},
+        onRetry(message) { t.mock.timers.reset(); assert.fail(`正常慢请求不应重试：${message}`); } });
+      t.mock.timers.reset();
+      assert.equal(result.ok, true);
+      assert.equal(result.text, "开头结尾");
+    }
+    assert.equal(calls, 2, "正常慢请求不应重发模型请求");
+  } finally {
+    t.mock.timers.reset();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
+    Object.assign(process.env, original);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("写作流真实超时会重试，已输出半篇时保留超时原因并拒绝保存", async (t) => {
   const original = { ...process.env };
   const root = await mkdtemp(path.join(tmpdir(), "writer-stream-timeout-"));

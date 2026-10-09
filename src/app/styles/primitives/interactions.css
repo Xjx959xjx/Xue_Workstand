@@ -53,7 +53,6 @@
   .markdown-box,
   .code-box,
   .result-box,
-  .project-style-textarea,
   .writer-textarea,
   .modal-editor textarea {
     line-height: var(--line-height-reading);
@@ -70,7 +69,6 @@
 .list-button,
 .copy-source-card,
 .copy-project-row,
-.project-workbench-source,
 .task-center-row,
 .tools-candidate-card,
 .gross-monitor-card,
@@ -83,7 +81,6 @@
 .list-button:active,
 .copy-source-card:active,
 .copy-project-row:active,
-.project-workbench-source:active,
 .tools-candidate-card:active {
   transform: none;
   transition-duration: var(--motion-fast);

@@ -69,14 +69,12 @@ import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source
 import type {
   AccountListItem,
   Draft,
-  ProjectListItem,
   WriteRevisionScope,
   WriteStyleReferenceInput
 } from "@/lib/types";
 
 const WRITER_SESSION_DRAFT_KEY = "writer-mobile-session-draft-v1";
 const EMPTY_ACCOUNTS: AccountListItem[] = [];
-const EMPTY_PROJECTS: ProjectListItem[] = [];
 
 export default function WriterPage() {
   return (
@@ -134,9 +132,7 @@ function WriterPageContent() {
       const saved = window.sessionStorage.getItem(WRITER_SESSION_DRAFT_KEY);
       if (saved) {
         const draft = JSON.parse(saved) as Partial<{
-          targetType: "account" | "project";
           accountId: string;
-          projectId: string;
           styleRefs: WriteStyleReferenceInput[];
           prompt: string;
           sourceText: string;
@@ -146,9 +142,7 @@ function WriterPageContent() {
           revisionMode?: "edit" | "recalibrate";
         }>;
         if (Array.isArray(draft.styleRefs) && draft.styleRefs.length) {
-          setStyleRefs(draft.styleRefs);
-        } else if (draft.targetType === "project" && typeof draft.projectId === "string") {
-          setStyleRefs([{ targetType: "project", projectId: draft.projectId }]);
+          setStyleRefs(draft.styleRefs.filter(reference => reference.targetType === "account"));
         } else if (typeof draft.accountId === "string") {
           const platform = draft.accountId.split(":")[0];
           if (platform === "bilibili" || platform === "douyin") {
@@ -181,32 +175,22 @@ function WriterPageContent() {
         platform: account.platform,
         accountId: account.id
       })),
-      ...(library?.projects || EMPTY_PROJECTS).map((project) => writeStyleReferenceKey({
-        targetType: "project" as const,
-        projectId: project.id
-      }))
     ]);
     const selected = styleRefs.filter((reference) => availableKeys.has(writeStyleReferenceKey(reference)));
     if (selected.length) return selected;
     const firstAccount = library?.accounts[0];
     if (firstAccount) return [{ targetType: "account" as const, platform: firstAccount.platform, accountId: firstAccount.id }];
-    const firstProject = library?.projects[0];
-    return firstProject ? [{ targetType: "project" as const, projectId: firstProject.id }] : [];
-  }, [library?.accounts, library?.projects, styleRefs]);
+    return [];
+  }, [library?.accounts, styleRefs]);
   const primaryStyleRef = selectedStyleRefs[0];
-  const targetType = primaryStyleRef?.targetType || "account";
   const selectedAccount = useMemo(() => primaryStyleRef?.targetType === "account"
     ? library?.accounts.find((account) => account.id === primaryStyleRef.accountId && account.platform === primaryStyleRef.platform) || null
     : null, [library?.accounts, primaryStyleRef]);
-  const selectedProject = useMemo(() => primaryStyleRef?.targetType === "project"
-    ? library?.projects.find((project) => project.id === primaryStyleRef.projectId) || null
-    : null, [library?.projects, primaryStyleRef]);
 
   const { historyDrafts, historyLoading, handleDraftSaved, setDraftSummaries } = useWriterHistory(setNotice);
 
   const { activeStyleLoading, activeStyleError, activeTitle, styleCards } = useWriterReferenceDetails({
     accounts: library?.accounts || EMPTY_ACCOUNTS,
-    projects: library?.projects || EMPTY_PROJECTS,
     references: selectedStyleRefs,
     setNotice
   });
@@ -275,18 +259,13 @@ function WriterPageContent() {
     routerPush: router.push,
     routerReplace: router.replace,
     selectedAccount,
-    selectedProject,
     styleRefs: selectedStyleRefs,
     setBusy,
     setNotice,
     startTask,
-    targetType,
     useWebResearch
   });
-  useUnsavedChangesGuard(
-    hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()),
-    "当前写作内容尚未保存，确定要离开吗？"
-  );
+  useUnsavedChangesGuard(hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()));
 
   useEffect(() => {
     if (lastDraftId) loadedDraftParamRef.current = lastDraftId;
@@ -439,7 +418,7 @@ function WriterPageContent() {
 
   const applyLoadedDraft = useCallback((draft: Draft, batch?: Draft[]) => {
     setRevisionTargets(null);
-    setStyleRefs(draftWriteStyleReferenceInputs(draft));
+    setStyleRefs(draftWriteStyleReferenceInputs(draft).filter(reference => reference.targetType === "account"));
     setPrompt(draft.prompt);
     setSourceText(restoreWriterSourceInput({
       originalSourceInput: draft.originalSourceInput,
@@ -460,10 +439,9 @@ function WriterPageContent() {
     const nextPrompt = searchParams.get("prompt");
     const nextSourceText = searchParams.get("sourceText");
     const nextAccountId = searchParams.get("accountId");
-    const nextProjectId = searchParams.get("projectId");
     const nextStyleRefs = searchParams.getAll("styleRef").flatMap((value) => {
       const reference = parseWriteStyleReferenceKey(value);
-      return reference ? [reference] : [];
+      return reference?.targetType === "account" ? [reference] : [];
     });
     const draftId = searchParams.get("draftId");
 
@@ -475,6 +453,7 @@ function WriterPageContent() {
           if (ignore) return;
           loadedDraftParamRef.current = draft.id;
           applyLoadedDraft(draft, batch);
+          if (draft.targetType === "project") setNotice("项目写作已移除，历史稿件可查看和手动保存。");
         })
         .catch((error) => {
           if (ignore) return;
@@ -493,7 +472,7 @@ function WriterPageContent() {
     if (appliedSearchParamRef.current === searchKey) return;
 
     const hasUrlState =
-      Boolean(target || nextMode || nextAccountId || nextProjectId || nextStyleRefs.length) ||
+      Boolean(target || nextMode || nextAccountId || nextStyleRefs.length) ||
       nextPrompt !== null ||
       nextSourceText !== null;
     if (!hasUrlState) {
@@ -503,8 +482,7 @@ function WriterPageContent() {
 
     if (nextStyleRefs.length) {
       setStyleRefs(nextStyleRefs);
-    } else if (nextProjectId) {
-      setStyleRefs([{ targetType: "project", projectId: nextProjectId }]);
+
     } else if (nextAccountId) {
       const platform = nextAccountId.split(":")[0];
       if (platform === "bilibili" || platform === "douyin") {
@@ -537,7 +515,7 @@ function WriterPageContent() {
     onClearCurrent: clearHistoryCurrent, setNotice, refresh
   });
 
-  if (!loading && !library?.accounts.length && !library?.projects.length) {
+  if (!loading && !historyLoading && !library?.accounts.length && !historyDrafts.length && !searchParams.get("draftId")) {
     return (
       <div className="page writer-page">
         <header className="page-header">
@@ -549,12 +527,12 @@ function WriterPageContent() {
               </span>
               <div className="page-title-copy">
                 <h1>对话写作</h1>
-                <p className="subtle">需要至少一个账号或项目风格作为引用。</p>
+                <p className="subtle">需要至少一个账号风格作为引用。</p>
               </div>
             </div>
           </div>
         </header>
-        <EmptyState title="还没有可参考的风格" body="先采集一个账号，或在账号库里创建项目风格卡，再来这里生成文案。" action={{ href: "/library", label: "去采集账号" }} />
+        <EmptyState title="还没有可参考的风格" body="先采集一个账号并生成风格卡，再来这里生成文案。" action={{ href: "/library", label: "去采集账号" }} />
       </div>
     );
   }
@@ -589,7 +567,6 @@ function WriterPageContent() {
                     accounts={library?.accounts || EMPTY_ACCOUNTS}
                     disabled={loading}
                     onChange={setStyleRefs}
-                    projects={library?.projects || EMPTY_PROJECTS}
                     references={selectedStyleRefs}
                   />
                 </div>
@@ -709,7 +686,7 @@ function WriterPageContent() {
               </section>
               {lastDraftId ? (
                 <section className="writer-preference-section" key={lastDraftId} aria-label="长期写作偏好">
-                  <WriterPreference draftId={lastDraftId} disabled={Boolean(busy)} onSaved={refresh} />
+                  <WriterPreference draftId={lastDraftId} disabled={Boolean(busy) || lastDraftBase?.targetType === "project"} onSaved={refresh} />
                 </section>
               ) : null}
 
@@ -929,7 +906,7 @@ function WriterPageContent() {
                     </button>
                   </div>
                   <p className="writer-revision-help" id="writer-revision-mode-help">
-                    {revisionTargets !== null ? `将要求分别应用于所选 ${selectedRevisionKeys.length} 篇全文，保留各自风格并新增版本。` : selectedDraftText ? "仅修改选中内容，生成完整新版本。" : revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达。" : "选中文字可局部修改；其余表达尽量保留。"}
+                    {lastDraftBase?.targetType === "project" ? "项目写作已移除，旧稿可手动编辑保存；新建账号稿请点击「新建」。" : revisionTargets !== null ? `将要求分别应用于所选 ${selectedRevisionKeys.length} 篇全文，保留各自风格并新增版本。` : selectedDraftText ? "仅修改选中内容，生成完整新版本。" : revisionMode === "recalibrate" ? "沿用本稿参考，重新组织表达。" : "选中文字可局部修改；其余表达尽量保留。"}
                   </p>
                 </section>
               ) : null}
@@ -1013,7 +990,6 @@ function createWriterReferenceParams(references: WriteStyleReferenceInput[], mod
     targetType: primary?.targetType || "account",
     mode
   });
-  if (primary?.targetType === "project") params.set("projectId", primary.projectId);
   if (primary?.targetType === "account") params.set("accountId", primary.accountId);
   for (const reference of references) params.append("styleRef", writeStyleReferenceKey(reference));
   return params;

@@ -1,18 +1,24 @@
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildOpenCliSearchQuery, buildWriterWebResearchMessages, completePreparedWriteCopy, prepareWriteCopyContext, webSearchCompleteStrict } from "../src/lib/ai";
+import type { Logger } from "pino";
+import { buildWriterWebResearchMessages, completePreparedWriteCopy, prepareWriteCopyContext, webSearchCompleteStrict } from "../src/lib/ai";
 import { saveStyle, upsertAccount } from "../src/lib/storage";
 import { writerResearchBoundaryInstruction } from "../src/lib/writer-prompts";
+import { getConfiguredWebResearchConfigs } from "../src/lib/model-runtime";
+import { cachedWriterResearch } from "../src/lib/storage/writer-research";
+import { readAiSettings, saveAiSettings } from "../src/lib/storage/ai-settings";
 
-test("备用搜索优先使用明确作品名，避免搜索写作指令", () => {
-  assert.equal(buildOpenCliSearchQuery({ mode: "rewrite", prompt:
-    "按当前所选参考风格改写，保留素材核心信息和话题角度。写一期游戏《篮球少女》的杂谈，自来水一点，然后要有内容" }), "篮球少女 游戏");
-  assert.equal(buildOpenCliSearchQuery({ mode: "topic", prompt: "杭州秋季活动" }), "杭州秋季活动");
-});
+function respondToPlan(payload: Record<string, unknown>, res: ServerResponse) {
+  if ((payload.tools as unknown[])?.length) return false;
+  res.writeHead(200, { "Content-Type": "text/event-stream" });
+  const delta = JSON.stringify({ subjects: ["本次主题"], questions: ["本次需要核实的问题"] });
+  res.end(`data: ${JSON.stringify({ type: "response.output_text.delta", delta })}\n\ndata: {"type":"response.completed","response":{}}\n\n`);
+  return true;
+}
 
 test("主题检索保留素材中的对象和时间条件，支持资料与要求分开传递", () => {
   const input = { mode: "topic" as const, prompt: "写一期游戏杂谈", sourceText: "《篮球少女》2026年5月测试的玩家讨论",
@@ -22,9 +28,121 @@ test("主题检索保留素材中的对象和时间条件，支持资料与要�
   for (const content of [input.prompt, input.sourceText, input.supportDocContext]) {
     assert.ok(messages[1].content.includes(content));
   }
-  assert.ok(buildOpenCliSearchQuery(input).includes("篮球少女"));
   const withoutMaterials = buildWriterWebResearchMessages({ mode: "topic", prompt: "杭州活动" });
   assert.ok(!withoutMaterials[1].content.includes("undefined"));
+});
+
+test("原生检索失败直接停止，不兜底或缓存失败；旧备用缓存及不同强度的缓存不复用", async () => {
+  const original = { ...process.env };
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-strict-research-"));
+  const requests: Record<string, unknown>[] = [];
+  let fail = true;
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push(JSON.parse(body));
+    if (fail) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "invalid upstream request" } }));
+    } else {
+      if (respondToPlan(requests.at(-1)!, res)) return;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('data: {"type":"response.output_item.done","item":{"type":"web_search_call","status":"completed"}}\n\ndata: {"type":"response.output_text.delta","delta":"已查到真实资料 https://example.com/source"}\n\ndata: {"type":"response.completed","response":{}}\n\n');
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|SITES_|OPENCLI_)/.test(key)) delete process.env[key];
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, WEB_RESEARCH_ENABLED: "1", WEB_RESEARCH_API_KEY: "fixture",
+    WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, WEB_RESEARCH_MODEL: "fixture",
+    OPENCLI_BIN: path.join(root, "unavailable-opencli") });
+  try {
+    const account = await upsertAccount({ platform: "douyin", name: "严格检索", uid: "strict-research" });
+    await saveStyle(account.platform, account.id, "自然口语介绍产品。");
+    const input = { platform: account.platform, accountId: account.id, mode: "topic" as const,
+      prompt: "介绍某个产品", useWebResearch: true };
+    const legacyFingerprint = JSON.stringify({ version: 2, messages: buildWriterWebResearchMessages(input),
+      configs: getConfiguredWebResearchConfigs().map(({ baseUrl, responsesUrl, model, wireApi, serviceTier }) => ({ baseUrl, responsesUrl, model, wireApi, serviceTier })) });
+    await cachedWriterResearch(legacyFingerprint, async () => ({ content: "检索方式：opencli duckduckgo search\n旧备用搜索资料", cacheable: true }));
+    for (let count = 1; count <= 2; count++) {
+      await assert.rejects(prepareWriteCopyContext(input), /接口不兼容.*本次未生成草稿/);
+      assert.equal(requests.length, count, "失败不缓存，不悄悄返回旧备用资料或发起正文请求");
+    }
+    assert.equal((await fs.readdir(path.join(root, ".cache", "writer-research"))).length, 1, "只保留已有的旧缓存文件");
+    fail = false;
+    const prepared = await prepareWriteCopyContext(input);
+    assert.match(prepared.research || "", /已查到真实资料/);
+    assert.equal(requests.length, 4);
+    assert.equal((await prepareWriteCopyContext(input)).research, prepared.research);
+    assert.equal(requests.length, 4);
+    const settings = await readAiSettings();
+    await saveAiSettings({ ...settings, overrides: { web_research: { model: "", effort: "high" } } });
+    await prepareWriteCopyContext(input);
+    assert.equal(requests.length, 6, "检索强度变化后重新规划和检索");
+    assert.deepEqual(requests.at(-1)?.reasoning, { effort: "high" });
+    assert.ok(requests.every(request => Array.isArray(request.tools)), "所有模型请求均为联网研究，未启动正文生成");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
+    Object.assign(process.env, original);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("写作检索两分钟后仍可完成；三分钟预算到期明确失败，不重试或生成草稿", async (t) => {
+  const original = { ...process.env };
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "writer-slow-research-"));
+  let calls = 0;
+  let elapsed = 130_000;
+  const logger = (globalThis as typeof globalThis & { __styleWorkbenchLogger?: Logger }).__styleWorkbenchLogger;
+  assert.ok(logger);
+  const info = t.mock.method(logger, "info");
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    if (respondToPlan(JSON.parse(body), res)) return;
+    calls++;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write('data: {"type":"response.output_item.done","item":{"type":"web_search_call","status":"completed"}}\n\n');
+    setImmediate(() => {
+      t.mock.timers.tick(elapsed);
+      res.end('data: {"type":"response.output_text.delta","delta":"已查到官方介绍 https://example.com/product"}\n\ndata: {"type":"response.completed","response":{}}\n\n');
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|SITES_|OPENCLI_)/.test(key)) delete process.env[key];
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, WEB_RESEARCH_ENABLED: "1", WEB_RESEARCH_API_KEY: "fixture",
+    WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, WEB_RESEARCH_MODEL: "fixture",
+    // The regression must never launch the user's browser when the old deadline fires.
+    OPENCLI_BIN: path.join(root, "unavailable-opencli") });
+  try {
+    const account = await upsertAccount({ platform: "douyin", name: "慢检索", uid: "slow-research" });
+    await saveStyle(account.platform, account.id, "自然口语介绍产品。");
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const prepared = await prepareWriteCopyContext({ platform: account.platform, accountId: account.id,
+      mode: "topic", prompt: "介绍微蒸烤一体机", useWebResearch: true });
+    assert.match(prepared.research || "", /已查到官方介绍 https:\/\/example.com\/product/);
+    assert.equal(calls, 1);
+    const diagnostic = info.mock.calls.map(call => call.arguments[0] as Record<string, unknown>)
+      .find(event => event.event === "model.web-research-stream");
+    assert.equal(diagnostic?.status, "completed");
+    assert.equal(diagnostic?.eventCount, 3);
+    assert.equal(typeof diagnostic?.firstSearchMs, "number");
+    assert.equal(diagnostic?.outputChars, 35);
+    assert.ok(!JSON.stringify(diagnostic).includes("官方介绍"));
+
+    elapsed = 181_000;
+    await assert.rejects(prepareWriteCopyContext({ platform: account.platform, accountId: account.id,
+      mode: "topic", prompt: "另一个产品的官方介绍", useWebResearch: true }), /模型联网搜索超时，本次未生成草稿/);
+    assert.equal(calls, 2, "总预算到期后不再发起一次注定超时的完整重试");
+  } finally {
+    t.mock.timers.reset();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
+    Object.assign(process.env, original);
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("首选搜索兼容 auto 工具选择，断流仅重试一次；参数、限流、鉴权和取消不重试", async () => {
@@ -120,7 +238,9 @@ test("联网无结果与部分命中：首稿和续改区分检索状态与事�
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
-    requests.push(JSON.parse(body));
+    const payload = JSON.parse(body);
+    if (respondToPlan(payload, res)) return;
+    requests.push(payload);
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     for (const event of [
       { type: "response.output_item.done", item: { type: "web_search_call", status: "completed" } },

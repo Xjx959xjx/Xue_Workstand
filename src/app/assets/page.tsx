@@ -292,12 +292,6 @@ function AssetsPageContent() {
 
       <section className="engagement-workbench">
         <section className="panel engagement-main">
-          <div className="engagement-refbar">
-            <div>
-              <h2>生成器</h2>
-              <p className="pane-subtitle">链接或文案。</p>
-            </div>
-          </div>
           <div className="engagement-content-grid">
             <EngagementGeneratorPane
               busy={busy}

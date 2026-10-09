@@ -23,7 +23,6 @@
 .field textarea,
 .writer-ref-select,
 .writer-textarea,
-.project-style-textarea,
 .copy-links-textarea,
 .account-filter-input,
 .filter-select,
@@ -48,7 +47,6 @@
 
 .field textarea,
 .writer-textarea,
-.project-style-textarea,
 .copy-links-textarea,
 .modal-editor textarea {
   resize: vertical;
@@ -59,7 +57,6 @@
 .field textarea:hover,
 .writer-ref-select:hover,
 .writer-textarea:hover,
-.project-style-textarea:hover,
 .copy-links-textarea:hover,
 .account-filter-input:hover,
 .filter-select:hover,
@@ -76,7 +73,6 @@
 .field textarea:focus,
 .writer-ref-select:focus,
 .writer-textarea:focus,
-.project-style-textarea:focus,
 .copy-links-textarea:focus,
 .account-filter-input:focus,
 .filter-select:focus,
@@ -93,7 +89,6 @@
 .field textarea:focus-visible,
 .writer-ref-select:focus-visible,
 .writer-textarea:focus-visible,
-.project-style-textarea:focus-visible,
 .copy-links-textarea:focus-visible,
 .account-filter-input:focus-visible,
 .filter-select:focus-visible,

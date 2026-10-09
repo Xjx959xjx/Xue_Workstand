@@ -170,6 +170,7 @@ function formatTargets(targetStats: Record<string, number>, platform: "bilibili"
     favorite: "收藏",
     share: platform === "bilibili" ? "分享" : "转发",
     danmaku: "弹幕",
+    mustFire: "必火",
     blueLink: "蓝链点击"
   };
   return (

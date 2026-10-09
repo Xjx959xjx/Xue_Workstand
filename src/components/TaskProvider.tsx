@@ -17,7 +17,7 @@ import {
   retryJob as retryJobRequest,
   startJob
 } from "@/lib/client";
-import { invalidateAccountDetail, invalidateProjectDetail } from "@/lib/detail-cache";
+import { invalidateAccountDetail } from "@/lib/detail-cache";
 import { formatJobErrorMessage } from "@/lib/job-messages";
 import { defaultJobHref, getJobResultHref } from "@/lib/job-links";
 import { applyJobListResponse, isActiveJob, isTerminalJob } from "@/lib/job-sync";
@@ -366,12 +366,11 @@ function invalidateJobClientCaches(job: JobRecord) {
     invalidateGrossMarginLibraryCache();
   }
   if (job.kind === "hotspot-refresh") invalidateHotspotRadarCache();
-  if (job.kind === "write-copy" || job.kind === "image-cover") invalidateDraftsCache();
+  if (job.kind === "write-copy") invalidateDraftsCache();
   if (job.kind === "engagement") {
     invalidateEngagementRecordsCache();
     if (job.scope?.draftId) invalidateDraftsCache();
   }
-  if (job.kind === "project-style") invalidateProjectDetail(job.scope?.projectId);
 
   const updatesAccount =
     job.dataChange?.resource === "library-account" ||
@@ -386,7 +385,7 @@ function invalidateJobClientCaches(job: JobRecord) {
     else invalidateAccountDetail();
   }
 
-  return updatesAccount || job.kind === "write-copy" || job.kind === "project-style" || job.kind === "engagement";
+  return updatesAccount || job.kind === "write-copy" || job.kind === "engagement";
 }
 
 function handleJobNotifications(
@@ -487,7 +486,7 @@ function shouldHydrateJob(
   cache: Map<string, JobRecord>,
   pathname: string
 ) {
-  if (job.kind === "image-generation" || job.kind === "image-cover") return false;
+  if (job.kind === "image-generation") return false;
   const relevantToCurrentPage = isJobRelevantToHref(job, pathname);
   const needsFullJob = Boolean(job.hasResult || job.hasPartialText);
   if (isActiveJob(job)) return relevantToCurrentPage && needsFullJob;

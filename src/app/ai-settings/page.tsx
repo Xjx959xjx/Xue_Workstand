@@ -7,7 +7,7 @@ import { AI_EFFORTS, AI_GROUPS, AI_POLICIES, type AiEffort } from "@/lib/ai-poli
 import { useAiSettings } from "./useAiSettings";
 import "./settings.css";
 
-const chatModels = ["gpt-6-astra", "gpt-6.1-sol"];
+const chatModels = ["gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol"];
 const effortOptions = AI_EFFORTS.filter((effort) => effort !== "none");
 const effortLabels = { low: "轻量", medium: "均衡", high: "深入", xhigh: "最高" };
 type SettingsController = ReturnType<typeof useAiSettings>;

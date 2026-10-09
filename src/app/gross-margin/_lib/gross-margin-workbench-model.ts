@@ -187,6 +187,7 @@ export function buildGrossMarginTemplateValues({
   const favoriteLine = lines.get("favorite");
   const shareLine = lines.get("share");
   const douPlusLine = lines.get("douPlus");
+  const mustFireLine = lines.get("mustFire");
   const coinLine = lines.get("coin");
   const danmakuLine = lines.get("danmaku");
   const blueLinkLine = lines.get("blueLink");
@@ -206,12 +207,14 @@ export function buildGrossMarginTemplateValues({
     favoriteValue: formatReviewMetricValue(favoriteLine, platform),
     shareValue: formatReviewMetricValue(shareLine, platform),
     douPlusValue: formatReviewMetricValue(douPlusLine, platform),
+    mustFireValue: formatReviewMetricValue(mustFireLine, platform),
     coinValue: formatReviewMetricValue(coinLine, platform),
     danmakuValue: formatReviewMetricValue(danmakuLine, platform),
     blueLinkLine: blueLinkLine && blueLinkLine.quantity > 0
       ? `蓝链点击：${formatReviewMetricValue(blueLinkLine, platform)}`
       : "",
     maintenanceCost: formatReviewMoney(calculation.maintenanceCost),
+    grossProfit: formatReviewMoney(calculation.grossProfit),
     grossMarginRate: formatReviewPercent(calculation.grossMarginRate),
     splitRoundLine,
     reviewFooter
@@ -337,7 +340,8 @@ function buildSplitRoundLine(
           { service: "comment", label: "评论" },
           { service: "share", label: "分享" },
           { service: "danmaku", label: "弹幕" },
-          { service: "blueLink", label: "蓝链点击" }
+          { service: "blueLink", label: "蓝链点击" },
+          { service: "mustFire", label: "必火" }
         ]
       : [
           { service: "play", label: "播放" },
@@ -361,7 +365,7 @@ function buildSplitRoundLine(
 
 function formatSplitRoundMetricValue(line: GrossMarginCalculationLine | undefined, ratio: number) {
   if (!line || line.quantity <= 0) return "";
-  if (line.service === "douPlus") return `${formatReviewMoney(Math.min(line.quantity, roundUpToStep(line.quantity * ratio, 1)))}元`;
+  if (line.service === "douPlus" || line.service === "mustFire") return `${formatReviewMoney(Math.min(line.quantity, roundUpToStep(line.quantity * ratio, 1)))}元`;
   const absoluteValue = toAbsoluteMetricValue(line);
   const roundedValue = Math.min(absoluteValue, roundUpToStep(absoluteValue * ratio, getSplitRoundStep(line.service)));
   return formatSplitRoundCount(line.service, roundedValue);
@@ -384,7 +388,7 @@ function formatBilibiliPlayChannel(line?: GrossMarginCalculationLine) {
 
 function formatReviewMetricValue(line: GrossMarginCalculationLine | undefined, platform: PlatformKey) {
   if (!line || line.quantity <= 0) return "/";
-  if (line.service === "douPlus") return `${formatReviewMoney(line.quantity)}元`;
+  if (line.service === "douPlus" || line.service === "mustFire") return `${formatReviewMoney(line.quantity)}元`;
   if (line.quantityUnit === "万") {
     return `${formatThreshold(line.quantity)}${platform === "bilibili" ? "W" : "万"}`;
   }

@@ -1,7 +1,7 @@
 "use client";
 
-import { getAccountDetail, getProjectDetail } from "@/lib/client";
-import type { AccountDetail, Platform, ProjectDetail } from "@/lib/types";
+import { getAccountDetail } from "@/lib/client";
+import type { AccountDetail, Platform } from "@/lib/types";
 
 type DetailCacheOptions = {
   includeStyle?: boolean;
@@ -11,8 +11,6 @@ type DetailCacheOptions = {
 
 const accountDetailCache = new Map<string, AccountDetail>();
 const accountDetailRequests = new Map<string, Promise<AccountDetail>>();
-const projectDetailCache = new Map<string, ProjectDetail>();
-const projectDetailRequests = new Map<string, Promise<ProjectDetail>>();
 const MAX_CACHE_ENTRIES = 60;
 
 export function cachedGetAccountDetail(input: {
@@ -45,40 +43,11 @@ export function cachedGetAccountDetail(input: {
   return request;
 }
 
-export function cachedGetProjectDetail(projectId: string, options: DetailCacheOptions = {}) {
-  const cacheKey = projectDetailCacheKey(projectId, options);
-  if (options.force) invalidateProjectDetail(projectId);
-
-  const cached = projectDetailCache.get(cacheKey);
-  if (cached && !options.force) return Promise.resolve(cached);
-
-  const pending = projectDetailRequests.get(cacheKey);
-  if (pending && !options.force) return pending;
-
-  const request = getProjectDetail(projectId, {
-    includeStyle: options.includeStyle
-    })
-    .then((detail) => {
-      if (projectDetailRequests.get(cacheKey) === request) remember(projectDetailCache, cacheKey, detail);
-      return detail;
-    })
-    .finally(() => {
-      if (projectDetailRequests.get(cacheKey) === request) projectDetailRequests.delete(cacheKey);
-    });
-
-  projectDetailRequests.set(cacheKey, request);
-  return request;
-}
-
 export function getCachedAccountDetail(input: {
   platform: Platform;
   accountId: string;
 } & DetailCacheOptions) {
   return accountDetailCache.get(accountDetailCacheKey(input.platform, input.accountId, input)) || null;
-}
-
-export function getCachedProjectDetail(projectId: string, options: DetailCacheOptions = {}) {
-  return projectDetailCache.get(projectDetailCacheKey(projectId, options)) || null;
 }
 
 export function invalidateAccountDetail(platform?: Platform, accountId?: string) {
@@ -87,26 +56,12 @@ export function invalidateAccountDetail(platform?: Platform, accountId?: string)
   deleteMatching(accountDetailRequests, prefix);
 }
 
-export function invalidateProjectDetail(projectId?: string) {
-  const prefix = projectId ? projectDetailPrefix(projectId) : "project|";
-  deleteMatching(projectDetailCache, prefix);
-  deleteMatching(projectDetailRequests, prefix);
-}
-
 function accountDetailPrefix(platform: Platform, accountId: string) {
   return `account|${platform}|${accountId}|`;
 }
 
 function accountDetailCacheKey(platform: Platform, accountId: string, options: DetailCacheOptions) {
   return `${accountDetailPrefix(platform, accountId)}${options.includeStyle ? "style" : "base"}|${options.version || "current"}`;
-}
-
-function projectDetailPrefix(projectId: string) {
-  return `project|${projectId}|`;
-}
-
-function projectDetailCacheKey(projectId: string, options: DetailCacheOptions) {
-  return `${projectDetailPrefix(projectId)}${options.includeStyle ? "style" : "base"}|${options.version || "current"}`;
 }
 
 function remember<T>(cache: Map<string, T>, key: string, value: T) {

@@ -28,7 +28,8 @@ const metricPatterns: Array<{
   { service: "danmaku", label: "弹幕", pattern: /^弹幕(?:（([^）]+)）)?\s*[：:]\s*(.+)$/ },
   { service: "blueLink", label: "蓝链点击", pattern: /^蓝链点击(?:（([^）]+)）)?\s*[：:]\s*(.+)$/ },
   { service: "douPlus", label: "抖加", pattern: /^抖加(?:（([^）]+)）)?\s*[：:]\s*(.+)$/ },
-  { service: "douPlus", label: "dou+", pattern: /^dou\+(?:（([^）]+)）)?\s*[：:]\s*(.+)$/i }
+  { service: "douPlus", label: "dou+", pattern: /^dou\+(?:（([^）]+)）)?\s*[：:]\s*(.+)$/i },
+  { service: "mustFire", label: "必火", pattern: /^必火(?:（([^）]+)）)?\s*[：:]\s*(.+)$/ }
 ];
 
 export function GrossMarginImportModal({

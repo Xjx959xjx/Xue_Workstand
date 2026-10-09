@@ -12,10 +12,8 @@ import {
   BatchTranscribeResult,
   CollectOrder,
   CollectResult,
-  CopySource,
   Draft,
   DraftSummary,
-  DraftCoverReference,
   DouyinHotlistRefreshResult,
   DouyinHotlistResponse,
   EngagementGenerationRequest,
@@ -35,9 +33,9 @@ import {
   LibraryOverviewResponse,
   Platform,
   ProjectDraftInput,
-  ProjectDetail,
-  ProjectSummary,
   RemoteStatusResponse,
+  ServiceMode,
+  ServiceModeStatus,
   TranscriptVersion,
   Video,
   WriteAction,
@@ -48,7 +46,6 @@ import {
   WriteStyleReferenceInput,
   WriterSourceFileImport
 } from "./types";
-import type { LinkTranscriptionResult } from "./transcription";
 import type { PublishCopyInput, PublishCopyResult } from "./publish-copy-types";
 import type { DouyinHotlistRefreshLogResponse } from "./douyin-hotlist-refresh-log";
 import type { TrendRadarFeed } from "./trendradar-types";
@@ -58,9 +55,6 @@ let draftsRequest: Promise<{ drafts: DraftSummary[] }> | null = null;
 let draftsCacheRevision = 0;
 const draftOverrides = new Map<string, Draft>();
 const deletedDraftIds = new Set<string>();
-let copySourcesCache: { sources: CopySource[] } | null = null;
-let copySourcesRequest: Promise<{ sources: CopySource[] }> | null = null;
-let copySourcesCacheRevision = 0;
 let engagementRecordsCache: { records: EngagementRecordSummary[] } | null = null;
 let engagementRecordsRequest: Promise<{ records: EngagementRecordSummary[] }> | null = null;
 let engagementRecordsCacheRevision = 0;
@@ -83,10 +77,9 @@ type DraftSaveInput = Omit<AccountDraftInput, "assets"> | Omit<ProjectDraftInput
 
 type WriteCopyRequest = {
   action?: WriteAction;
-  targetType?: "account" | "project";
+  targetType?: "account";
   platform?: Platform;
   accountId?: string;
-  projectId?: string;
   styleRefs?: WriteStyleReferenceInput[];
   mode: Draft["mode"];
   prompt?: string;
@@ -350,13 +343,6 @@ function rememberEngagementRecordFromJob(job: JobRecord) {
   const record = (job.result as { record?: EngagementRecord }).record;
   if (!record || typeof record.id !== "string") return;
   rememberEngagementRecords([record]);
-}
-
-function rememberCopySources(sources: CopySource[]) {
-  if (!sources.length || !copySourcesCache) return;
-  copySourcesCache = {
-    sources: mergeById(sources, copySourcesCache.sources, compareCreatedAtDesc)
-  };
 }
 
 function rememberEngagementRecords(records: EngagementRecord[]) {
@@ -686,12 +672,6 @@ export async function exportAccountTranscripts(input: { platform: Platform; acco
   return { fileName, transcriptCount };
 }
 
-export function getProjectDetail(projectId: string, options: { includeStyle?: boolean } = {}) {
-  const params = new URLSearchParams({ projectId });
-  if (options.includeStyle) params.set("includeStyle", "1");
-  return requestJson<ProjectDetail>(`/api/projects?${params.toString()}`);
-}
-
 export function getJobs(cursor?: string) {
   const params = new URLSearchParams();
   if (cursor) params.set("cursor", cursor);
@@ -1016,30 +996,6 @@ export function restoreTranscriptVersion(input: {
   });
 }
 
-export function getCopySources(): Promise<{ sources: CopySource[] }> {
-  if (copySourcesCache) return Promise.resolve(copySourcesCache);
-  if (copySourcesRequest) return copySourcesRequest;
-
-  const revision = copySourcesCacheRevision;
-  const request = requestJson<{ sources: CopySource[] }>("/api/copy-sources")
-    .then((result) => {
-      if (revision === copySourcesCacheRevision) copySourcesCache = result;
-      return revision === copySourcesCacheRevision ? result : copySourcesCache || getCopySources();
-    })
-    .finally(() => {
-      if (copySourcesRequest === request) copySourcesRequest = null;
-    });
-  copySourcesRequest = request;
-  return request;
-}
-
-export function refreshCopySources() {
-  copySourcesCacheRevision += 1;
-  copySourcesCache = null;
-  copySourcesRequest = null;
-  return getCopySources();
-}
-
 export function getCachedEngagementRecords() {
   return engagementRecordsCache;
 }
@@ -1081,16 +1037,6 @@ export function invalidateEngagementRecordsCache() {
 export function refreshEngagementRecords() {
   invalidateEngagementRecordsCache();
   return getEngagementRecords();
-}
-
-export function transcribeCopySource(input: { url: string; titleHint?: string; analyzeVideo?: boolean }) {
-  return requestJson<{ source: CopySource; result: LinkTranscriptionResult }>("/api/copy-sources", {
-    method: "POST",
-    body: JSON.stringify({ action: "transcribe", ...input })
-  }).then((result) => {
-    rememberCopySources([result.source]);
-    return result;
-  });
 }
 
 export type SingleVideoAssetKind = "video" | "cover" | "audio";
@@ -1153,32 +1099,6 @@ export async function downloadSingleVideoAsset(input: { url: string; kind: Singl
   });
   downloadBlob(blob, fileName);
   return { fileName };
-}
-
-export function createProjectFromCopySources(input: {
-  name: string;
-  description?: string;
-  sourceMaterialIds: string[];
-}) {
-  return requestJson<{ project: ProjectSummary }>("/api/copy-sources", {
-    method: "POST",
-    body: JSON.stringify({ action: "create_project", ...input })
-  });
-}
-
-export function deleteCopySources(sourceIds: string[]) {
-  return requestJson<{ deleted: string[] }>("/api/copy-sources", {
-    method: "DELETE",
-    body: JSON.stringify({ sourceIds })
-  }).then((result) => {
-    if (copySourcesCache) {
-      const deleted = new Set(result.deleted);
-      copySourcesCache = {
-        sources: copySourcesCache.sources.filter((source) => !deleted.has(source.id))
-      };
-    }
-    return result;
-  });
 }
 
 export function deleteTranscript(input: { platform: Platform; accountId: string; videoId: string }) {
@@ -1254,75 +1174,6 @@ export async function streamGenerateStyle(
       if (event.type === "result") handlers.onResult?.(event.data);
     }
   );
-}
-
-export function upsertProject(input: {
-  projectId?: string;
-  name: string;
-  description?: string;
-  sourceAccountIds: string[];
-  sourceMaterialIds?: string[];
-}) {
-  return requestJson<ProjectSummary>("/api/projects", {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-}
-
-export function deleteProjects(projectIds: string[]) {
-  return requestJson<{ deleted: string[] }>("/api/projects", {
-    method: "DELETE",
-    body: JSON.stringify({ projectIds })
-  });
-}
-
-export function generateProjectStyle(projectId: string) {
-  return requestJson<StyleGenerationResponse>("/api/projects", {
-    method: "PATCH",
-    body: JSON.stringify({ projectId })
-  });
-}
-
-export async function streamGenerateProjectStyle(
-  input: {
-    projectId?: string;
-    name: string;
-    description?: string;
-    sourceAccountIds: string[];
-    sourceMaterialIds?: string[];
-  },
-  handlers: {
-    onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
-    onDelta?: (delta: string) => void;
-    onResult?: (result: { project: ProjectSummary } & StyleGenerationResponse) => void;
-  }
-) {
-  await readNdjsonStream<
-    | { type: "stage"; stage: string; message: string; progress?: number }
-    | { type: "delta"; delta: string }
-    | { type: "result"; data: { project: ProjectSummary } & StyleGenerationResponse }
-    | { type: "error"; message: string }
-    | { type: "done" }
-  >(
-    "/api/projects/stream",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input)
-    },
-    (event) => {
-      if (event.type === "stage") handlers.onStage?.(event);
-      if (event.type === "delta") handlers.onDelta?.(event.delta);
-      if (event.type === "result") handlers.onResult?.(event.data);
-    }
-  );
-}
-
-export function saveProjectStyle(projectId: string, content: string) {
-  return requestJson<{ style: string }>("/api/projects", {
-    method: "PUT",
-    body: JSON.stringify({ projectId, content })
-  });
 }
 
 export function saveStyle(platform: Platform, accountId: string, content: string) {
@@ -1581,81 +1432,6 @@ export function generateEngagement(input: EngagementGenerationRequest) {
   });
 }
 
-export function collectDraftCoverReferences(draftId: string) {
-  return requestJson<{ draft: Draft; references: DraftCoverReference[]; supportsCover: boolean }>("/api/draft-assets/cover/references", {
-    method: "POST",
-    body: JSON.stringify({ draftId })
-  }).then((result) => {
-    rememberDrafts([result.draft]);
-    return result;
-  });
-}
-
-export async function uploadDraftCoverReferences(input: { draftId: string; files: File[] }) {
-  const formData = new FormData();
-  formData.set("draftId", input.draftId);
-  input.files.forEach((file) => formData.append("files", file));
-
-  const response = await fetch("/api/draft-assets/cover/references", {
-    method: "POST",
-    body: formData,
-    cache: "no-store"
-  }).catch((error) => {
-    throw new Error(describeRequestError(error));
-  });
-
-  const fallbackResponse = response.clone();
-  const data = (await response.json().catch(async () => {
-    const text = await fallbackResponse.text().catch(() => "");
-    return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
-  })) as { error?: unknown; draft?: Draft };
-
-  if (!response.ok) {
-    throw new Error(normalizeApiError(data.error) || summarizeHttpError(response.status));
-  }
-  if (data.draft) rememberDrafts([data.draft]);
-  return data as { draft: Draft; references: DraftCoverReference[] };
-}
-
-export async function streamGenerateDraftCover(
-  input: {
-    draftId: string;
-    referenceIds: string[];
-    prompt?: string;
-    count: number;
-  },
-  handlers: {
-    signal?: AbortSignal;
-    onStage?: (payload: { stage: string; message: string; progress?: number }) => void;
-    onResult?: (result: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] }) => void;
-  }
-) {
-  try {
-    await readNdjsonStream<
-    | { type: "stage"; stage: string; message: string; progress?: number; jobId?: string }
-    | { type: "result"; data: { draft: Draft; images: NonNullable<NonNullable<Draft["assets"]>["cover"]>["images"]; references: DraftCoverReference[] } }
-    | { type: "error"; message: string }
-    | { type: "done" }
-  >(
-    "/api/draft-assets/cover/stream",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input), signal: handlers.signal
-    },
-    (event) => {
-      if (event.type === "stage") handlers.onStage?.(event);
-      if (event.type === "result") {
-        rememberDrafts([event.data.draft]);
-        handlers.onResult?.(event.data);
-      }
-    }
-    );
-  } finally {
-    invalidateDraftsCache();
-  }
-}
-
 export function draftAssetFileUrl(draftId: string, path: string) {
   const params = new URLSearchParams({ draftId, path });
   return `/api/draft-assets/file?${params.toString()}`;
@@ -1780,6 +1556,16 @@ export function getRemoteStatus(options: { fresh?: boolean; signal?: AbortSignal
   const suffix = params.size ? `?${params.toString()}` : "";
   return requestJson<RemoteStatusResponse>(`/api/remote/status${suffix}`, {
     signal: options.signal
+  });
+}
+
+export function getServiceMode(signal?: AbortSignal) {
+  return requestJson<ServiceModeStatus>("/api/remote/service-mode", { signal });
+}
+
+export function switchServiceMode(mode: ServiceMode) {
+  return requestJson<{ accepted: boolean }>("/api/remote/service-mode", {
+    method: "POST", body: JSON.stringify({ mode })
   });
 }
 

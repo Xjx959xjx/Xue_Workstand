@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { invalidateAccountDetail, invalidateProjectDetail } from "@/lib/detail-cache";
+import { invalidateAccountDetail } from "@/lib/detail-cache";
 import { updateWriterPreference } from "@/lib/client";
 
 export function WriterPreference({ draftId, disabled, onSaved }: { draftId: string; disabled: boolean; onSaved: () => Promise<void> }) {
@@ -17,9 +17,8 @@ export function WriterPreference({ draftId, disabled, onSaved }: { draftId: stri
         ? { action: "undo", draftId: saved.draftId, preferenceId: saved.id }
         : { action: "remember", draftId, text });
       if (result.reference.targetType === "account") invalidateAccountDetail(result.reference.platform, result.reference.accountId);
-      else invalidateProjectDetail(result.reference.projectId);
       setSaved(undo ? null : { draftId, id: result.preferenceId });
-      setMessage(undo ? "已撤销这条偏好。" : "已记住，之后为这个博主或项目新建稿件时生效。当前稿件继续保留原风格快照。");
+      setMessage(undo ? "已撤销这条偏好。" : "已记住，之后为这个博主新建稿件时生效。当前稿件继续保留原风格快照。");
       setText("");
       await onSaved();
     } catch (error) { setMessage(error instanceof Error ? error.message : "保存偏好失败，请重试。"); }

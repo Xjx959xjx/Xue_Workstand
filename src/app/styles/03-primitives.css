@@ -80,21 +80,20 @@
 }
 
 @media (min-width: 1181px) {
-  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page) {
+  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page) {
     grid-template-rows: auto minmax(0, 1fr);
     height: var(--workspace-page-height);
   }
 
-  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .notice),
-  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page, .project-workbench-page):has(> .error) {
+  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page):has(> .notice),
+  :is(.projects-page, .assets-page, .writer-page, .gross-margin-page):has(> .error) {
     grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   :is(.projects-page:has(> .notice), .projects-page:has(> .error)) > .project-workspace,
   :is(.assets-page:has(> .notice), .assets-page:has(> .error)) > :is(.assets-workspace, .engagement-workbench),
   :is(.writer-page:has(> .notice), .writer-page:has(> .error)) > .writer-workbench,
-  :is(.gross-margin-page:has(> .notice), .gross-margin-page:has(> .error)) > .gross-margin-workspace,
-  :is(.project-workbench-page:has(> .notice), .project-workbench-page:has(> .error)) > .project-workbench-shell {
+  :is(.gross-margin-page:has(> .notice), .gross-margin-page:has(> .error)) > .gross-margin-workspace {
     grid-row: 3;
   }
 
@@ -117,8 +116,7 @@
   .assets-page > :is(.panel.three-pane, .engagement-workbench),
   .projects-page > .project-workspace,
   .writer-page > .writer-workbench,
-  .gross-margin-page > .gross-margin-workspace,
-  .project-workbench-page > .project-workbench-shell {
+  .gross-margin-page > .gross-margin-workspace {
     min-height: 0;
     height: 100%;
   }

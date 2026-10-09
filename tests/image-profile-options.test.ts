@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { imageConfig, publicImageProfiles } from "../src/lib/image-runtime";
-import { imageProfileForModel, imageRatioForSize, imageSizeForProfile } from "../src/lib/image-profile-options";
+import { imageProfileForModel, imageRatioForSize, imageRatios, imageSizeForProfile } from "../src/lib/image-profile-options";
 
 test("模型与分辨率独立选择，档位切换路由到独立密钥且不公开密钥", () => {
   const old = process.env.IMAGE_PROFILES;
@@ -25,5 +25,7 @@ test("模型与分辨率独立选择，档位切换路由到独立密钥且不�
     assert.equal(imageRatioForSize("1536x864"), "16:9");
     assert.equal(imageRatioForSize("800x1000"), "800:1000");
     assert.equal(imageSizeForProfile(profiles[2], "auto"), "auto");
+    assert.equal(imageRatios[0], "auto");
+    assert.equal(imageRatioForSize("auto"), "auto");
   } finally { if (old === undefined) delete process.env.IMAGE_PROFILES; else process.env.IMAGE_PROFILES = old; }
 });

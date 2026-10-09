@@ -36,9 +36,9 @@ function writer(saveDraft: (input: object) => Promise<Draft>) {
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
     { exports, require(name: string) { if (!(name in dependencies)) throw new Error(`Unexpected dependency: ${name}`); return dependencies[name]; } });
   const input: HookInput = {
-    activeJobs: [], recentJobs: [], busy: "", hasTaskInput: true, mode: "topic", targetType: "account",
+    activeJobs: [], recentJobs: [], busy: "", hasTaskInput: true, mode: "topic",
     normalizedPrompt: "测试", normalizedSourceText: "", originalSourceInput: "", supportDocLinks: "",
-    selectedAccount: null, selectedProject: null, styleRefs: [{ targetType: "account", platform: "douyin", accountId: "a" }],
+    selectedAccount: null, styleRefs: [{ targetType: "account", platform: "douyin", accountId: "a" }],
     revisionInstruction: "精简", revisionScope: "full", revisionMode: "edit", selectedText: "", useWebResearch: false,
     setBusy(value) { input.busy = typeof value === "function" ? value(input.busy) : value; }, setNotice() {},
     refresh: async () => {}, routerPush() {}, routerReplace() {}, cancelTask: async () => { throw new Error("Unexpected cancellation API"); },
@@ -54,6 +54,28 @@ function draft(id: string, content = "原正文"): Draft {
     styleRef: { platform: "douyin", accountId: "a", accountName: "账号" },
     version: { sessionId: id, revision: 1, origin: "generated", contextFingerprint: "test", promptVersion: "test" } };
 }
+
+test("历史项目稿保留手动保存，但不会按默认账号重新生成或续改", async () => {
+  let starts = 0;
+  const state = writer(async input => ({ ...legacy, ...input, id: "manual-version" }));
+  const legacy: Draft = { id: "legacy-project", targetType: "project", projectId: "project:legacy", projectName: "历史项目",
+    title: "旧稿", content: "旧稿正文", mode: "topic", prompt: "原要求", createdAt: "2026-10-06T00:00:00Z", updatedAt: "2026-10-06T00:00:00Z",
+    styleRef: { projectId: "project:legacy", projectName: "历史项目" } };
+  state.input.startTask = async () => { starts++; throw new Error("不应启动生成"); };
+  state.render().loadDraftResult(legacy);
+  assert.equal(state.render().canGenerate, false);
+  assert.equal(state.render().canRevise, false);
+  await state.render().handleGenerate();
+  await state.render().handleRevise();
+  assert.equal(starts, 0);
+  state.render().handleContentChange("手动编辑旧稿");
+  await state.render().handleSaveEdit();
+  assert.equal(state.render().lastContent, "手动编辑旧稿");
+  assert.equal(state.render().lastDraftBase?.targetType, "project");
+  assert.equal(state.render().lastDraftVersion?.parentDraftId, legacy.id);
+  state.render().clearDraftResult();
+  assert.equal(state.render().canGenerate, true, "新建账号稿仍能生成");
+});
 
 test("保存期间继续编辑，切换独立稿件后保留新增正文与保存基线", async () => {
   let finishSave!: () => void;

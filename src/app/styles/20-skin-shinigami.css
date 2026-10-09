@@ -176,7 +176,7 @@ html[data-skin="shinigami"] body:has(.writer-page, .assets-page, .tools-page)::b
   opacity: 0.68;
 }
 
-html[data-skin="shinigami"] body:has(.library-page, .project-workbench-page)::before {
+html[data-skin="shinigami"] body:has(.library-page)::before {
   background-image: url("/skins/shinigami-seireitei-world-v3.webp");
   background-position: 58% center;
   filter: saturate(0.62) contrast(1.02) brightness(0.5);
@@ -353,11 +353,11 @@ html[data-skin="shinigami"] :is(.hotspots-page, .douyin-hotlist-page) {
   --shinigami-module-art: url("/skins/shinigami-ichigo-urahara-v3.webp");
 }
 
-html[data-skin="shinigami"] :is(.library-page, .project-workbench-page, .mobile-more) {
+html[data-skin="shinigami"] :is(.library-page, .mobile-more) {
   --shinigami-module-art: url("/skins/shinigami-rukia-toshiro-v3.webp");
 }
 
-html[data-skin="shinigami"] :is(.project-workbench-page, .writer-page, .assets-page, .tools-page, .gross-margin-page, .mobile-home) {
+html[data-skin="shinigami"] :is(.writer-page, .assets-page, .tools-page, .gross-margin-page, .mobile-home) {
   --shinigami-module-art: url("/skins/shinigami-ichigo-urahara-v3.webp");
 }
 
@@ -576,7 +576,6 @@ html[data-skin="shinigami"] :is(
   .style-summary-card,
   .copy-source-card,
   .copy-project-row,
-  .project-workbench-section,
   .tools-candidate-card,
   .gross-monitor-card,
   .engagement-option,
@@ -601,7 +600,6 @@ html[data-skin="shinigami"] :is(.workbench-leading-panel, .page > .panel:not(.th
 html[data-skin="shinigami"] :is(
   .copy-source-card,
   .copy-project-row,
-  .project-workbench-source,
   .tools-candidate-card,
   .gross-monitor-card,
   .engagement-option,
@@ -622,7 +620,6 @@ html[data-skin="shinigami"] :is(
   html[data-skin="shinigami"] :is(
     .copy-source-card,
     .copy-project-row,
-    .project-workbench-source,
     .tools-candidate-card,
     .gross-monitor-card,
     .engagement-option,
@@ -744,14 +741,14 @@ html[data-skin="shinigami"] .btn.primary:hover::after {
   transform: translateX(-10px) rotate(-7deg) scaleX(1.18);
 }
 
-html[data-skin="shinigami"] :is(.field input, .field :is(select, .workbench-select-trigger), .field textarea, .writer-ref-select, .writer-textarea, .project-style-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input) {
+html[data-skin="shinigami"] :is(.field input, .field :is(select, .workbench-select-trigger), .field textarea, .writer-ref-select, .writer-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input) {
   border-color: color-mix(in oklch, var(--accent) 16%, var(--line-strong));
   background:
     linear-gradient(90deg, color-mix(in oklch, var(--accent-soft) 14%, transparent), transparent 18%),
     color-mix(in oklch, var(--panel-raised) 88%, var(--panel));
 }
 
-html[data-skin="shinigami"] :is(.field input, .field :is(select, .workbench-select-trigger), .field textarea, .writer-ref-select, .writer-textarea, .project-style-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input):focus {
+html[data-skin="shinigami"] :is(.field input, .field :is(select, .workbench-select-trigger), .field textarea, .writer-ref-select, .writer-textarea, .copy-links-textarea, .account-filter-input, .filter-select, .filter-search input, .modal-editor textarea, .pane-search input):focus {
   border-color: color-mix(in oklch, var(--accent-strong) 72%, var(--line-strong));
   box-shadow:
     0 0 0 2px color-mix(in oklch, var(--accent) 24%, transparent),

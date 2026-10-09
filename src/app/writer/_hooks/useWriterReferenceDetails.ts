@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { formatPlatform } from "@/components/Formatters";
-import { cachedGetAccountDetail, cachedGetProjectDetail, getCachedAccountDetail, getCachedProjectDetail } from "@/lib/detail-cache";
+import { cachedGetAccountDetail, getCachedAccountDetail } from "@/lib/detail-cache";
 import { writeStyleReferenceKey } from "@/lib/write-references";
-import type { AccountListItem, ProjectListItem, WriteStyleReferenceInput } from "@/lib/types";
+import type { AccountListItem, WriteStyleReferenceInput } from "@/lib/types";
 
 export type WriterStyleCard = {
   key: string;
@@ -17,14 +17,12 @@ export type WriterStyleCard = {
 
 type UseWriterReferenceDetailsInput = {
   accounts: AccountListItem[];
-  projects: ProjectListItem[];
   references: WriteStyleReferenceInput[];
   setNotice: Dispatch<SetStateAction<string>>;
 };
 
 export function useWriterReferenceDetails({
   accounts,
-  projects,
   references,
   setNotice
 }: UseWriterReferenceDetailsInput) {
@@ -51,15 +49,7 @@ export function useWriterReferenceDetails({
         const cached = getCachedAccountDetail(input);
         if (cached) cachedStyles[key] = cached.style;
         else missing.push({ key, load: () => cachedGetAccountDetail(input) });
-        continue;
       }
-
-      const project = projects.find((item) => item.id === reference.projectId);
-      if (!project) continue;
-      const options = { includeStyle: true, version: project.updatedAt };
-      const cached = getCachedProjectDetail(project.id, options);
-      if (cached) cachedStyles[key] = cached.style;
-      else missing.push({ key, load: () => cachedGetProjectDetail(project.id, options) });
     }
 
     setStyles(cachedStyles);
@@ -84,7 +74,7 @@ export function useWriterReferenceDetails({
     return () => {
       ignore = true;
     };
-  }, [accounts, projects, references, setNotice]);
+  }, [accounts, references, setNotice]);
 
   return useMemo(() => {
     const styleCards = references.flatMap((reference): WriterStyleCard[] => {
@@ -100,15 +90,7 @@ export function useWriterReferenceDetails({
           error: errors[key]
         }] : [];
       }
-      const project = projects.find((item) => item.id === reference.projectId);
-      return project ? [{
-        key,
-        title: project.name,
-        subtitle: `项目风格 · ${project.sourceAccounts.length} 个参考账号`,
-        style: styles[key],
-        loading: loadingKeys.includes(key),
-        error: errors[key]
-      }] : [];
+      return [];
     });
     return {
       activeStyleLoading: loadingKeys.length > 0,
@@ -116,5 +98,5 @@ export function useWriterReferenceDetails({
       activeTitle: styleCards.length > 1 ? `${styleCards.length} 个并发风格` : styleCards[0]?.title,
       styleCards
     };
-  }, [accounts, errors, loadingKeys, projects, references, styles]);
+  }, [accounts, errors, loadingKeys, references, styles]);
 }

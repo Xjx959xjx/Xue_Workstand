@@ -1,7 +1,6 @@
 import type { RadarAnalysis, RadarDailyReport, RadarGrade, RadarRating } from "./hotspot-radar/types";
 import type { ImagePromptAssistInput } from "./image-prompt-assist-types";
 import type { ImageGenerationInput } from "./image-generation-types";
-import type { DraftCoverInput } from "./cover-types";
 export const platforms = ["bilibili", "douyin"] as const;
 
 export type Platform = (typeof platforms)[number];
@@ -9,6 +8,15 @@ export type Platform = (typeof platforms)[number];
 export type RemoteServiceHealth = {
   status: "ok" | "unconfigured" | "unavailable";
   message?: string;
+};
+
+export type ServiceMode = "development" | "production";
+export type ServiceModeStatus = {
+  mode: ServiceMode;
+  available: boolean;
+  reason?: string;
+  switching?: boolean;
+  error?: string;
 };
 
 export type RemoteStatusResponse = {
@@ -726,6 +734,7 @@ export type GrossMarginServiceKind =
   | "play"
   | "like"
   | "douPlus"
+  | "mustFire"
   | "coin"
   | "comment"
   | "share"
@@ -1221,6 +1230,7 @@ export type BatchTranscribeResult = {
   }>;
 };
 
+// 保留已移除任务的历史记录类型；新任务由 startJobSchema 限制。
 export const jobKinds = [
   "image-prompt-assist",
   "image-generation",
@@ -1346,7 +1356,6 @@ export type LibraryTrashOperation = {
 export type JobStartInput =
   | { kind: "image-prompt-assist"; title?: string; inputSummary?: string; href?: string; input: ImagePromptAssistInput }
   | { kind: "image-generation"; title?: string; inputSummary?: string; href?: string; input: ImageGenerationInput }
-  | { kind: "image-cover"; title?: string; inputSummary?: string; href?: string; input: DraftCoverInput }
   | {
       kind: "write-copy";
       title?: string;
@@ -1354,10 +1363,9 @@ export type JobStartInput =
       href?: string;
       input: {
         action?: WriteAction;
-        targetType?: "account" | "project";
+        targetType?: "account";
         platform?: Platform;
         accountId?: string;
-        projectId?: string;
         styleRefs?: WriteStyleReferenceInput[];
         mode: Draft["mode"];
         prompt: string;
@@ -1384,19 +1392,6 @@ export type JobStartInput =
         platform: Platform;
         accountId: string;
         force?: boolean;
-      };
-    }
-  | {
-      kind: "project-style";
-      title?: string;
-      inputSummary?: string;
-      href?: string;
-      input: {
-        projectId?: string;
-        name: string;
-        description?: string;
-        sourceAccountIds: string[];
-        sourceMaterialIds?: string[];
       };
     }
   | {

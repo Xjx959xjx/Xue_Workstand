@@ -61,6 +61,10 @@ const metricRules: Array<{
     labels: [/^弹幕(?:数|量)?$/, /^自定义弹幕$/]
   },
   {
+    service: "mustFire",
+    labels: [/^必火(?:金额)?$/]
+  },
+  {
     service: "blueLink",
     labels: [/^蓝链$/, /^蓝链点击(?:数|量)?$/]
   }

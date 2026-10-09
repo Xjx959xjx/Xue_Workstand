@@ -956,7 +956,7 @@ function renderStatusIcon(status: GrossMarginMonitorRecord["status"]) {
 function renderMetricIcon(service: GrossMarginMonitorMetric["service"]) {
   if (service === "play") return <Eye aria-hidden="true" size={13} />;
   if (service === "like") return <ThumbsUp aria-hidden="true" size={13} />;
-  if (service === "coin" || service === "douPlus") return <CircleDollarSign aria-hidden="true" size={13} />;
+  if (service === "coin" || service === "douPlus" || service === "mustFire") return <CircleDollarSign aria-hidden="true" size={13} />;
   if (service === "favorite") return <Star aria-hidden="true" size={13} />;
   if (service === "comment") return <MessageCircle aria-hidden="true" size={13} />;
   if (service === "share") return <Forward aria-hidden="true" size={13} />;

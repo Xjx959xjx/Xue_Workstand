@@ -5,7 +5,7 @@ import { promisify } from "util";
 import { NextResponse } from "next/server";
 import { libraryRoot } from "@/lib/storage";
 import { getChatRuntimeConfig } from "@/lib/ai";
-import { getImageRuntimeConfig } from "@/lib/cover";
+import { getImageRuntimeConfig } from "@/lib/image-runtime";
 import { checkFeishuRuntime } from "@/lib/feishu";
 import { probeChatModel } from "@/lib/model-runtime";
 import { resolveOpenCliCommand } from "@/lib/opencli";

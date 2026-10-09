@@ -13,7 +13,7 @@ import {
   readCapabilityBridgeSecret
 } from "./capability-bridge-service.mjs";
 
-const root = process.cwd();
+const root = process.env.WORKBENCH_SOURCE_ROOT || process.cwd();
 const stateRoot = path.join(root, ".remote-server");
 const releasesRoot = path.join(stateRoot, "releases");
 const currentLink = path.join(stateRoot, "current");
@@ -263,6 +263,7 @@ async function serve() {
 
   const env = {
     ...process.env,
+    WORKBENCH_SOURCE_ROOT: root,
     HOSTNAME: "127.0.0.1",
     PORT: "3000",
     APP_MODE: "workspace",

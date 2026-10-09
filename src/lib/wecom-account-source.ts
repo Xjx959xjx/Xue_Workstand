@@ -246,6 +246,7 @@ export function parseWecomAccountSheet(markdown: string): GrossMarginAccountPric
 
     const platform = cell(cells, headers, "平台") || section;
     const name = cell(cells, headers, "账号昵称");
+    if (isAccountSectionNote(name, cells)) continue;
     if (platform !== "抖音" && platform !== "B站") continue;
     if (!Object.keys(headers).some(header => /^定制(?:视频)?(?:价格|报价);/.test(header))) {
       if (name) unsupportedAccountRows = true;
@@ -310,6 +311,10 @@ function splitMarkdownRow(line: string) {
     .slice(1, line.endsWith("|") ? -1 : undefined)
     .split("|")
     .map((cellValue) => cellValue.trim());
+}
+
+function isAccountSectionNote(name: string, cells: string[]) {
+  return name.startsWith("以下账号") && cells.slice(1).every((value) => !value);
 }
 
 function cell(cells: string[], headers: Record<string, number>, header: string) {

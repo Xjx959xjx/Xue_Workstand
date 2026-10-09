@@ -161,3 +161,15 @@ function toImageServiceError(status: number, model: string, provider: { code: st
   }
   return new ImageServiceError(`图片服务返回错误（${status}），请稍后重试或检查中转服务状态。`, "server", status);
 }
+
+export function getImageRuntimeConfig() {
+  const config = imageConfig();
+  return {
+    baseUrl: config.baseUrl,
+    model: config.model,
+    size: config.size,
+    quality: config.quality,
+    proxyConfigured: Boolean(config.proxyUrl),
+    configured: Boolean(config.apiKey)
+  };
+}

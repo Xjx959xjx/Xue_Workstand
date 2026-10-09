@@ -35,7 +35,8 @@ const serviceOptions: Array<{ value: GrossMarginServiceKind; label: string }> = 
   { value: "danmaku", label: "弹幕" },
   { value: "douPlus", label: "抖加" },
   { value: "coin", label: "投币" },
-  { value: "blueLink", label: "蓝链点击" }
+  { value: "blueLink", label: "蓝链点击" },
+  { value: "mustFire", label: "必火" }
 ];
 
 export function GrossMarginPriceTableEditorModal({
@@ -57,7 +58,7 @@ export function GrossMarginPriceTableEditorModal({
   const activeCount = useMemo(() => rows.filter((row) => row.active).length, [rows]);
   const inactiveCount = rows.length - activeCount;
   const dirty = JSON.stringify(rows) !== JSON.stringify(initialRowsRef.current);
-  useUnsavedChangesGuard(dirty, "单价表还有未保存修改，确定要离开吗？");
+  useUnsavedChangesGuard(dirty);
 
   function requestClose() {
     if (busy) return;

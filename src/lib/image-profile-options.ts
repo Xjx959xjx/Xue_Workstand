@@ -1,6 +1,6 @@
 import type { ImageGenerationConfig } from "./image-generation-types";
 export type ImageProfile = ImageGenerationConfig["profiles"][number];
-export const imageRatios = ["1:1", "3:2", "2:3", "16:9", "9:16", "4:3", "3:4"] as const;
+export const imageRatios = ["auto", "1:1", "3:2", "2:3", "16:9", "9:16", "4:3", "3:4"] as const;
 export const resolutionLabels = { "1080p": "1080P", "2k": "2K", "4k": "4K" };
 export function imageModelLabel(model: string) { return model.replace(/^gpt-image-/i, "Image "); }
 export function imageRatioForSize(size: string) {

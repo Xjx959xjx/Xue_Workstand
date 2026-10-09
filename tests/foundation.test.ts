@@ -1,3 +1,4 @@
+import { legacyProject } from "./helpers/legacy-project";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -16,7 +17,6 @@ import {
 import { prepareWriteCopyBatchContext, prepareWriteCopyContext } from "../src/lib/ai";
 import {
   deleteAccounts,
-  deleteProjects,
   getVideo,
   readTranscript,
   resolveDraft,
@@ -24,7 +24,6 @@ import {
   saveTranscript,
   saveVideos,
   upsertAccount,
-  upsertProject
 } from "../src/lib/storage";
 import { writeCopyInputSchema } from "../src/lib/write-validation";
 import {
@@ -82,8 +81,8 @@ test("同名账号和项目不会覆盖彼此目录", async () => {
     assert.notEqual(firstAccount.slug, secondAccount.slug);
 
     const [firstProject, secondProject] = await Promise.all([
-      upsertProject({ name: "同名项目" }),
-      upsertProject({ name: "同名项目" })
+      legacyProject({ name: "同名项目" }),
+      legacyProject({ name: "同名项目" })
     ]);
     assert.notEqual(firstProject.id, secondProject.id);
     assert.notEqual(firstProject.slug, secondProject.slug);
@@ -110,7 +109,7 @@ test("写作风格引用支持并发多选、保序去重和旧参数兼容", ()
   );
   assert.equal(writeCopyInputSchema.safeParse({
     action: "create",
-    styleRefs: references,
+    styleRefs: references.filter(reference => reference.targetType === "account"),
     mode: "topic",
     prompt: "分别按两种风格各写一段"
   }).success, true);
@@ -130,7 +129,7 @@ test("旧版多风格草稿仍会清理已删除的引用", async () => {
   await withTemporaryLibrary(async () => {
     const primary = await upsertAccount({ platform: "bilibili", name: "风格 A", uid: "primary-style" });
     const secondary = await upsertAccount({ platform: "douyin", name: "风格 B", uid: "secondary-style" });
-    const project = await upsertProject({ name: "风格项目", sourceAccountIds: [secondary.id] });
+    const project = await legacyProject({ name: "风格项目", sourceAccountIds: [secondary.id] });
     const draft = await saveDraft({
       targetType: "account",
       platform: primary.platform,
@@ -153,23 +152,21 @@ test("旧版多风格草稿仍会清理已删除的引用", async () => {
     });
 
     assert.equal((await resolveDraft(draft.id)).draft.styleRefs?.length, 3);
-    await deleteProjects([project.id]);
-    assert.deepEqual((await resolveDraft(draft.id)).draft.styleRefs?.map((reference) => reference.targetType), ["account", "account"]);
     await deleteAccounts([secondary.id]);
     assert.deepEqual((await resolveDraft(draft.id)).draft.styleRefs?.map((reference) => writeStyleReferenceKey(reference)), [
-      `account:${primary.platform}:${primary.id}`
+      `account:${primary.platform}:${primary.id}`, `project:${project.id}`
     ]);
   });
 });
 
 test("多选风格会拆成互不混合的独立写作上下文", async () => {
   await withTemporaryLibrary(async () => {
-    const account = await upsertAccount({ platform: "bilibili", name: "账号风格", uid: "context-account" });
-    const project = await upsertProject({ name: "项目风格" });
+    const account = await upsertAccount({ platform: "bilibili", name: "数码风格", uid: "context-account" });
+    const other = await upsertAccount({ platform: "douyin", name: "游戏风格", uid: "other-context-account" });
     const prepared = await prepareWriteCopyBatchContext({
       styleRefs: [
         { targetType: "account", platform: account.platform, accountId: account.id },
-        { targetType: "project", projectId: project.id }
+        { targetType: "account", platform: other.platform, accountId: other.id }
       ],
       mode: "topic",
       prompt: "分别生成风格测试"
@@ -178,10 +175,10 @@ test("多选风格会拆成互不混合的独立写作上下文", async () => {
     assert.equal(prepared.variants.length, 2);
     assert.equal(prepared.variants[0].prepared.draftBase?.styleRefs?.length, 1);
     assert.equal(prepared.variants[1].prepared.draftBase?.styleRefs?.length, 1);
-    assert.match(prepared.variants[0].prepared.messages[1].content, /账号风格/);
-    assert.doesNotMatch(prepared.variants[0].prepared.messages[1].content, /项目风格/);
-    assert.match(prepared.variants[1].prepared.messages[1].content, /项目风格/);
-    assert.doesNotMatch(prepared.variants[1].prepared.messages[1].content, /账号风格/);
+    assert.match(prepared.variants[0].prepared.messages[1].content, /数码风格/);
+    assert.doesNotMatch(prepared.variants[0].prepared.messages[1].content, /游戏风格/);
+    assert.match(prepared.variants[1].prepared.messages[1].content, /游戏风格/);
+    assert.doesNotMatch(prepared.variants[1].prepared.messages[1].content, /数码风格/);
     assert.match(prepared.variants[0].prepared.messages[0].content, /按所选风格卡和用户要求写作/);
   });
 });

@@ -2,25 +2,13 @@ import { z } from "zod";
 import { platforms } from "./types";
 import { normalizeRewritePrompt, splitWriterSourceInput } from "./source-extraction";
 
-const writeStyleReferenceSchema = z.discriminatedUnion("targetType", [
-  z.object({
-    targetType: z.literal("account"),
-    platform: z.enum(platforms),
-    accountId: z.string().min(1)
-  }),
-  z.object({
-    targetType: z.literal("project"),
-    projectId: z.string().min(1)
-  })
-]);
-
 export const writeCopyInputSchema = z.object({
   action: z.enum(["create", "revise"]).optional().default("create"),
-  targetType: z.enum(["account", "project"]).optional(),
+  targetType: z.literal("account", { errorMap: () => ({ message: "项目写作已移除，请选择账号风格。" }) }).optional(),
   platform: z.enum(platforms).optional(),
   accountId: z.string().optional(),
-  projectId: z.string().optional(),
-  styleRefs: z.array(writeStyleReferenceSchema).min(1).max(8, "一次最多并发生成 8 个风格").optional(),
+  projectId: z.never({ errorMap: () => ({ message: "项目写作已移除，请选择账号风格。" }) }).optional(),
+  styleRefs: z.array(z.object({ targetType: z.literal("account", { errorMap: () => ({ message: "项目写作已移除，请选择账号风格。" }) }), platform: z.enum(platforms), accountId: z.string().min(1) })).min(1).max(8, "一次最多并发生成 8 个风格").optional(),
   mode: z.enum(["topic", "rewrite"]),
   prompt: z.string().optional().default(""),
   originalSourceInput: z.string().optional(),
@@ -77,13 +65,6 @@ export const writeCopyInputSchema = z.object({
   }
 
   if (input.styleRefs?.length) return;
-
-  if (input.targetType === "project" || input.projectId) {
-    if (!input.projectId) {
-      ctx.addIssue({ code: "custom", message: "请选择参考项目", path: ["projectId"] });
-    }
-    return;
-  }
 
   if (!input.platform || !input.accountId) {
     ctx.addIssue({ code: "custom", message: "请选择至少一个参考风格", path: ["accountId"] });

@@ -33,5 +33,5 @@ export function AppProviders({
 }
 
 function isLibraryRoute(pathname: string) {
-  return pathname.startsWith("/mobile") || pathname === "/library" || pathname === "/project-workbench" || pathname === "/writer";
+  return pathname.startsWith("/mobile") || pathname === "/library" || pathname === "/writer";
 }

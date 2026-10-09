@@ -20,6 +20,37 @@ test("链接追踪标识不进入正文或评论提示词", () => {
   assert.doesNotMatch(prompt, /BV1xx411c7mD|7123456789012345678|1234567890|douyin\.com/);
 });
 
+test("评论批次提示词要求按真实样本混合短中长", () => {
+  const prompt = buildCommentBatchPrompt({
+    source: { id: "fixture", title: "折叠手机", content: "屏幕展开更大，价格也更高。" },
+    relatedResearch: {
+      lengthBuckets: { short: 10, medium: 60, long: 30 }, referenceSamples: [], hotComments: [],
+      usedQueries: [], searchAnchors: [], searchEventTerms: [], failedQueries: [],
+      relatedVideoCount: 1, relatedCommentCount: 100, freshCommentCount: 100, targetPlatformCommentCount: 100,
+      matchedLibraryCommentCount: 0, replySampleCount: 0, longCommentCount: 30, sampleLibraryCount: 0,
+      intentBuckets: { reaction: 100, question: 0, price: 0, comparison: 0, skeptical: 0, experience: 0, follow: 0, chatter: 0 },
+      sourceStats: [], quarantinedVideoCount: 0, quarantinedCommentCount: 0, quarantinedSources: [], quarantineClassifierStatus: "not_needed",
+      reusableComments: [], themes: [], phrases: [], questions: [], objections: [], recentTopics: [], legacyTopics: [],
+      playerLifeAngles: [], platformAngles: [], replyAngles: [], longCommentPatterns: [], chatterAngles: [], cacheHit: false
+    },
+    platform: "douyin",
+    requestedCount: 10,
+    usedComments: []
+  });
+  assert.match(prompt, /短评.*10%.*中评.*60%.*长评.*30%/);
+  assert.match(prompt, /至少包含.*36 字以上/);
+  assert.match(prompt, /12 字以内/);
+});
+
+test("少量评论仍混合长短，单条补写不要求凑一组，缺少样本不虚报分布", () => {
+  for (const requestedCount of [1, 2, 5]) {
+    const prompt = buildCommentBatchPrompt({ source: { id: "fixture", title: "折叠手机", content: "屏幕展开更大。" }, relatedResearch: null, platform: "bilibili", requestedCount, usedComments: ["先看价格"] });
+    assert.doesNotMatch(prompt, /真实样本长度分布/);
+    if (requestedCount > 1) assert.match(prompt, /至少包含 1 条 12 字以内.*1 条 36 字以上/);
+    else assert.doesNotMatch(prompt, /至少包含|本批不要把所有评论/);
+  }
+});
+
 test("弹幕批次取消恢复、永久失败和两路失败落盘", async (t) => {
   const env = { ...process.env };
   const root = await mkdtemp(path.join(tmpdir(), "engagement-danmaku-"));

@@ -12,7 +12,6 @@ import type {
   JobRecord,
   JobStartInput,
   ProjectDraftInput,
-  ProjectListItem,
   WriteBatchResult,
   WriteGenerationResult,
   WriteResult,
@@ -61,12 +60,10 @@ type UseWriterGenerationInput = {
   routerPush: (href: string) => void;
   routerReplace: (href: string, options?: { scroll?: boolean }) => void;
   selectedAccount: AccountListItem | null;
-  selectedProject: ProjectListItem | null;
   styleRefs: WriteStyleReferenceInput[];
   setBusy: Dispatch<SetStateAction<string>>;
   setNotice: Dispatch<SetStateAction<string>>;
   startTask: (input: JobStartInput) => Promise<JobRecord>;
-  targetType: "account" | "project";
   useWebResearch: boolean;
 };
 
@@ -92,12 +89,10 @@ export function useWriterGeneration({
   routerPush,
   routerReplace,
   selectedAccount,
-  selectedProject,
   styleRefs,
   setBusy,
   setNotice,
   startTask,
-  targetType,
   useWebResearch
 }: UseWriterGenerationInput) {
   const [lastContent, setLastContent] = useState("");
@@ -117,10 +112,9 @@ export function useWriterGeneration({
     () =>
       writeCopySourceKey({
         action: "create",
-        targetType,
-        platform: targetType === "account" ? selectedAccount?.platform : undefined,
-        accountId: targetType === "account" ? selectedAccount?.id : undefined,
-        projectId: targetType === "project" ? selectedProject?.id : undefined,
+        targetType: "account",
+        platform: selectedAccount?.platform,
+        accountId: selectedAccount?.id,
         styleRefs,
         mode,
         prompt: normalizedPrompt,
@@ -134,11 +128,9 @@ export function useWriterGeneration({
       normalizedSourceText,
       selectedAccount?.id,
       selectedAccount?.platform,
-      selectedProject?.id,
       styleRefs,
       supportDocLinks,
-      targetType,
-      useWebResearch
+    useWebResearch
     ]
   );
 
@@ -150,14 +142,14 @@ export function useWriterGeneration({
     const tracked = writeJobCandidates.find((job) => job.id === activeWriteJobId);
     if (tracked) return tracked;
     return writeJobCandidates.find((job) =>
-      isActiveJob(job) && isCurrentWriteJob(job, targetType, selectedAccount?.id, selectedProject?.id, writeJobSourceKey)
+      isActiveJob(job) && isCurrentWriteJob(job, selectedAccount?.id, writeJobSourceKey)
     ) || null;
-  }, [activeWriteJobId, selectedAccount?.id, selectedProject?.id, targetType, writeJobCandidates, writeJobSourceKey]);
+  }, [activeWriteJobId, selectedAccount?.id, writeJobCandidates, writeJobSourceKey]);
   const isGenerating = Boolean(activeWriteJob && isActiveJob(activeWriteJob));
-  const canGenerate = Boolean(hasTaskInput && styleRefs.length && !busy && !isGenerating);
+  const canGenerate = Boolean(hasTaskInput && styleRefs.length && lastDraftBase?.targetType !== "project" && !busy && !isGenerating);
   const canRevise = Boolean(
     lastDraftId &&
-    lastDraftBase &&
+    lastDraftBase && lastDraftBase.targetType !== "project" &&
     lastContent.trim() &&
     revisionInstruction.trim() &&
     !busy &&
@@ -365,10 +357,9 @@ export function useWriterGeneration({
         href: "/writer",
         input: {
           action: "create",
-          targetType,
-          platform: targetType === "account" ? selectedAccount?.platform : undefined,
-          accountId: targetType === "account" ? selectedAccount?.id : undefined,
-          projectId: targetType === "project" ? selectedProject?.id : undefined,
+          targetType: "account",
+          platform: selectedAccount?.platform,
+          accountId: selectedAccount?.id,
           styleRefs,
           mode,
           prompt: normalizedPrompt,
@@ -402,18 +393,16 @@ export function useWriterGeneration({
     originalSourceInput,
     restoreGenerationState,
     selectedAccount,
-    selectedProject,
     styleRefs,
     setBusy,
     setNotice,
     startTask,
     supportDocLinks,
-    targetType,
     useWebResearch
   ]);
 
   const handleRevise = useCallback(async (variantKeys?: string[]) => {
-    if (!canRevise || !lastDraftBase) return;
+    if (!canRevise || !lastDraftBase || lastDraftBase.targetType === "project") return;
     const targets = variantKeys?.length ? generatedVariants.filter(item => variantKeys.includes(item.key)) : [];
     if (variantKeys && (!targets.length || targets.some(item => !item.draftId || !item.content.trim()))) {
       setNotice("请选择有正文的稿件后再修改。");
@@ -424,7 +413,6 @@ export function useWriterGeneration({
     setNotice("");
     setGenerateStage("准备续改任务");
 
-    const isProject = lastDraftBase.targetType === "project";
     try {
       const job = await startTask({
         kind: "write-copy",
@@ -433,10 +421,9 @@ export function useWriterGeneration({
         href: "/writer",
         input: {
           action: "revise",
-          targetType: isProject ? "project" : "account",
-          platform: isProject ? undefined : lastDraftBase.platform,
-          accountId: isProject ? undefined : lastDraftBase.accountId,
-          projectId: isProject ? lastDraftBase.projectId : undefined,
+          targetType: "account",
+          platform: lastDraftBase.platform,
+          accountId: lastDraftBase.accountId,
           mode: lastDraftBase.mode,
           prompt: lastDraftBase.prompt,
           sourceText: lastDraftBase.input,
@@ -702,15 +689,12 @@ function draftToSaveBase(draft: Draft): DraftSaveBase {
 
 function isCurrentWriteJob(
   job: JobRecord,
-  targetType: "account" | "project",
   accountId?: string,
-  projectId?: string,
   sourceKey?: string
 ) {
-  if (job.scope?.targetType !== targetType) return false;
+  if (job.scope?.targetType !== "account") return false;
   if (sourceKey && job.scope.sourceKey !== sourceKey) return false;
-  if (targetType === "account") return Boolean(accountId && job.scope.accountId === accountId);
-  return Boolean(projectId && job.scope.projectId === projectId);
+  return Boolean(accountId && job.scope.accountId === accountId);
 }
 
 function isActiveJob(job: JobRecord) {

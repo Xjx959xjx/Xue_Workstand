@@ -117,7 +117,7 @@ type CommentEntityCorrection = {
   stage: "brief" | "relatedResearch" | "comment";
 };
 
-const ENGAGEMENT_ENGINE_VERSION = "engagement-v14-douyin-session";
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v15-comment-length-mix";
 const ENGAGEMENT_DANMAKU_ENGINE_VERSION = "danmaku-v2";
 const ENGAGEMENT_SOURCE_CACHE_VERSION = "engagement-v3";
 const COMMENT_OUTPUT_REVIEW_BATCH_SIZE = 48;
@@ -1035,6 +1035,19 @@ function formatStyleExamples(examples: string[]) {
     : "暂无本地真实样本，只按平台预设分布生成。";
 }
 
+function formatCommentLengthMix(input: { relatedResearch: EngagementCommentResearch | null; requestedCount: number }) {
+  const buckets = input.relatedResearch?.lengthBuckets;
+  const total = buckets ? buckets.short + buckets.medium + buckets.long : 0;
+  const percent = (value: number) => Math.round((value / total) * 100);
+  const distribution = buckets && total > 0
+    ? `真实样本长度分布：短评约 ${percent(buckets.short)}%、中评约 ${percent(buckets.medium)}%、长评约 ${percent(buckets.long)}%。`
+    : "";
+  const minimum = input.requestedCount > 1
+    ? `请把长短评论混排，本批至少包含 ${input.requestedCount >= 6 ? 2 : 1} 条 12 字以内的短反应和 1 条 36 字以上的展开评论。`
+    : "单条补写按内容自然决定长度。";
+  return `${distribution}${minimum}短评 2–12 字，中评 13–35 字，长评 36–140 字；每条不超过 140 字。长评要有具体问题、补充或展开，不能只是把短句拉长，也不要靠编造经历或产品事实凑字数。`;
+}
+
 export function buildCommentBatchPrompt(input: {
   source: EngagementContent;
   relatedResearch: EngagementCommentResearch | null;
@@ -1058,6 +1071,7 @@ ${formatCommentSource(source)}
 以下是按来源分组的抓取原评。
 ${JSON.stringify(references.map((group) => ({ ...group, title: sanitizeEngagementGenerationText(group.title, guard), comments: group.comments.filter((text) => !containsEngagementTransportLeak(text, guard)) })))}
 </表达参考>
+${formatCommentLengthMix(input)}
 ${input.usedComments.length ? `
 <已生成评论>
 ${JSON.stringify(input.usedComments.filter((text) => !containsEngagementTransportLeak(text, guard)))}

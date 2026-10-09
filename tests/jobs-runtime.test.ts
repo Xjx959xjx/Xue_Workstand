@@ -55,6 +55,27 @@ function localJobs(mocks: Record<string, unknown> = {}) {
   return { jobs, disk, fail: () => { failing = true; } };
 }
 
+test("联网准备失败时后台写作停止，不启动正文或发布检索成功状态", async () => {
+  let generationCalls = 0;
+  const { jobs } = localJobs({
+    "./source-extraction": { splitWriterSourceInput: () => ({}), extractRewriteSourceMaterial: () => ({ pendingLinkCount: 0 }) },
+    "./support-documents": { hasSupportDocumentReference: () => false },
+    "./ai": {
+      prepareWriteCopyBatchContext: async () => { throw new Error("模型联网搜索超时，本次未生成草稿"); },
+      streamResponseTextWithFallback: async () => { generationCalls++; }
+    }
+  });
+  jobs.audit.runtime.records.set("research-failure", { ...record("research-failure"), kind: "write-copy" });
+  await assert.rejects(jobs.audit.runWriteCopyJob("research-failure", {
+    kind: "write-copy", input: { mode: "topic", prompt: "测试", useWebResearch: true, save: true }
+  }), /模型联网搜索超时/);
+  assert.equal(generationCalls, 0);
+  const job = jobs.audit.runtime.records.get("research-failure");
+  assert.ok(!job.events?.some((event: { message: string }) => event.message.includes("联网检索已完成")));
+  assert.equal(job.result, undefined);
+  assert.equal(job.dataRevision, undefined);
+});
+
 test("多风格保持原有并发，失败仅汇总一次且不污染准备失败列表", async () => {
   let active = 0, peak = 0;
   const batch = { variants: Array.from({ length: 4 }, (_, i) => ({ styleKey: String(i), styleTitle: `风格${i}`, prepared: { messages: [] } })), preparationFailures: [] };

@@ -124,13 +124,12 @@ type StartJobRequest = {
 
 ### 支持的 `kind` 与 `input`
 
-下表列出 API 层的字段和约束。平台值为 `bilibili` 或 `douyin`；标为“可选”的字段可以省略。
+项目风格和草稿封面任务不再接受新请求，历史记录仍兼容读取。写作仅支持账号风格，历史项目稿可查看和手动保存。下表列出 API 层的字段和约束。平台值为 `bilibili` 或 `douyin`；标为“可选”的字段可以省略。
 
 | `kind` | `input` |
 | --- | --- |
-| `write-copy` | 写作或续改。必填 `mode`（`topic` / `rewrite`）；常用字段为 `action`（`create` / `revise`，默认 `create`）、`prompt`、`sourceText`、`supportDocLinks`、`targetType`、`platform`、`accountId`、`projectId`、`styleRefs`、`save`、`useWebResearch`。续改时还需 `parentDraftId`、`currentContent`、`revisionInstruction`；`revisionScope=selection` 时还需 `selectedText`。新稿 `topic` 必须有 `prompt`，`rewrite` 必须有改写要求或素材。 |
+| `write-copy` | 写作或续改。必填 `mode`（`topic` / `rewrite`）；常用字段为 `action`（`create` / `revise`，默认 `create`）、`prompt`、`sourceText`、`supportDocLinks`、`targetType`、`platform`、`accountId`、`styleRefs`、`save`、`useWebResearch`。续改时还需 `parentDraftId`、`currentContent`、`revisionInstruction`；`revisionScope=selection` 时还需 `selectedText`。新稿 `topic` 必须有 `prompt`，`rewrite` 必须有改写要求或素材。 |
 | `account-style` | `platform`、`accountId` |
-| `project-style` | `name`；`projectId`、`description`、`sourceAccountIds`、`sourceMaterialIds` 可选。 |
 | `transcribe-video` | `platform`、`accountId`、`videoId`；`mediaUrl`（完整 `http(s)` URL）、`allowRemoteDownload` 可选。 |
 | `batch-transcribe` | `platform`、`accountId`、`limit`（正整数或 `all`，默认 `5`）；`videoIds`（数组，空数组表示不选视频）、`updateStyle` 可选。 |
 | `engagement` | `sourceType` 为 `draft`、`text`、`url` 或 `record`。分别需要 `draftId`、`text`、`url` 或 `recordId`。公共选项：`includeComments` 默认 `true`、`commentCount` 1-200 默认 `50`、`includeDanmaku` 默认 `false`、`danmakuCount` 1-300 默认 `50`、`targetPlatform` 可选。评论统一先执行全网调研，不再提供生成模式切换。 |

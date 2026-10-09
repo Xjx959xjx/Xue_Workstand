@@ -17,24 +17,6 @@
 
 .engagement-main {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.engagement-refbar {
-  display: flex;
-  min-height: 62px;
-  align-items: center;
-  padding: var(--pane-header-pad);
-  border-bottom: 1px solid color-mix(in oklch, var(--line-subtle) 84%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 88%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
-}
-
-.engagement-refbar h2 {
-  color: var(--text-strong);
-  font-size: var(--text-section-title);
-  font-weight: var(--font-weight-heading);
-  line-height: var(--line-height-section-title);
 }
 
 .engagement-content-grid {

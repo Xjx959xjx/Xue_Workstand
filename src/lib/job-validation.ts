@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { imagePromptAssistSchema } from "./image-prompt-assist-types";
 import { imageGenerationInputSchema } from "./image-generation-types";
-import { draftCoverInputSchema } from "./cover-types";
 import { createUrlPreprocessor } from "./platform-links";
 import { platforms } from "./types";
 import { writeCopyInputSchema } from "./write-validation";
@@ -28,20 +27,6 @@ const accountStyleSchema = z.object({
     platform: z.enum(platforms),
     accountId: z.string().min(1),
     force: z.boolean().optional()
-  })
-});
-
-const projectStyleSchema = z.object({
-  kind: z.literal("project-style"),
-  title: z.string().optional(),
-  inputSummary: z.string().optional(),
-  href: z.string().optional(),
-  input: z.object({
-    projectId: z.string().optional(),
-    name: z.string().min(1),
-    description: z.string().optional(),
-    sourceAccountIds: z.array(z.string()).default([]),
-    sourceMaterialIds: z.array(z.string()).optional()
   })
 });
 
@@ -186,10 +171,8 @@ const grossMarginRefreshSchema = z.object({
 export const startJobSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("image-prompt-assist"), title: z.string().optional(), inputSummary: z.string().optional(), href: z.string().optional(), input: imagePromptAssistSchema }),
   z.object({ kind: z.literal("image-generation"), title: z.string().optional(), inputSummary: z.string().optional(), href: z.string().optional(), input: imageGenerationInputSchema }),
-  z.object({ kind: z.literal("image-cover"), title: z.string().optional(), inputSummary: z.string().optional(), href: z.string().optional(), input: draftCoverInputSchema }),
   writeCopySchema,
   accountStyleSchema,
-  projectStyleSchema,
   transcribeVideoSchema,
   batchTranscribeSchema,
   hotlistRefreshSchema,

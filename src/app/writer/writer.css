@@ -1251,7 +1251,7 @@
 }
 
 .writer-source-field .writer-textarea.source {
-  height: 200px;
+  height: 248px;
   resize: vertical;
   font-size: var(--text-body);
   border-radius: var(--radius-md);

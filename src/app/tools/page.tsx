@@ -14,8 +14,7 @@ import {
   Paperclip,
   Search,
   Sparkles,
-  Video,
-  Wrench
+  Video
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useFeedback } from "@/components/FeedbackProvider";
@@ -31,8 +30,6 @@ import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source
 
 type BusyState = "" | "transcribe" | "download" | "publish-copy";
 type NoticeTone = "success" | "info" | "error";
-
-const defaultStirlingPdfUrl = process.env.NEXT_PUBLIC_STIRLING_PDF_URL || "http://localhost:8080";
 
 const downloadOptions: Array<{
   kind: SingleVideoAssetKind;
@@ -66,7 +63,6 @@ export default function ToolsPage() {
   const [publishTopicHint, setPublishTopicHint] = useState("");
   const [publishPlatform, setPublishPlatform] = useState<PublishCopyTargetPlatform>("both");
   const [publishResult, setPublishResult] = useState<PublishCopyResult | null>(null);
-  const [stirlingPdfUrl, setStirlingPdfUrl] = useState(defaultStirlingPdfUrl);
   const [publishSourceDragActive, setPublishSourceDragActive] = useState(false);
   const [publishSourceImporting, setPublishSourceImporting] = useState(false);
   const [busy, setBusy] = useState<BusyState>("");
@@ -78,8 +74,6 @@ export default function ToolsPage() {
 
   const cleanUrl = url.trim();
   const cleanPublishSourceText = publishSourceText.trim();
-  const cleanStirlingPdfUrl = stirlingPdfUrl.trim();
-  const stirlingPdfUrlValid = isHttpUrl(cleanStirlingPdfUrl);
   const noticeIsError = noticeTone === "error";
 
   async function handleTranscribe() {
@@ -252,54 +246,10 @@ export default function ToolsPage() {
     notify({ tone: "success", message: "标题和发布文案已复制。" });
   }
 
-  function handleOpenStirlingPdf() {
-    if (!stirlingPdfUrlValid) {
-      const message = "请输入有效的 HTTP(S) Stirling-PDF 地址。";
-      setNotice(message);
-      setNoticeTone("error");
-      notify({ tone: "error", message });
-      return;
-    }
-
-    const opened = window.open(cleanStirlingPdfUrl, "_blank", "noopener,noreferrer");
-    if (!opened) {
-      const message = "浏览器阻止了新窗口，请允许打开 Stirling-PDF。";
-      setNotice(message);
-      setNoticeTone("error");
-      notify({ tone: "error", message });
-      return;
-    }
-
-    setNotice("已打开 Stirling-PDF。PDF 文件会在你的 Stirling-PDF 实例中处理。");
-    setNoticeTone("info");
-  }
-
   return (
     <div className="page tools-page">
-      <header className="page-header">
-        <div className="page-title-group">
-          <span className="page-title-eyebrow">内容工具</span>
-          <div className="page-title-row">
-            <span className="page-title-mark" aria-hidden="true">
-              <Wrench size={20} strokeWidth={2.1} />
-            </span>
-            <div className="page-title-copy">
-              <h1>工具台</h1>
-              <p className="subtle">视频素材与发布包装。</p>
-            </div>
-          </div>
-        </div>
-        <div className="page-header-meta">
-          <span className="stat-pill">B站 / 抖音 / PDF</span>
-        </div>
-      </header>
-      <div className="tools-section-label"><span>你的创作装备</span><span>03 TOOLS / 随时开工</span></div>
-
       <div className="tools-modules">
-        <div className="tools-utility-column">
-          {renderVideoWorkspace()}
-          {renderStirlingPdfWorkspace()}
-        </div>
+        {renderVideoWorkspace()}
         {renderPublishWorkspace()}
       </div>
 
@@ -333,8 +283,56 @@ export default function ToolsPage() {
             </button>
           </div>
 
+          <div className="tools-video-preview" aria-live="polite">
+            {result ? (
+              <>
+                {result.fallback ? <p className="notice">{result.fallbackReason || "使用了备用提取结果，请检查文稿。"}</p> : null}
+                <div className="tools-video-result">
+                  <VideoSourceSummary result={result} />
+                  <div className="tools-transcript-card">
+                    <div className="tools-transcript-head">
+                      <div>
+                        <span className="tools-label">提取文案</span>
+                        <strong>{result.text.length.toLocaleString("zh-CN")} 字</strong>
+                      </div>
+                      <div className="tools-result-actions">
+                        <button className="btn compact" type="button" onClick={() => void copyResultText()}>
+                          <Clipboard size={15} aria-hidden="true" />
+                          复制
+                        </button>
+                        <button className="btn primary compact" type="button" onClick={moveTranscriptToPublishCopy}>
+                          <Sparkles size={15} aria-hidden="true" />
+                          用于标题与发布
+                          <ArrowRight size={14} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="tools-transcript-preview">{result.text}</p>
+                    <details className="tools-transcript-details">
+                      <summary>查看完整文稿</summary>
+                      <textarea
+                        aria-label="提取结果文案"
+                        autoComplete="off"
+                        className="tools-result-text"
+                        name="transcribeResult"
+                        value={result.text}
+                        readOnly
+                      />
+                    </details>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="tools-video-empty">
+                <FileText size={24} aria-hidden="true" />
+                <strong>提取后，在这里查看文案</strong>
+                <p>支持复制，或填入右侧生成标题与发布文案。</p>
+              </div>
+            )}
+          </div>
+
           <div className="tools-action-block">
-            <span className="tools-label">下载素材</span>
+            <span className="tools-label">下载素材 <small>有链接即可下载，无需先提取文案</small></span>
             <div className="tools-download-actions">
               {downloadOptions.map((option) => {
                 const Icon = option.icon;
@@ -356,46 +354,6 @@ export default function ToolsPage() {
             </div>
           </div>
         </div>
-
-        {result ? <div className="tools-result-pane" aria-live="polite">
-          {result.fallback ? <p className="notice">{result.fallbackReason || "使用了备用提取结果，请检查文稿。"}</p> : null}
-          {result ? (
-            <div className="tools-video-result">
-              <VideoSourceSummary result={result} />
-              <div className="tools-transcript-card">
-                <div className="tools-transcript-head">
-                  <div>
-                    <span className="tools-label">提取文案</span>
-                    <strong>{result.text.length.toLocaleString("zh-CN")} 字</strong>
-                  </div>
-                  <div className="tools-result-actions">
-                    <button className="btn compact" type="button" onClick={() => void copyResultText()}>
-                      <Clipboard size={15} aria-hidden="true" />
-                      复制
-                    </button>
-                    <button className="btn primary compact" type="button" onClick={moveTranscriptToPublishCopy}>
-                      <Sparkles size={15} aria-hidden="true" />
-                      生成标题与发布
-                      <ArrowRight size={14} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-                <p className="tools-transcript-preview">{result.text}</p>
-                <details className="tools-transcript-details">
-                  <summary>查看完整文稿</summary>
-                <textarea
-                  aria-label="提取结果文案"
-                  autoComplete="off"
-                  className="tools-result-text"
-                  name="transcribeResult"
-                  value={result.text}
-                  readOnly
-                />
-                </details>
-              </div>
-            </div>
-          ) : null}
-        </div> : null}
       </section>
     );
   }
@@ -561,35 +519,6 @@ export default function ToolsPage() {
     );
   }
 
-  function renderStirlingPdfWorkspace() {
-    return (
-      <section className="panel tools-module tools-pdf-workspace" aria-label="PDF 工具">
-        <div className="tools-control-pane">
-          <PaneHeading index="03" icon={FileText} title="PDF 工具" description="压缩、转换、合并，交给 Stirling-PDF。" />
-          <div className="tools-pdf-launch">
-            <span className="tools-pdf-caption">连接你的 PDF 工作区</span>
-            <button className="btn tools-pdf-open" disabled={!stirlingPdfUrlValid} type="button" onClick={handleOpenStirlingPdf}>
-              打开工具 <ExternalLink size={15} aria-hidden="true" />
-            </button>
-          </div>
-          <details className="tools-pdf-settings">
-            <summary>服务地址</summary>
-            <label className="field">
-              <span>Stirling-PDF 地址</span>
-              <div className={`tools-input-shell ${stirlingPdfUrlValid ? "" : "invalid"}`}>
-                <LinkIcon size={16} aria-hidden="true" />
-                <input autoComplete="url" name="stirlingPdfUrl" type="url" value={stirlingPdfUrl}
-                  onChange={(event) => setStirlingPdfUrl(event.target.value)} placeholder="http://localhost:8080"
-                  aria-invalid={Boolean(cleanStirlingPdfUrl) && !stirlingPdfUrlValid} />
-              </div>
-              {!stirlingPdfUrlValid ? <small className="error">请输入以 http:// 或 https:// 开头的有效地址。</small> : null}
-              <small className="subtle">文件由该服务处理，不经过本工作台。</small>
-            </label>
-          </details>
-        </div>
-      </section>
-    );
-  }
 }
 
 function PaneHeading(input: { index: string; icon: LucideIcon; title: string; description: string }) {
@@ -713,16 +642,6 @@ function formatReferenceMeta(reference: PublishCopyResult["research"]["reference
     stats.comments ? `评 ${stats.comments}` : ""
   ].filter(Boolean);
   return items.length ? items.join(" / ") : reference.query;
-}
-
-function isHttpUrl(value: string) {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function transcriptionSourceLabel(source: SingleVideoTranscribeResult["source"]) {

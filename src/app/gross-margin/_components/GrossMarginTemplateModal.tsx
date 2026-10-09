@@ -39,7 +39,7 @@ export function GrossMarginTemplateModal({
   }, [draft, previewValues]);
   const canSave = Boolean(draft.trim()) && !preview.error && !busy;
   const dirty = draft !== template.content;
-  useUnsavedChangesGuard(dirty, "文案模板还有未保存修改，确定要离开吗？");
+  useUnsavedChangesGuard(dirty);
   const lineCount = useMemo(() => draft.split("\n").filter((line) => line.trim()).length, [draft]);
 
   function insertVariable(name: string) {

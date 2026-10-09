@@ -3,7 +3,7 @@ import { constants as fsConstants, promises as fs } from "fs";
 import { promisify } from "util";
 import packageJson from "../../package.json";
 import { getChatRuntimeConfig, getWebResearchCapability } from "./ai";
-import { getImageRuntimeConfig } from "./cover";
+import { getImageRuntimeConfig } from "./image-runtime";
 import { getAppMode } from "./app-mode";
 import { resolveOpenCliCommand } from "./opencli-runtime";
 import {

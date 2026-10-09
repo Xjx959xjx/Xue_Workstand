@@ -70,11 +70,10 @@ export async function POST(request: Request) {
 
       const batch = await prepareWriteCopyBatchContext(input, { signal, onProgress(message) { emit({ type: "stage", stage: "prepare-style", message, progress: 32 }); } });
       if (input.useWebResearch) {
-        const researchUnavailable = batch.research?.startsWith("联网资料：模型联网暂时不可用");
         emit({
           type: "stage",
           stage: "research",
-          message: researchUnavailable ? "联网检索暂不可用，正在继续生成" : "联网检索已完成，正在整理资料",
+          message: "联网检索已完成，正在整理资料",
           progress: 35
         });
         if (batch.research) emit({ type: "result", data: { research: batch.research, phase: "research" } });

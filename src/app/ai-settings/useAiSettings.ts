@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getAiModelSettings, saveAiModelSettings } from "@/lib/client";
 import { AI_POLICIES, type AiPolicyId, type AiPolicyOverrides, type AiPolicyValue, type AiSettingsView } from "@/lib/ai-policy-catalog";
+import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 
 export function useAiSettings() {
   const [saved, setSaved] = useState<AiSettingsView | null>(null);
@@ -19,18 +20,7 @@ export function useAiSettings() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    if (!dirty) return;
-    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    const navigate = (event: MouseEvent) => {
-      const anchor = (event.target as Element).closest?.("a[href]");
-      if (!anchor || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (!window.confirm("AI 配置尚未保存，离开会丢失修改。确定离开吗？")) { event.preventDefault(); event.stopPropagation(); }
-    };
-    window.addEventListener("beforeunload", unload);
-    document.addEventListener("click", navigate, true);
-    return () => { window.removeEventListener("beforeunload", unload); document.removeEventListener("click", navigate, true); };
-  }, [dirty]);
+  useUnsavedChangesGuard(dirty);
   function change(ids: AiPolicyId[], patch: Partial<AiPolicyValue> | null) {
     if (!saved) return;
     setMessage("");

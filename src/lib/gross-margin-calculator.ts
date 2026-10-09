@@ -20,7 +20,8 @@ export const GROSS_MARGIN_SERVICE_CONFIGS: GrossMarginServiceConfig[] = [
   { service: "danmaku", label: "弹幕" },
   { service: "douPlus", label: "dou+" },
   { service: "coin", label: "投币" },
-  { service: "blueLink", label: "蓝链点击" }
+  { service: "blueLink", label: "蓝链点击" },
+  { service: "mustFire", label: "必火" }
 ];
 
 export function calculateGrossMargin({
@@ -90,6 +91,7 @@ export function makeEmptyQuantityInputs(): Record<GrossMarginServiceKind, string
     play: "",
     like: "",
     douPlus: "",
+    mustFire: "",
     coin: "",
     comment: "",
     share: "",

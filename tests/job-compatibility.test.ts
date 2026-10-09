@@ -94,6 +94,6 @@ test("任务版本和恢复输入保留旧字段、补默认值，并拒绝未�
   assert.equal(payload.input.input.commentCount, 50);
   assert.equal(payload.input.input.includeComments, true);
   assert.equal(startJobSchema.parse({ kind: "image-generation", title: "模型名称", input: imageInput }).title, "模型名称");
-  assert.deepEqual(startJobSchema.options.map(schema => schema.shape.kind.value).sort(), [...jobKinds].sort());
-  assert.deepEqual(jobKinds.map(defaultJobHref), ["/images", "/images", "/writer", "/writer", "/library", "/project-workbench", "/library", "/library", "/assets", "/douyin-hotlist", "/library", "/tools", "/tools", "/hotspots", "/gross-margin/monitor"]);
+  assert.deepEqual(startJobSchema.options.map(schema => schema.shape.kind.value).sort(), jobKinds.filter(kind => kind !== "project-style" && kind !== "image-cover").sort());
+  assert.deepEqual(jobKinds.map(defaultJobHref), ["/images", "/images", "/writer", "/writer", "/library", "/writer", "/library", "/library", "/assets", "/douyin-hotlist", "/library", "/tools", "/tools", "/hotspots", "/gross-margin/monitor"]);
 });

@@ -32,7 +32,7 @@ export async function getAiSettingsView(): Promise<AiSettingsView> {
   const effective = Object.fromEntries(AI_POLICIES.map((p) => {
     const value = settings.overrides[p.id] || defaults[p.id];
     const config = p.id === "web_research" ? web : chat;
-    const baseModel = p.id === "image_generate" ? imageConfig(defaultImageProfileId()).model : p.id === "image_cover" ? imageConfig().model : config.model;
+    const baseModel = p.id === "image_generate" ? imageConfig(defaultImageProfileId()).model : config.model;
     inheritedModels[p.id] = baseModel;
     const baseEffort = "kind" in p ? "none"
       : p.id === "vision" ? (config.wireApi === "chat_completions" ? "none" : "low") : config.reasoningEffort;
@@ -43,7 +43,7 @@ export async function getAiSettingsView(): Promise<AiSettingsView> {
     return [p.id, { model: value.model || baseModel, effort }];
   })) as AiSettingsView["effective"];
   return { ...settings, defaults, effective, inheritedModels, inheritedEfforts,
-    models: [...new Set([chat.model, web.model, "gpt-6-astra", "gpt-6.1-sol", ...images.map((p) => p.model)].filter(Boolean))],
+    models: [...new Set([chat.model, web.model, "gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol", ...images.map((p) => p.model)].filter(Boolean))],
     services: { chat: chat.model || "未配置", web: web.model, image: imageConfig(defaultImageProfileId()).model, asr: process.env.VOLCENGINE_ASR_RESOURCE_ID || "volc.seedasr.auc", transcriptCleaning: process.env.TRANSCRIPT_CLEAN_USE_MODEL === "true" }
   };
 }

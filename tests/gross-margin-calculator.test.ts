@@ -77,6 +77,32 @@ test("默认档位跳过停用项，没有可用档位时保持为空", () => {
   assert.equal(selections.like, "");
 });
 
+test("B站必火按金额计入维护成本", () => {
+  const table = makePriceTable([
+    makeOption({ id: "bilibili-must-fire", service: "mustFire", name: "默认", unitPrice: 1, quantityUnit: "元" })
+  ]);
+  table.platform = "bilibili";
+  const quantityInputs = { ...makeEmptyQuantityInputs(), mustFire: "120" };
+  const result = calculateGrossMargin({
+    configs: GROSS_MARGIN_SERVICE_CONFIGS.filter(({ service }) => service === "mustFire"),
+    discountPrice: 500,
+    originalPrice: 600,
+    priceInputs: { "bilibili-must-fire": "1" },
+    quantityInputs,
+    selectedOptions: { mustFire: "bilibili-must-fire" },
+    table
+  });
+
+  assert.equal(result.lines[0]?.label, "必火");
+  assert.equal(result.lines[0]?.total, 120);
+  assert.equal(result.maintenanceCost, 120);
+  assert.equal(result.grossProfit, 380);
+});
+
+test("必火排在维护项最底部", () => {
+  assert.equal(GROSS_MARGIN_SERVICE_CONFIGS.at(-1)?.service, "mustFire");
+});
+
 test("起量提示只在已输入且未达门槛时出现", () => {
   const option = makeOption({
     id: "play",

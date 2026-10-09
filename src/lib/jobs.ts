@@ -1,18 +1,13 @@
 import { assistImagePrompt } from "./image-prompt-assist";
 import { generateImages } from "./image-generation";
-import { generateDraftCover } from "./cover";
 import { randomUUID } from "crypto";
 import path from "path";
 import {
-  buildSavedProjectStyleResult,
   completeCachedAccountStyle,
-  completeCachedProjectStyle,
   completePreparedAccountStyle,
-  completePreparedProjectStyle,
   completePreparedWriteCopy,
   completePreparedWriteVariant,
   prepareAccountStyleContext,
-  prepareSavedProjectStyleContext,
   prepareWriteCopyBatchContext,
   prepareWriteCopyContext,
   resolveWriteBatchOutcome,
@@ -391,11 +386,12 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
           const lease = await readCloudJobLease(job.id);
           if (!lease || (lease.lease_expires_at || 0) > Date.now()) return;
         }
-        input = await readJobPayload(job.id, job.kind);
+        input = job.kind === "project-style" || job.kind === "image-cover" ? null : await readJobPayload(job.id, job.kind);
       } catch (error) {
         runtime.readErrors.set(jobPayloadPath(summary.id), `任务 ${summary.id} 未恢复：${error instanceof Error ? error.message : "读取恢复参数失败，请检查素材库。"}`);
         return;
       }
+      const removedFeature = job.kind === "project-style" || job.kind === "image-cover";
       const legacyBatch = input?.kind === "batch-transcribe" && !input.input.videoIds &&
         (job.status === "running" || (job.attempt || 0) > 0);
       const unstartedCloudJob = isCloudStorageMode() && job.status === "queued" && !job.attempt;
@@ -421,8 +417,8 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
         ...job,
         status: "interrupted",
         progress: job.progress || 0,
-        message: legacyBatch ? "旧版批量任务缺少固定候选，已中断，请确认范围后重新发起。" : input ? "服务重启后任务已中断，可从任务中心重试。" : "服务重启后任务已中断，且缺少恢复参数。",
-        error: legacyBatch ? "缺少原批次候选，无法安全自动恢复。" : input ? "任务已中断，可重试。" : "任务恢复参数缺失，请重新发起。",
+        message: removedFeature ? "该功能已移除，历史任务已中断，已保存资料仍保留。" : legacyBatch ? "旧版批量任务缺少固定候选，已中断，请确认范围后重新发起。" : input ? "服务重启后任务已中断，可从任务中心重试。" : "服务重启后任务已中断，且缺少恢复参数。",
+        error: removedFeature ? "项目写作与草稿封面功能已移除，无法继续此任务。" : legacyBatch ? "缺少原批次候选，无法安全自动恢复。" : input ? "任务已中断，可重试。" : "任务恢复参数缺失，请重新发起。",
         updatedAt: interruptedAt,
         completedAt: interruptedAt
       }); } catch (error) {
@@ -721,28 +717,10 @@ async function runJob(jobId: string, input: JobStartInput) {
       await completeJob(jobId, { message: "提示词建议已生成", result, resultRef: { id: jobId, href: `/images?assistId=${encodeURIComponent(jobId)}`, label: "查看建议" } });
     } else if (input.kind === "image-generation") {
       await runImageGenerationJob(jobId, input);
-    } else if (input.kind === "image-cover") {
-      const draft = (await resolveDraft(input.input.draftId)).draft;
-      const href = buildWriterDraftHref(draft);
-      await patchJob(jobId, { href, resultRef: { id: draft.id, href, label: "查看草稿封面" } });
-      const result = await generateDraftCover({
-        ...input.input, signal: getJobAbortSignal(jobId),
-        onStage: (stage) => patchJob(jobId, stage).then(() => {}),
-        onSaved: async (images) => {
-          await patchJobWithDataChange(jobId, {
-            stage: "save", message: `已保存 ${images.length}/${input.input.count} 张封面`,
-            result: { draftId: draft.id, imageIds: images.map((image) => image.id) }
-          }, { resource: "drafts", recordId: draft.id });
-        }
-      });
-      throwIfCancelled(jobId);
-      await completeJob(jobId, { message: `已生成 ${result.images.length} 张封面`, result: { draftId: draft.id, imageIds: result.images.map((image) => image.id) } });
     } else if (input.kind === "write-copy") {
       await runWriteCopyJob(jobId, input);
     } else if (input.kind === "account-style") {
       await runAccountStyleJob(jobId, input);
-    } else if (input.kind === "project-style") {
-      await runProjectStyleJob(jobId, input);
     } else if (input.kind === "transcribe-video") {
       await runTranscribeVideoJob(jobId, input);
     } else if (input.kind === "batch-transcribe") {
@@ -858,9 +836,7 @@ async function runWriteCopyJob(jobId: string, start: Extract<JobStartInput, { ki
   if (start.input.useWebResearch) {
     await patchJob(jobId, {
       stage: "research",
-      message: batch.research?.startsWith("联网资料：模型联网暂时不可用")
-        ? "联网检索暂不可用，正在继续生成"
-        : "联网检索已完成，正在整理资料",
+      message: "联网检索已完成，正在整理资料",
       progress: 35,
       result: batch.research ? { research: batch.research } : undefined
     });
@@ -1129,113 +1105,6 @@ async function runAccountStyleJob(jobId: string, start: Extract<JobStartInput, {
       id: start.input.accountId,
       href: start.href || "/library",
       label: "查看账号库"
-    }
-  });
-}
-
-async function runProjectStyleJob(jobId: string, start: Extract<JobStartInput, { kind: "project-style" }>) {
-  throwIfCancelled(jobId);
-  const startedAt = Date.now();
-  let partialText = "";
-  let firstDeltaMs: number | undefined;
-  const partialUpdater = createPartialTextUpdater(jobId, {
-    stage: "generate",
-    message: "正在生成项目风格卡",
-    progress(text) {
-      return Math.min(90, 45 + Math.floor(text.length / 90));
-    }
-  });
-  await patchJob(jobId, {
-    stage: "validate",
-    message: "正在校验项目配置",
-    progress: 15
-  });
-  if (!start.input.sourceAccountIds.length && !start.input.sourceMaterialIds?.length) {
-    throw new Error("先加案例或账号");
-  }
-  throwIfCancelled(jobId);
-
-  await patchJob(jobId, {
-    stage: "prepare",
-    message: "正在保存项目并读取参考样本",
-    progress: 35
-  });
-  const prepared = await prepareSavedProjectStyleContext(start.input, {
-    signal: getJobAbortSignal(jobId),
-    onAnalysisProgress(progress) {
-      const percent = progress.analysisCount
-        ? Math.floor((progress.completedCount / progress.analysisCount) * 30)
-        : 0;
-      queueJobPatch(jobId, {
-        stage: "analysis",
-        message: progress.message || `正在分析完整样本 ${progress.completedCount}/${progress.analysisCount}`,
-        progress: Math.min(44, 15 + percent)
-      });
-    }
-  });
-  throwIfCancelled(jobId);
-  const cached = completeCachedProjectStyle(prepared.context);
-  if (cached) {
-    const result = await buildSavedProjectStyleResult(prepared, { ...cached, totalMs: Date.now() - startedAt });
-    await patchJob(jobId, {
-      stage: "cache",
-      message: "样本未变化，已复用现有项目风格卡",
-      progress: 95,
-      partialText: result.style
-    });
-    await completeJob(jobId, {
-      message: "项目风格卡已复用",
-      result,
-      partialText: result.style,
-      resultRef: {
-        id: result.project.id,
-        href: "/project-workbench",
-        label: "查看项目工作台"
-      }
-    });
-    return;
-  }
-
-  await patchJob(jobId, {
-    stage: "generate",
-    message: "正在生成项目风格卡",
-    progress: 45
-  });
-  const completion = await streamStyleResponseTextWithFallback({
-    policy: "project_style",
-    messages: prepared.context.messages,
-    signal: getJobAbortSignal(jobId),
-    onDelta(delta) {
-      if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
-      partialText += delta;
-      partialUpdater.update(partialText);
-    }
-  });
-  if (!partialText.trim() && completion.text) {
-    if (firstDeltaMs === undefined) firstDeltaMs = Date.now() - startedAt;
-    partialText = completion.text;
-  }
-  await partialUpdater.flush(partialText);
-  throwIfCancelled(jobId);
-
-  await patchJob(jobId, {
-    stage: "finalize",
-    message: "正在写入项目风格卡",
-    progress: 92
-  });
-  const saved = await completePreparedProjectStyle(prepared.context, completion, {
-    firstDeltaMs,
-    totalMs: Date.now() - startedAt
-  });
-  const result = await buildSavedProjectStyleResult(prepared, saved);
-  await completeJob(jobId, {
-    message: "项目风格卡已更新",
-    result,
-    partialText: result.style,
-    resultRef: {
-      id: result.project.id,
-      href: "/project-workbench",
-      label: "查看项目工作台"
     }
   });
 }
@@ -1670,10 +1539,8 @@ function makeJobId(kind: JobKind) {
 function defaultJobTitle(input: JobStartInput) {
   if (input.kind === "image-prompt-assist") return input.input.mode === "polish" ? "AI 润色提示词" : "AI 构图建议";
   if (input.kind === "image-generation") return "生成图片";
-  if (input.kind === "image-cover") return "生成草稿封面";
   if (input.kind === "write-copy") return "生成文案";
   if (input.kind === "account-style") return "生成账号风格卡";
-  if (input.kind === "project-style") return "生成项目风格卡";
   if (input.kind === "transcribe-video") return "转写视频";
   if (input.kind === "batch-transcribe") return input.input.updateStyle ? "批量转写并更新风格" : "批量转写";
   if (input.kind === "hotlist-refresh") return input.input.automatic ? "自动刷新视频热榜" : "刷新视频热榜";
@@ -1687,14 +1554,12 @@ function defaultJobTitle(input: JobStartInput) {
 }
 
 function defaultInputSummary(input: JobStartInput) {
-  if (input.kind === "image-cover") return input.input.draftId;
   if (input.kind === "image-generation" || input.kind === "image-prompt-assist") return input.input.prompt.slice(0, 60);
   if (input.kind === "write-copy") {
     if (input.input.action === "revise") return input.input.revisionScope === "selection" ? "选中段落续改" : "全文续改";
     return input.input.mode === "topic" ? "自由输入" : "素材改写";
   }
   if (input.kind === "account-style") return input.input.accountId;
-  if (input.kind === "project-style") return input.input.name;
   if (input.kind === "transcribe-video") return input.input.videoId;
   if (input.kind === "batch-transcribe") {
     const range = input.input.videoIds?.length
@@ -1719,7 +1584,6 @@ function defaultInputSummary(input: JobStartInput) {
 }
 
 function defaultJobScope(input: JobStartInput): JobScope {
-  if (input.kind === "image-cover") return { targetType: "draft", draftId: input.input.draftId };
   if (input.kind === "image-generation") return { targetType: "text", sourceKey: shortHash(input.input.prompt), canvasId: input.input.canvasId };
   if (input.kind === "image-prompt-assist") return { targetType: "text", sourceKey: shortHash(input.input.prompt) };
   if (input.kind === "write-copy") {
@@ -1727,7 +1591,6 @@ function defaultJobScope(input: JobStartInput): JobScope {
       targetType: input.input.targetType,
       platform: input.input.platform,
       accountId: input.input.accountId,
-      projectId: input.input.projectId,
       sourceKey: writeCopySourceKey(input.input)
     });
   }
@@ -1736,13 +1599,6 @@ function defaultJobScope(input: JobStartInput): JobScope {
       targetType: "account",
       platform: input.input.platform,
       accountId: input.input.accountId
-    });
-  }
-  if (input.kind === "project-style") {
-    return compactJobScope({
-      targetType: "project",
-      projectId: input.input.projectId,
-      sourceKey: input.input.projectId ? undefined : shortHash(`${input.input.name}-${input.input.sourceAccountIds.join(",")}-${(input.input.sourceMaterialIds || []).join(",")}`)
     });
   }
   if (input.kind === "transcribe-video") {

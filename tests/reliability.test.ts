@@ -1,3 +1,4 @@
+import { legacyProject } from "./helpers/legacy-project";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -11,7 +12,6 @@ import {
   resolveProject,
   restoreLibraryTrashOperation,
   upsertAccount,
-  upsertProject
 } from "../src/lib/storage";
 import {
   resolveGrossMarginMonitorRecord,
@@ -60,7 +60,7 @@ test("毛利监控记录并发更新不会丢字段，并拒绝旧 revision 覆�
 test("删除账号会原子清理引用，并可从回收站完整恢复", async () => {
   await withTemporaryLibrary(async () => {
     const account = await upsertAccount({ platform: "bilibili", name: "待恢复账号", uid: "recover-account" });
-    const project = await upsertProject({ name: "引用项目", sourceAccountIds: [account.id] });
+    const project = await legacyProject({ name: "引用项目", sourceAccountIds: [account.id] });
     const deleted = await deleteAccounts([account.id]);
 
     await assert.rejects(() => resolveAccount(account.platform, account.id), /找不到账号/);

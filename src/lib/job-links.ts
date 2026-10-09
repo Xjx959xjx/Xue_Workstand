@@ -4,7 +4,7 @@ export function defaultJobHref(kind: JobKind) {
   if (kind === "image-generation" || kind === "image-prompt-assist") return "/images";
   if (kind === "image-cover") return "/writer";
   if (kind === "write-copy") return "/writer";
-  if (kind === "project-style") return "/project-workbench";
+  if (kind === "project-style") return "/writer";
   if (kind === "engagement") return "/assets";
   if (kind === "hotlist-refresh") return "/douyin-hotlist";
   if (kind === "single-video-transcribe" || kind === "publish-copy") return "/tools";

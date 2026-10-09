@@ -9,8 +9,8 @@ import {
   type StyleEvidence, type WriterPlan
 } from "../src/lib/writer-context";
 import { parseStoredRecord } from "../src/lib/storage/schemas";
-import { prepareWriteCopyContext, prepareWriteCopyBatchContext, resolveWriteBatchOutcome, completePreparedWriteCopy, prepareAccountStyleContext, completePreparedAccountStyle, prepareProjectStyleContext, completePreparedProjectStyle } from "../src/lib/ai";
-import { upsertAccount, saveStyle, readStyle, saveVideos, saveTranscript, saveDraft, resolveDraft, getDraftSummaries, readAccountStyleMeta, saveAccountStyleMeta, readAccountStyleSampleAnalysis, saveAccountStyleSampleAnalysis, upsertProject, saveCopySource, saveProjectStyle, readProjectStyle, readProjectStyleMeta, saveProjectStyleMeta } from "../src/lib/storage";
+import { prepareWriteCopyContext, prepareWriteCopyBatchContext, resolveWriteBatchOutcome, completePreparedWriteCopy, prepareAccountStyleContext, completePreparedAccountStyle } from "../src/lib/ai";
+import { upsertAccount, saveStyle, readStyle, saveVideos, saveTranscript, saveDraft, resolveDraft, getDraftSummaries, readAccountStyleMeta, saveAccountStyleMeta, readAccountStyleSampleAnalysis, saveAccountStyleSampleAnalysis } from "../src/lib/storage";
 import { addWriterPreference } from "../src/lib/writer-preference";
 import { POST as preferenceRoute } from "../src/app/api/write/preference/route";
 import { POST as saveDraftRoute } from "../src/app/api/drafts/route";
@@ -314,49 +314,6 @@ test("归纳不输入旧卡规则；卡片缓存失效复用分析，旧分析�
     assert.equal(analysisChanged.analysisStats.analysisGeneratedCount, 1);
     assert.equal(requests.length, 2);
     assert.match(await readStyle(account.platform, account.id), /不要重复解释结尾/);
-  });
-});
-
-test("项目归纳隔离账号与素材来源，复用分析、保留偏好与作品指纹并拒绝并发覆盖", async () => {
-  await fixture(async ({ account, setReply, requests }) => {
-    const other = await upsertAccount({ platform: "douyin", name: "另一个风格", uid: "other-fixture" });
-    const otherQuote = "先把过程交代清楚，然后解释大家关心的原因。";
-    for (const [owner, transcript] of [[account, quote], [other, otherQuote]] as const) {
-      await saveVideos(owner, [video(owner, "event", "同名来源", 1)]);
-      await saveTranscript({ platform: owner.platform, accountId: owner.id, videoId: "event", text: transcript, source: "manual" });
-      await saveStyle(owner.platform, owner.id, "旧卡专有规则：每段必须反转");
-    }
-    const material = await saveCopySource({ title: "同文转载", platform: "douyin", url: "https://example.test/material", transcript: quote, source: "manual" });
-    const project = await upsertProject({ name: "风格测试项目", sourceAccountIds: [account.id, other.id], sourceMaterialIds: [material.id] });
-    await saveProjectStyle(project.id, addWriterPreference("旧项目风格", "def-456", "保留自然过渡"));
-    setReply(messages => {
-      const excerpt = messages[1].includes(otherQuote) ? otherQuote : quote;
-      return JSON.stringify({ ...evidence, narrative: { forms: ["叙事"], beats: [{ purpose: "交代原因", quote: excerpt }], bridges: [] }, moves: [{ ...evidence.moves[0], quote: excerpt }] });
-    });
-    const context = await prepareProjectStyleContext(project.id);
-    assert.equal(requests.length, 3);
-    const ids = [...new Set(context.evidenceQuotes!.map(item => item.sourceId))];
-    assert.equal(ids.length, 3, "同名视频与独立素材必须有唯一引用 ID");
-    for (const id of ids) assert.ok(context.messages[1].content.includes(`来源:${id}`));
-    assert.doesNotMatch(context.messages[1].content, /旧卡专有规则|保留自然过渡/);
-    const accountId = `account:${account.id}:event`;
-    const materialId = `material:${material.id}`;
-    assert.equal(context.evidenceQuotes!.find(item => item.sourceId === accountId)?.workHash, context.evidenceQuotes!.find(item => item.sourceId === materialId)?.workHash);
-    await assert.rejects(() => completePreparedProjectStyle(context, { text: styleCard("event"), model: "fixture", ok: true, fallback: false }), /引用/);
-    const valid = styleCard(accountId);
-    assert.match(await readProjectStyle(project.id), /旧项目风格/);
-    await completePreparedProjectStyle(context, { text: valid, model: "fixture", ok: true, fallback: false });
-    assert.match(await readProjectStyle(project.id), /保留自然过渡/);
-    await saveStyle(account.platform, account.id, "修改账号卡不改变项目原文证据");
-    assert.ok((await prepareProjectStyleContext(project.id)).cachedStyle);
-    const meta = (await readProjectStyleMeta(project.id))!;
-    await saveProjectStyleMeta(project.id, { ...meta, sampleHash: "previous-card-version" });
-    const next = await prepareProjectStyleContext(project.id);
-    assert.equal(next.analysisStats.analysisCachedCount, 3);
-    assert.equal(requests.length, 3);
-    await saveProjectStyle(project.id, "用户正在编辑项目卡");
-    await assert.rejects(() => completePreparedProjectStyle(next, { text: valid, model: "fixture", ok: true, fallback: false }), /生成期间已被修改/);
-    assert.equal((await readProjectStyle(project.id)).trim(), "用户正在编辑项目卡");
   });
 });
 

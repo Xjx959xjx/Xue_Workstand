@@ -33,3 +33,16 @@ test("企业微信抖音旧档位表头不再作为账号报价读取", () => {
 
   assert.deepEqual(accounts, []);
 });
+
+test("企业微信账号表中的分组说明行不会被识别成账号", () => {
+  const accounts = parseWecomAccountSheet([
+    "抖音",
+    "|账号昵称|平台|抖音ID|植入价格;（含税不含平台费）|定制价格;（含税不含平台费）|",
+    "|---|---|---|---|---|",
+    "|账号一|抖音|account-one|100|200|",
+    "|以下账号主要发布星广联投视频，短视频一口价售卖可谈深折（K列）|||||",
+    "|账号二|抖音|account-two|300|400|"
+  ].join("\n"));
+
+  assert.deepEqual(accounts.map(({ name }) => name), ["账号一", "账号二"]);
+});

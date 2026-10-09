@@ -6,13 +6,12 @@ import { WorkbenchSelectPopover } from "@/components/WorkbenchSelect";
 import { Check, ChevronDown } from "lucide-react";
 import { formatPlatform } from "@/components/Formatters";
 import { writeStyleReferenceKey } from "@/lib/write-references";
-import type { AccountListItem, ProjectListItem, WriteStyleReferenceInput } from "@/lib/types";
+import type { AccountListItem, WriteStyleReferenceInput } from "@/lib/types";
 
 type WriterReferencePickerProps = {
   accounts: AccountListItem[];
   disabled?: boolean;
   onChange: (references: WriteStyleReferenceInput[]) => void;
-  projects: ProjectListItem[];
   references: WriteStyleReferenceInput[];
 };
 
@@ -29,23 +28,16 @@ export function WriterReferencePicker({
   accounts,
   disabled,
   onChange,
-  projects,
   references
 }: WriterReferencePickerProps) {
   const options = useMemo<ReferenceOption[]>(() => [
-    ...projects.map((project) => ({
-      key: writeStyleReferenceKey({ targetType: "project", projectId: project.id }),
-      label: project.name,
-      meta: `项目 · ${project.sourceAccounts.length} 个参考账号`,
-      reference: { targetType: "project" as const, projectId: project.id }
-    })),
     ...accounts.map((account) => ({
       key: writeStyleReferenceKey({ targetType: "account", platform: account.platform, accountId: account.id }),
       label: account.name,
       meta: `${formatPlatform(account.platform)}账号`,
       reference: { targetType: "account" as const, platform: account.platform, accountId: account.id }
     }))
-  ], [accounts, projects]);
+  ], [accounts]);
   const selectedKeys = useMemo(() => references.map(writeStyleReferenceKey), [references]);
   const selectedOptions = selectedKeys.flatMap((key) => {
     const option = options.find((item) => item.key === key);

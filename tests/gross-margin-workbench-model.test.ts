@@ -83,6 +83,7 @@ test("审核模板值会保留账号标识并按服务粒度生成首轮目标",
   assert.equal(values.douyinId, "douyin-1");
   assert.equal(values.playLabel, "（播放）");
   assert.equal(values.playValue, "1.2万");
+  assert.equal(values.grossProfit, "700");
   assert.equal(values.splitRoundLine, "分两轮维护：第一轮，播放1万，点赞8000，抖加61元");
   assert.equal(values.videoUrl, "https://www.douyin.com/video/123");
 });

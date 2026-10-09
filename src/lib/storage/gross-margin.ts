@@ -25,7 +25,7 @@ import { resolveGrossMarginAccounts } from "../wecom-account-source";
 import { parseStoredRecord, storedRecordKind, versionStoredRecord } from "./schemas";
 
 const grossMarginTablePlatforms = ["douyin", "bilibili"] as const;
-const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"] as const;
+const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink", "mustFire"] as const;
 const maxGrossMarginPlaySamples = 180;
 const grossMarginMonitorRecordQueues = new Map<string, Promise<unknown>>();
 
@@ -650,7 +650,7 @@ function normalizeGrossMarginTargetStats(
 ) {
   const allowedServices =
     platform === "bilibili"
-      ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink"] as const)
+      ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink", "mustFire"] as const)
       : (["play", "like", "comment", "favorite", "share"] as const);
   const normalized: Partial<Record<GrossMarginServiceKind, number>> = {};
 
@@ -686,7 +686,7 @@ function buildGrossMarginMonitorMetrics(
 ): GrossMarginMonitorMetric[] {
   const services =
     platform === "bilibili"
-      ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink"] as const)
+      ? (["play", "like", "coin", "favorite", "comment", "share", "danmaku", "blueLink", "mustFire"] as const)
       : (["play", "like", "comment", "favorite", "share"] as const);
 
   return services
@@ -705,7 +705,7 @@ function buildGrossMarginMonitorMetrics(
         difference,
         differencePercent,
         highRisk: hasCurrent && differencePercent >= 0.7,
-        manualOnly: service === "blueLink" || (platform === "douyin" && service === "play")
+        manualOnly: service === "blueLink" || service === "mustFire" || (platform === "douyin" && service === "play")
       } satisfies GrossMarginMonitorMetric;
     })
     .filter(Boolean) as GrossMarginMonitorMetric[];
@@ -720,6 +720,7 @@ function formatGrossMarginMonitorServiceLabel(service: GrossMarginServiceKind, p
   if (service === "share") return platform === "douyin" ? "转发" : "分享";
   if (service === "danmaku") return "弹幕";
   if (service === "blueLink") return "蓝链点击";
+  if (service === "mustFire") return "必火";
   return "抖加";
 }
 
@@ -847,6 +848,15 @@ function getDefaultGrossMarginPriceOptions(
       unitPrice: 30,
       quantityUnit: "千",
       note: "30 / 千",
+      updatedAt: now
+    },
+    {
+      id: "bilibili-must-fire-default",
+      service: "mustFire",
+      name: "默认",
+      unitPrice: 1,
+      quantityUnit: "元",
+      note: "按实际必火金额计入成本",
       updatedAt: now
     },
     {

@@ -186,7 +186,7 @@ const styleMetaSchema = versionedObject.extend({
 }).passthrough();
 
 const grossMarginAmountSchema = z.number().finite().nonnegative();
-const grossMarginServiceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
+const grossMarginServiceSchema = z.enum(["play", "like", "douPlus", "mustFire", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
 const grossMarginStatsSchema = z.record(grossMarginServiceSchema, grossMarginAmountSchema);
 const grossMarginAccountSchema = z.object({
   platform: platformSchema, name: z.string().min(1), defaultPrice: grossMarginAmountSchema,

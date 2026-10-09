@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { getEngagementRecord } from "@/lib/client";
 import { engagementSourceKey } from "@/lib/job-scope";
 import { extractFirstLinkFromInput } from "@/lib/platform-links";
 import type { EngagementRecord, JobRecord, JobStartInput, Platform } from "@/lib/types";
@@ -42,6 +43,7 @@ export function useEngagementGeneration({
   const [resultRecord, setResultRecord] = useState<EngagementRecord | null>(null);
   const [activeEngagementJobId, setActiveEngagementJobId] = useState("");
   const handledEngagementJobIdsRef = useRef(new Set<string>());
+  const resolvingEngagementJobIdsRef = useRef(new Set<string>());
   const trimmedSource = sourceInput.trim();
   const activeTitle = resultRecord?.title || trimmedSource.slice(0, 32) || "评论生成";
   const currentInput = useMemo(
@@ -105,6 +107,16 @@ export function useEngagementGeneration({
         setResultRecord(result.record);
         onRecordCompleted(result.record);
         setNotice(buildSuccessMessage(result.record));
+      } else if (engagementJob.resultRef?.id && !resolvingEngagementJobIdsRef.current.has(engagementJob.id)) {
+        resolvingEngagementJobIdsRef.current.add(engagementJob.id);
+        void getEngagementRecord(engagementJob.resultRef.id, { fresh: true }).then((record) => {
+          handledEngagementJobIdsRef.current.add(engagementJob.id);
+          setResultRecord(record);
+          onRecordCompleted(record);
+          setNotice(buildSuccessMessage(record));
+        }).catch((error) => {
+          setNotice(error instanceof Error ? error.message : "任务已完成，但读取互动素材结果失败。");
+        });
       } else {
         setNotice("任务已完成，但暂未收到互动素材结果，正在等待任务同步。");
       }

@@ -31,7 +31,9 @@ export async function saveAiSettings(input: AiSettings) {
     if (value.revision !== current.revision) {
       throw Object.assign(new Error("配置已在其他页面更新，请重新载入后再修改。当前编辑内容已保留。"), { status: 409 });
     }
-    const next = { ...value, revision: current.revision + 1, updatedAt: new Date().toISOString() };
+    const overrides = { ...value.overrides };
+    for (const id of ["project_sample", "project_style", "image_cover"] as const) delete overrides[id];
+    const next = { ...value, overrides, revision: current.revision + 1, updatedAt: new Date().toISOString() };
     try { await writeJsonFile(target, next); }
     catch (error) { throw new Error(`保存 AI 配置失败，请检查资料目录的写入权限和可用空间。${error instanceof Error ? error.message : ""}`); }
     return next;

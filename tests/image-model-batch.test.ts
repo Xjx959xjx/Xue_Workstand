@@ -17,6 +17,9 @@ test("多选模式只勾选另一个模型时仍正确路由", () => {
   assert.equal(imageModelBatch(input, ["gpt-image-2.5"], profiles)[0].profileId, "half");
   assert.equal(imageModelBatch(input, [], profiles)[0], input);
 });
+test("自动比例在多模型与分辨率切换后仍保留", () => {
+  assert.deepEqual(imageModelBatch({ ...input, size: "auto" }, ["gpt-image-2", "gpt-image-2.5"], profiles).map((item) => item.size), ["auto", "auto"]);
+});
 test("未配置模型在提交前显式失败", () => {
   assert.throws(() => imageModelBatch(input, ["missing"], profiles), /未配置/);
   assert.throws(() => imageModelBatch(input, ["gpt-image-2.5"], profiles.map(p => ({...p, configured:false}))), /未配置/);

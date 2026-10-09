@@ -89,7 +89,7 @@
 - 根级全局 CSS 只承载 token、基础样式、通用 primitives 和 shell；路由专属布局与响应式样式尽量与页面 / layout 共置，避免所有页面加载全部业务 CSS。
 - 使用 `lucide-react`；纯图标按钮提供 `aria-label`，表单有可见 label，异步状态有 `aria-live` / `aria-busy`，键盘焦点清晰，动效尊重 `prefers-reduced-motion`。
 - 弹窗统一处理 `role="dialog"`、`aria-modal`、焦点进入 / 恢复、Tab 约束、Escape 和背景滚动。
-- 有未保存内容的页面统一拦截侧栏导航、刷新和关闭；危险操作与主操作区分，并提供确认或可恢复机制。
+- 模块间导航不弹离开确认；有未保存内容的页面仍保护刷新和关闭。生成结果自动保存与输入暂存沿用现有机制，手动保存区域不得宣称自动保存；危险操作与主操作区分，并提供确认或可恢复机制。
 - 长列表使用分页、增量渲染、虚拟化或 `content-visibility`。筛选、排序、分页和当前选择等可恢复状态优先写入 URL。
 - 大页面按页面编排、controller hook、业务组件和纯函数拆分；不为拆行数或套用模式引入无语义组件、第二套组件系统或状态库。仅在真实共享状态需求下增加 Context / Provider。
 - React / Next.js 工作按需参考 `vercel-react-best-practices`；重构组件接口时参考 `vercel-composition-patterns`，只读相关规则，核对已安装版本与服务端 / 客户端边界。

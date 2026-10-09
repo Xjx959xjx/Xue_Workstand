@@ -21,7 +21,7 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
   unsavedChanges = false,
   disabled = false
 }: LibraryEditorModalProps) {
-  useUnsavedChangesGuard(unsavedChanges, "编辑器还有未保存修改，确定要离开吗？");
+  useUnsavedChangesGuard(unsavedChanges);
   return (
     <ModalBackdrop
       disabled={disabled}
