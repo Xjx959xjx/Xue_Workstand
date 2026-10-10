@@ -156,7 +156,7 @@ ${clampText(input.sourceText, 1800)}`
   return {
     topic: cleanInlineText(stringField(object.topic)) || queries[0],
     queries,
-    querySource: result.fallback ? "local" : "model",
+    querySource: result.ok ? "model" : "local",
     fallbackReason: result.fallback ? result.fallbackReason || "模型检索词规划不可用，已合并本地关键词。" : undefined
   };
 }

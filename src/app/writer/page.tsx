@@ -46,7 +46,6 @@ import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useRemoteStatus } from "@/components/RemoteStatusProvider";
 import { useScopedTasks } from "@/components/TaskProvider";
-import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import {
   getWriterHistoryDraft,
@@ -265,7 +264,6 @@ function WriterPageContent() {
     startTask,
     useWebResearch
   });
-  useUnsavedChangesGuard(hasAnyUnsavedChanges || hasTaskInput || Boolean(revisionInstruction.trim()));
 
   useEffect(() => {
     if (lastDraftId) loadedDraftParamRef.current = lastDraftId;
@@ -411,7 +409,8 @@ function WriterPageContent() {
 
   useEffect(() => {
     if (!notice || isTaskProgressMessage(notice)) return;
-    notify({ tone: noticeIsError ? "error" : "success", message: notice });
+    const usedRelay = /中转|兜底|备用模型/i.test(notice);
+    notify({ tone: noticeIsError ? "error" : usedRelay ? "warning" : "success", message: notice });
   }, [notice, noticeIsError, notify]);
 
   const [undoHistorySwitch, setUndoHistorySwitch] = useState<(() => void) | null>(null);

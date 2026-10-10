@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { copyText } from "@/lib/copy-text";
 import {
   bulkSaveGrossMarginMonitorRecords,
   getGrossMarginLibrary,
@@ -370,8 +371,14 @@ export function useGrossMarginWorkbench() {
       return;
     }
     setBusy("export");
+    let copied = false;
     try {
-      await navigator.clipboard.writeText(effectiveReviewTemplate);
+      try {
+        await copyText(effectiveReviewTemplate);
+        copied = true;
+      } catch {
+        // 剪贴板权限失败不应阻止保存，保存后提供手动复制入口。
+      }
       const result = await saveGrossMarginMonitorRecord({
         platform,
         accountName: matchedAccount?.name || accountName,
@@ -384,9 +391,19 @@ export function useGrossMarginWorkbench() {
         )
       });
       setLibrary(result.library);
-      notify({ tone: "success", message: "文案已复制，监控目标已保存" });
+      notify(copied
+        ? { tone: "success", message: "文案已复制，监控目标已保存" }
+        : {
+          tone: "warning",
+          message: "监控目标已保存，但浏览器未允许复制。请打开文案，选中预览文字后手动复制。",
+          action: { label: "查看文案", onClick: () => setTemplateModalOpen(true) },
+          durationMs: 15000
+        });
     } catch (error) {
-      notify({ tone: "error", message: error instanceof Error ? error.message : "复制或保存监控目标失败" });
+      notify({
+        tone: "error",
+        message: `${copied ? "文案已复制，但监控保存失败" : "文案未复制，监控保存失败"}：${error instanceof Error ? error.message : "请稍后重试"}`
+      });
     } finally {
       setBusy("");
     }

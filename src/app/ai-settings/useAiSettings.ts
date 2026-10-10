@@ -1,8 +1,8 @@
 "use client";
+
 import { useCallback, useEffect, useState } from "react";
 import { getAiModelSettings, saveAiModelSettings } from "@/lib/client";
 import { AI_POLICIES, type AiPolicyId, type AiPolicyOverrides, type AiPolicyValue, type AiSettingsView } from "@/lib/ai-policy-catalog";
-import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 
 export function useAiSettings() {
   const [saved, setSaved] = useState<AiSettingsView | null>(null);
@@ -11,20 +11,19 @@ export function useAiSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const dirtyIds = AI_POLICIES.filter((p) => !("retired" in p && p.retired) && JSON.stringify(overrides[p.id]) !== JSON.stringify(saved?.overrides[p.id])).map((p) => p.id);
+  const dirtyIds = AI_POLICIES.filter(p => !("retired" in p && p.retired) && JSON.stringify(overrides[p.id]) !== JSON.stringify(saved?.overrides[p.id])).map(p => p.id);
   const dirty = dirtyIds.length > 0;
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try { const data = await getAiModelSettings(); setSaved(data); setOverrides(data.overrides); setMessage(""); }
-    catch (e) { setError(e instanceof Error ? e.message : "读取配置失败"); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "读取配置失败"); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
-  useUnsavedChangesGuard(dirty);
   function change(ids: AiPolicyId[], patch: Partial<AiPolicyValue> | null) {
     if (!saved) return;
     setMessage("");
-    setOverrides((current) => {
+    setOverrides(current => {
       const next = { ...current };
       for (const id of ids) {
         if (!patch) { delete next[id]; continue; }
@@ -40,8 +39,8 @@ export function useAiSettings() {
     setSaving(true); setError(""); setMessage("");
     try {
       const data = await saveAiModelSettings({ schemaVersion: 1, revision: saved.revision, updatedAt: saved.updatedAt, overrides });
-      setSaved(data); setOverrides(data.overrides); setMessage("配置已保存，新的 AI 请求将使用最新设置。");
-    } catch (e) { setError(e instanceof Error ? e.message : "保存配置失败"); }
+      setSaved(data); setOverrides(data.overrides); setMessage("配置已保存，新请求将使用最新设置。");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "保存配置失败"); }
     finally { setSaving(false); }
   }
   return { saved, overrides, loading, saving, error, message, dirty, dirtyIds, load, change, save,

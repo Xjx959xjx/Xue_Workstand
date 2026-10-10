@@ -1,4 +1,5 @@
 import { Platform } from "./types";
+import { piEnabled } from "./pi-runtime";
 
 export type TranscriptCleanResult = {
   text: string;
@@ -40,7 +41,7 @@ export async function cleanTranscriptText(input: {
 
   const { chatComplete, getChatRuntimeConfig } = await import("./ai");
   const runtime = getChatRuntimeConfig();
-  if (!runtime.configured) {
+  if (!piEnabled() && !runtime.configured) {
     return {
       text: localCleaned,
       usedModel: "local-cleaner",
@@ -53,6 +54,7 @@ export async function cleanTranscriptText(input: {
     const chunks = splitTranscriptChunks(localCleaned, TRANSCRIPT_CLEAN_CHUNK_SIZE);
     const cleanedChunks: string[] = [];
     const usedModels = new Set<string>();
+    const fallbackReasons = new Set<string>();
 
     for (const [index, chunk] of chunks.entries()) {
       throwIfAborted(input.signal);
@@ -75,8 +77,9 @@ export async function cleanTranscriptText(input: {
       throwIfAborted(input.signal);
 
       usedModels.add(result.model);
+      if (result.fallbackReason) fallbackReasons.add(result.fallbackReason);
       const cleanedChunk = finalizeModelOutput(result.text);
-      if (result.fallback || !cleanedChunk) {
+      if (!result.ok || !cleanedChunk) {
         return {
           text: localCleaned,
           usedModel: "local-cleaner",
@@ -101,7 +104,8 @@ export async function cleanTranscriptText(input: {
     return {
       text: cleanedText,
       usedModel: [...usedModels].join(", "),
-      fallback: false
+      fallback: fallbackReasons.size > 0,
+      fallbackReason: [...fallbackReasons].join("；") || undefined
     };
   } catch (error) {
     if (isAbortError(error, input.signal)) throw error;

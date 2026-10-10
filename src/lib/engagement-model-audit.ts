@@ -40,7 +40,7 @@ export async function auditedCommentModelCall(
     throw error;
   }
   record.status = "completed"; record.completedAt = nowIso(); record.elapsedMs = Date.now() - started;
-  record.actual = { model: result.model, wireApi: result.wireApi, reasoningEffort: result.reasoningEffort };
+  record.actual = { model: result.model, wireApi: result.wireApi, reasoningEffort: result.reasoningEffort, backend: result.backend, fallback: result.fallback, fallbackReason: result.fallbackReason };
   record.responseText = result.text;
   await save();
   return result;

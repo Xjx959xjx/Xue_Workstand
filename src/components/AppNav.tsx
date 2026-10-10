@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
   ImagePlus,
-  Settings2,
   Activity,
   Calculator,
   LibraryBig,
@@ -16,7 +15,8 @@ import {
   PenLine,
   Radar,
   Sword,
-  Wrench
+  Wrench,
+  Settings2
 } from "lucide-react";
 import { TaskCenter } from "./TaskCenter";
 import { SkinToggle } from "./SkinToggle";
@@ -38,9 +38,9 @@ const navItems: NavItem[] = [
   { href: "/writer", label: "对话写作", icon: PenLine, group: "创作工作区" },
   { href: "/assets", label: "评论生成", icon: MessageSquarePlus, group: "创作工作区" },
   { href: "/tools", label: "工具台", icon: Wrench, group: "数据与工具" },
+  { href: "/ai-settings", label: "AI 模型配置", icon: Settings2, group: "数据与工具" },
   { href: "/gross-margin", label: "数据维护", icon: Calculator, group: "数据与工具" },
   { href: "/gross-margin/monitor", label: "数据监控", icon: Activity, group: "数据与工具" },
-  { href: "/ai-settings", label: "AI 模型配置", icon: Settings2, group: "数据与工具" }
 ];
 
 const navGroupOrder: NavItem["group"][] = ["内容发现", "创作工作区", "数据与工具"];
@@ -66,7 +66,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   const grossMarginMode = appMode === "gross-margin";
   const visibleNavItems = useMemo(() => grossMarginMode ? grossMarginNavItems : navItems, [grossMarginMode]);
   const visibleNavGroups = useMemo(() => navGroupOrder
-    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label && item.href !== "/ai-settings") }))
+    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label) }))
     .filter((group) => group.items.length), [visibleNavItems]);
   const brandHref = grossMarginMode ? "/gross-margin" : "/douyin-hotlist";
   const activeHref = visibleNavItems
@@ -218,12 +218,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         <SkinToggle />
         <TaskCenter />
         {!grossMarginMode ? <ServiceModeControl /> : null}
-        {!grossMarginMode ? <Link prefetch={false} href="/ai-settings" className={`nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""}`} aria-current={activeHref === "/ai-settings" ? "page" : undefined}
-          onClick={(event) => handleNavClick(event, "/ai-settings")} onFocus={() => void prewarmRoute("/ai-settings")} onPointerLeave={cancelPrewarm}
-        onBlur={cancelPrewarm}
-        onPointerEnter={() => void prewarmRoute("/ai-settings")}>
-          <Settings2 size={18} strokeWidth={1.75} aria-hidden="true" /><span>AI 模型配置</span>
-        </Link> : null}
+
       </div>
     </aside>
   );

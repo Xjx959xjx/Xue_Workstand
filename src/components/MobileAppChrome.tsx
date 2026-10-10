@@ -16,7 +16,7 @@ const primaryItems = [
   { href: "/mobile/more", label: "更多", icon: Menu, more: true }
 ];
 
-const secondaryPrefixes = ["/ai-settings", "/hotspots", "/assets", "/tools", "/gross-margin"];
+const secondaryPrefixes = ["/hotspots", "/assets", "/tools", "/gross-margin"];
 
 export function MobileAppChrome({ appMode }: { appMode: AppMode }) {
   const pathname = usePathname();

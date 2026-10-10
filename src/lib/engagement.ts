@@ -4,6 +4,7 @@ import { getConfiguredChatConfigs } from "./model-runtime";
 import { runCommentPipeline, pipelineKept, type CommentPipelineCheckpoint } from "./engagement-pipeline";
 import { commentPipelineCheckpointSchema, danmakuBatchCheckpointSchema } from "./storage/schemas";
 import { chatCompleteStrict, getChatRuntimeConfig } from "./ai";
+import { piEnabled } from "./pi-runtime";
 import { auditedCommentModelCall } from "./engagement-model-audit";
 import { classifyModelFailure } from "./model-runtime";
 import { z } from "zod";
@@ -852,7 +853,7 @@ export async function generateComments(input: {
 }) {
   const { source, count, platform, excludedComments, signal, onProgress } = input;
   if (platform === "unknown") throw new Error("没有识别到评论目标平台，请选择抖音或 B站。");
-  if (!getChatRuntimeConfig().configured || process.env.ENGAGEMENT_MODEL_COMMENTS === "0") throw new Error("评论生成需要可用的对话模型，请检查模型配置。");
+  if ((!piEnabled() && !getChatRuntimeConfig().configured) || process.env.ENGAGEMENT_MODEL_COMMENTS === "0") throw new Error("评论生成需要可用的对话模型，请检查 Pi 终端或中转站配置。");
   const transportGuard = buildEngagementTransportGuard([source.input, source.title, source.content], source.excludedVideoIds);
   const generationSource = sanitizeEngagementSource(source, transportGuard);
   const runtimeSignature = getConfiguredChatConfigs().map((config) => ({ baseUrl: config.baseUrl, responsesUrl: config.responsesUrl, chatCompletionsUrl: config.chatCompletionsUrl, model: config.model, wireApi: config.wireApi, reasoningEffort: config.reasoningEffort, serviceTier: config.serviceTier }));
@@ -954,7 +955,7 @@ async function requestCommentModelBatch<T>(
         }
       });
       throwIfAborted(signal);
-      if (result.fallback) throw new Error(result.fallbackReason || `${label}未返回有效结果，已停止交付。`);
+      if (!result.ok) throw new Error(result.fallbackReason || `${label}未返回有效结果，已停止交付。`);
       return { result, parsed: parse(result.text), attempts };
     } catch (error) {
       throwIfAborted(signal);
@@ -1120,6 +1121,7 @@ async function generateDanmaku(
   const parsedItems: Array<{ slot: DanmakuSlot; text: string }> = [];
   const acceptedTextsBySlot = new Map<number, string>();
   const failures: string[] = [];
+  const fallbackReasons: string[] = [];
   const batchResults: NonNullable<NonNullable<NonNullable<Draft["assets"]>["danmaku"]>["diagnostics"]>["batches"] = [];
   let usedModel = "model";
 
@@ -1136,7 +1138,7 @@ async function generateDanmaku(
         if (cached !== null) {
           const parsed = danmakuBatchCheckpointSchema.safeParse(cached);
           if (!parsed.success || parsed.data.signature !== signature || parsed.data.index !== batchIndex || parsed.data.texts.length > slots.length) throw new Error("弹幕批次检查点损坏或与当前输入不匹配，已停止恢复；已有素材未被修改。");
-          return { result: { model: parsed.data.model }, slots, texts: parsed.data.texts, attempts: parsed.data.attempts, batchIndex };
+          return { result: { model: parsed.data.model, fallbackReason: parsed.data.fallbackReason }, slots, texts: parsed.data.texts, attempts: parsed.data.attempts, batchIndex };
         }
         let lastError: unknown;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -1160,17 +1162,17 @@ async function generateDanmaku(
                 }
               ],
               "medium",
-              { policy: "danmaku", signal }
+              { policy: "danmaku", signal, onRetry: message => runOptions.onProgress?.({ stage: "generate", progress: 65, message }) }
             );
             throwIfAborted(signal);
-            if (result.fallback || !result.text.trim()) {
+            if (!result.ok || !result.text.trim()) {
               throw new Error(result.fallbackReason || "模型没有返回可用弹幕，请重试或更换模型。");
             }
             const texts = parseStringArray(result.text, { preservePositions: true }).slice(0, slots.length);
             if (!texts.some(Boolean)) {
               throw new Error("模型返回了内容，但没有解析到可用弹幕。");
             }
-            await writeEngagementCache("pipeline", cacheKey, danmakuBatchCheckpointSchema.parse({ schemaVersion: 1, signature, index: batchIndex, texts, model: result.model, attempts: attempt }));
+            await writeEngagementCache("pipeline", cacheKey, danmakuBatchCheckpointSchema.parse({ schemaVersion: 1, signature, index: batchIndex, texts, model: result.model, attempts: attempt, fallbackReason: result.fallbackReason }));
             return { result, slots, texts, attempts: attempt, batchIndex };
           } catch (error) {
             throwIfAborted(signal);
@@ -1201,6 +1203,7 @@ async function generateDanmaku(
         return;
       }
       usedModel = item.value.result.model || usedModel;
+      if (item.value.result.fallbackReason) fallbackReasons.push(item.value.result.fallbackReason);
       batchResults.push({
         index: item.value.batchIndex,
         requestedCount: item.value.slots.length,
@@ -1236,8 +1239,8 @@ async function generateDanmaku(
   }
   return {
     usedModel,
-    fallback: failures.length > 0,
-    fallbackReason: failures.length ? `部分弹幕批次失败，已保留 ${selectedItems.length}/${count} 条：${uniqueText(failures).join("；")}` : undefined,
+    fallback: failures.length > 0 || fallbackReasons.length > 0,
+    fallbackReason: uniqueText([...fallbackReasons, ...(failures.length ? [`部分弹幕批次失败，已保留 ${selectedItems.length}/${count} 条：${uniqueText(failures).join("；")}`] : [])]).join("；") || undefined,
     timingBasis: timeline.timingBasis,
     durationSec: timeline.durationSec,
     styleSampleCount: styleProfile.sampleCount,

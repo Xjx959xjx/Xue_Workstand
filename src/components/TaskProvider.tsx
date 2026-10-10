@@ -560,9 +560,10 @@ function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
   const failed = job.status === "failed" || hydrationFailed;
   const interrupted = job.status === "interrupted" || Boolean(job.recoveryError);
   const partialFailure = !failed && hasPartialRefreshFailure(job);
+  const usedRelay = resultUsedRelay(job.result) || /中转|兜底|备用模型/i.test(job.message || job.error || job.recoveryError || "");
   const resultHref = getJobResultHref(job);
   notify({
-    tone: failed ? "error" : interrupted || partialFailure ? "warning" : "success",
+    tone: failed ? "error" : interrupted || partialFailure || usedRelay ? "warning" : "success",
     title: hydrationFailed ? "任务结果同步失败" : failed ? `${job.title}失败` : interrupted ? `${job.title}已中断` : partialFailure ? `${job.title}部分完成` : `${job.title}完成`,
     message: failed || interrupted ? formatJobErrorMessage(job.recoveryError || job.error || job.message) : job.message,
     durationMs: failed || interrupted || partialFailure ? 15000 : resultHref ? 10000 : 5000,
@@ -574,6 +575,14 @@ function notifyJob(job: JobRecord, notify: (input: FeedbackInput) => void) {
           }
         : undefined
   });
+}
+
+function resultUsedRelay(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.fallback === true) return true;
+  if (typeof record.fallbackReason === "string" && /中转|兜底|备用模型/i.test(record.fallbackReason)) return true;
+  return Array.isArray(record.results) && record.results.some(resultUsedRelay);
 }
 
 function hasPartialRefreshFailure(job: JobRecord) {

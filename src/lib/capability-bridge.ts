@@ -15,6 +15,7 @@ import {
   type LinkSourceDownloadAsset
 } from "./transcription";
 import { platforms } from "./types";
+import { getPiStatus, piEnabled, PiRequestError, piRequestSchema } from "./pi-runtime";
 
 const bridgeEnvelopeSchema = z.object({
   operation: z.enum(REMOTE_CAPABILITY_OPERATIONS),
@@ -190,6 +191,16 @@ async function dispatchCapability(
   context: { signal: AbortSignal; requestUrl: string }
 ) {
   switch (operation) {
+    case "pi-status": {
+      parseSchema(z.object({}).strict(), payload, "Pi 状态请求格式不正确");
+      return getPiStatus();
+    }
+    case "pi-model": {
+      if (!piEnabled()) throw new PiRequestError("本机 Pi 已关闭，使用原中转站兜底");
+      const input = parseSchema(piRequestSchema, payload, "Pi 模型请求格式不正确");
+      const { runPiModel } = await import("./pi-runtime-local");
+      return runPiModel(input, { signal: context.signal });
+    }
     case "opencli": {
       const input = parseSchema(openCliSchema, payload, "OpenCLI 参数不正确");
       return {

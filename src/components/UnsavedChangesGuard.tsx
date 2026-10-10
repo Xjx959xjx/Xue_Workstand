@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
-
 const UNSAVED_CHANGES_SELECTOR = '[data-unsaved-changes="true"]';
 
 export function hasUnsavedChanges() {
@@ -11,13 +9,4 @@ export function hasUnsavedChanges() {
 export function confirmDiscardUnsavedChanges(message: string) {
   if (!hasUnsavedChanges()) return true;
   return window.confirm(message);
-}
-
-export function useUnsavedChangesGuard(dirty: boolean) {
-  useEffect(() => {
-    if (!dirty) return;
-    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    window.addEventListener("beforeunload", unload);
-    return () => window.removeEventListener("beforeunload", unload);
-  }, [dirty]);
 }

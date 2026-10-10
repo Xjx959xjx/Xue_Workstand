@@ -548,7 +548,7 @@ export function classifyModelFailure(error: unknown): {
     return { kind: "network", userMessage: "对话模型服务连接异常", rawMessage: compactErrorMessage(message) };
   }
   if (/\bmodel_not_found\b/i.test(message)) {
-    return { kind: "endpoint", userMessage: "当前节点不支持所选模型，请在 AI 模型配置中选择该节点可用的型号", rawMessage: compactErrorMessage(message) };
+    return { kind: "endpoint", userMessage: "当前节点不支持所选模型，请检查原中转站模型配置，或在 Pi 终端选择可用型号", rawMessage: compactErrorMessage(message) };
   }
   if (originalError instanceof ModelHttpError && (originalError.status === 400 || originalError.status === 422)) {
     return { kind: "endpoint", userMessage: "对话模型请求参数或模型配置不兼容，请检查节点配置", rawMessage: compactErrorMessage(message) };
@@ -616,7 +616,7 @@ const modelTransportGlobal = globalThis as typeof globalThis & {
 const proxyDispatchers = modelTransportGlobal.modelProxyDispatchers ??= new Map<string, ProxyAgent>();
 const MAX_PROXY_DISPATCHERS = 8;
 
-function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
+export function chatDispatcher(proxyUrl: string): ProxyAgent | undefined {
   if (!proxyUrl) return undefined;
   const cached = proxyDispatchers.get(proxyUrl);
   if (cached) {

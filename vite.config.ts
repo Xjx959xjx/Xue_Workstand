@@ -45,6 +45,9 @@ const devWatchIgnorePatterns = [
 ];
 
 export default defineConfig({
+  resolve: {
+    alias: [{ find: "./pi-runtime-local", replacement: new URL("./src/lib/pi-runtime-cloud.ts", import.meta.url).pathname }]
+  },
   server: {
     watch: { ignored: devWatchIgnorePatterns }
   },

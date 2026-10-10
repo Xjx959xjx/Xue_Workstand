@@ -5,7 +5,6 @@ import { WorkbenchSelect } from "@/components/WorkbenchSelect";
 import { useMemo, useRef, useState } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
-import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import type {
   GrossMarginPriceOption,
   GrossMarginPriceTable,
@@ -58,7 +57,6 @@ export function GrossMarginPriceTableEditorModal({
   const activeCount = useMemo(() => rows.filter((row) => row.active).length, [rows]);
   const inactiveCount = rows.length - activeCount;
   const dirty = JSON.stringify(rows) !== JSON.stringify(initialRowsRef.current);
-  useUnsavedChangesGuard(dirty);
 
   function requestClose() {
     if (busy) return;

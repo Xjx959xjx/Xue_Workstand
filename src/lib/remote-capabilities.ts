@@ -12,7 +12,9 @@ export const REMOTE_CAPABILITY_OPERATIONS = [
   "link-download",
   "feishu-publish",
   "feishu-doc-read",
-  "wecom-doc"
+  "wecom-doc",
+  "pi-model",
+  "pi-status"
 ] as const;
 
 export type RemoteCapabilityOperation = typeof REMOTE_CAPABILITY_OPERATIONS[number];

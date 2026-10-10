@@ -9,7 +9,6 @@ import { ImageGallery } from "./_components/ImageGallery";
 import { ImageJobStatus } from "./_components/ImageJobStatus";
 import { ImageResults } from "./_components/ImageResults";
 import type { PreviewImage } from "./_components/ImagePreview";
-import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 const ImagePreview = dynamic(() => import("./_components/ImagePreview").then((module) => module.ImagePreview), { ssr: false });
 const ImageCompare = dynamic(() => import("./_components/ImageCompare"), { ssr: false });
 
@@ -33,7 +32,6 @@ function ImageWorkbench() {
   function openReferencePreview(image: ImageFile) { setPreviewImages([...new Map([...w.references, ...w.recordReferences, image].map((item) => [item.id, item])).values()]); setPreview(image); }
   const [previewDrafts, setPreviewDrafts] = useState<Record<string, string>>({});
   const dirty = w.dirty || Object.values(previewDrafts).some((text) => text.trim());
-  useUnsavedChangesGuard(dirty);
   const [compared, setCompared] = useState<ImageFile[]>([]);
   const [comparing, setComparing] = useState(false);
   const [draggedImage, setDraggedImage] = useState<ImageFile | null>(null);

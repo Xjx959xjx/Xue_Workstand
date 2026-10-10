@@ -6,6 +6,18 @@ export function polishWriterPrompt(prompt: string, signal: AbortSignal) {
     method: "POST", body: JSON.stringify({ prompt }), signal
   });
 }
+
+let aiSettingsRequest: Promise<import("./ai-policy-catalog").AiSettingsView> | null = null;
+export function getAiModelSettings() {
+  if (!aiSettingsRequest) aiSettingsRequest = requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings")
+    .finally(() => { aiSettingsRequest = null; });
+  return aiSettingsRequest;
+}
+export function saveAiModelSettings(value: import("./ai-policy-catalog").AiSettings) {
+  return requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings", {
+    method: "PUT", body: JSON.stringify(value)
+  });
+}
 import {
   AccountDraftInput,
   AccountDetail,
@@ -1644,20 +1656,6 @@ export async function deleteImageGenerationRecords(input: { action: "delete"; id
   const result = await requestJson<import("./image-generation-types").ImageRecordDeleteResult>("/api/images", { method: "DELETE", body: JSON.stringify(input) });
   invalidateImageRecordsCache();
   return result;
-}
-
-let aiSettingsRequest: Promise<import("./ai-policy-catalog").AiSettingsView> | null = null;
-export function getAiModelSettings() {
-  if (!aiSettingsRequest) {
-    aiSettingsRequest = requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings")
-      .finally(() => { aiSettingsRequest = null; });
-  }
-  return aiSettingsRequest;
-}
-export function saveAiModelSettings(value: import("./ai-policy-catalog").AiSettings) {
-  return requestJson<import("./ai-policy-catalog").AiSettingsView>("/api/ai-settings", {
-    method: "PUT", body: JSON.stringify(value)
-  });
 }
 
 export function getRadarSignals(query: { page?: number; search?: string; source?: string; id?: string } = {}) {

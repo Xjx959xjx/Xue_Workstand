@@ -2,11 +2,18 @@ import { AI_POLICIES, type AiPolicyId, type AiPolicyValue, type AiSettingsView }
 import { readAiSettings } from "./storage/ai-settings";
 import { getChatConfig, getConfiguredChatConfigs, getConfiguredWebResearchConfigs, getWebResearchConfig, type ChatRuntimeConfig } from "./model-runtime";
 import { imageConfig, publicImageProfiles, defaultImageProfileId } from "./image-runtime";
+import { getPiStatus, piEnabled } from "./pi-runtime";
 
 export async function resolveAiPolicy(id: AiPolicyId): Promise<AiPolicyValue> {
   const settings = await readAiSettings();
   const definition = AI_POLICIES.find((entry) => entry.id === id)!;
   return settings.overrides[id] || { model: definition.model, effort: definition.effort };
+}
+export async function resolveAiSource(id?: AiPolicyId) {
+  if (!id) return "auto";
+  if (id === "web_research") return "relay";
+  if (id === "image_generate") return (await resolveAiPolicy(id)).source || "relay";
+  return (await resolveAiPolicy(id)).source || "auto";
 }
 export async function applyAiPolicy(configs: ChatRuntimeConfig[], id?: AiPolicyId) {
   if (!id) return configs;
@@ -19,7 +26,10 @@ export async function applyAiPolicy(configs: ChatRuntimeConfig[], id?: AiPolicyI
 }
 export async function aiPolicySignature(ids: AiPolicyId[]) {
   const settings = await readAiSettings();
-  return JSON.stringify(ids.map((id) => settings.overrides[id] || AI_POLICIES.find((entry) => entry.id === id)));
+  const legacy = ids.map((id) => settings.overrides[id] || AI_POLICIES.find((entry) => entry.id === id));
+  if (!piEnabled() || ids.every(id => id === "web_research" || id === "image_generate")) return JSON.stringify(legacy);
+  const pi = await getPiStatus();
+  return JSON.stringify({ legacy, pi: { provider: pi.provider, model: pi.model, thinking: pi.thinking, configured: pi.configured, configSignature: pi.configSignature } });
 }
 export async function getAiSettingsView(): Promise<AiSettingsView> {
   const settings = await readAiSettings();

@@ -343,7 +343,7 @@ ${buildEngagementResearchPlanningPrompt(brief)}`;
       { policy: "comment_plan", auditScope, signal }
     );
     throwIfAborted(signal);
-    if (result.fallback || !result.text.trim()) {
+    if (!result.ok || !result.text.trim()) {
       previousError = result.fallbackReason || "模型没有返回内容";
       previousOutput = result.text.trim();
       continue;

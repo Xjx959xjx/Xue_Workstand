@@ -3,7 +3,6 @@
 import { useMemo, useRef, useState } from "react";
 import { RotateCcw, Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
-import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import {
   grossMarginReviewTemplateVariables,
   renderGrossMarginReviewTemplate,
@@ -39,7 +38,6 @@ export function GrossMarginTemplateModal({
   }, [draft, previewValues]);
   const canSave = Boolean(draft.trim()) && !preview.error && !busy;
   const dirty = draft !== template.content;
-  useUnsavedChangesGuard(dirty);
   const lineCount = useMemo(() => draft.split("\n").filter((line) => line.trim()).length, [draft]);
 
   function insertVariable(name: string) {

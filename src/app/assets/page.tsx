@@ -98,7 +98,8 @@ function AssetsPageContent() {
 
   useEffect(() => {
     if (!notice || isTaskProgressMessage(notice)) return;
-    notify({ tone: noticeIsError ? "error" : "success", message: notice });
+    const usedRelay = /中转|兜底|备用模型/i.test(notice);
+    notify({ tone: noticeIsError ? "error" : usedRelay ? "warning" : "success", message: notice });
   }, [notice, noticeIsError, notify]);
 
   useEffect(() => {

@@ -16,6 +16,8 @@ export function validateAiSettings(value: unknown): AiSettings {
     const definition = AI_POLICIES.find((entry) => entry.id === id);
     if (!definition) throw new Error(`AI 配置包含未知链路：${id}`);
     if ("kind" in definition && config.effort !== "none") throw new Error("图片模型不支持对话推理等级");
+    if (id === "web_research" && config.source && config.source !== "relay") throw new Error("联网检索只能使用中转链路");
+    if (id === "image_generate" && config.source === "auto") throw new Error("图片生成请选择仅订阅或仅中转，不自动切换计费来源");
   }
   return result.data as AiSettings;
 }

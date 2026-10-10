@@ -5,6 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { z } from "zod";
+import * as apiRoute from "../src/lib/api-route";
+import * as platformLinks from "../src/lib/platform-links";
+import * as utils from "../src/lib/utils";
 import { parseDate } from "@internationalized/date";
 import { calculateGrossMargin, makeEmptyQuantityInputs, parseGrossMarginAmount, parseGrossMarginMetric } from "../src/lib/gross-margin-calculator";
 import { buildGrossMarginTemplateValues, formatImportedQuantity } from "../src/app/gross-margin/_lib/gross-margin-workbench-model";
@@ -59,6 +63,39 @@ function deferred<T>() {
   const promise = new Promise<T>(finish => { resolve = finish; });
   return { promise, resolve };
 }
+
+test("导出监控和保存单价接受必火字段，仍拒绝未知服务", async () => {
+  const saved: Array<{ targetStats?: { mustFire?: number }; items?: Array<{ service: string }> }> = [];
+  const route = load<typeof import("../src/app/api/gross-margin/route")>("src/app/api/gross-margin/route.ts", {
+    zod: { z },
+    "@/lib/api-route": apiRoute,
+    "@/lib/gross-margin-monitor-template": {},
+    "@/lib/gross-margin-refresh": {},
+    "@/lib/platform-links": platformLinks,
+    "@/lib/utils": utils,
+    "@/lib/gross-margin-calculator": { parseGrossMarginAmount, parseGrossMarginMetric },
+    "@/lib/storage": {
+      getGrossMarginLibrary: async () => ({}),
+      upsertGrossMarginMonitorRecord: async (input: typeof saved[number]) => { saved.push(input); return input; },
+      saveGrossMarginPriceTable: async (input: typeof saved[number]) => { saved.push(input); return input; }
+    }
+  });
+  const post = (body: unknown) => route.POST(new Request("http://localhost/api/gross-margin", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  }));
+  const monitor = { action: "saveMonitorRecord", platform: "bilibili", accountName: "测试",
+    videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk", sourceText: "【B站】\n账号：测试", targetStats: { mustFire: 2000 } };
+  const result = await post(monitor);
+  assert.equal(result.status, 200, JSON.stringify(await result.json()));
+  assert.equal(saved[0].targetStats?.mustFire, 2000);
+  const price = await post({ action: "savePriceTable", platform: "bilibili", items: [{
+    id: "bilibili-must-fire", service: "mustFire", name: "默认", unitPrice: 1, quantityUnit: "元"
+  }] });
+  assert.equal(price.status, 200);
+  assert.equal(saved[1].items?.[0].service, "mustFire");
+  assert.equal((await post({ ...monitor, targetStats: { unknownService: 1 } })).status, 400);
+  assert.equal(saved.length, 2);
+});
 
 function sheet(price = "20") {
   return `抖音\n|账号昵称|平台|抖音ID|植入价格;（含税不含平台费）|定制价格;（含税不含平台费）|\n|---|---|---|---|---|\n|Good|抖音|good|0|10|\n|Bad|抖音|bad|5|${price}|`;
@@ -262,5 +299,39 @@ test("认证资料桥强制可信模式；模式不一致拒绝；毛利只允�
     globalThis.fetch = previousFetch;
     for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
     Object.assign(process.env, previous);
+  }
+});
+
+test("剪贴板受限仍保存监控并提供手动复制入口，保存失败不报成功", async () => {
+  const source = ts.createSourceFile("workbench.ts", readFileSync("src/app/gross-margin/_hooks/useGrossMarginWorkbench.ts", "utf8"), ts.ScriptTarget.Latest, true);
+  let handler = "";
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "handleExportReview") handler = node.getText(source);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  for (const clipboardMode of ["allowed", "denied", "missing"]) {
+    for (const saveFails of [false, true]) {
+      let saves = 0, opened = false;
+      const notices: Array<{ tone: string; message: string; action?: { onClick: () => void } }> = [];
+      const busyStates: string[] = [];
+      const run = vm.runInNewContext(ts.transpileModule(`${handler}\nhandleExportReview`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+        busy: "", validationError: "", videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk", renderedReviewTemplate: { error: "" },
+        effectiveReviewTemplate: "测试文案", platform: "bilibili", matchedAccount: null, accountName: "测试", calculation: { lines: [] },
+        copyText: async () => { if (clipboardMode !== "allowed") throw new Error("NotAllowedError"); },
+        saveGrossMarginMonitorRecord: async () => { saves++; if (saveFails) throw new Error("保存失败"); return { library: {} }; },
+        setLibrary() {}, setBusy: (value: string) => busyStates.push(value), setTemplateModalOpen: (value: boolean) => { opened = value; },
+        notify: (value: typeof notices[number]) => notices.push(value), Error
+      });
+      await run();
+      assert.equal(saves, 1);
+      assert.equal(busyStates.at(-1), "");
+      assert.equal(notices[0].tone, saveFails ? "error" : clipboardMode === "allowed" ? "success" : "warning");
+      if (!saveFails && clipboardMode !== "allowed") {
+        assert.match(notices[0].message, /监控目标已保存/);
+        notices[0].action?.onClick();
+        assert.equal(opened, true);
+      }
+    }
   }
 });

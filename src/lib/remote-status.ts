@@ -4,6 +4,7 @@ import { promisify } from "util";
 import packageJson from "../../package.json";
 import { getChatRuntimeConfig, getWebResearchCapability } from "./ai";
 import { getImageRuntimeConfig } from "./image-runtime";
+import { getPiStatus } from "./pi-runtime";
 import { getAppMode } from "./app-mode";
 import { resolveOpenCliCommand } from "./opencli-runtime";
 import {
@@ -60,12 +61,15 @@ async function buildRemoteStatus(): Promise<RemoteStatusResponse> {
     )
     : localFfmpeg || service("unavailable", "ffmpeg 状态未知");
   const browserBridge = await checkBrowserBridge(opencli.status === "ok");
+  const pi = await getPiStatus();
   const services = {
     storage,
     opencli,
     browserBridge,
     ffmpeg,
-    chat: chat.configured
+    chat: pi.configured ? service("ok", pi.message) : pi.enabled && chat.configured
+      ? service("ok", `${pi.message}；原中转站 ${chat.model} 已配置`)
+      : chat.configured
       ? service("ok", `已配置 ${chat.model}`)
       : service("unconfigured", "未配置对话模型"),
     image: image.configured

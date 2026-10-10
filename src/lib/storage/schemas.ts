@@ -244,6 +244,7 @@ const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
   job: jobSchema,
   "job-payload": versionedObject.extend({ version: z.literal(1), input: startJobSchema }).passthrough(),
   "image-generation": imageGenerationInputSchema.extend({
+    source: z.enum(["subscription", "relay"]).optional(),
     schemaVersion: z.literal(STORAGE_SCHEMA_VERSION), id: z.string().min(1), model: z.string().min(1),
     createdAt: timestampSchema, updatedAt: timestampSchema, deletedAt: timestampSchema.optional(),
     images: z.array(z.object({ id: z.string().uuid(), name: z.string(), format: z.enum(["png", "jpeg", "webp"]), createdAt: timestampSchema })).max(4)
@@ -346,7 +347,8 @@ export function versionStoredRecord(value: unknown) {
 
 export const aiPolicyValueSchema = z.object({
   model: z.string().trim().max(120, "模型名称不能超过 120 字符").regex(/^[A-Za-z0-9._:/-]*$/, "模型名称只能包含字母、数字及 . _ : / -"),
-  effort: z.enum(["default", "none", "low", "medium", "high", "xhigh"], { errorMap: () => ({ message: "推理等级不受支持" }) })
+  effort: z.enum(["default", "none", "low", "medium", "high", "xhigh"], { errorMap: () => ({ message: "推理等级不受支持" }) }),
+  source: z.enum(["auto", "subscription", "relay"]).optional()
 }).strict();
 export const aiSettingsSchema = z.object({
   schemaVersion: z.literal(1), revision: z.number().int().nonnegative(),
@@ -471,7 +473,7 @@ export const engagementModelCallSchema = z.object({
   startedAt: z.string().datetime(), completedAt: z.string().datetime().optional(), elapsedMs: z.number().nonnegative().optional(),
   status: z.enum(["running", "completed", "failed", "cancelled"]),
   configured: z.object({ model: z.string(), effort: z.string() }).optional(),
-  actual: z.object({ model: z.string(), wireApi: z.string().optional(), reasoningEffort: z.string().optional() }).optional(),
+  actual: z.object({ model: z.string(), wireApi: z.string().optional(), reasoningEffort: z.string().optional(), backend: z.enum(["pi", "legacy"]).optional(), fallback: z.boolean().optional(), fallbackReason: z.string().optional() }).optional(),
   messages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string() })),
   retries: z.array(z.object({ at: z.string().datetime(), message: z.string() })),
   responseText: z.string().optional(), error: z.string().optional()
@@ -480,7 +482,7 @@ export const engagementModelCallSchema = z.object({
 export const danmakuBatchCheckpointSchema = z.object({
   schemaVersion: z.literal(1), signature: z.string().min(1),
   index: z.number().int().nonnegative(), texts: z.array(z.string()).min(1).max(16),
-  model: z.string(), attempts: z.number().int().positive().max(2)
+  model: z.string(), attempts: z.number().int().positive().max(2), fallbackReason: z.string().optional()
 });
 
 export const commentPipelineCheckpointSchema = z.object({

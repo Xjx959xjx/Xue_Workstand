@@ -35,7 +35,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const platformSchema = z.enum(["douyin", "bilibili"]);
-const serviceSchema = z.enum(["play", "like", "douPlus", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
+const serviceSchema = z.enum(["play", "like", "douPlus", "mustFire", "coin", "comment", "share", "favorite", "danmaku", "blueLink"]);
 const amountSchema = z.preprocess(
   value => typeof value === "string" && value.trim() ? parseGrossMarginAmount(value) : value,
   z.number({ invalid_type_error: "请填写有效的非负数字" }).finite().min(0, "金额不能小于 0").max(100_000_000, "金额过大，请检查输入")

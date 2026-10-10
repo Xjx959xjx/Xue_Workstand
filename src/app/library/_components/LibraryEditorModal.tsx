@@ -2,7 +2,6 @@
 
 import { memo, type ReactNode } from "react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
-import { useUnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 
 type LibraryEditorModalProps = {
   children: ReactNode;
@@ -21,7 +20,6 @@ export const LibraryEditorModal = memo(function LibraryEditorModal({
   unsavedChanges = false,
   disabled = false
 }: LibraryEditorModalProps) {
-  useUnsavedChangesGuard(unsavedChanges);
   return (
     <ModalBackdrop
       disabled={disabled}

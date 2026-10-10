@@ -1,7 +1,7 @@
 export const AI_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
 export type AiEffort = typeof AI_EFFORTS[number];
 export const AI_GROUPS = ["全部链路", "风格学习", "对话写作", "评论与弹幕", "发布工具", "图片与素材"] as const;
-export type AiPolicyValue = { model: string; effort: AiEffort | "default" };
+export type AiPolicyValue = { model: string; effort: AiEffort | "default"; source?: "auto" | "subscription" | "relay" };
 export const AI_POLICIES = [
   { id: "account_sample", group: "风格学习", title: "账号样本分析", description: "逐篇学习转写稿，提取风格证据并纠错。", model: "", effort: "medium" },
   { id: "account_style", group: "风格学习", title: "账号风格卡", description: "汇总样本证据，生成完整账号风格。", model: "", effort: "medium" },

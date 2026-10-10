@@ -4,34 +4,31 @@ import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 
-test("未保存页面允许模块导航，刷新和关闭仍受保护，卸载会清理监听", () => {
+test("写作台离页时仍暂存输入，但不阻止刷新或关闭", () => {
   const document = new EventTarget();
   const window = new EventTarget();
-  let confirms = 0;
-  let cleanup: (() => void) | undefined;
-  class Anchor {
-    href = "http://workbench.test/images";
-    target = "";
-    hasAttribute() { return false; }
-  }
-  Object.assign(document, { closest: () => new Anchor() });
-  Object.assign(window, { location: { pathname: "/writer" }, confirm: () => { confirms++; return false; } });
-  const exports = {} as { useUnsavedChangesGuard: (dirty: boolean) => void };
-  const source = readFileSync(new URL("../src/components/UnsavedChangesGuard.tsx", import.meta.url), "utf8");
+  const stored = new Map<string, string>();
+  const cleanups: (() => void)[] = [];
+  Object.assign(window, { sessionStorage: { setItem: (key: string, value: string) => stored.set(key, value) } });
+  const exports = {} as { useWriterSessionSave: (key: string, enabled: boolean, input: object, onError: (message: string) => void) => void };
+  const source = readFileSync(new URL("../src/app/writer/_hooks/useWriterSessionSave.ts", import.meta.url), "utf8");
+  const effect = (callback: () => (() => void) | undefined) => {
+    const cleanup = callback();
+    if (cleanup) cleanups.push(cleanup);
+  };
   vm.runInNewContext(ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
-  }).outputText, { exports, document, window, URL, HTMLAnchorElement: Anchor,
-    require: () => ({ useEffect: (effect: () => (() => void) | undefined) => { cleanup = effect(); } }) });
+  }).outputText, { exports, document, window, setTimeout, clearTimeout,
+    require: () => ({ useEffect: effect, useLayoutEffect: effect, useRef: (current: unknown) => ({ current }) }) });
 
-  exports.useUnsavedChangesGuard(true);
-  const click = Object.assign(new Event("click", { cancelable: true }), { button: 0 });
-  assert.equal(document.dispatchEvent(click), true, "模块导航不得被拦截");
-  assert.equal(confirms, 0, "模块导航不得弹确认");
-  const unload = new Event("beforeunload", { cancelable: true });
-  window.dispatchEvent(unload);
-  assert.equal(unload.defaultPrevented, true);
-  cleanup?.();
-  assert.equal(window.dispatchEvent(new Event("beforeunload", { cancelable: true })), true);
-  exports.useUnsavedChangesGuard(false);
-  assert.equal(window.dispatchEvent(new Event("beforeunload", { cancelable: true })), true);
+  const input = { styleRefs: [], prompt: "尚未生成的输入", sourceText: "素材", useWebResearch: false, revisionInstruction: "续改要求", revisionMode: "edit" };
+  exports.useWriterSessionSave("writer-session", true, input, (message) => assert.fail(message));
+  try {
+    const unload = new Event("beforeunload", { cancelable: true });
+    assert.equal(window.dispatchEvent(unload), true, "刷新和关闭不得被拦截");
+    assert.equal(unload.defaultPrevented, false);
+    assert.deepEqual(JSON.parse(stored.get("writer-session")!), input, "离页前必须完成输入暂存");
+  } finally {
+    cleanups.forEach(cleanup => cleanup());
+  }
 });
