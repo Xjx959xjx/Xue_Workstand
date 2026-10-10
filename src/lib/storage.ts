@@ -43,7 +43,6 @@ export {
   getGrossMarginLibrary,
   getGrossMarginMonitorRecords,
   getGrossMarginReviewTemplate,
-  resetGrossMarginReviewTemplate,
   resolveGrossMarginMonitorRecord,
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,

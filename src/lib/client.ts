@@ -556,16 +556,6 @@ export function resolveGrossMarginVideoAccount(videoUrl: string, options: { sign
   });
 }
 
-export function resetGrossMarginReviewTemplate(platform: GrossMarginReviewTemplate["platform"]) {
-  return requestJson<{ template: GrossMarginReviewTemplate; library: GrossMarginLibrary }>("/api/gross-margin", {
-    method: "POST",
-    body: JSON.stringify({ action: "resetReviewTemplate", platform })
-  }).then((result) => {
-    rememberGrossMarginLibrary(result.library);
-    return result;
-  });
-}
-
 export function saveGrossMarginMonitorRecord(input: {
   platform: GrossMarginPriceTable["platform"];
   accountName: string;
@@ -786,6 +776,24 @@ export function getCachedDouyinHotlist(input: { windowDays?: number; window?: st
 export function getDouyinHotlistRefreshLogs(options: { signal?: AbortSignal } = {}) {
   return requestJson<DouyinHotlistRefreshLogResponse>("/api/douyin-hotlist/refresh-logs", {
     signal: options.signal
+  });
+}
+
+export function deleteDouyinHotlistGroup(input: { groupId: string; revision: number; window?: string }) {
+  return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
+    method: "POST", body: JSON.stringify({ ...input, action: "deleteGroup" })
+  }).then((result) => {
+    resetDouyinHotlistCache(result);
+    return result;
+  });
+}
+
+export function saveDouyinHotlistGroup(input: { groupId?: string; name: string; accountIds: string[]; revision: number; window?: string }) {
+  return requestJson<DouyinHotlistResponse>("/api/douyin-hotlist", {
+    method: "POST", body: JSON.stringify({ ...input, action: "saveGroup" })
+  }).then((result) => {
+    resetDouyinHotlistCache(result);
+    return result;
   });
 }
 

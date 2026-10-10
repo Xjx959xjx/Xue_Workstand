@@ -350,6 +350,14 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
     linear-gradient(180deg, color-mix(in oklch, var(--panel-raised) 98%, var(--panel)) 0%, color-mix(in oklch, var(--panel) 94%, var(--panel-soft)) 100%);
 }
 
+.douyin-hotlist-rank-pane:has(> .hotlist-group-bar) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.douyin-hotlist-rank-pane:has(> .hotlist-group-bar):has(> .error) {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
 .douyin-hotlist-rank-pane .pane-header h2 {
   margin: 0;
   color: var(--text-strong);
@@ -1615,4 +1623,65 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
     height: min(calc(var(--app-vh) * 78), 720px);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
+}
+.hotlist-summary .hotlist-summary-count { font-size: inherit; font-weight: 600; vertical-align: baseline; }
+.hotlist-summary > .status-pill.pending { margin-left: 6px; }
+.hotlist-group-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line-subtle); }
+.hotlist-group-filters, .hotlist-group-actions { display: flex; align-items: center; gap: 6px; }
+.hotlist-group-filters { min-width: 0; flex-wrap: wrap; }
+.hotlist-group-actions { flex-shrink: 0; }
+.hotlist-group-filters .btn.active { background: var(--accent-tint); color: var(--text-strong); border-color: var(--line); }
+.hotlist-group-filters .btn > span:last-child { font-size: 12px; color: var(--muted); }
+.hotlist-group-filter-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Group editor reuses the workbench dialog, select and listbox interaction patterns. */
+.modal-panel.hotlist-group-editor { width: min(580px, calc(100vw - 32px)); padding: 0; background: var(--panel); }
+.hotlist-group-editor { grid-template-rows: auto minmax(0, 1fr); }
+.hotlist-group-editor > form { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.hotlist-group-editor-header { display: flex; align-items: flex-start; gap: 12px; padding: 24px 24px 20px; border-bottom: 1px solid var(--line-subtle); }
+.hotlist-group-editor-header > div { flex: 1; }
+.hotlist-group-editor-icon { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-soft); color: var(--text-strong); }
+.hotlist-group-editor-header h2 { margin: 1px 0 6px; font-size: 18px; letter-spacing: -.025em; }
+.hotlist-group-editor-header p { margin: 0; font-size: 13px; line-height: 1.6; }
+.hotlist-group-editor-body { padding: 22px 24px 18px; overflow-y: auto; }
+.hotlist-group-name { display: grid; gap: 9px; font-size: 13px; font-weight: 500; }
+.hotlist-group-name > span { display: flex; justify-content: space-between; }
+.hotlist-group-name small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.hotlist-group-name input { min-height: 40px; width: 100%; }
+.hotlist-group-member-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 12px; font-size: 13px; }
+.hotlist-group-member-heading p { font-size: 12px; margin: 6px 0 0; }
+.hotlist-group-member-heading .status-pill { flex-shrink: 0; }
+.hotlist-group-picker { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.hotlist-group-picker-tools { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--panel-soft); border-bottom: 1px solid var(--line-subtle); }
+.hotlist-group-search { display: flex; align-items: center; gap: 8px; color: var(--muted); flex: 1; min-width: 0; padding-left: 8px; }
+.hotlist-group-search input { width: 100%; min-width: 0; border: 0; box-shadow: none; background: transparent; padding-left: 0; font-size: 13px; }
+.hotlist-group-picker-tools .workbench-select { flex-shrink: 0; }
+.hotlist-group-members { height: 232px; overflow-y: auto; padding: 6px; outline: none; }
+.hotlist-group-members[data-focus-visible] { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hotlist-group-member { display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 10px; border-radius: var(--radius-sm); cursor: pointer; outline: none; content-visibility: auto; contain-intrinsic-size: auto 58px; }
+.hotlist-group-member[data-hovered], .hotlist-group-member[data-focused] { background: var(--panel-soft); }
+.hotlist-group-member[data-selected] { background: var(--accent-tint); }
+.hotlist-group-member[data-focus-visible] { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hotlist-group-member[data-disabled] { opacity: .5; cursor: default; }
+.hotlist-group-check { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line-strong); border-radius: 4px; flex-shrink: 0; }
+.hotlist-group-member[data-selected] .hotlist-group-check { background: var(--text-strong); border-color: var(--text-strong); color: var(--panel); }
+.hotlist-group-member .account-avatar { width: 30px; height: 30px; flex-shrink: 0; }
+.hotlist-group-member-copy { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.hotlist-group-member-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.hotlist-group-member-copy small, .hotlist-group-selected-label { color: var(--muted); font-size: 11px; }
+.hotlist-group-selected { display: flex; flex-wrap: wrap; gap: 6px; max-height: 84px; overflow-y: auto; margin-top: 12px; }
+.hotlist-group-selected .btn { border: 1px solid var(--line-subtle); font-size: 12px; min-height: 28px; }
+.hotlist-group-selected .btn span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hotlist-group-selection-hint { font-size: 12px; margin: 12px 0 0; }
+.hotlist-group-editor-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--line-subtle); background: var(--panel-soft); }
+.hotlist-group-picker-empty { height: 100%; min-height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; padding: 20px; }
+.hotlist-group-picker-empty strong { color: var(--text); font-size: 13px; font-weight: 500; }
+.hotlist-group-picker-empty p { margin: 0; font-size: 12px; }
+.hotlist-group-empty { text-align: center; padding: 48px 24px; }
+@media (max-width: 760px) {
+  .hotlist-group-bar { align-items: flex-start; flex-direction: column; padding: 12px; gap: 8px; }
+  .hotlist-group-editor-header { padding: 20px 16px 16px; }
+  .hotlist-group-editor-body { padding: 18px 16px; }
+  .hotlist-group-editor-footer { padding: 14px 16px; }
+  .hotlist-group-editor-icon { display: none; }
+  .hotlist-group-members { height: 200px; }
 }

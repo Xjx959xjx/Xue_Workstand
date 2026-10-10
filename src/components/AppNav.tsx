@@ -21,6 +21,7 @@ import {
 import { TaskCenter } from "./TaskCenter";
 import { SkinToggle } from "./SkinToggle";
 import { ServiceModeControl } from "./ServiceModeControl";
+import { NavigationPreferences, useNavigationVisibility } from "./NavigationPreferences";
 import type { AppMode } from "@/lib/app-mode";
 
 type NavItem = {
@@ -64,10 +65,11 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [showRouteBusy, setShowRouteBusy] = useState(false);
   const grossMarginMode = appMode === "gross-margin";
+  const navigation = useNavigationVisibility();
   const visibleNavItems = useMemo(() => grossMarginMode ? grossMarginNavItems : navItems, [grossMarginMode]);
   const visibleNavGroups = useMemo(() => navGroupOrder
-    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label) }))
-    .filter((group) => group.items.length), [visibleNavItems]);
+    .map((label) => ({ label, items: visibleNavItems.filter((item) => item.group === label && item.href !== "/ai-settings" && !navigation.hidden.includes(item.href)) }))
+    .filter((group) => group.items.length), [visibleNavItems, navigation.hidden]);
   const brandHref = grossMarginMode ? "/gross-margin" : "/douyin-hotlist";
   const activeHref = visibleNavItems
     .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
@@ -175,6 +177,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         </span>
       </Link>
       <nav className="nav-list" aria-label="主导航">
+        <NavigationPreferences items={visibleNavItems} hidden={navigation.hidden} error={navigation.error} ready={navigation.ready} onSave={navigation.save} />
         {visibleNavGroups.map((group) => {
           return (
             <section className="nav-section" key={group.label} aria-labelledby={`nav-${group.label}`}>
@@ -218,7 +221,23 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         <SkinToggle />
         <TaskCenter />
         {!grossMarginMode ? <ServiceModeControl /> : null}
-
+        {!grossMarginMode && !navigation.hidden.includes("/ai-settings") ? (
+          <Link
+            href="/ai-settings"
+            prefetch={false}
+            className={`btn ghost nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""} ${pendingHref === "/ai-settings" && activeHref !== "/ai-settings" ? "pending" : ""}`}
+            style={{ width: "100%", justifyContent: "flex-start" }}
+            aria-current={activeHref === "/ai-settings" ? "page" : undefined}
+            onFocus={() => void prewarmRoute("/ai-settings")}
+            onClick={(event) => handleNavClick(event, "/ai-settings")}
+            onPointerLeave={cancelPrewarm}
+            onBlur={cancelPrewarm}
+            onPointerEnter={() => void prewarmRoute("/ai-settings")}
+          >
+            <Settings2 size={18} strokeWidth={1.75} aria-hidden="true" />
+            <span>AI 模型配置</span>
+          </Link>
+        ) : null}
       </div>
     </aside>
   );

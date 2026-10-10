@@ -968,7 +968,15 @@ export type DouyinHotlistSummary = {
   lastFullRefreshAt?: string;
 };
 
+export type DouyinHotlistGroup = {
+  id: string;
+  name: string;
+  accountIds: string[];
+};
+
 export type DouyinHotlistResponse = {
+  groups?: DouyinHotlistGroup[];
+  groupRevision?: number;
   accounts: DouyinHotlistAccount[];
   items: DouyinHotlistItem[];
   summary: DouyinHotlistSummary;

@@ -37,7 +37,6 @@ export function GrossMarginWorkbench({ appMode }: { appMode: AppMode }) {
           template={controller.reviewTemplate}
           onClose={controller.closeTemplateModal}
           onSave={controller.handleSaveReviewTemplate}
-          onReset={controller.handleResetReviewTemplate}
         />
       ) : null}
       {controller.priceEditorOpen && controller.table ? (

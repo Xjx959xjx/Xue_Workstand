@@ -1,6 +1,7 @@
 import { buildDouyinVideoUrl } from "@/lib/platform-links";
 import type {
   DouyinHotlistAccount,
+  DouyinHotlistGroup,
   DouyinHotlistItem,
   DouyinHotlistResponse,
   Platform
@@ -78,18 +79,22 @@ export function parseWindowFilter(value: string | null): WindowFilter {
 
 export function buildHotlistHref({
   account,
+  group,
   pathname,
   search,
   sort,
   window
 }: {
   account: AccountSelection;
+  group?: string;
   pathname: string;
   search: string;
   sort: SortMode;
   window: WindowFilter;
 }) {
   const params = new URLSearchParams(search);
+  if (group === "all") params.delete("group");
+  else if (group) params.set("group", group);
   if (account === "all") params.delete("account");
   else params.set("account", account);
   if (sort === "likes") params.delete("sort");
@@ -98,6 +103,12 @@ export function buildHotlistHref({
   else params.set("window", window);
   const queryString = params.toString();
   return queryString ? `${pathname}?${queryString}` : pathname;
+}
+
+export function getHotlistGroupAccounts(accounts: DouyinHotlistAccount[], groups: DouyinHotlistGroup[], groupId: string) {
+  if (groupId === "all") return accounts;
+  const ids = new Set(groups.find((group) => group.id === groupId)?.accountIds ?? []);
+  return accounts.filter((account) => ids.has(account.id));
 }
 
 export function getVisibleHotlistItems({

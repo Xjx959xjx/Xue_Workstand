@@ -361,14 +361,6 @@ export async function saveGrossMarginReviewTemplate(input: {
   return template;
 }
 
-export async function resetGrossMarginReviewTemplate(platformInput: GrossMarginPriceTable["platform"]) {
-  await ensureGrossMarginDirs();
-  const platform = normalizeGrossMarginPlatform(platformInput);
-  await fs.rm(grossMarginReviewTemplatePath(platform), { force: true });
-  return normalizeGrossMarginReviewTemplate(platform, null);
-}
-
-
 function normalizeGrossMarginPriceTable(
   platform: GrossMarginPriceTable["platform"],
   table?: GrossMarginPriceTable | null

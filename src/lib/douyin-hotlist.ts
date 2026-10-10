@@ -130,6 +130,8 @@ export async function getDouyinHotlist(options: { force?: boolean; windowDays?: 
   return {
     accounts,
     items,
+    groups: watchlist.groups ?? [],
+    groupRevision: watchlist.groupRevision ?? 0,
     summary: {
       windowDays: window.windowDays,
       windowKey: window.windowKey,

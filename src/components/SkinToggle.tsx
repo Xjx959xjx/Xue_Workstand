@@ -91,6 +91,8 @@ export function SkinToggle({ compact = false }: SkinToggleProps) {
 
   return (
     <button
+      hidden
+      style={{ display: "none" }}
       type="button"
       className={`skin-toggle ${compact ? "compact" : ""} ${active ? "active" : ""}`}
       aria-label={actionLabel}

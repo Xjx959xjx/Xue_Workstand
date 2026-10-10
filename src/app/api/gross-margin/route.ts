@@ -10,7 +10,6 @@ import {
   appendGrossMarginPlaySample,
   deleteGrossMarginMonitorRecord,
   getGrossMarginLibrary,
-  resetGrossMarginReviewTemplate,
   saveGrossMarginPriceTable,
   saveGrossMarginReviewTemplate,
   updateGrossMarginMonitorRecord,
@@ -62,10 +61,6 @@ const mutationSchema = z.discriminatedUnion("action", [
     action: z.literal("saveReviewTemplate"),
     platform: platformSchema,
     content: z.string().trim().min(1, "文案模板不能为空")
-  }),
-  z.object({
-    action: z.literal("resetReviewTemplate"),
-    platform: platformSchema
   }),
   z.object({
     action: z.literal("resolveVideoAccount"),
@@ -156,10 +151,6 @@ export async function POST(request: Request) {
     }
     if (input.action === "saveReviewTemplate") {
       const template = await saveGrossMarginReviewTemplate(input);
-      return { template, library: await getGrossMarginLibrary() };
-    }
-    if (input.action === "resetReviewTemplate") {
-      const template = await resetGrossMarginReviewTemplate(input.platform);
       return { template, library: await getGrossMarginLibrary() };
     }
     const table = await saveGrossMarginPriceTable(input);

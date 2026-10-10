@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { RotateCcw, Save, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Save, X } from "lucide-react";
 import { ModalBackdrop } from "@/components/ModalBackdrop";
 import {
-  grossMarginReviewTemplateVariables,
   renderGrossMarginReviewTemplate,
   type GrossMarginReviewTemplateValues
 } from "@/lib/gross-margin-template";
+import { GrossMarginTemplateEditor } from "./GrossMarginTemplateEditor";
 import type { GrossMarginReviewTemplate } from "@/lib/types";
 
 export function GrossMarginTemplateModal({
@@ -16,7 +16,6 @@ export function GrossMarginTemplateModal({
   previewValues,
   template,
   onClose,
-  onReset,
   onSave
 }: {
   busy: boolean;
@@ -24,10 +23,8 @@ export function GrossMarginTemplateModal({
   previewValues: GrossMarginReviewTemplateValues;
   template: GrossMarginReviewTemplate;
   onClose: () => void;
-  onReset: () => Promise<void>;
   onSave: (value: string) => Promise<void>;
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(template.content);
   const preview = useMemo(() => {
     try {
@@ -40,33 +37,10 @@ export function GrossMarginTemplateModal({
   const dirty = draft !== template.content;
   const lineCount = useMemo(() => draft.split("\n").filter((line) => line.trim()).length, [draft]);
 
-  function insertVariable(name: string) {
-    const token = `{{${name}}}`;
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      setDraft((current) => `${current}${current.endsWith("\n") || !current ? "" : "\n"}${token}`);
-      return;
-    }
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const next = `${draft.slice(0, start)}${token}${draft.slice(end)}`;
-    setDraft(next);
-    window.requestAnimationFrame(() => {
-      textarea.focus();
-      const cursor = start + token.length;
-      textarea.setSelectionRange(cursor, cursor);
-    });
-  }
-
   function requestClose() {
     if (busy) return;
     if (dirty && !window.confirm("文案模板还有未保存修改，确定关闭吗？")) return;
     onClose();
-  }
-
-  function resetDraft(value: string) {
-    if (dirty && !window.confirm("当前模板修改尚未保存，确定覆盖吗？")) return;
-    setDraft(value);
   }
 
   return (
@@ -91,25 +65,7 @@ export function GrossMarginTemplateModal({
 
         <div className="gross-template-layout">
           <section className="gross-template-edit-column" aria-label="编辑模板">
-            <label className="field gross-template-editor">
-              <span>模板内容</span>
-              <textarea
-                autoComplete="off"
-                disabled={busy}
-                name="grossTemplateContent"
-                ref={textareaRef}
-                rows={18}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-              />
-            </label>
-            <div className="gross-template-variable-list" aria-label="可插入变量">
-              {grossMarginReviewTemplateVariables.map((variable) => (
-                <button className="btn compact" disabled={busy} key={variable.name} onClick={() => insertVariable(variable.name)} type="button">
-                  {`{{${variable.name}}}`}
-                </button>
-              ))}
-            </div>
+            <GrossMarginTemplateEditor value={draft} disabled={busy} onChange={setDraft} />
           </section>
 
           <aside className="gross-template-preview" aria-label="文案预览">
@@ -128,17 +84,6 @@ export function GrossMarginTemplateModal({
         </div>
 
         <footer className="button-row gross-template-actions">
-          <button className="btn" disabled={busy} onClick={requestClose} type="button">
-            取消
-          </button>
-          <button className="btn" disabled={busy} onClick={() => resetDraft(template.defaultContent)} type="button">
-            <RotateCcw aria-hidden="true" size={15} />
-            套用默认
-          </button>
-          <button className="btn" disabled={busy || !template.customized} onClick={() => { if (!dirty || window.confirm("当前模板修改尚未保存，确定恢复系统默认吗？")) void onReset(); }} type="button">
-            <RotateCcw aria-hidden="true" size={15} />
-            恢复系统默认
-          </button>
           <button
             aria-busy={busy}
             className="btn primary"

@@ -15,9 +15,21 @@ const versionedObject = z.object({
 
 export const douyinHotlistWatchlistSchema = versionedObject.extend({
   schemaVersion: z.literal(1).optional(), version: z.literal(1), accountIds: z.array(z.string().min(1)),
+  groups: z.array(z.object({
+    id: z.string().uuid(), name: z.string().trim().min(1).max(40),
+    accountIds: z.array(z.string().min(1))
+  })).optional(),
+  groupRevision: z.number().int().nonnegative().optional(),
   updatedAt: z.string().min(1), lastRefreshedAt: z.string().optional(),
   lastFullRefreshAttemptAt: z.string().optional(), lastFullRefreshAt: z.string().optional()
-}).passthrough();
+}).passthrough().superRefine((value, context) => {
+  const groups = value.groups ?? [];
+  if (new Set(groups.map((group) => group.id)).size !== groups.length ||
+      new Set(groups.map((group) => group.name.toLocaleLowerCase())).size !== groups.length ||
+      groups.some((group) => new Set(group.accountIds).size !== group.accountIds.length || group.accountIds.some((id) => !value.accountIds.includes(id)))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "视频热榜分组存在重复或无效账号引用。" });
+  }
+});
 
 const jobStatusSchema = z.enum(["queued", "running", "completed", "failed", "interrupted", "cancelled"]);
 const jobProgressSchema = z.number().finite().min(0).max(100);

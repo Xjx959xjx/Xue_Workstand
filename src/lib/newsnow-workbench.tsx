@@ -30,6 +30,7 @@ export function createNewsNowWorkbench(React: typeof ReactType, api: NewsNowApi)
 
   return function NewsNowWorkbench() {
     const [layout, setLayout] = useState<NewsNowLayout>(() => readNewsNowLayout(null, sourceIds));
+    const [layoutReady, setLayoutReady] = useState(false);
     const [state, setState] = useState<NewsNowWorkbenchState>({ total: sourceIds.length, hidden: 0, refreshing: false, completed: 0, failures: [], message: "", storageError: "" });
     const [draggedId, setDraggedId] = useState<string | null>(null);
     const grid = useRef<HTMLOListElement>(null);
@@ -237,20 +238,38 @@ export function createNewsNowWorkbench(React: typeof ReactType, api: NewsNowApi)
       setState(current => ({ ...current, refreshing: false, completed, failures, message: controller.signal.aborted ? `已停止刷新，完成 ${completed}/${sourceIds.length}` : failures.length ? `刷新完成：${sourceIds.length - failures.length} 个成功，${failures.length} 个失败，旧内容仍可阅读。` : `全部 ${sourceIds.length} 个来源已刷新` }));
     }, []);
 
+    // Restore before mounting cards: loading saved preferences is not a user reorder.
+    // Keep this independent of the optional referrer used by the parent bridge.
+    useLayoutEffect(() => {
+      try {
+        const saved = readNewsNowLayout(localStorage.getItem(NEWSNOW_LAYOUT_KEY), sourceIds);
+        layoutRef.current = saved;
+        setLayout(saved);
+      } catch (error) {
+        setState(current => ({ ...current, storageError: `无法读取卡片偏好，本次暂用默认布局。${error instanceof Error ? error.message : "请检查浏览器存储权限。"}` }));
+      }
+      setLayoutReady(true);
+    }, []);
+
     useEffect(() => {
       alive.current = true;
       try {
         const origin = new URL(document.referrer).origin;
         const url = new URL(origin);
         if (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) parentOrigin.current = origin;
-        changeLayout(readNewsNowLayout(localStorage.getItem(NEWSNOW_LAYOUT_KEY), sourceIds), false);
-      } catch (error) {
-        setState(current => ({ ...current, storageError: error instanceof Error ? error.message : "无法读取卡片偏好，本次使用默认布局。" }));
+      } catch {
+        // Referrer can be absent under browser privacy policies; validate the handshake below.
       }
       const listener = (event: MessageEvent) => {
-        if (event.source !== window.parent || event.origin !== parentOrigin.current) return;
+        if (event.source !== window.parent || window.parent === window) return;
         const message = event.data;
         if (message?.channel !== NEWSNOW_BRIDGE_CHANNEL || message?.version !== NEWSNOW_BRIDGE_VERSION) return;
+        if (!parentOrigin.current && message.type === "connect") {
+          if (!URL.canParse(event.origin)) return;
+          const url = new URL(event.origin);
+          if (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) parentOrigin.current = event.origin;
+        }
+        if (event.origin !== parentOrigin.current) return;
         if (message.type === "connect") {
           if (typeof message.reducedMotion === "boolean") reducedMotion.current = message.reducedMotion;
           if (message.tokens && typeof message.tokens === "object") {
@@ -285,7 +304,7 @@ export function createNewsNowWorkbench(React: typeof ReactType, api: NewsNowApi)
       if (parentOrigin.current) window.parent.postMessage({ channel: NEWSNOW_BRIDGE_CHANNEL, version: NEWSNOW_BRIDGE_VERSION, type: "state", state: { ...state, hidden: layout.hidden.length } }, parentOrigin.current);
     }, [state, layout.hidden.length]);
 
-    const visible = layout.order.filter(id => !layout.hidden.includes(id));
+    const visible = layoutReady ? layout.order.filter(id => !layout.hidden.includes(id)) : [];
     return <>
       <p id="nw-drag-hint" className="nw-sr-only">拖动手柄排序；也可按住 Alt 并按方向键移动卡片，Escape 取消拖动。</p>
       <p className="nw-sr-only" aria-live="polite">{state.message}</p>
@@ -299,7 +318,7 @@ export function createNewsNowWorkbench(React: typeof ReactType, api: NewsNowApi)
           {state.failures.some(failure => failure.id === id) ? <span className="nw-card-failure" role="status" title={state.failures.find(failure => failure.id === id)?.reason}>刷新失败 · 保留旧内容</span> : null}
         </li>)}
       </ol>
-      {!visible.length ? <div className="nw-empty"><Icon name="show" /><h2>卡片都收起来了</h2><p>随时恢复你想看的资讯来源。</p><button type="button" className="btn" onClick={() => restore()}>恢复全部卡片</button></div> : null}
+      {layoutReady && !visible.length ? <div className="nw-empty"><Icon name="show" /><h2>卡片都收起来了</h2><p>随时恢复你想看的资讯来源。</p><button type="button" className="btn" onClick={() => restore()}>恢复全部卡片</button></div> : null}
       <dialog ref={dialog} className="nw-manager" aria-labelledby="nw-manager-title" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }} onClose={() => { window.parent.postMessage({ channel: NEWSNOW_BRIDGE_CHANNEL, version: NEWSNOW_BRIDGE_VERSION, type: "focus-manage" }, parentOrigin.current); }}>
         <div className="nw-manager-body">
           <header><div><h2 id="nw-manager-title">管理卡片</h2><p>拖动排序，隐藏暂时不看的来源。</p></div><button type="button" className="btn nw-control" aria-label="关闭管理卡片" onClick={() => dialog.current?.close()}><Icon name="close" /></button></header>

@@ -7,6 +7,7 @@ import {
   removeDouyinHotlistAccount
 } from "@/lib/douyin-hotlist";
 import { platforms } from "@/lib/types";
+import { deleteDouyinHotlistGroup, saveDouyinHotlistGroup } from "@/lib/storage/douyin-hotlist";
 
 export const runtime = "nodejs";
 
@@ -17,7 +18,10 @@ const getSchema = z.object({
 });
 
 const postSchema = z.object({
-  action: z.enum(["addAccount", "removeAccount", "refresh"]),
+  action: z.enum(["addAccount", "removeAccount", "refresh", "saveGroup", "deleteGroup"]),
+  groupId: z.string().uuid().optional(),
+  name: z.string().trim().min(1, "请输入分组名称。").max(40, "分组名称不能超过 40 个字符。").optional(),
+  revision: z.number().int().nonnegative().optional(),
   platform: z.enum(platforms).optional(),
   query: z.string().optional(),
   accountId: z.string().optional(),
@@ -48,6 +52,24 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return apiJson(async () => {
     const input = await parseJsonBody(request, postSchema);
+
+    if (input.action === "deleteGroup") {
+      await deleteDouyinHotlistGroup({
+        id: z.string().uuid("请选择要删除的分组。").parse(input.groupId),
+        revision: z.number().int().nonnegative().parse(input.revision)
+      });
+      return getDouyinHotlist({ windowKey: input.window });
+    }
+
+    if (input.action === "saveGroup") {
+      await saveDouyinHotlistGroup({
+        id: input.groupId,
+        name: z.string().min(1, "请输入分组名称。").parse(input.name),
+        accountIds: z.array(z.string()).parse(input.accountIds),
+        revision: z.number().int().nonnegative().parse(input.revision)
+      });
+      return getDouyinHotlist({ windowKey: input.window });
+    }
 
     if (input.action === "addAccount") {
       return addDouyinHotlistAccount({

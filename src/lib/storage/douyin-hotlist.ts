@@ -1,4 +1,5 @@
 import path from "path";
+import { randomUUID } from "crypto";
 import {
   createHotlistSurgeState,
   getHotlistSurgeDecision,
@@ -7,7 +8,7 @@ import {
   isHotlistSurgeStateAboveThreshold,
   shouldRetainHotlistSurgeState
 } from "../douyin-hotlist-surge";
-import type { Account, Platform, Video, VideoHotlistSurgeState, VideoHotlistTrend } from "../types";
+import type { Account, DouyinHotlistGroup, Platform, Video, VideoHotlistSurgeState, VideoHotlistTrend } from "../types";
 import { calculateHotlistBaseScore, HOTLIST_SCORE_VERSION } from "../douyin-hotlist-score";
 import { nowIso, safeSegment, shortHash } from "../utils";
 import { libraryRoot, normalizeStorageSegment } from "./core";
@@ -22,6 +23,8 @@ const WATCHLIST_FILE = "watchlist.json";
 type DouyinHotlistWatchlist = {
   version: 1;
   accountIds: string[];
+  groups?: DouyinHotlistGroup[];
+  groupRevision?: number;
   updatedAt: string;
   lastRefreshedAt?: string;
   lastFullRefreshAttemptAt?: string;
@@ -117,10 +120,56 @@ export async function removeDouyinHotlistAccountRefs(accountIds: string[]) {
     const next = {
       ...current,
       accountIds: current.accountIds.filter((accountId) => !removed.has(accountId)),
+      groups: current.groups?.map((group) => ({ ...group, accountIds: group.accountIds.filter((id) => !removed.has(id)) })),
+      groupRevision: (current.groupRevision ?? 0) + 1,
       updatedAt: nowIso()
     };
     await writeJsonFile(watchlistPath(), versionStoredRecord(next));
     return next;
+  });
+}
+
+export async function saveDouyinHotlistGroup(input: {
+  id?: string; name: string; accountIds: string[]; revision: number;
+}) {
+  return withHotlistWatchlistLock(async () => {
+    const current = await readDouyinHotlistWatchlistUnlocked();
+    const fail = (message: string, status: number): never => { throw Object.assign(new Error(message), { status }); };
+    if (input.revision !== (current.groupRevision ?? 0)) fail("分组已被其他操作更新，请重载后再保存。", 409);
+    const name = input.name.trim();
+    if (!name || name.length > 40) fail("分组名称请输入 1–40 个字符。", 400);
+    const groups = current.groups ?? [];
+    if (input.id && !groups.some((group) => group.id === input.id)) fail("该分组不存在，请重载后再试。", 404);
+    if (groups.some((group) => group.id !== input.id && group.name.toLocaleLowerCase() === name.toLocaleLowerCase())) fail("已有同名分组，请换个名字。", 400);
+    const accountIds = normalizeDouyinHotlistAccountIds(input.accountIds);
+    if (accountIds.some((id) => !current.accountIds.includes(id))) fail("部分账号已移出监控池，请重载后重新选择。", 409);
+    const group = { id: input.id ?? randomUUID(), name, accountIds };
+    const next = {
+      ...current,
+      groups: input.id ? groups.map((item) => item.id === input.id ? group : item) : [...groups, group],
+      groupRevision: (current.groupRevision ?? 0) + 1,
+      updatedAt: nowIso()
+    };
+    await writeJsonFile(watchlistPath(), versionStoredRecord(next));
+    return group;
+  });
+}
+
+export async function deleteDouyinHotlistGroup(input: { id: string; revision: number }) {
+  return withHotlistWatchlistLock(async () => {
+    const current = await readDouyinHotlistWatchlistUnlocked();
+    if (input.revision !== (current.groupRevision ?? 0)) {
+      throw Object.assign(new Error("分组已被其他操作更新，请重载后再删除。"), { status: 409 });
+    }
+    if (!current.groups?.some((group) => group.id === input.id)) {
+      throw Object.assign(new Error("该分组不存在，请重载后再试。"), { status: 404 });
+    }
+    await writeJsonFile(watchlistPath(), versionStoredRecord({
+      ...current,
+      groups: current.groups.filter((group) => group.id !== input.id),
+      groupRevision: (current.groupRevision ?? 0) + 1,
+      updatedAt: nowIso()
+    }));
   });
 }
 

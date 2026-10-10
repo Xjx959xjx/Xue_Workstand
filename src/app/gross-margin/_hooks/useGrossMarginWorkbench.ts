@@ -6,7 +6,6 @@ import { copyText } from "@/lib/copy-text";
 import {
   bulkSaveGrossMarginMonitorRecords,
   getGrossMarginLibrary,
-  resetGrossMarginReviewTemplate,
   resolveGrossMarginVideoAccount,
   saveGrossMarginMonitorRecord,
   saveGrossMarginPriceTable,
@@ -423,20 +422,6 @@ export function useGrossMarginWorkbench() {
     }
   }
 
-  async function handleResetReviewTemplate() {
-    setBusy("template");
-    try {
-      const result = await resetGrossMarginReviewTemplate(platform);
-      setLibrary(result.library);
-      setTemplateModalOpen(false);
-      notify({ tone: "success", message: `${formatPlatform(platform)}文案模板已恢复系统默认` });
-    } catch (error) {
-      notify({ tone: "error", message: error instanceof Error ? error.message : "恢复默认模板失败" });
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function handleBulkMonitorSubmit(input: { template: string; createProject: boolean; projectName: string }) {
     setBusy("bulk-monitor");
     try {
@@ -526,7 +511,6 @@ export function useGrossMarginWorkbench() {
     handleImportTemplate,
     handlePlatformChange,
     handleRefresh,
-    handleResetReviewTemplate,
     handleSaveFullPriceTable,
     handleSavePriceTable,
     handleSaveReviewTemplate,
