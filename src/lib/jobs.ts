@@ -1,3 +1,5 @@
+import { runTrendRadarNative } from "./trendradar-native";
+import { trendRadarSettingsSchema } from "./trendradar-native-types";
 import { assistImagePrompt } from "./image-prompt-assist";
 import { generateImages } from "./image-generation";
 import { randomUUID } from "crypto";
@@ -23,7 +25,7 @@ import { buildWriterDraftHref } from "./draft-links";
 import { generateEngagement } from "./engagement";
 import { refreshDouyinHotlist } from "./douyin-hotlist";
 import { refreshGrossMarginMonitorRecords } from "./gross-margin-refresh";
-import { getHotspotRadar } from "./hotspots";
+import { syncGrossMarginProjectSource } from "./storage/gross-margin-projects";
 import { hasSupportDocumentReference } from "./support-documents";
 import { extractRewriteSourceMaterial, splitWriterSourceInput } from "./source-extraction";
 import { engagementSourceKey, writeCopySourceKey } from "./job-scope";
@@ -1378,37 +1380,36 @@ async function runPublishCopyJob(jobId: string, start: Extract<JobStartInput, { 
 }
 
 async function runHotspotRefreshJob(jobId: string, start: Extract<JobStartInput, { kind: "hotspot-refresh" }>) {
-  await patchJob(jobId, {
-    stage: "collect",
-    message: start.input.continueAnalysis ? "正在继续已采集资讯的分析" : start.input.retryReport ? "正在恢复选题日报" : "正在汇入热点榜单、RSS 与视频热榜",
-    progress: 8
-  });
-  const result = await getHotspotRadar({
-    refresh: true,
-    retryReport: start.input.retryReport,
-    continueAnalysis: start.input.continueAnalysis,
-    trendRadarIds: start.input.trendRadarIds,
+  if (start.input.retryReport || start.input.continueAnalysis || start.input.trendRadarIds) {
+    throw new Error("热点雷达已切换为 TrendRadar 原生报告，请回到热点雷达重新生成报告，旧选题批次不能续跑");
+  }
+  const result = await runTrendRadarNative(start.input.native || trendRadarSettingsSchema.parse({}), {
     signal: getJobAbortSignal(jobId),
-    async onProgress(progress) {
-      if (!progress.dataChanged) throwIfCancelled(jobId);
-      const patch = {
-        stage: progress.stage || "collect",
-        message: `${progress.sourceName}${progress.failed ? "（失败）" : ""} · ${progress.completed}/${progress.total}`,
-        progress: progress.stage === "AI 粗筛" ? 55 + Math.round(progress.completed / Math.max(1, progress.total) * 15) : progress.stage === "事件归并" ? 68 : progress.stage === "正文" ? 70 : progress.stage === "AI 精筛" ? 70 + Math.round(progress.completed / Math.max(1, progress.total) * 20) : progress.stage === "日报" ? 94 : Math.min(54, 8 + Math.round(progress.completed / Math.max(1, progress.total) * 46))
-      };
-      if (progress.dataChanged) await patchJobWithDataChange(jobId, patch, { resource: "hotspots" });
-      else await patchTransientJob(jobId, patch);
-    }
+    onProgress: progress => patchTransientJob(jobId, progress).then(() => undefined),
   });
+  await patchJobWithDataChange(jobId, { stage: "saved", progress: 98, message: "TrendRadar 原生报告已保存" }, { resource: "hotspots" });
   throwIfCancelled(jobId);
   await completeJob(jobId, {
-    message: `热点刷新完成：${result.summary.hotspotCount} 个热点，${result.summary.failedSourceCount} 个来源异常`,
-    result,
-    resultRef: { href: start.href || "/hotspots", label: "查看热点雷达" }
+    message: `TrendRadar 报告完成：分析 ${result.counts.analyzed} 条资讯${result.warnings.length ? `，${result.warnings.length} 项来源或分析提示` : ""}`,
+    result, resultRef: { href: "/hotspots?view=topics", label: "查看 TrendRadar 报告" }
   });
 }
 
 async function runGrossMarginRefreshJob(jobId: string, start: Extract<JobStartInput, { kind: "gross-margin-refresh" }>) {
+  if (start.input.syncProjects) {
+    await patchJob(jobId, { stage: "load", message: "正在读取企业微信当月项目报价", progress: 8 });
+    const source = await syncGrossMarginProjectSource({
+      signal: getJobAbortSignal(jobId),
+      onProgress: async attempt => {
+        throwIfCancelled(jobId);
+        await patchTransientJob(jobId, { stage: "load", message: "企业微信正在导出项目表，可在任务中心停止或重试", progress: Math.min(90, 10 + attempt) });
+      }
+    });
+    await patchJobWithDataChange(jobId, { stage: "saved", message: "当月项目报价已同步", progress: 98 }, { resource: "gross-margin" });
+    throwIfCancelled(jobId);
+    await completeJob(jobId, { message: `${source.month} 项目报价已同步：${source.orders.length} 条`, result: { month: source.month, projectOrderCount: source.orders.length }, resultRef: { href: "/gross-margin", label: "查看项目报价" } });
+    return;
+  }
   await patchJob(jobId, {
     stage: "load",
     message: "正在读取监控记录",
@@ -1548,7 +1549,7 @@ function defaultJobTitle(input: JobStartInput) {
   if (input.kind === "single-video-transcribe") return "提取单条视频文案";
   if (input.kind === "publish-copy") return "生成标题与发布文案";
   if (input.kind === "hotspot-refresh") return input.input.trendRadarIds ? "分析 TrendRadar 候选" : input.input.continueAnalysis ? "继续分析热点" : input.input.retryReport ? "重试热点日报" : "刷新热点雷达";
-  if (input.kind === "gross-margin-refresh") return "批量刷新数据监控";
+  if (input.kind === "gross-margin-refresh") return input.input.syncProjects ? "同步当月项目报价" : "批量刷新数据监控";
   if (input.input.sourceType === "record") return "补齐评论素材";
   return "生成评论素材";
 }
@@ -1576,7 +1577,7 @@ function defaultInputSummary(input: JobStartInput) {
   if (input.kind === "single-video-transcribe") return input.input.titleHint || input.input.url;
   if (input.kind === "publish-copy") return input.input.topicHint || input.input.sourceText.slice(0, 42);
   if (input.kind === "hotspot-refresh") return input.input.trendRadarIds ? `${input.input.trendRadarIds.length} 条 TrendRadar 候选` : input.input.continueAnalysis ? "已采集资讯中的未完成候选" : input.input.retryReport ? "已完成选题池" : "全量热点来源";
-  if (input.kind === "gross-margin-refresh") return input.input.recordIds?.length ? `${input.input.recordIds.length} 条记录` : "全部监控记录";
+  if (input.kind === "gross-margin-refresh") return input.input.syncProjects ? "企业微信当月项目表" : input.input.recordIds?.length ? `${input.input.recordIds.length} 条记录` : "全部监控记录";
   if (input.input.sourceType === "draft") return "从草稿生成";
   if (input.input.sourceType === "url") return "从链接生成";
   if (input.input.sourceType === "record") return "补齐已有评论";
@@ -1639,7 +1640,7 @@ function defaultJobScope(input: JobStartInput): JobScope {
     return compactJobScope({ targetType: "hotspot", sourceKey: "all" });
   }
   if (input.kind === "gross-margin-refresh") {
-    return compactJobScope({ targetType: "gross-margin", sourceKey: shortHash((input.input.recordIds || ["all"]).join(",")) });
+    return compactJobScope({ targetType: "gross-margin", sourceKey: shortHash(input.input.syncProjects ? "project-orders" : (input.input.recordIds || ["all"]).join(",")) });
   }
   if (input.input.sourceType === "draft") {
     return compactJobScope({

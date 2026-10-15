@@ -41,6 +41,7 @@ test("配置原子保存、热读取与并发版本冲突，恢复默认不改�
   assert.equal(config.reasoningEffort, saved.overrides.comment_plan?.effort);
   const view = await getAiSettingsView();
   assert.ok(view.models.includes("gpt-5.6-sol"));
+  assert.equal(view.effective.trendradar.model, "gpt-5.6-sol");
   assert.equal(view.effective.comment_generate.model, "gpt-6-astra");
   assert.equal(view.effective.comment_generate.effort, "low");
   assert.equal(view.effective.danmaku.model, "gpt-6.1-sol");
@@ -148,5 +149,11 @@ test("真实请求体使用保存的模型及等级，覆盖旧调用参数并�
     for (reply of [" ", "长".repeat(12001)]) {
       await assert.rejects(assistWriterPrompt(prompt, new AbortController().signal), /原要求已保留/);
     }
+    reply = "热点分析完成";
+    const current = await readAiSettings();
+    await saveAiSettings({ ...current, overrides: { ...current.overrides, trendradar: { source: "relay", model: "gpt-5.6-sol", effort: "high" } } });
+    await chatCompleteStrict([{ role: "user", content: "分析热点" }], undefined, { policy: "trendradar" });
+    assert.equal(bodies.at(-1)?.model, "gpt-5.6-sol");
+    assert.equal(bodies.at(-1)?.reasoning_effort, "high");
   } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
 }));

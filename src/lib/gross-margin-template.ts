@@ -1,6 +1,7 @@
 import type { GrossMarginPriceTable } from "./types";
 
 export const grossMarginReviewTemplateVariables = [
+  { name: "date", label: "日期" },
   { name: "accountName", label: "账号名" },
   { name: "douyinId", label: "抖音ID" },
   { name: "cooperationCode", label: "合作码" },
@@ -32,6 +33,12 @@ export type GrossMarginReviewTemplateValues = Partial<Record<GrossMarginReviewTe
 
 const templateVariablePattern = /{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g;
 const supportedTemplateVariables = new Set(grossMarginReviewTemplateVariables.map((variable) => variable.name));
+const reviewDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric"
+});
 
 export function getDefaultGrossMarginReviewTemplate(platform: GrossMarginPriceTable["platform"]) {
   if (platform === "bilibili") {
@@ -101,8 +108,12 @@ export function validateGrossMarginReviewTemplate(content: string) {
 
 export function renderGrossMarginReviewTemplate(content: string, values: GrossMarginReviewTemplateValues) {
   const normalized = validateGrossMarginReviewTemplate(content);
+  const dateParts = reviewDateFormatter.formatToParts(new Date());
+  const datePart = (type: Intl.DateTimeFormatPartTypes) => dateParts.find((part) => part.type === type)?.value;
+  const currentDate = `${datePart("year")}年${datePart("month")}月${datePart("day")}日`;
   return normalized
-    .replace(templateVariablePattern, (_match, name: string) => String(values[name as GrossMarginReviewTemplateVariable] ?? ""))
+    .replace(templateVariablePattern, (_match, name: string) =>
+      name === "date" ? currentDate : String(values[name as GrossMarginReviewTemplateVariable] ?? ""))
     .split("\n")
     .map((line) => line.trimEnd())
     .filter((line) => line.trim())

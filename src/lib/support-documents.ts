@@ -702,6 +702,6 @@ function summarizeSupportDocumentError(error: unknown, provider: SupportDocument
     return `${supportDocumentProviderLabel(provider)}未公开，或当前工具身份没有查看权限`;
   }
   if (/not found|404|不存在|无效/i.test(message)) return "文档不存在或链接无效";
-  if (/authorization expired/i.test(message)) return "企业微信授权已过期，请重新运行 wecom-cli init";
+  if (/authorization expired/i.test(message)) return "企业微信文档授权已过期，请在机器人「可使用权限」中重新授权；管理员授权模式请联系管理员处理";
   return message.replace(/\s+/g, " ").trim().slice(0, 500) || `${supportDocumentProviderLabel(provider)}读取失败`;
 }

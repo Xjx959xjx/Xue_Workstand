@@ -6,8 +6,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Newspaper, Sparkles } from "lucide-react";
 import { NewsNowDiscovery } from "./NewsNowDiscovery";
 
-const RadarAnalysis = dynamic(() => import("./RadarAnalysis"), {
-  loading: () => <p role="status">正在读取 AI 选题…</p>,
+const RadarAnalysis = dynamic(() => import("./TrendRadarReport"), {
+  loading: () => <p role="status">正在读取 TrendRadar 报告…</p>,
 });
 
 export default function HotspotsPage() {
@@ -18,8 +18,8 @@ function RadarWorkspace() {
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  // 保留既有 topics/news 深链接；无参数时进入资讯发现。
-  const analysis = params.get("view") === "topics" || params.get("view") === "news";
+  // 保留既有 topics/news 深链接；无参数时进入 TrendRadar 报告。
+  const analysis = params.get("view") !== "discover";
   function select(view: "discover" | "topics") {
     const next = new URLSearchParams(params.toString());
     next.set("view", view);
@@ -30,7 +30,7 @@ function RadarWorkspace() {
   const navigation = <nav className="radar-view-toolbar radar-compact-nav" aria-label="热点雷达内容">
       <div className="radar-content-tabs">
         <button aria-pressed={!analysis} onClick={() => select("discover")}><Newspaper size={16} />资讯发现</button>
-        <button aria-pressed={analysis} onClick={() => select("topics")}><Sparkles size={16} />AI 选题</button>
+        <button aria-pressed={analysis} onClick={() => select("topics")}><Sparkles size={16} />TrendRadar 报告</button>
       </div>
     </nav>;
   return <div className={`page radar-page${analysis ? "" : " radar-discovery-page"}`}>

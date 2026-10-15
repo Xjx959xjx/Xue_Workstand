@@ -45,6 +45,8 @@ import {
   type PlatformKey
 } from "../_lib/gross-margin-workbench-model";
 import { useGrossMarginAccountRefresh } from "./useGrossMarginAccountRefresh";
+import { useGrossMarginProjects } from "./useGrossMarginProjects";
+import { chooseGrossMarginProjectOrder, findGrossMarginProjectOrders, getGrossMarginProjectPrices } from "@/lib/gross-margin-projects";
 
 type BusyState = "" | "refresh" | "prices" | "price-editor" | "export" | "template" | "bulk-monitor";
 type VideoAccountLookupState = {
@@ -87,6 +89,26 @@ export function useGrossMarginWorkbench() {
   const accountNameRef = useRef("");
   const rebateRateRef = useRef("");
   const videoAccountLookupRequestRef = useRef(0);
+  const projects = useGrossMarginProjects(libraryLoaded);
+  const [projectSelection, setProjectSelection] = useState<{ context: string; id: string } | null>(null);
+  const projectContext = `${platform}:${accountName}:${videoUrl}`;
+  const projectSourceRef = useRef(projects.source);
+  const projectSelectionRef = useRef(projectSelection);
+  useEffect(() => { projectSourceRef.current = projects.source; projectSelectionRef.current = projectSelection; }, [projects.source, projectSelection]);
+  const projectOrders = useMemo(() => findGrossMarginProjectOrders(projects.source?.orders || [], platform, accountName), [projects.source, platform, accountName]);
+  const selectedProject = projectSelection?.context === projectContext
+    ? projectOrders.find(order => order.id === projectSelection.id) || null
+    : chooseGrossMarginProjectOrder(projectOrders, videoUrl);
+
+  // 异步项目表到达或账号/链接切换后，带入选中记录的原始金额。
+  useEffect(() => {
+    if (!selectedProject) return;
+    const prices = getGrossMarginProjectPrices(selectedProject);
+    setOriginalPrice(prices.originalPrice);
+    setRebateRate(prices.rebateRate);
+    rebateRateRef.current = prices.rebateRate;
+    setDiscountPrice(prices.discountPrice);
+  }, [projectContext, selectedProject]);
 
   const tables = useMemo(() => library?.tables || [], [library]);
   const table = useMemo(
@@ -203,7 +225,19 @@ export function useGrossMarginWorkbench() {
           const resolvedName = resolvedAccount?.name || result.accountName;
           accountNameRef.current = resolvedName;
           setAccountName(resolvedName);
-          if (resolvedAccount) {
+          const matchingProjects = findGrossMarginProjectOrders(projectSourceRef.current?.orders || [], result.platform, resolvedName);
+          const selection = projectSelectionRef.current;
+          const manuallySelected = selection?.context === `${result.platform}:${resolvedName}:${nextUrl}`;
+          const resolvedProject = manuallySelected
+            ? matchingProjects.find(order => order.id === selection.id)
+            : chooseGrossMarginProjectOrder(matchingProjects, nextUrl);
+          if (resolvedProject) {
+            const prices = getGrossMarginProjectPrices(resolvedProject);
+            setOriginalPrice(prices.originalPrice);
+            setRebateRate(prices.rebateRate);
+            rebateRateRef.current = prices.rebateRate;
+            setDiscountPrice(prices.discountPrice);
+          } else if (resolvedAccount && !manuallySelected) {
             const price = getGrossMarginAccountPrice(resolvedAccount, "custom");
             setAccountPriceKind(price.kind);
             setOriginalPrice(String(price.value));
@@ -215,7 +249,7 @@ export function useGrossMarginWorkbench() {
             status: resolvedAccount ? "matched" : "unmatched",
             message: resolvedAccount
               ? `已识别账号：${resolvedName}`
-              : `已识别账号「${resolvedName}」，但报价表未匹配，请手动填写价格。`
+              : `已识别账号「${resolvedName}」，可选择当月项目或手动填写价格。`
           });
         })
         .catch((error) => {
@@ -242,6 +276,7 @@ export function useGrossMarginWorkbench() {
   }
 
   function handlePlatformChange(nextPlatform: PlatformKey) {
+    clearProjectPrices();
     setPlatform(nextPlatform);
     const nextTable = tables.find((item) => item.platform === nextPlatform) || null;
     if (!nextTable) return;
@@ -255,6 +290,8 @@ export function useGrossMarginWorkbench() {
   }
 
   function handleAccountNameChange(value: string) {
+    if (value === accountNameRef.current) return;
+    clearProjectPrices();
     accountNameRef.current = value;
     setAccountName(value);
     setVideoAccountLookup({ status: "idle", message: "" });
@@ -264,6 +301,7 @@ export function useGrossMarginWorkbench() {
 
   function handleVideoUrlChange(value: string) {
     const nextUrl = normalizeVideoUrlInput(value);
+    if (nextUrl !== videoUrl) clearProjectPrices();
     setVideoUrl(nextUrl);
     const nextPlatform = detectVideoPlatform(nextUrl);
     if (nextPlatform && nextPlatform !== platform) handlePlatformChange(nextPlatform);
@@ -271,8 +309,9 @@ export function useGrossMarginWorkbench() {
 
   function updateOriginalPrice(value: string) {
     setOriginalPrice(value);
-    if (rebateRate.trim()) {
-      setDiscountPrice(formatAmountInput(toAmount(value) * (1 - toAmount(rebateRate) / 100)));
+    // 账号切换时清空返点与填账号报价在同一批更新内发生，读取最新 ref 避免沿用旧比例。
+    if (rebateRateRef.current.trim()) {
+      setDiscountPrice(formatAmountInput(toAmount(value) * (1 - toAmount(rebateRateRef.current) / 100)));
     }
   }
 
@@ -291,8 +330,27 @@ export function useGrossMarginWorkbench() {
   }
 
   function handleAccountPriceKindChange(kind: AccountPriceKind) {
+    setProjectSelection({ context: projectContext, id: "manual" });
     setAccountPriceKind(kind);
     if (matchedAccount) applyAccountPrice(matchedAccount, kind);
+  }
+
+  function clearProjectPrices() {
+    setProjectSelection(null);
+    setOriginalPrice("");
+    setRebateRate("");
+    rebateRateRef.current = "";
+    setDiscountPrice("");
+  }
+
+  function handleProjectChange(id: string) {
+    setProjectSelection({ context: projectContext, id });
+    if (id === "manual") {
+      setOriginalPrice("");
+      setRebateRate("");
+      rebateRateRef.current = "";
+      setDiscountPrice("");
+    }
   }
 
   async function handleRefresh() {
@@ -372,8 +430,10 @@ export function useGrossMarginWorkbench() {
     setBusy("export");
     let copied = false;
     try {
+      // 导出时重新填充当天日期，避免页面跨日停留后复制昨日文案。
+      const reviewText = renderGrossMarginReviewTemplate(reviewTemplate.content, reviewTemplateValues);
       try {
-        await copyText(effectiveReviewTemplate);
+        await copyText(reviewText);
         copied = true;
       } catch {
         // 剪贴板权限失败不应阻止保存，保存后提供手动复制入口。
@@ -382,7 +442,7 @@ export function useGrossMarginWorkbench() {
         platform,
         accountName: matchedAccount?.name || accountName,
         videoUrl,
-        sourceText: effectiveReviewTemplate,
+        sourceText: reviewText,
         targetStats: Object.fromEntries(
           calculation.lines
             .filter((line) => line.quantity > 0)
@@ -453,6 +513,7 @@ export function useGrossMarginWorkbench() {
       template
     });
     setPlatform(imported.platform);
+    clearProjectPrices();
     setPriceInputs(imported.priceInputs);
     setSelectedOptions(imported.selectedOptions);
     setQuantityInputs(imported.quantityInputs);
@@ -468,6 +529,14 @@ export function useGrossMarginWorkbench() {
   }
 
   return {
+    projectOrders,
+    selectedProject,
+    projectSelectionValue: selectedProject?.id || (projectSelection?.context === projectContext && projectSelection.id === "manual" ? "manual" : "choose"),
+    projectMonth: projects.source?.month || "",
+    projectSourceError: projects.error,
+    projectSourceLoading: projects.loading,
+    refreshProjects: projects.refresh,
+    handleProjectChange,
     accountName,
     accountPriceKind,
     activePricePanelServiceConfigs,

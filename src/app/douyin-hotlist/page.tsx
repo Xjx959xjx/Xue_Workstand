@@ -29,7 +29,6 @@ import type {
 } from "@/lib/types";
 import {
   buildHotlistHref,
-  formatDate,
   getPlatformAccountSelection,
   getPlatformLabel,
   getHotlistGroupAccounts,
@@ -240,13 +239,10 @@ function DouyinHotlistPageContent() {
   const refreshLabel = selectedAccount ? "抓取当前账号" : selectedPlatform ? `抓取${selectedPlatformLabel}${windowLabel}` : `抓取全部${windowLabel}`;
   const rankTitle = selectedAccount ? selectedAccount.name : selectedPlatform ? `${selectedPlatformLabel}热度榜` : selectedGroup?.name || "实时热度榜";
   const activePlatformFilter: Platform | "all" = selectedPlatform || selectedAccount?.platform || "all";
-  const lastFullRefreshLabel = summary?.lastFullRefreshAt || summary?.lastFullRefreshAttemptAt;
   const visibleAccountCount = selectedAccount ? 1 : selectedPlatform ? selectedPlatformAccounts.length : groupAccounts.length;
   const rankSubtitle = summary ? <>
-    <strong className="status-pill completed hotlist-summary-count">{visibleAccountCount} 个{selectedPlatformLabel}账号</strong>
-    <span aria-hidden="true"> · </span><span>{windowLabel}</span>{" "}
-    <strong className="status-pill completed hotlist-summary-count">{visibleItems.length} 条</strong>
-    <span> · 最近刷新 {lastFullRefreshLabel ? formatDate(lastFullRefreshLabel) : "未检查"}</span>
+    <span><strong className="hotlist-summary-count">{visibleAccountCount}</strong> 个{selectedPlatformLabel}账号</span>
+    <span>{windowLabel} <strong className="hotlist-summary-count">{visibleItems.length}</strong> 条</span>
     {initialLoading || refreshing ? <span className="status-pill pending">{initialLoading ? "读取中" : `刷新 ${Math.round(activeRefreshJob?.progress || 0)}%`}</span> : null}
   </> : "正在读取视频热榜…";
 

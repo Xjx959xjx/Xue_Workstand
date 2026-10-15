@@ -2,7 +2,7 @@
 
 import { WorkbenchSelect, WorkbenchSelectPopover } from "@/components/WorkbenchSelect";
 
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, RefreshCw } from "lucide-react";
 import { Button, ComboBox, Input, ListBox, ListBoxItem } from "react-aria-components";
 import {
   getActiveServiceOptions,
@@ -45,6 +45,14 @@ type GrossMarginMaintenancePaneProps = Pick<
   | "updateOriginalPrice"
   | "videoUrl"
   | "videoAccountLookup"
+  | "projectOrders"
+  | "selectedProject"
+  | "projectSelectionValue"
+  | "projectMonth"
+  | "projectSourceError"
+  | "projectSourceLoading"
+  | "refreshProjects"
+  | "handleProjectChange"
 >;
 
 type GrossMarginAccountComboboxProps = {
@@ -101,7 +109,15 @@ export function GrossMarginMaintenancePane({
   table,
   updateOriginalPrice,
   videoUrl,
-  videoAccountLookup
+  videoAccountLookup,
+  projectOrders,
+  selectedProject,
+  projectSelectionValue,
+  projectMonth,
+  projectSourceError,
+  projectSourceLoading,
+  refreshProjects,
+  handleProjectChange
 }: GrossMarginMaintenancePaneProps) {
   const selectedAccountPrice = matchedAccount
     ? getGrossMarginAccountPrice(matchedAccount, accountPriceKind)
@@ -130,13 +146,23 @@ export function GrossMarginMaintenancePane({
                 onChange={handleAccountNameChange}
                 value={accountName}
               />
-              {matchedAccount ? (
-                <span className="field-hint">
-                  已匹配{selectedAccountPrice?.label}：{formatMoney(selectedAccountPrice?.value || 0)}
-                </span>
-              ) : accountName.trim() ? (
-                <span className="field-hint warning">未匹配账号，价格可手填</span>
-              ) : null}
+              <span className={`field-hint${!selectedProject && !matchedAccount && accountName.trim() ? " warning" : ""}`}>
+                {selectedProject ? "已带入项目报价" : matchedAccount ? `已匹配${selectedAccountPrice?.label}：${formatMoney(selectedAccountPrice?.value || 0)}` : accountName.trim() ? "未匹配账号，价格可手填" : "\u00a0"}
+              </span>
+            </div>
+            <div className="field gross-project-field" title={selectedProject ? `${selectedProject.projectName}${selectedProject.date ? ` · ${selectedProject.date}` : ""}` : undefined}>
+              <label htmlFor="gross-project">项目</label>
+              <div className="gross-project-controls">
+                <WorkbenchSelect aria-label="项目" aria-describedby="gross-project-hint" id="gross-project" value={projectSelectionValue} onValueChange={handleProjectChange}>
+                  <option value="choose" disabled>{projectSourceLoading ? "正在同步当月项目…" : !accountName.trim() ? "请先选择账号" : projectOrders.length ? "请选择当月项目" : projectSourceError ? "同步失败，可手动填写" : "暂无匹配的当月项目"}</option>
+                  {projectOrders.map(order => <option value={order.id} key={order.id}>{order.projectName}{order.date ? ` · ${order.date}` : ""}{order.orderAmount !== null ? ` · ${formatMoney(order.orderAmount)}` : ""}</option>)}
+                  <option value="manual">手动填写</option>
+                </WorkbenchSelect>
+                <button className="btn compact icon-only" type="button" aria-label={projectSourceLoading ? "同步项目中" : projectSourceError ? "重试同步项目" : "同步项目"} title={projectSourceLoading ? "同步项目中" : projectSourceError ? "重试同步项目" : "同步项目"} disabled={projectSourceLoading} onClick={() => void refreshProjects()}><RefreshCw size={16} aria-hidden="true" /></button>
+              </div>
+              <span id="gross-project-hint" className={`field-hint${projectSourceError || selectedProject?.warning ? " warning" : ""}`} role="status" title={projectSourceError || selectedProject?.warning}>
+                {projectSourceLoading ? "正在同步项目报价，已有缓存仍可使用" : projectSourceError || selectedProject?.warning || (selectedProject ? `返点金额：${formatMoney(selectedProject.rebateAmount || 0)}` : `${projectMonth || "当月"} · ${projectOrders.length} 个项目 · 右侧按钮手动同步`)}
+              </span>
             </div>
             <div className="field">
               <label htmlFor="gross-video-url">视频链接</label>
@@ -146,18 +172,18 @@ export function GrossMarginMaintenancePane({
                 name="videoUrl"
                 type="url"
                 value={videoUrl}
+                title={videoUrl || undefined}
                 onBlur={() => handleVideoUrlChange(videoUrl)}
                 onChange={(event) => handleVideoUrlChange(event.target.value)}
                 placeholder="粘贴视频链接，导出时会带上…"
               />
-              {videoAccountLookup.message ? (
-                <span
-                  aria-live="polite"
-                  className={`field-hint${videoAccountLookup.status === "error" || videoAccountLookup.status === "unmatched" ? " warning" : ""}`}
-                >
-                  {videoAccountLookup.message}
-                </span>
-              ) : null}
+              <span
+                aria-live="polite"
+                className={`field-hint${videoAccountLookup.status === "error" || videoAccountLookup.status === "unmatched" ? " warning" : ""}`}
+                title={videoAccountLookup.message}
+              >
+                {videoAccountLookup.message || "\u00a0"}
+              </span>
             </div>
           </div>
           <div className="gross-price-summary-grid">

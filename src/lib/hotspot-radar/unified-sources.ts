@@ -1,45 +1,22 @@
-import { createHash } from "node:crypto";
-import { getDouyinHotlist } from "../douyin-hotlist";
 import { getTrendRadarFeed, trendRadarItemsToSources } from "../trendradar";
-import { canonicalRadarUrl, safeSourceUrl } from "./collector";
+import { canonicalRadarUrl } from "./collector";
 import { coarseFilter, isLowValueRoutineSports } from "./source-rules.mjs";
 import type { RadarSignal } from "./source-rules.mjs";
 import type { CollectedSource, RadarRefreshOptions } from "./collector";
 import type { RadarPipelineConfig } from "./config";
-import type { DouyinHotlistResponse } from "../types";
-
-export function videoHotlistSources(feed: DouyinHotlistResponse): CollectedSource[] {
-  const checkedAt = feed.summary.lastRefreshedAt || "";
-  const source = { id: "video-hotlist", name: "视频热榜", url: "", type: "video", scope: "已保存的抖音 / B站热榜" };
-  const items: RadarSignal[] = [];
-  let invalid = 0;
-  for (const { video, account, rank } of feed.items) {
-    let url: string;
-    try { url = safeSourceUrl(video.url); } catch { invalid++; continue; }
-    items.push({ id: `video:${video.platform}:${createHash("sha256").update(video.id).digest("hex").slice(0, 24)}`, sourceId: source.id, source: `${account.name}（${video.platform === "bilibili" ? "B站" : "抖音"}）`, originalSource: account.name,
-      title: video.title, summary: "视频标题线索；未读取视频文稿，不代表已核实视频内容或事件事实。", url, category: "视频热榜", publishedAt: video.publishedAt || "", collectedAt: checkedAt, observedAt: checkedAt, inputKind: "video",
-      metrics: { rank, likes: video.stats.likes, comments: video.stats.comments, views: video.stats.views } });
-  }
-  const warnings = [!checkedAt ? "尚无视频热榜刷新记录，请先在视频热榜更新" : "", feed.summary.staleAccountIds.length ? `${feed.summary.staleAccountIds.length} 个热榜账号记录缺失` : "", invalid ? `${invalid} 条视频链接无效，已排除` : ""].filter(Boolean);
-  return [{ source, checkedAt, items, ...(warnings.length ? { error: warnings.join("；") } : {}) }];
-}
 
 export async function collectUnifiedSources(config: RadarPipelineConfig, options: RadarRefreshOptions): Promise<CollectedSource[]> {
-  const results = await Promise.allSettled([
-    config.sources.some(kind => kind !== "video") ? getTrendRadarFeed(options.signal, undefined, { maxAgeHours: config.maxAgeHours, kinds: config.sources.filter(kind => kind !== "video") }) : Promise.resolve(null),
-    config.sources.includes("video") ? getDouyinHotlist({ windowDays: Math.ceil(config.maxAgeHours / 24) }) : Promise.resolve(null)
-  ]);
-  options.signal?.throwIfAborted();
   const collected: CollectedSource[] = [];
   const failed = (id: string, name: string, message: string): CollectedSource => ({ source: { id, name, url: "", type: "unified", scope: "统一资讯池" }, checkedAt: new Date().toISOString(), items: [], error: message });
-  const [trend, video] = results;
-  if (trend.status === "rejected") collected.push(failed("trendradar", "TrendRadar", trend.reason instanceof Error ? trend.reason.message : "读取 TrendRadar 失败"));
-  else if (trend.value) {
-    collected.push(...trendRadarItemsToSources(trend.value.items));
-    if (trend.value.missing.length || trend.value.warnings.length) collected.push(failed("trendradar-status", "TrendRadar 读取状态", [...trend.value.missing, ...trend.value.warnings].join("；")));
+  try {
+    const feed = await getTrendRadarFeed(options.signal, undefined, { maxAgeHours: config.maxAgeHours, kinds: config.sources });
+    collected.push(...trendRadarItemsToSources(feed.items));
+    if (feed.missing.length || feed.warnings.length) collected.push(failed("trendradar-status", "TrendRadar 读取状态", [...feed.missing, ...feed.warnings].join("；")));
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    collected.push(failed("trendradar", "TrendRadar", error instanceof Error ? error.message : "读取 TrendRadar 失败"));
   }
-  if (video.status === "rejected") collected.push(failed("video-hotlist", "视频热榜", video.reason instanceof Error ? video.reason.message : "读取视频热榜失败"));
-  else if (video.value) collected.push(...videoHotlistSources(video.value));
+  options.signal?.throwIfAborted();
   const now = Date.now();
   for (const entry of collected) {
     const priorCount = entry.items.length;

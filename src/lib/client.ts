@@ -524,6 +524,10 @@ export function refreshGrossMarginLibraryCache() {
   return getGrossMarginLibrary();
 }
 
+export function getGrossMarginProjectSource(signal?: AbortSignal) {
+  return requestJson<import("./types").GrossMarginProjectSource>("/api/gross-margin?projectOrders=1", { signal, cache: "no-store" });
+}
+
 export function saveGrossMarginPriceTable(input: { platform: GrossMarginPriceTable["platform"]; items: GrossMarginPriceTableSaveItem[] }) {
   return requestJson<{ table: GrossMarginPriceTable; library: GrossMarginLibrary }>("/api/gross-margin", {
     method: "POST",
@@ -1670,4 +1674,8 @@ export function getRadarSignals(query: { page?: number; search?: string; source?
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") params.set(key, String(value));
   return requestJson<{ items: import("./types").HotspotSignal[]; total: number; page: number; generatedAt: string }>(`/api/hotspots/signals?${params}`);
+}
+
+export function getTrendRadarNativeStatus(signal?: AbortSignal) {
+  return requestJson<import("./trendradar-native-types").TrendRadarNativeStatus>("/api/hotspots/native", { signal, cache: "no-store" });
 }

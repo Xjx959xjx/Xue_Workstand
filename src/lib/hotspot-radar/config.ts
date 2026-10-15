@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const settingsSchema = z.object({
-  sources: z.array(z.enum(["hotlist", "rss", "video"])).min(1),
+  sources: z.array(z.enum(["hotlist", "rss"])).min(1),
   maxAgeHours: z.coerce.number().int().min(6).max(168),
   candidateLimit: z.coerce.number().int().min(12).max(120),
   perSourceLimit: z.coerce.number().int().min(3).max(60),
@@ -13,7 +13,7 @@ const settingsSchema = z.object({
 export type RadarPipelineConfig = z.infer<typeof settingsSchema>;
 export function getRadarPipelineConfig(): RadarPipelineConfig {
   const parsed = settingsSchema.safeParse({
-    sources: (process.env.HOTSPOT_RADAR_INPUTS || "hotlist,rss,video").split(",").map(value => value.trim()),
+    sources: (process.env.HOTSPOT_RADAR_INPUTS || "hotlist,rss").split(",").map(value => value.trim()).filter(value => value !== "video"),
     maxAgeHours: process.env.HOTSPOT_RADAR_MAX_AGE_HOURS || 72,
     candidateLimit: process.env.HOTSPOT_RADAR_COARSE_LIMIT || 80,
     perSourceLimit: process.env.HOTSPOT_RADAR_PER_SOURCE_LIMIT || 20,

@@ -143,13 +143,17 @@ function resolveRefreshFailure(error: unknown, localAccounts: GrossMarginAccount
     : { accounts: localAccounts, source: "local", warning, refreshing: false, fallback: true, fallbackReason: detail };
 }
 
-async function fetchWecomSheetContent(url: string) {
-  const first = await callWecomDoc({ url, type: 2 });
+export async function fetchWecomSheetContent(url: string, options: { signal?: AbortSignal; onProgress?: (attempt: number) => Promise<void> } = {}) {
+  const first = await callWecomDoc({ url, type: 2 }, options.signal);
   let response = first;
-  for (let attempt = 0; attempt < MAX_CONTENT_POLL_ATTEMPTS && !response.task_done; attempt += 1) {
+  const attempts = options.onProgress ? 90 : MAX_CONTENT_POLL_ATTEMPTS;
+  for (let attempt = 0; attempt < attempts && !response.task_done; attempt += 1) {
     if (!response.task_id) throw new Error("企业微信表格内容任务缺少 task_id");
-    await wait(250);
-    response = await callWecomDoc({ url, type: 2, task_id: response.task_id });
+    options.signal?.throwIfAborted();
+    await options.onProgress?.(attempt);
+    await wait(options.onProgress ? 1000 : 250);
+    options.signal?.throwIfAborted();
+    response = await callWecomDoc({ url, type: 2, task_id: response.task_id }, options.signal);
   }
   if (!response.task_done || typeof response.content !== "string") {
     throw new Error("企业微信表格读取超时");
@@ -157,7 +161,8 @@ async function fetchWecomSheetContent(url: string) {
   return response.content;
 }
 
-async function callWecomDoc(input: Record<string, unknown>): Promise<WecomResponse> {
+async function callWecomDoc(input: Record<string, unknown>, signal?: AbortSignal): Promise<WecomResponse> {
+  signal?.throwIfAborted();
   if (process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud") {
     if (!hasRemoteCapabilityBridge()) {
       throw new Error("Sites 云端运行时不支持本机 wecom-cli；请配置远程企业微信文档服务。");
@@ -165,7 +170,7 @@ async function callWecomDoc(input: Record<string, unknown>): Promise<WecomRespon
     return callRemoteCapability<WecomResponse>(
       "wecom-doc",
       { method: "get_doc_content", input },
-      { timeoutMs: timeoutMs() }
+      { timeoutMs: timeoutMs(), signal }
     );
   }
   const command = process.env.WECOM_CLI_BIN?.trim() || "wecom-cli";
@@ -175,11 +180,13 @@ async function callWecomDoc(input: Record<string, unknown>): Promise<WecomRespon
       const result = await execFileAsync(command, ["doc", "get_doc_content", "--json", JSON.stringify(input)], {
         windowsHide: true,
         maxBuffer: 20 * 1024 * 1024,
+        signal,
         timeout: timeoutMs()
       });
       stdout = result.stdout;
       break;
     } catch (error) {
+      if (signal?.aborted) throw error;
       if (isMissingExecutable(error)) {
         throw new Error(`未检测到 ${command}，请先安装并登录 wecom-cli`);
       }
@@ -370,7 +377,7 @@ function isRetryableWecomError(error: unknown) {
 function formatWecomError(error: unknown) {
   const detail = sanitizeWecomError(getWecomErrorText(error));
   if (/authorization expired/i.test(detail)) {
-    return "企业微信授权已过期，请重新运行 wecom-cli init";
+    return "企业微信文档授权已过期，请在机器人「可使用权限」中重新授权；管理员授权模式请联系管理员处理";
   }
   if (/MCP网络请求失败|error sending request/i.test(detail)) {
     return "企业微信 MCP 网络请求失败，请稍后重试";

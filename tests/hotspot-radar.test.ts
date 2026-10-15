@@ -8,7 +8,7 @@ import { z } from "zod";
 import { isRecentVerifiedSignal } from "../src/lib/hotspot-radar/source-rules.mjs";
 import { canonicalRadarUrl, mergeRadarSignals, safeSourceUrl } from "../src/lib/hotspot-radar/collector";
 import { analyzeRadar, toStoredSignal, parseRadarModelJson, validateModelIds } from "../src/lib/hotspot-radar/analysis";
-import { publishRadarSnapshot, assertCollectionCoverage, getRadarSignals, getHotspotRadar, getHotspotDetail, retainPriorityTopics, saveHotspotFeedback } from "../src/lib/hotspots";
+import { publishRadarSnapshot, refreshHotspotRadar, assertCollectionCoverage, getRadarSignals, getHotspotRadar, getHotspotDetail, retainPriorityTopics, saveHotspotFeedback } from "../src/lib/hotspots";
 import type { HotspotEvent, HotspotRadarRefreshResult } from "../src/lib/types";
 
 import { writeSupportDocumentCache } from "../src/lib/storage/support-documents";
@@ -237,7 +237,7 @@ test("分页夹取最后一页，旧快照推导来源 ID，评分保留正文�
   try {
     const snapshot = await getHotspotRadar();
     const now = new Date().toISOString();
-    const signals = Array.from({ length: 40 }, (_, i) => toStoredSignal({ ...signal(), id: `video:douyin:${i}`, sourceId: "video-hotlist" }));
+    const signals = Array.from({ length: 40 }, (_, i) => toStoredSignal({ ...signal(), id: `trend:rss:${i}`, sourceId: "trend:rss:test" }));
     const topic: HotspotEvent = {
       id: "topic", board: "game", monitorType: "breakout", monitorLabel: "热点", triggerMode: "", thresholdHint: "", actionWindow: "",
       priorityLabel: "还行", scopeMatches: [], title: "游戏回应", game: "游戏", category: "", status: "watch", score: 40,
@@ -250,7 +250,7 @@ test("分页夹取最后一页，旧快照推导来源 ID，评分保留正文�
     const feed = await getRadarSignals({ page: 99 });
     assert.equal(feed.page, 2);
     assert.equal(feed.items.length, 10);
-    assert.equal((await getHotspotRadar()).hotspots[0].sourceIds?.includes("video-hotlist"), true);
+    assert.equal((await getHotspotRadar()).hotspots[0].sourceIds?.includes("trend:rss:test"), true);
     const rated = (await saveHotspotFeedback("topic", "吊爆了")).hotspots[0];
     assert.equal(rated.score, 100);
     assert.equal(rated.status, "watch", "评分不会凭空补充正文");
@@ -265,6 +265,23 @@ test("分页夹取最后一页，旧快照推导来源 ID，评分保留正文�
     assert.equal((await saveHotspotFeedback("topic", "不行")).hotspots[0].status, "watch");
     await writeFile(path.join(root, "hotspots/radar-snapshot.json"), JSON.stringify({ ...snapshot, generatedAt: now, hotspots: [{ ...topic, status: "risk" }], signals }));
     assert.equal((await saveHotspotFeedback("topic", "吊爆了")).hotspots[0].status, "risk", "人工评分不能解除核实风险");
+
+    const video = toStoredSignal({ ...signal(), id: "video:douyin:legacy", sourceId: "video-hotlist", inputKind: "video" });
+    const polluted = { ...topic, id: "polluted", signalIds: [signals[0].id, video.id], gradeLabel: "吊爆了" as const, retainedUntil: new Date(Date.now() + 3600000).toISOString() };
+    const stored = { ...snapshot, generatedAt: now, hotspots: [topic, polluted], signals: [...signals, video] };
+    const snapshotFile = path.join(root, "hotspots/radar-snapshot.json");
+    await writeFile(snapshotFile, JSON.stringify(stored));
+    assert.deepEqual((await getHotspotRadar()).hotspots.map(item => item.id), ["topic"], "混合视频证据的旧选题也隐藏");
+    assert.equal((await getRadarSignals({ id: video.id })).total, 0);
+    await assert.rejects(getHotspotDetail("polluted"), /不存在或已过期/);
+    assert.equal(retainPriorityTopics(stored, []).length, 0, "最高档保留规则不能带回视频选题");
+    assert.equal(await readFile(snapshotFile, "utf8"), JSON.stringify(stored), "读取过滤不改写历史文件");
+    await writeRadarCollection({ schemaVersion: 1, pipeline: "unified-events", generatedAt: now, signals: [video], scouts: [], status: "failed", partialHotspots: [polluted], completedSignalIds: [video.id], analyzedCount: 1, candidateCount: 1 });
+    const before = await readFile(path.join(root, "hotspots/radar-collection.json"), "utf8");
+    await assert.rejects(refreshHotspotRadar({ continueAnalysis: true }), /旧采集批次包含已停用的视频热榜/);
+    await assert.rejects(refreshHotspotRadar({ retryReport: true }), /旧日报批次包含已停用的视频热榜/);
+    assert.equal(await readFile(path.join(root, "hotspots/radar-collection.json"), "utf8"), before, "拒绝续跑不覆盖旧批次");
+
   } finally {
     if (previousRoot === undefined) delete process.env.STYLE_LIBRARY_DIR;
     else process.env.STYLE_LIBRARY_DIR = previousRoot;

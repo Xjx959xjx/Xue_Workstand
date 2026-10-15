@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiJson, formatApiError, parseJsonBody } from "@/lib/api-route";
 import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
+import { getGrossMarginProjectSource } from "@/lib/storage/gross-margin-projects";
 import {
   refreshGrossMarginMonitorRecord,
   refreshGrossMarginMonitorRecords,
@@ -106,6 +107,7 @@ const mutationSchema = z.discriminatedUnion("action", [
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
+  if (params.get("projectOrders") === "1") return apiJson(() => getGrossMarginProjectSource(), { fallbackMessage: "读取当月项目报价缓存失败" });
   const refreshAccounts = params.get("refreshAccounts") === "1";
   const cachedAccountsOnly = params.get("cachedAccounts") === "1";
   return apiJson(() => getGrossMarginLibrary({ refreshAccounts, cachedAccountsOnly }), {

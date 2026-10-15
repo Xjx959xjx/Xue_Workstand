@@ -1,8 +1,9 @@
 export const AI_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
 export type AiEffort = typeof AI_EFFORTS[number];
-export const AI_GROUPS = ["全部链路", "风格学习", "对话写作", "评论与弹幕", "发布工具", "图片与素材"] as const;
+export const AI_GROUPS = ["全部链路", "热点分析", "风格学习", "对话写作", "评论与弹幕", "发布工具", "图片与素材"] as const;
 export type AiPolicyValue = { model: string; effort: AiEffort | "default"; source?: "auto" | "subscription" | "relay" };
 export const AI_POLICIES = [
+  { id: "trendradar", group: "热点分析", title: "TrendRadar 报告", description: "热点兴趣筛选、趋势分析与报告翻译共用此配置。", model: "gpt-5.6-sol", effort: "default" },
   { id: "account_sample", group: "风格学习", title: "账号样本分析", description: "逐篇学习转写稿，提取风格证据并纠错。", model: "", effort: "medium" },
   { id: "account_style", group: "风格学习", title: "账号风格卡", description: "汇总样本证据，生成完整账号风格。", model: "", effort: "medium" },
   { id: "writer_generate", group: "对话写作", title: "正文生成", description: "主题写作、改写和多风格独立生成。", model: "", effort: "medium" },

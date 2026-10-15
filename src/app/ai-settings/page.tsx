@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, RefreshCw, Save } from "lucide-react";
+import { ChevronDown, ExternalLink, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
 import { WorkbenchSelect } from "@/components/WorkbenchSelect";
 import { AI_EFFORTS, AI_GROUPS, AI_POLICIES, type AiEffort, type AiPolicyValue } from "@/lib/ai-policy-catalog";
 import { useAiSettings } from "./useAiSettings";
@@ -17,12 +17,13 @@ type Settings = {
 const effortLabels = { low: "轻量", medium: "均衡", high: "深入", xhigh: "最高" };
 const relayModels = ["gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-sol"];
 
-function PolicySettings({ subscriptionModel }: { subscriptionModel: string }) {
+function PolicySettings() {
   const w = useAiSettings();
-  return <section className="ai-settings-section" aria-labelledby="policy-heading" data-unsaved-changes={w.dirty ? "true" : undefined}>
-    <div className="ai-settings-section-head"><div><h2 id="policy-heading">各环节模型</h2><p>逐项指定调用来源；自动优先会在订阅不可用时转用中转。</p></div>
-      <span role="status" className="ai-save-state">{w.loading ? "读取中…" : w.dirty ? `${w.dirtyIds.length} 项待保存` : "已保存"}</span></div>
-    {w.error && <p role="alert" className="ai-settings-notice error">{w.error}</p>}
+  return <details className="ai-settings-section ai-settings-advanced" data-unsaved-changes={w.dirty ? "true" : undefined}>
+    <summary className="ai-settings-advanced-summary"><SlidersHorizontal size={18} aria-hidden="true" /><span><strong>高级设置</strong><span>各环节的调用来源与中转配置</span></span><span role="status" className="ai-save-state">{w.loading ? "读取中…" : w.error ? "配置异常，展开查看" : w.dirty ? `${w.dirtyIds.length} 项待保存` : ""}</span><ChevronDown className="ai-settings-chevron" size={18} aria-hidden="true" /></summary>
+    <div className="ai-settings-advanced-body">
+    <p className="ai-settings-footnote">订阅沿用上方默认模型；「订阅优先」在不可用时使用中转。</p>
+    {w.error && <p role="alert" className="ai-settings-notice error">{w.error} <button className="btn compact" type="button" disabled={w.loading || w.saving} onClick={() => void w.load()}>重试</button></p>}
     {w.message && <p role="status" className="ai-settings-notice">{w.message}</p>}
     {w.saved && <div className="ai-policy-list" aria-busy={w.saving}>
       {AI_GROUPS.slice(1).map(group => <div key={group} className="ai-policy-group"><h3>{group}</h3>
@@ -35,24 +36,25 @@ function PolicySettings({ subscriptionModel }: { subscriptionModel: string }) {
           const model = value.model || w.saved!.inheritedModels[policy.id];
           const effort = value.effort === "default" ? w.saved!.inheritedEfforts[policy.id] : value.effort;
           return <div className="ai-policy-row" key={policy.id}>
-            <div className="ai-policy-name"><strong>{policy.title}{w.dirtyIds.includes(policy.id) && <small> 待保存</small>}</strong><span>{policy.description}</span></div>
+            <div className="ai-policy-name"><strong>{policy.title}{w.dirtyIds.includes(policy.id) && <small> 待保存</small>}</strong></div>
             <label><span>调用来源</span><WorkbenchSelect aria-label={`${policy.title}调用来源`} disabled={fixed || w.saving} value={source} onValueChange={next => w.change([policy.id], { source: next as AiPolicyValue["source"] })}>
-              {policy.id !== "image_generate" && <option value="auto">订阅优先，中转兜底</option>}<option value="subscription">仅订阅</option><option value="relay">仅中转</option>
+              {policy.id !== "image_generate" && <option value="auto">订阅优先</option>}<option value="subscription">仅订阅</option><option value="relay">仅中转</option>
             </WorkbenchSelect></label>
-            <label><span>中转模型</span><WorkbenchSelect aria-label={`${policy.title}中转模型`} disabled={w.saving} value={model} onValueChange={next => w.change([policy.id], { model: next })}>
+            {source !== "subscription" ? <><label><span>中转模型</span><WorkbenchSelect aria-label={`${policy.title}中转模型`} disabled={w.saving} value={model} onValueChange={next => w.change([policy.id], { model: next })}>
               {models.map(item => <option key={item} value={item}>{item}</option>)}
             </WorkbenchSelect></label>
             <label><span>中转推理</span><WorkbenchSelect aria-label={`${policy.title}中转推理强度`} disabled={isImage || w.saving} value={isImage ? "none" : effort} onValueChange={next => w.change([policy.id], { effort: next as AiEffort })}>
               {isImage ? <option value="none">不适用</option> : AI_EFFORTS.filter(item => item !== "none").map(item => <option key={item} value={item}>{effortLabels[item]}</option>)}
             </WorkbenchSelect></label>
+            </> : <span className="ai-policy-subscription">{isImage ? "ChatGPT 订阅生图" : "使用默认模型"}</span>}
             <button className="btn compact" type="button" disabled={!w.overrides[policy.id] || w.saving} onClick={() => w.change([policy.id], null)}>重置</button>
-            {source !== "relay" && <span className="ai-policy-source-note">{isImage ? "使用 ChatGPT 订阅（Codex）生图；失败不会自动使用中转。本机工作台可用。" : `订阅使用默认模型：${subscriptionModel || "尚未配置"}`}</span>}
           </div>;
         })}</div>)}
-      <p className="ai-settings-footnote">联网检索使用中转；图片生成可选择 ChatGPT 订阅或中转，保存后重新打开生图页面。语音转写使用 {w.saved.services.asr}。</p>
+      <p className="ai-settings-footnote">联网检索仅支持中转。生图设置保存后需重新打开生图页；订阅生图仅本机可用，失败不转中转。语音转写： {w.saved.services.asr}。</p>
     </div>}
-    <div className="ai-settings-actions"><button className="btn" type="button" disabled={!w.dirty || w.saving} onClick={w.discard}>撤销修改</button><button className="btn primary" type="button" disabled={!w.dirty || w.saving || w.loading} aria-busy={w.saving} onClick={() => void w.save()}><Save size={16} aria-hidden="true" />保存各环节配置</button></div>
-  </section>;
+    <div className="ai-settings-actions"><button className="btn" type="button" disabled={!w.dirty || w.saving} onClick={w.discard}>撤销修改</button><button className="btn primary" type="button" disabled={!w.dirty || w.saving || w.loading} aria-busy={w.saving} onClick={() => void w.save()}><Save size={16} aria-hidden="true" />保存高级设置</button></div>
+    </div>
+  </details>;
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -63,7 +65,7 @@ async function readResponse<T>(response: Response): Promise<T> {
 
 export default function AiSettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [provider, setProvider] = useState("openai-codex");
+  const provider = "openai-codex";
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState("medium");
   const [verifyUrl, setVerifyUrl] = useState("");
@@ -76,9 +78,8 @@ export default function AiSettingsPage() {
     try {
       const data = await readResponse<Settings>(await fetch("/api/pi-settings", { cache: "no-store" }));
       setSettings(data);
-      const nextProvider = preferredProvider || data.provider || "openai-codex";
-      setProvider(nextProvider);
-      setModel(preferredProvider ? data.subscriptions.find(item => item.provider === nextProvider)?.models[0]?.id || "" : data.model || data.subscriptions.find(item => item.provider === nextProvider)?.models[0]?.id || "");
+      const models = data.subscriptions.find(item => item.provider === "openai-codex")?.models || [];
+      setModel(!preferredProvider && data.provider === "openai-codex" ? data.model || models[0]?.id || "" : models[0]?.id || "");
       setThinking(data.thinking);
       setError("");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "读取模型配置失败"); }
@@ -86,7 +87,7 @@ export default function AiSettingsPage() {
 
   useEffect(() => { void load(); return () => loginController.current?.abort(); }, []);
 
-  async function login(loginProvider: "openai" | "openai-codex") {
+  async function login(loginProvider: "openai-codex") {
     const controller = new AbortController();
     loginController.current = controller;
     setBusy(true);
@@ -120,7 +121,7 @@ export default function AiSettingsPage() {
         if (done) break;
       }
       if (!connected) throw new Error("登录连接已中断，请重新发起订阅登录");
-      setMessage(`${loginProvider === "openai" ? "OpenAI 直连" : "ChatGPT Codex"} 已连接，请选择模型并保存`);
+      setMessage("订阅已连接，请选择模型并保存");
       setVerifyUrl("");
       await load(loginProvider);
     } catch (cause) {
@@ -149,41 +150,39 @@ export default function AiSettingsPage() {
   }
 
   const selected = settings?.subscriptions.find(item => item.provider === provider);
-  const connected = settings?.subscriptions.some(item => item.connected);
-  const codexConnected = settings?.subscriptions.find(item => item.provider === "openai-codex")?.connected;
-  const directConnected = settings?.subscriptions.find(item => item.provider === "openai")?.connected;
+  const connected = selected?.connected;
+  const dirty = Boolean(settings && (settings.provider !== provider || settings.model !== model || settings.thinking !== thinking));
   return <div className="page ai-settings-page">
-    <header className="page-header"><h1>AI 模型配置</h1></header>
+    <header className="page-header"><div><h1>AI 模型配置</h1><p>管理订阅与默认模型</p></div></header>
     {error && <p role="alert" className="ai-settings-notice error">{error}</p>}
     {message && <p role="status" className="ai-settings-notice">{message}</p>}
-    <section className="ai-settings-section" aria-labelledby="subscription-heading">
+    <section className="panel ai-settings-section ai-settings-subscription" aria-labelledby="subscription-heading" aria-busy={busy} data-unsaved-changes={dirty ? "true" : undefined}>
       <div className="ai-settings-section-head">
-        <div><h2 id="subscription-heading">模型订阅</h2><p>连接 ChatGPT 账号后，选择模型并保存为默认模型。</p></div>
-        <span className={`ai-settings-status ${connected ? "connected" : ""}`}>{connected ? "已连接" : "未连接"}</span>
+        <div><h2 id="subscription-heading">ChatGPT 订阅</h2><p>连接账号，使用订阅模型完成创作。</p></div>
+        <span className={`status-pill ${connected ? "done" : "pending"}`}>{!settings ? "未读取" : connected ? "已连接" : "未连接"}</span>
       </div>
-      <div className="ai-settings-actions"><button className="btn primary" type="button" disabled={busy} aria-busy={busy} onClick={() => void login("openai-codex")}>{codexConnected ? "重新连接 ChatGPT 订阅" : "连接 ChatGPT 订阅"}</button><button className="btn" type="button" disabled={busy} onClick={() => void login("openai")}>{directConnected ? "重新连接 OpenAI 直连" : "连接 OpenAI 直连"}</button>
-      {busy && loginController.current && <button className="btn" type="button" onClick={() => { loginController.current?.abort(); setVerifyUrl(""); setMessage("已取消订阅登录"); }}>取消登录</button>}
-      {verifyUrl && <a className="ai-settings-auth-link" href={verifyUrl} target="_blank" rel="noopener noreferrer">打开授权页面 <ExternalLink size={15} aria-hidden="true" /></a>}</div>
-      <p className="ai-settings-footnote">OpenAI 直连需要账号额外授予 chatgpt.tokens.use.direct 权限；普通 ChatGPT 订阅请选择左侧入口。</p>
-    </section>
-    <section className="ai-settings-section" aria-labelledby="model-heading">
-      <div className="ai-settings-section-head"><div><h2 id="model-heading">默认模型</h2><p>{settings?.model ? `当前生效：${settings.provider}/${settings.model}` : "尚未选择默认模型"}</p></div></div>
-      <div className="ai-settings-fields"><label><span>订阅来源</span><WorkbenchSelect aria-label="订阅来源" value={provider} onValueChange={value => { setProvider(value); setModel(settings?.subscriptions.find(item => item.provider === value)?.models[0]?.id || ""); }}>
-        <option value="openai-codex">ChatGPT 订阅（Codex）</option>
-        <option value="openai">OpenAI 直连</option>
-      </WorkbenchSelect></label>
-      <label><span>模型</span>{selected?.connected ? <WorkbenchSelect aria-label="模型" value={model} onValueChange={setModel}>
-        {selected?.models.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
-      </WorkbenchSelect> : <span className="ai-settings-placeholder">连接订阅后选择模型</span>}</label>
-      <label><span>推理强度</span><WorkbenchSelect aria-label="推理强度" disabled={!selected?.connected} value={thinking} onValueChange={setThinking}>
-        {["off", "minimal", "low", "medium", "high", "xhigh"].map(value => <option key={value} value={value}>{value}</option>)}
-      </WorkbenchSelect></label></div>
-      <div className="ai-settings-actions">
-        <button className="btn primary" type="button" disabled={busy || !model || !selected?.connected} onClick={() => void save()}><Save size={16} aria-hidden="true" />保存默认模型</button>
+      <div className="ai-settings-connection">
+        <button className={`btn ${connected ? "" : "primary"}`} type="button" disabled={busy || !settings} onClick={() => void login("openai-codex")}>{busy && loginController.current ? "等待授权…" : connected ? "重新连接" : "连接账号"}</button>
         <button className="btn icon-only" type="button" aria-label="刷新模型状态" disabled={busy} onClick={() => void load()}><RefreshCw size={16} aria-hidden="true" /></button>
+        {busy && loginController.current && <button className="btn" type="button" onClick={() => { loginController.current?.abort(); setVerifyUrl(""); setMessage("已取消订阅登录"); }}>取消登录</button>}
+        {verifyUrl && <a className="ai-settings-auth-link" href={verifyUrl} target="_blank" rel="noopener noreferrer">打开授权页面 <ExternalLink size={15} aria-hidden="true" /></a>}
       </div>
-      <p className="ai-settings-footnote">订阅环节使用此默认模型；是否允许中转兜底由下方各环节设置决定。</p>
+      <div className="ai-settings-model-area">
+        <div className="ai-settings-fields">
+          <label><span>默认模型</span>{connected ? <WorkbenchSelect aria-label="默认模型" disabled={busy} value={model} onValueChange={setModel}>
+            {selected.models.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
+          </WorkbenchSelect> : <span className="ai-settings-placeholder">连接账号后可选择</span>}</label>
+          <label><span>推理强度</span><WorkbenchSelect aria-label="推理强度" disabled={busy || !connected} value={thinking} onValueChange={setThinking}>
+            {Object.entries({ off: "关闭", minimal: "最低", ...effortLabels }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </WorkbenchSelect></label>
+        </div>
+        <div className="ai-settings-footer">
+          <span className="ai-save-state" role="status">{!settings ? "等待读取配置" : dirty ? "有未保存的修改" : settings.model ? "已保存" : "尚未配置模型"}</span>
+          <button className="btn primary" type="button" disabled={busy || !dirty || !model || !connected} onClick={() => void save()}><Save size={16} aria-hidden="true" />{busy && !loginController.current ? "保存中…" : "保存设置"}</button>
+        </div>
+        {settings && settings.provider !== provider && settings.model && <p className="ai-settings-footnote">当前仍使用旧来源，请连接订阅并保存以切换。</p>}
+      </div>
     </section>
-    <PolicySettings subscriptionModel={settings?.model ? `${settings.provider}/${settings.model}` : ""} />
+    <PolicySettings />
   </div>;
 }

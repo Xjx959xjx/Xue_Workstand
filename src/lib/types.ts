@@ -780,6 +780,27 @@ export type GrossMarginAccountPrice = {
   homepage?: string;
 };
 
+export type GrossMarginProjectOrder = {
+  id: string;
+  month: string;
+  platform: GrossMarginPriceTable["platform"];
+  accountName: string;
+  projectName: string;
+  orderAmount: number | null;
+  rebateAmount: number | null;
+  finalPrice: number | null;
+  videoUrl: string;
+  date: string;
+  warning?: string;
+};
+
+export type GrossMarginProjectSource = {
+  month: string;
+  orders: GrossMarginProjectOrder[];
+  fetchedAt?: string;
+  stale: boolean;
+};
+
 export type GrossMarginReviewTemplate = {
   platform: GrossMarginPriceTable["platform"];
   content: string;
@@ -1482,7 +1503,7 @@ export type JobStartInput =
       title?: string;
       inputSummary?: string;
       href?: string;
-      input: { retryReport?: boolean; continueAnalysis?: boolean; trendRadarIds?: string[] };
+      input: { retryReport?: boolean; continueAnalysis?: boolean; trendRadarIds?: string[]; native?: import("./trendradar-native-types").TrendRadarSettings };
     }
   | {
       kind: "gross-margin-refresh";
@@ -1491,6 +1512,7 @@ export type JobStartInput =
       href?: string;
       input: {
         recordIds?: string[];
+        syncProjects?: boolean;
       };
     }
   | {

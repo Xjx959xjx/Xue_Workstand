@@ -4,6 +4,18 @@ import { styleEvidenceSchema, writerContextSchema } from "../writer-context";
 import { imageGenerationInputSchema } from "../image-generation-types";
 import { jobKinds } from "../types";
 import { startJobSchema } from "../job-validation";
+import { trendRadarSettingsSchema } from "../trendradar-native-types";
+
+export const trendRadarNativeStateSchema = z.object({
+  schemaVersion: z.literal(1),
+  generatedAt: z.string().datetime(), engineVersion: z.string().min(1),
+  settings: trendRadarSettingsSchema,
+  analysis: z.object({ core_trends: z.string(), sentiment_controversy: z.string(), signals: z.string(), rss_insights: z.string(), outlook_strategy: z.string() }),
+  counts: z.object({ hotlist: z.number().nonnegative(), rss: z.number().nonnegative(), matched: z.number().nonnegative(), analyzed: z.number().nonnegative() }),
+  warnings: z.array(z.string()), fallback: z.boolean(), fallbackReason: z.string().optional(),
+  html: z.string().min(1),
+  databases: z.array(z.object({ kind: z.enum(["news", "rss"]), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), data: z.string().max(64 * 1024 * 1024).regex(/^[A-Za-z0-9+/]*={0,2}$/) })).max(2),
+});
 
 export const STORAGE_SCHEMA_VERSION = 1;
 
@@ -232,6 +244,7 @@ export type StoredRecordKind =
   | "gross-margin-monitor"
   | "gross-margin-accounts"
   | "gross-margin-account-cache"
+  | "gross-margin-project-cache"
   | "job"
   | "job-payload"
   | "image-generation"
@@ -247,6 +260,15 @@ export type StoredRecordKind =
   | "support-document-cache";
 
 const schemas: Record<StoredRecordKind, z.ZodTypeAny> = {
+  "gross-margin-project-cache": versionedObject.extend({
+    month: z.string().regex(/^\d{4}-\d{2}$/), fetchedAt: timestampSchema, stale: z.boolean(),
+    orders: z.array(z.object({
+      id: z.string().min(1), month: z.string().regex(/^\d{4}-\d{2}$/), platform: z.enum(["douyin", "bilibili"]),
+      accountName: z.string().min(1), projectName: z.string().min(1),
+      orderAmount: grossMarginAmountSchema.nullable(), rebateAmount: grossMarginAmountSchema.nullable(), finalPrice: grossMarginAmountSchema.nullable(),
+      videoUrl: z.string(), date: z.string(), warning: z.string().optional()
+    }))
+  }),
   "gross-margin-table": grossMarginTableSchema,
   "gross-margin-template": versionedObject.extend({ platform: platformSchema, content: z.string(), updatedAt: timestampSchema }).passthrough(),
   "gross-margin-monitor": grossMarginMonitorSchema,
@@ -279,6 +301,7 @@ export function storedRecordKind(target: string, root: string): StoredRecordKind
   const segments = relative.split(path.sep);
   const file = segments.at(-1) || "";
   if (segments[0] === "gross-margin") {
+    if (segments.length === 3 && segments[1] === "project-orders" && file.endsWith(".json")) return "gross-margin-project-cache";
     if (segments.length === 3 && segments[1] === "monitor-records" && file.endsWith(".json")) return "gross-margin-monitor";
     if (segments.length === 2) {
       if (file === "accounts.json") return "gross-margin-accounts";

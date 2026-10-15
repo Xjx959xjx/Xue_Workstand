@@ -39,8 +39,8 @@ export async function getHotspotRadar(options: { refresh?: boolean } & RadarRefr
   const response = summarizeSnapshot(applyFeedback(snapshot, feedback));
   const collection = await readRadarCollection();
   if (collection) {
-    response.collection = { generatedAt: collection.generatedAt, signalCount: collection.signals.length, status: collection.status, error: collection.error, analyzedCount: collection.analyzedCount, candidateCount: collection.candidateCount };
-    response.scouts = collection.scouts;
+    response.collection = { generatedAt: collection.generatedAt, signalCount: collection.signals.filter(item => !isVideoSignal(item)).length, status: collection.status, error: collection.error, analyzedCount: collection.analyzedCount, candidateCount: collection.candidateCount };
+    response.scouts = collection.scouts.filter(item => item.id !== "video-hotlist");
     response.analysis = collection.analysis;
     if (collection.status !== "completed") response.provisionalHotspots = summarizeSnapshot(applyFeedback({ ...snapshot, hotspots: collection.partialHotspots, signals: [...snapshot.signals, ...collection.signals] }, feedback)).hotspots;
   }
@@ -83,9 +83,16 @@ function applyFeedback(snapshot: HotspotRadarRefreshResult, feedback: RadarFeedb
     const status: HotspotEvent["status"] = item.status === "risk" ? "risk" : score >= 60 && hasBody ? "ready" : "watch";
     return { ...item, userRating: rating, gradeLabel, priorityLabel: gradeLabel, score, status, displayInfo: { ...item.displayInfo, statusLine: item.displayInfo.statusLine.replace(/^(吊爆了|有点东西|能做|还行|先看看)/, gradeLabel) } };
   });
-  return { ...snapshot, hotspots: sortTopics(hotspots), summary: { ...snapshot.summary, hotspotCount: hotspots.length, readyCount: hotspots.filter(item => item.status === "ready").length } };
+  return { ...snapshot, ...(snapshot.hotspots.some(item => hasVideoEvidence(item, snapshot.signals)) ? { dailyReport: undefined } : {}), hotspots: sortTopics(hotspots), summary: { ...snapshot.summary, hotspotCount: hotspots.length, readyCount: hotspots.filter(item => item.status === "ready").length } };
+}
+function isVideoSignal(item: Pick<HotspotSignal, "id" | "sourceId" | "inputKind">) {
+  return item.inputKind === "video" || item.sourceId === "video-hotlist" || item.id.startsWith("video:");
+}
+function hasVideoEvidence(item: HotspotEvent, signals: HotspotSignal[]) {
+  return item.sourceIds?.includes("video-hotlist") || item.signalIds.some(id => id.startsWith("video:") || signals.some(signal => signal.id === id && isVideoSignal(signal)));
 }
 function isVisibleTopic(item: HotspotEvent, snapshot: HotspotRadarResponse) {
+  if (hasVideoEvidence(item, snapshot.signals)) return false;
   if (item.retainedUntil && Date.parse(item.retainedUntil) > Date.now()) return true;
   if (item.updatedAt) return isRecentVerifiedSignal({ publishedAt: item.updatedAt });
   if (item.publishedAt) return isRecentVerifiedSignal(item);
@@ -94,6 +101,8 @@ function isVisibleTopic(item: HotspotEvent, snapshot: HotspotRadarResponse) {
 }
 function sortTopics(items: HotspotEvent[]) { return items.slice().sort((a, b) => radarGrades.indexOf(a.gradeLabel || "先看看") - radarGrades.indexOf(b.gradeLabel || "先看看") || (b.publishedAt || "").localeCompare(a.publishedAt || "")); }
 export function retainPriorityTopics(previous: HotspotRadarRefreshResult, current: HotspotEvent[], now = Date.now()) {
+  previous = { ...previous, hotspots: previous.hotspots.filter(item => !hasVideoEvidence(item, previous.signals)) };
+  current = current.filter(item => !hasVideoEvidence(item, previous.signals));
   const byId = new Map(previous.hotspots.map(item => [item.id, item]));
   const currentIds = new Set(current.map(item => item.id));
   const pool: HotspotEvent[] = current.map(item => {
@@ -133,7 +142,8 @@ export async function refreshHotspotRadar(options: RadarRefreshOptions = {}): Pr
     if (options.continueAnalysis && (!saved || !saved.signals.length || !Number.isFinite(Date.parse(saved.generatedAt)) || Date.now() - Date.parse(saved.generatedAt) > 72 * 3600000)) throw new Error("没有可继续分析的近期资讯，请重新采集");
     const unified = !saved || saved.pipeline === "unified-events";
     if (unified) options = { ...options, pipeline: getRadarPipelineConfig(), previousTopics: previous.hotspots.filter(item => isVisibleTopic(item, previous)) };
-    const restoredTopics = saved ? (saved.status === "completed" ? previous.hotspots : saved.partialHotspots) : [];
+    if (saved && (saved.signals.some(isVideoSignal) || saved.partialHotspots.some(item => hasVideoEvidence(item, saved.signals)))) throw new Error("旧采集批次包含已停用的视频热榜，请点击更新选题重新采集，不能继续此批次");
+    const restoredTopics = saved ? (saved.status === "completed" ? previous.hotspots.filter(item => isVisibleTopic(item, previous)) : saved.partialHotspots) : [];
     // 工作台完成状态独立于 TrendRadar 的本轮新增标记。仅沿用已发布成功的近期批次，
     // 未完成批次仍走逐条模型缓存，避免跳过尚未发布的选题。
     const reusable = !saved && unified && lastCollection?.status === "completed" && Date.now() - Date.parse(lastCollection.generatedAt) <= 72 * 3600000;
@@ -212,7 +222,7 @@ export function getHotspotRadarSnapshotSummary(snapshot: HotspotRadarResponse) {
 export async function getRadarSignals(query: { page?: number; search?: string; source?: string; id?: string } = {}) {
   const collection = await readRadarCollection();
   const snapshot = collection ? null : await readSnapshot();
-  const all = collection?.signals || snapshot?.signals || [];
+  const all = (collection?.signals || snapshot?.signals || []).filter(item => !isVideoSignal(item));
   const matching = [...all].sort((a, b) => Date.parse(b.publishedAt || b.capturedAt) - Date.parse(a.publishedAt || a.capturedAt)).filter(item => (!query.id || item.id === query.id) && (!query.source || item.sourceId === query.source) && (!query.search || `${item.title} ${item.sourceName} ${item.summary || ""}`.toLowerCase().includes(query.search.toLowerCase())));
   const page = Math.min(Math.max(1, Math.floor(query.page || 1)), Math.max(1, Math.ceil(matching.length / 30)));
   const items: HotspotSignal[] = query.id ? matching : matching.slice((page - 1) * 30, page * 30).map(({ summary: _summary, ...item }) => { void _summary; return item; });
@@ -224,6 +234,7 @@ async function finishSavedRadarReport(previous: HotspotRadarRefreshResult, feedb
   const collection = await readRadarCollection();
   if (!collection || (!collection.analysis && !collection.candidateCount) || collection.analyzedCount !== collection.candidateCount || !["failed", "cancelled"].includes(collection.status)) throw new Error("没有已完成精筛且待恢复的日报，请重新采集并筛选");
   if (Date.now() - Date.parse(collection.generatedAt) > 72 * 3600000) throw new Error("已保存资讯超过72小时，请重新采集");
+  if (collection.signals.some(isVideoSignal) || collection.partialHotspots.some(item => hasVideoEvidence(item, collection.signals))) throw new Error("旧日报批次包含已停用的视频热榜，请点击更新选题重新采集");
   try {
   await updateRadarCollection(current => ({ ...current, status: "analyzing", error: undefined }));
   const hotspots = retainPriorityTopics(previous, collection.partialHotspots);

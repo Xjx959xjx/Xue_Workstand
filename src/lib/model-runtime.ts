@@ -96,7 +96,7 @@ type ChatMessage = {
 };
 
 const DEFAULT_FALLBACK_CHAT_BASE_URL = "https://www.fhl.mom";
-const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-6.1-sol";
+const DEFAULT_FALLBACK_CHAT_MODEL = "gpt-5.6-sol";
 const DEFAULT_WEB_RESEARCH_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_WEB_RESEARCH_MODEL = "gpt-6";
 const MAX_ADDITIONAL_CHAT_FALLBACKS = 4;

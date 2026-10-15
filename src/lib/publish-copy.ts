@@ -119,7 +119,7 @@ async function buildQueryPlan(input: Required<PublishCopyInput>, options: { sign
 
 用户补充关键词：${input.topicHint || "无"}
 原文案：
-${clampText(input.sourceText, 1800)}`
+${input.sourceText}`
       }
     ],
     "medium",

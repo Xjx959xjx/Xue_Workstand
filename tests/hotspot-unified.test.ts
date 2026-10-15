@@ -5,36 +5,30 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getRadarPipelineConfig } from "../src/lib/hotspot-radar/config";
-import { selectUnifiedCandidates, deduplicateUnifiedSignals, videoHotlistSources } from "../src/lib/hotspot-radar/unified-sources";
+import { selectUnifiedCandidates, deduplicateUnifiedSignals } from "../src/lib/hotspot-radar/unified-sources";
 import { eventGroupingSchema, buildEventSignals } from "../src/lib/hotspot-radar/events";
 import { analyzeRadar } from "../src/lib/hotspot-radar/analysis";
 import { getHotspotRadar, retainPriorityTopics } from "../src/lib/hotspots";
 import type { RadarSignal } from "../src/lib/hotspot-radar/source-rules.mjs";
-import type { DouyinHotlistResponse } from "../src/lib/types";
 import { writeSupportDocumentCache } from "../src/lib/storage/support-documents";
 
 const item = (id: string, kind: "rss" | "hotlist" | "video" = "rss"): RadarSignal => ({ id, sourceId: kind, source: kind, originalSource: kind, title: `游戏官方回应玩家争议 ${id}`, summary: "官方发布声明", url: `https://example.com/${id}`, category: "游戏", publishedAt: kind === "hotlist" ? "" : new Date().toISOString(), collectedAt: new Date().toISOString(), inputKind: kind });
 
-test("统一候选按类型均衡、配置排除、URL去重保留来源，视频数据不冒充全文", () => {
+test("统一候选按类型均衡、配置排除、URL去重保留来源，排除视频输入", () => {
   const config = { ...getRadarPipelineConfig(), candidateLimit: 12, exclude: ["屏蔽"] };
   const inputs = [...Array.from({length:30}, (_, i) => item(`rss-${i}`)), item("榜单", "hotlist"), item("视频", "video"), {...item("过滤"), title:"屏蔽内容"}];
   const selected = selectUnifiedCandidates(inputs, config);
   assert.equal(selected.length, 12);
-  assert.ok(selected.some(row => row.inputKind === "video"));
+  assert.ok(selected.every(row => row.inputKind !== "video"));
   assert.ok(selected.some(row => row.inputKind === "hotlist"));
   assert.ok(selected.every(row => row.title !== "屏蔽内容"));
   const duplicate = {...item("b"),url:inputs[0].url+"?utm_source=rss"};
   assert.equal(deduplicateUnifiedSignals([inputs[0],duplicate])[0].related?.[0].id,"b");
-  const videoFeed = {items:[{video:{id:"v", platform:"douyin",title:"视频",url:"https://www.douyin.com/video/123",stats:{likes:33,comments:4,views:0}},account:{name:"测试账号"},rank:1}],summary:{lastRefreshedAt:new Date().toISOString(),staleAccountIds:[]}} as unknown as DouyinHotlistResponse;
-  const video=videoHotlistSources(videoFeed)[0].items[0];
-  assert.equal(video.metrics?.likes,33);
-  assert.equal(video.publishedAt,"");
-  assert.match(video.summary,/未读取视频文稿/);
   assert.equal(eventGroupingSchema([item("a"),item("b")],[]).safeParse({events:[{signalIds:["a"]}]}).success,false);
   assert.equal(eventGroupingSchema([item("a")],[]).safeParse({events:[{signalIds:["invented"]}]}).success,false);
 });
 
-test("统一事件链路：无日期榜单、视频和RSS归并，缓存、进展、续跑和失败边界", async () => {
+test("统一事件链路：无日期榜单与RSS归并，排除视频，缓存、进展、续跑和失败边界", async () => {
   const env={...process.env};
   const root=await mkdtemp(path.join(tmpdir(),"radar-unified-"));
   const seen: string[]=[];
@@ -64,9 +58,9 @@ test("统一事件链路：无日期榜单、视频和RSS归并，缓存、进�
     const first=await analyzeRadar(signals,feedback,{pipeline:config,reuseAnalysis:true,enrichEvidence:true});
     assert.equal(first.hotspots.length,1);
     assert.equal(first.analysis.eventCount,1);
-    assert.equal(first.hotspots[0].signalIds.length,3);
-    assert.equal(first.hotspots[0].timeline?.length,3);
-    assert.equal((finePayload[0].related as unknown[]).length,2);
+    assert.equal(first.hotspots[0].signalIds.length,2);
+    assert.equal(first.hotspots[0].timeline?.length,2);
+    assert.equal((finePayload[0].related as unknown[]).length,1);
     assert.equal(await first.report(first.hotspots),undefined);
     assert.ok(!seen.includes("report"),"默认不额外生成日报");
     const count=seen.length;
@@ -87,8 +81,8 @@ test("统一事件链路：无日期榜单、视频和RSS归并，缓存、进�
     const empty=await getHotspotRadar();
     const merged=retainPriorityTopics({...empty,hotspots:first.hotspots},next.hotspots);
     assert.equal(merged.length,1);
-    assert.equal(merged[0].timeline?.length,4);
-    const grouped=buildEventSignals(signals,first.hotspots,{events:[{signalIds:signals.map(row=>row.id),previousEventId:first.hotspots[0].id}]});
+    assert.equal(merged[0].timeline?.length,3);
+    const grouped=buildEventSignals(signals.filter(row=>row.inputKind!=="video"),first.hotspots,{events:[{signalIds:signals.filter(row=>row.inputKind!=="video").map(row=>row.id),previousEventId:first.hotspots[0].id}]});
     assert.equal(grouped[0].previousContext,undefined,"相同指纹不反复把旧摘要送入模型");
     invalid=true;
     await assert.rejects(analyzeRadar([item("invalid-new")],feedback,{pipeline:config,reuseAnalysis:true}),/格式无效/);
@@ -102,5 +96,18 @@ test("统一事件链路：无日期榜单、视频和RSS归并，缓存、进�
     server.close();
     for(const key of Object.keys(process.env))if(!(key in env))delete process.env[key];Object.assign(process.env,env);
     await rm(root,{recursive:true,force:true});
+  }
+});
+
+test("兼容旧输入配置但不允许重新启用视频热榜", () => {
+  const previous = process.env.HOTSPOT_RADAR_INPUTS;
+  try {
+    process.env.HOTSPOT_RADAR_INPUTS = "hotlist,rss,video";
+    assert.deepEqual(getRadarPipelineConfig().sources, ["hotlist", "rss"]);
+    process.env.HOTSPOT_RADAR_INPUTS = "video";
+    assert.throws(() => getRadarPipelineConfig(), /热点分析配置无效/);
+  } finally {
+    if (previous === undefined) delete process.env.HOTSPOT_RADAR_INPUTS;
+    else process.env.HOTSPOT_RADAR_INPUTS = previous;
   }
 });

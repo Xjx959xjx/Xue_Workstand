@@ -22,6 +22,26 @@ import type { AccountSourceResult } from "../src/lib/wecom-account-source";
 import type { GrossMarginMonitorRecord, GrossMarginPriceTable } from "../src/lib/types";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
+
+test("切换账号清空返点后，新账号报价不沿用上一笔尚未提交的返点状态", () => {
+  const source = readFileSync("src/app/gross-margin/_hooks/useGrossMarginWorkbench.ts", "utf8");
+  const handler = source.match(/  function updateOriginalPrice\(value: string\) \{[\s\S]*?\n  \}/)![0];
+  let original = "";
+  let discount = "";
+  const rebateRateRef = { current: "" };
+  const run = vm.runInNewContext(ts.transpileModule(`${handler}\nupdateOriginalPrice`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+    rebateRate: "25", rebateRateRef,
+    setOriginalPrice: (value: string) => { original = value; },
+    setDiscountPrice: (value: string) => { discount = value; },
+    toAmount: Number, formatAmountInput: String
+  });
+  run("3000");
+  assert.equal(original, "3000");
+  assert.equal(discount, "");
+  rebateRateRef.current = "20";
+  run("12000");
+  assert.equal(discount, "9600");
+});
 const table: GrossMarginPriceTable = { platform: "douyin", updatedAt: timestamp, items: [{
   id: "play", service: "play", name: "播放", unitPrice: 1.005, quantityUnit: "个", updatedAt: timestamp
 }] };
@@ -71,6 +91,7 @@ test("导出监控和保存单价接受必火字段，仍拒绝未知服务", as
     "@/lib/api-route": apiRoute,
     "@/lib/gross-margin-monitor-template": {},
     "@/lib/gross-margin-refresh": {},
+    "@/lib/storage/gross-margin-projects": {},
     "@/lib/platform-links": platformLinks,
     "@/lib/utils": utils,
     "@/lib/gross-margin-calculator": { parseGrossMarginAmount, parseGrossMarginMetric },
@@ -148,8 +169,9 @@ test("企业微信授权过期保留成功缓存，并显示中文处理方式",
   const result = await source.resolveGrossMarginAccounts([], { persisted, refresh: true });
   assert.equal(result.accounts[1].defaultPrice, 30);
   assert.equal(result.fallback, true);
-  assert.equal(result.fallbackReason, "企业微信授权已过期，请重新运行 wecom-cli init");
-  assert.match(result.warning || "", /上次成功缓存.*企业微信授权已过期/);
+  assert.equal(result.fallbackReason, "企业微信文档授权已过期，请在机器人「可使用权限」中重新授权；管理员授权模式请联系管理员处理");
+  assert.match(result.warning || "", /上次成功缓存.*企业微信文档授权已过期/);
+  assert.doesNotMatch(result.warning || "", /wecom-cli init/);
   assert.doesNotMatch(result.warning || "", /authorization expired|192\.0\.2\.1|hint/);
 });
 
@@ -317,9 +339,14 @@ test("剪贴板受限仍保存监控并提供手动复制入口，保存失败�
       const busyStates: string[] = [];
       const run = vm.runInNewContext(ts.transpileModule(`${handler}\nhandleExportReview`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
         busy: "", validationError: "", videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk", renderedReviewTemplate: { error: "" },
-        effectiveReviewTemplate: "测试文案", platform: "bilibili", matchedAccount: null, accountName: "测试", calculation: { lines: [] },
-        copyText: async () => { if (clipboardMode !== "allowed") throw new Error("NotAllowedError"); },
-        saveGrossMarginMonitorRecord: async () => { saves++; if (saveFails) throw new Error("保存失败"); return { library: {} }; },
+        effectiveReviewTemplate: "昨日文案", reviewTemplate: { content: "日期：{{date}}" }, reviewTemplateValues: {},
+        renderGrossMarginReviewTemplate: () => "当日文案",
+        platform: "bilibili", matchedAccount: null, accountName: "测试", calculation: { lines: [] },
+        copyText: async (text: string) => { assert.equal(text, "当日文案"); if (clipboardMode !== "allowed") throw new Error("NotAllowedError"); },
+        saveGrossMarginMonitorRecord: async (input: { sourceText: string }) => {
+          assert.equal(input.sourceText, "当日文案");
+          saves++; if (saveFails) throw new Error("保存失败"); return { library: {} };
+        },
         setLibrary() {}, setBusy: (value: string) => busyStates.push(value), setTemplateModalOpen: (value: boolean) => { opened = value; },
         notify: (value: typeof notices[number]) => notices.push(value), Error
       });
