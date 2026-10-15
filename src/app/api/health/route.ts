@@ -10,8 +10,6 @@ import { getPiStatus } from "@/lib/pi-runtime";
 import { checkFeishuRuntime } from "@/lib/feishu";
 import { probeChatModel } from "@/lib/model-runtime";
 import { resolveOpenCliCommand } from "@/lib/opencli";
-import { probeRemoteCapabilityBridge } from "@/lib/remote-capabilities";
-import { isCloudStorageMode, storageFs } from "@/lib/storage/fs";
 
 export const runtime = "nodejs";
 
@@ -24,15 +22,7 @@ export async function GET(request: Request) {
   let opencliOk = false;
   let opencliVersion = "";
   let opencliError = "";
-  const capabilityProbe = isCloudStorageMode()
-    ? await probeRemoteCapabilityBridge({ signal: request.signal })
-    : undefined;
-
-  if (isCloudStorageMode()) {
-    opencliOk = Boolean(capabilityProbe?.operations.includes("opencli"));
-    opencliVersion = opencliOk ? "remote-capability" : "";
-    opencliError = opencliOk ? "" : capabilityProbe?.message || "远程 OpenCLI 能力不可用";
-  } else try {
+  try {
     const { stdout } = await execFileAsync(opencli, [...runtime.argsPrefix, "--version"], {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       timeout: 5000
@@ -64,7 +54,7 @@ export async function GET(request: Request) {
   const image = getImageRuntimeConfig();
   const [chatProbe, feishu, pi] = await Promise.all([
     probeChatModel({ signal: request.signal }),
-    checkFeishuRuntime({ remoteProbe: capabilityProbe }),
+    checkFeishuRuntime(),
     getPiStatus()
   ]);
 
@@ -89,24 +79,11 @@ export async function GET(request: Request) {
     image,
     feishuConfigured: feishu.configured,
     feishu,
-    remoteCapability: capabilityProbe
   });
 }
 
 async function checkGrossMarginStorage() {
   const root = path.join(libraryRoot(), "gross-margin");
-  if (isCloudStorageMode()) {
-    try {
-      await storageFs.stat(libraryRoot());
-      return { ok: true, root };
-    } catch (error) {
-      return {
-        ok: false,
-        root,
-        error: error instanceof Error ? error.message : "Sites D1/R2 云存储不可用"
-      };
-    }
-  }
   const probe = path.join(root, ".healthcheck");
   try {
     await fs.mkdir(root, { recursive: true });

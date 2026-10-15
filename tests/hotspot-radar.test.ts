@@ -68,7 +68,7 @@ test("模型两轮、合法空选题、部分批次失败、取消与持久化�
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_|HOTSPOT_RADAR_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|HOTSPOT_RADAR_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "test", CHAT_MODEL: "test", CHAT_REASONING_EFFORT: "high", CHAT_BASE_URL: `http://127.0.0.1:${address.port}/v1`, CHAT_WIRE_API: "chat_completions" });
   const feedback = { schemaVersion: 1 as const, ratings: [], history: [] };
   try {

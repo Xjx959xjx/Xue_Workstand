@@ -126,7 +126,7 @@ export default function MobileMorePage() {
       <section className="mobile-section">
         <div className="mobile-note-card">
           <strong>远程使用提醒</strong>
-          <p>MacBook 需要插电、开盖、联网并保持 Tailscale 在线。合盖睡眠或关机后，手机将无法连接后台。</p>
+          <p>MacBook 需要插电、开盖并联网。合盖睡眠或关机后，手机将无法连接后台。</p>
         </div>
       </section>
     </div>

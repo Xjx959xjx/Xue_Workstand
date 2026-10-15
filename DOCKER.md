@@ -18,7 +18,7 @@ docker compose up -d --build
 
 ## 外部能力
 
-OpenCLI 依赖已登录的 Chrome；Lark CLI 和官方 WeCom CLI 依赖各自授权。镜像不包含这些 CLI 或宿主机的凭据。这版镜像可运行工作台，但相关采集和云文档操作还需要在扩展镜像中安装对应 Linux CLI、完成授权，并连接浏览器服务；不能直接复用 macOS 的可执行文件。项目现有能力桥仅由云运行模式启用，单独填写桥接地址不会使本地存储模式自动转发；不要为启用桥接而切换 `SITES_RUNTIME` 或 `SITES_STORAGE_MODE`，这也会改变存储行为。模型 API、素材库和 FFmpeg 使用容器自身配置。
+OpenCLI 依赖已登录的 Chrome；Lark CLI 和官方 WeCom CLI 依赖各自授权。镜像不包含这些 CLI 或宿主机的凭据。这版镜像可运行工作台，但相关采集和云文档操作还需要在扩展镜像中安装对应 Linux CLI、完成授权，并连接浏览器服务；不能直接复用 macOS 的可执行文件。模型 API、素材库和 FFmpeg 使用容器自身配置。
 
 ## 管理与导出
 

@@ -65,10 +65,9 @@ test("一个视频命中人机评论源后整组评论全部隔离", () => {
   );
 });
 
-test("C 调研同时覆盖两个平台，各平台最多两个视频", () => {
+test("B站评论调研只采 B站，抖音保留双平台采集", () => {
   assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "bilibili"), [
-    { source: "bilibili", query: "苹果折叠屏", videoLimit: 2 },
-    { source: "douyin", query: "苹果折叠屏", videoLimit: 2 }
+    { source: "bilibili", query: "苹果折叠屏", videoLimit: 2 }
   ]);
   assert.deepEqual(buildPlatformResearchTasks("苹果折叠屏", "douyin"), [
     { source: "douyin", query: "苹果折叠屏", videoLimit: 2 },

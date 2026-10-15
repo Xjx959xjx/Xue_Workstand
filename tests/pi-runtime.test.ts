@@ -8,7 +8,6 @@ import { chatCompleteStrict, streamResponseTextWithFallback, readDocumentImages 
 import { getPiStatus } from "../src/lib/pi-runtime";
 import { aiPolicySignature } from "../src/lib/ai-policy-runtime";
 import { cleanTranscriptText } from "../src/lib/transcript-cleaning";
-import { handleCapabilityBridgePost } from "../src/lib/capability-bridge";
 import { GET as getPiSettings, PUT as putPiSettings } from "../src/app/api/pi-settings/route";
 import { POST as loginPi } from "../src/app/api/pi-settings/login/route";
 import { GET as getAiSettings, PUT as putAiSettings } from "../src/app/api/ai-settings/route";
@@ -57,7 +56,7 @@ test("Pi 终端默认配置、额度兜底、部分输出与取消隔离", async
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}`;
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|PI_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|PI_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { PI_ENABLED: "1", PI_CODING_AGENT_DIR: path.join(root, "pi"), STYLE_LIBRARY_DIR: path.join(root, "library"),
     CHAT_API_KEY: "legacy-key", CHAT_BASE_URL: `${base}/legacy`, CHAT_MODEL: "legacy-model", CHAT_WIRE_API: "chat_completions", CHAT_FALLBACK_ENABLED: "0" });
   await mkdir(process.env.PI_CODING_AGENT_DIR!, { recursive: true });
@@ -122,19 +121,6 @@ test("Pi 终端默认配置、额度兜底、部分输出与取消隔离", async
     assert.equal(responses.backend, "pi"); assert.equal(responsesText, "Responses 完整结果");
     assert.equal(calls.at(-1)!.body.tools, undefined);
     await writeModels();
-    process.env.SITES_CAPABILITY_BRIDGE_TOKEN = "pi-bridge-token-01234567890123456789";
-    const bridgeRequest = (payload: unknown, token = process.env.SITES_CAPABILITY_BRIDGE_TOKEN, operation = "pi-model") => new Request("http://localhost/api/capability-bridge", {
-      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ operation, payload })
-    });
-    await assert.rejects(handleCapabilityBridgePost(bridgeRequest({ messages }, "wrong")), /鉴权失败/);
-    await assert.rejects(handleCapabilityBridgePost(bridgeRequest({ messages, apiKey: "forbidden" })), /格式不正确/);
-    const bridged = await handleCapabilityBridgePost(bridgeRequest({ messages })) as { text: string };
-    assert.equal(bridged.text, "Pi 完整结果");
-    assert.deepEqual(await handleCapabilityBridgePost(bridgeRequest({}, undefined, "pi-status")), await getPiStatus());
-    await assert.rejects(handleCapabilityBridgePost(bridgeRequest({ apiKey: "forbidden" }, undefined, "pi-status")), /格式不正确/);
-    process.env.PI_ENABLED = "0";
-    await assert.rejects(handleCapabilityBridgePost(bridgeRequest({ messages })), /Pi 已关闭/);
-    assert.equal((await handleCapabilityBridgePost(bridgeRequest({}, undefined, "pi-status")) as { enabled: boolean }).enabled, false);
     process.env.PI_ENABLED = "1";
     mode = "vision";
     assert.deepEqual(await readDocumentImages(["data:image/png;base64,YQ=="]), ["图中文字"]);

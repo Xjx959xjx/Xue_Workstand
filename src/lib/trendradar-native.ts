@@ -4,7 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { chatCompleteStrict } from "./ai";
 import { libraryRoot } from "./storage/core";
-import { isCloudStorageMode, readJsonFile, writeJsonFile } from "./storage/fs";
+import { readJsonFile, writeJsonFile } from "./storage/fs";
 import { trendRadarNativeStateSchema } from "./storage/schemas";
 import { trendRadarRunner } from "./trendradar-native-runner";
 import { trendRadarSettingsSchema, type TrendRadarSettings, type TrendRadarReport, type TrendRadarNativeStatus } from "./trendradar-native-types";
@@ -41,7 +41,6 @@ type Progress = { stage: string; message: string; progress: number };
 export async function runTrendRadarNative(settings: TrendRadarSettings, options: {
   signal?: AbortSignal; onProgress?: (progress: Progress) => Promise<void>;
 } = {}): Promise<TrendRadarReport> {
-  if (isCloudStorageMode()) throw new Error("TrendRadar 需要本机 Docker，请通过本机资料桥运行热点雷达");
   settings = trendRadarSettingsSchema.parse(settings);
   const key = statePath();
   if (active.has(key)) throw new Error("TrendRadar 报告任务正在运行，请在任务中心查看进度");

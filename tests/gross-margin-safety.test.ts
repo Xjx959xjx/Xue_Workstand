@@ -16,8 +16,6 @@ import { getGrossMarginLibrary, invalidateGrossMarginLibraryCache, saveGrossMarg
 import { getGrossMarginLibrary as readLibrary, saveGrossMarginPriceTable, upsertGrossMarginMonitorRecord, updateGrossMarginMonitorRecord } from "../src/lib/storage/gross-margin";
 import { parseStoredRecord } from "../src/lib/storage/schemas";
 import { isJobKindAllowedForAppMode } from "../src/lib/app-mode";
-import { relayWorkspaceRequest } from "../src/lib/workspace-bridge";
-import { GET as bridgeGet } from "../src/app/api/capability-bridge/workspace/[...path]/route";
 import type { AccountSourceResult } from "../src/lib/wecom-account-source";
 import type { GrossMarginMonitorRecord, GrossMarginPriceTable } from "../src/lib/types";
 
@@ -124,7 +122,7 @@ function sheet(price = "20") {
 
 function accountSource(command: () => Promise<{ stdout: string }>, fallback = "1") {
   return load<typeof import("../src/lib/wecom-account-source")>("src/lib/wecom-account-source.ts", {
-    child_process: { execFile() {} }, util: { promisify: () => command }, "./remote-capabilities": {}
+    child_process: { execFile() {} }, util: { promisify: () => command }
   }, { WECOM_ACCOUNT_SHEET_URL: "https://sheet.invalid/test", WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL: fallback });
 }
 
@@ -302,26 +300,10 @@ test("临时库保留清空起量与零报价；损坏与新版拒读；更新�
   }
 });
 
-test("认证资料桥强制可信模式；模式不一致拒绝；毛利只允许刷新任务", async () => {
-  const previousFetch = globalThis.fetch, previous = { ...process.env };
-  try {
-    process.env.APP_MODE = "gross-margin";
-    delete process.env.SITES_STORAGE_MODE; delete process.env.SITES_RUNTIME;
-    process.env.SITES_CAPABILITY_BRIDGE_TOKEN = "test-token-abcdefghijklmnopqrstuvwxyz";
-    let calls = 0;
-    globalThis.fetch = async (_url, init) => { calls++; assert.equal(new Headers(init?.headers).get("x-workspace-app-mode"), "gross-margin"); return Response.json({}); };
-    await relayWorkspaceRequest(new Request("https://site.invalid/api/gross-margin", { headers: { "x-workspace-app-mode": "workspace" } }), "https://bridge.invalid/api", "test");
-    const headers = { authorization: `Bearer ${process.env.SITES_CAPABILITY_BRIDGE_TOKEN}`, "x-workspace-app-mode": "workspace" };
-    assert.equal((await bridgeGet(new Request("http://local/api/capability-bridge/workspace/gross-margin", { headers }))).status, 403);
-    assert.equal(calls, 1);
-    assert.equal(isJobKindAllowedForAppMode("gross-margin-refresh", "gross-margin"), true);
-    assert.equal(isJobKindAllowedForAppMode("write-copy", "gross-margin"), false);
-    assert.equal(isJobKindAllowedForAppMode("write-copy", "workspace"), true);
-  } finally {
-    globalThis.fetch = previousFetch;
-    for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
-    Object.assign(process.env, previous);
-  }
+test("毛利模式仅允许毛利刷新任务，完整工作台保留写作任务", () => {
+  assert.equal(isJobKindAllowedForAppMode("gross-margin-refresh", "gross-margin"), true);
+  assert.equal(isJobKindAllowedForAppMode("write-copy", "gross-margin"), false);
+  assert.equal(isJobKindAllowedForAppMode("write-copy", "workspace"), true);
 });
 
 test("剪贴板受限仍保存监控并提供手动复制入口，保存失败不报成功", async () => {

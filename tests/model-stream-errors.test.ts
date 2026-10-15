@@ -32,7 +32,7 @@ test("写作仍在生成时允许超过两分钟，不误判半篇为超时", as
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_MODEL: "fixture",
     CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, CHAT_WIRE_API: "responses", CHAT_FALLBACK_ENABLED: "0" });
   try {
@@ -84,7 +84,7 @@ test("写作流真实超时会重试，已输出半篇时保留超时原因并�
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_MODEL: "fixture",
     CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, CHAT_FALLBACK_ENABLED: "0" });
   try {
@@ -149,7 +149,7 @@ test("写作临时故障只重试一次；参数错误、部分输出和取消�
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_)/.test(key)) delete process.env[key];
   const baseUrl = `http://127.0.0.1:${address.port}`;
   Object.assign(process.env, {
     STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_BASE_URL: baseUrl,

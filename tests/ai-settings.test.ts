@@ -13,7 +13,7 @@ import { assistWriterPrompt } from "../src/lib/writer-prompt-assist";
 async function isolated(run: (root: string) => Promise<void>) {
   const env = { ...process.env };
   const root = await mkdtemp(path.join(tmpdir(), "ai-settings-test-"));
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|WEB_RESEARCH_|IMAGE_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|WEB_RESEARCH_|IMAGE_|FHL_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_MODEL: "gpt-6-astra", CHAT_REASONING_EFFORT: "low", CHAT_FALLBACK_ENABLED: "0" });
   try { await run(root); }
   finally {
@@ -45,7 +45,7 @@ test("配置原子保存、热读取与并发版本冲突，恢复默认不改�
   assert.equal(view.effective.comment_generate.model, "gpt-6-astra");
   assert.equal(view.effective.comment_generate.effort, "low");
   assert.equal(view.effective.danmaku.model, "gpt-6.1-sol");
-  assert.equal(view.effective.danmaku.effort, "medium");
+  assert.equal(view.effective.danmaku.effort, "low");
   assert.deepEqual(view.effective.writer_prompt, { model: "gpt-6.1-sol", effort: "low" });
   assert.equal(view.inheritedEfforts.transcript_clean, "low");
   assert.equal(view.inheritedEfforts.image_generate, "none");

@@ -5,13 +5,6 @@ import net from "net";
 import os from "os";
 import path from "path";
 import process from "process";
-import {
-  CAPABILITY_GATEWAY_PORT,
-  getCapabilityBridgePublicUrl,
-  inspectCapabilityFunnel,
-  isTailscaleConnected,
-  readCapabilityBridgeSecret
-} from "./capability-bridge-service.mjs";
 
 const root = process.env.WORKBENCH_SOURCE_ROOT || process.cwd();
 const stateRoot = path.join(root, ".remote-server");
@@ -22,7 +15,6 @@ const errorLogFile = path.join(stateRoot, "server-error.log");
 const serviceLabel = "com.xjx.account-style-library.remote";
 const launchAgentPath = path.join(os.homedir(), "Library", "LaunchAgents", `${serviceLabel}.plist`);
 const devScript = path.join(root, "scripts", "dev-server.mjs");
-const capabilityGatewayScript = path.join(root, "scripts", "capability-bridge-gateway.mjs");
 const healthUrl = "http://127.0.0.1:3000/api/remote/status";
 const command = process.argv[2] || "status";
 const sourceEntries = [
@@ -30,7 +22,6 @@ const sourceEntries = [
   "public",
   "middleware.ts",
   "eslint.config.mjs",
-  "env.d.ts",
   "package.json",
   "package-lock.json",
   "next.config.mjs",
@@ -60,38 +51,23 @@ async function main() {
 
 async function setup() {
   if (process.platform !== "darwin") {
-    throw new Error("远程常驻服务当前只支持 macOS。");
+    throw new Error("本机常驻服务当前只支持 macOS。");
   }
-
-  assertCommand("node", "未检测到 Node.js。");
-  assertCommand("caffeinate", "未检测到 macOS caffeinate。");
-  assertCommand(
-    "tailscale",
-    "未检测到 Tailscale。请先在 Mac 和 iPhone 安装 Tailscale，并登录同一个私人账号。"
-  );
-
-  const tailscaleStatus = capture("tailscale", ["status", "--json"]);
-  if (!tailscaleStatus.ok || !isTailscaleConnected(tailscaleStatus.stdout)) {
-    throw new Error(`Tailscale 尚未连接：${summarizeOutput(tailscaleStatus.stderr || tailscaleStatus.stdout)}`);
-  }
-  const funnelStatus = capture("tailscale", ["funnel", "status", "--json"]);
-  const funnelInspection = inspectCapabilityFunnel(funnelStatus.stdout);
-  if (funnelStatus.ok && funnelInspection.unexpectedAuthorities.length) {
-    throw new Error("检测到能力桥以外的 Tailscale Funnel 公网入口，请先人工确认现有配置。");
-  }
+  if (!capture("/usr/bin/env", ["which", "node"]).ok) throw new Error("未检测到 Node.js。");
+  if (!capture("/usr/bin/env", ["which", "caffeinate"]).ok) throw new Error("未检测到 macOS caffeinate。");
 
   await fs.promises.mkdir(releasesRoot, { recursive: true });
   await fs.promises.mkdir(path.dirname(launchAgentPath), { recursive: true });
-  await fs.promises.writeFile(launchAgentPath, launchAgentPlist(), "utf8");
-
-  const serveResult = capture("tailscale", ["serve", "--bg", "3000"]);
-  if (!serveResult.ok) {
-    throw new Error(`配置 Tailscale Serve 失败：${summarizeOutput(serveResult.stderr || serveResult.stdout)}`);
+  const temporaryPath = `${launchAgentPath}.${process.pid}.tmp`;
+  try {
+    await fs.promises.writeFile(temporaryPath, launchAgentPlist(), "utf8");
+    await fs.promises.rename(temporaryPath, launchAgentPath);
+  } finally {
+    // 仅清理本次安装的临时配置，不触碰已安装配置或资料库。
+    await fs.promises.rm(temporaryPath, { force: true });
   }
-
-  console.log("远程运行环境已配置。");
+  console.log("本机正式服务运行环境已配置。");
   console.log(`LaunchAgent：${launchAgentPath}`);
-  console.log("Tailscale Serve 已代理到 http://127.0.0.1:3000。");
   if (await exists(path.join(currentLink, "server.js"))) {
     await start();
   } else {
@@ -123,64 +99,30 @@ async function start() {
 
 async function stop() {
   await stopLaunchAgent();
-  console.log("远程正式服务已停止。Tailscale Serve 配置保持不变。");
+  console.log("远程正式服务已停止。");
 }
 
 async function startDevelopment() {
   await assertNoActiveJobs();
   await stopLaunchAgent();
   await runNodeScript(devScript, ["start"]);
-  console.log("已切换为开发服务。Tailscale 仍会代理 http://127.0.0.1:3000。");
+  console.log("已切换为开发服务：http://127.0.0.1:3000");
 }
 
 async function status() {
   const launchAgent = capture("launchctl", ["print", launchTarget()]);
-  const tailscale = commandExists("tailscale")
-    ? capture("tailscale", ["status", "--json"])
-    : { ok: false, stdout: "", stderr: "未安装 Tailscale" };
-  const tailscaleServe = commandExists("tailscale")
-    ? capture("tailscale", ["serve", "status", "--json"])
-    : { ok: false, stdout: "", stderr: "未安装 Tailscale" };
-  const tailscaleFunnel = commandExists("tailscale")
-    ? capture("tailscale", ["funnel", "status", "--json"])
-    : { ok: false, stdout: "", stderr: "未安装 Tailscale" };
   const health = await fetchJson(healthUrl, 5_000);
-  const capabilityToken = readCapabilityBridgeSecret();
-  const capabilityGateway = capabilityToken
-    ? await fetchJsonWithBearer(
-      `http://127.0.0.1:${CAPABILITY_GATEWAY_PORT}/api/capability-bridge`,
-      capabilityToken,
-      5_000
-    )
-    : { ok: false, error: "钥匙串令牌未配置" };
-  const capabilityFunnelInspection = inspectCapabilityFunnel(tailscaleFunnel.stdout);
 
   console.log(JSON.stringify({
     launchAgent: {
       installed: await exists(launchAgentPath),
       loaded: launchAgent.ok
     },
-    tailscale: {
-      installed: commandExists("tailscale"),
-      connected: tailscale.ok && isTailscaleConnected(tailscale.stdout),
-      serveConfigured: tailscaleServe.ok && hasNonEmptyJson(tailscaleServe.stdout),
-      funnelConfigured: tailscaleFunnel.ok && capabilityFunnelInspection.configured
-    },
     server: {
       healthy: health.ok,
       url: healthUrl,
       response: health.ok ? health.data : undefined,
       error: health.ok ? undefined : health.error
-    },
-    capabilityBridge: {
-      keychainConfigured: capabilityToken.length >= 32,
-      gatewayHealthy: capabilityGateway.ok,
-      operations: capabilityGateway.ok && Array.isArray(capabilityGateway.data?.operations)
-        ? capabilityGateway.data.operations
-        : [],
-      error: capabilityGateway.ok ? undefined : capabilityGateway.error,
-      publicUrl: getCapabilityBridgePublicUrl(),
-      unexpectedFunnelAuthorities: capabilityFunnelInspection.unexpectedAuthorities
     },
     currentRelease: await currentReleaseName(),
     logFile,
@@ -256,11 +198,6 @@ async function serve() {
     throw new Error("远程服务找不到 current/server.js。");
   }
   const build = await readReleaseBuild(releaseRoot);
-  const capabilityToken = readCapabilityBridgeSecret();
-  const capabilityPublicUrl = capabilityToken
-    ? getCapabilityBridgePublicUrl({ required: true })
-    : "";
-
   const env = {
     ...process.env,
     WORKBENCH_SOURCE_ROOT: root,
@@ -270,11 +207,7 @@ async function serve() {
     APP_START_PATH: "/douyin-hotlist",
     APP_BUILD_ID: build?.buildId || path.basename(releaseRoot),
     APP_STARTED_AT: build?.builtAt || new Date().toISOString(),
-    STYLE_LIBRARY_DIR: path.join(root, "style-library"),
-    ...(capabilityToken ? {
-      SITES_CAPABILITY_BRIDGE_TOKEN: capabilityToken,
-      SITES_CAPABILITY_BRIDGE_PUBLIC_URL: capabilityPublicUrl
-    } : {})
+    STYLE_LIBRARY_DIR: path.join(root, "style-library")
   };
   const args = [path.join(releaseRoot, "server.js")];
 
@@ -288,28 +221,14 @@ async function serve() {
     env,
     stdio: "inherit"
   });
-  const gateway = capabilityToken
-    ? spawn(process.execPath, [capabilityGatewayScript], {
-      cwd: root,
-      env: {
-        ...process.env,
-        SITES_CAPABILITY_GATEWAY_PORT: String(CAPABILITY_GATEWAY_PORT),
-        SITES_CAPABILITY_UPSTREAM_PORT: "3000"
-      },
-      stdio: "inherit"
-    })
-    : null;
-
   const forward = (signal) => {
     if (!child.killed) child.kill(signal);
-    if (gateway && !gateway.killed) gateway.kill(signal);
     if (!powerAssertion.killed) powerAssertion.kill(signal);
   };
   process.on("SIGTERM", () => forward("SIGTERM"));
   process.on("SIGINT", () => forward("SIGINT"));
 
   const processes = [{ name: "工作台", child }, { name: "系统保活", child: powerAssertion }];
-  if (gateway) processes.push({ name: "能力桥窄网关", child: gateway });
   const exit = await Promise.race(processes.map(({ name, child: processChild }) => new Promise((resolve, reject) => {
     processChild.once("error", reject);
     processChild.once("exit", (code, signal) => resolve({ name, code, signal }));
@@ -421,11 +340,8 @@ async function waitForLaunchAgentStopped(timeoutMs) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const loaded = capture("launchctl", ["print", launchTarget()]).ok;
-    const [appPortOpen, gatewayPortOpen] = await Promise.all([
-      isTcpPortOpen(3000),
-      isTcpPortOpen(CAPABILITY_GATEWAY_PORT)
-    ]);
-    if (!loaded && !appPortOpen && !gatewayPortOpen) return;
+    const appPortOpen = await isTcpPortOpen(3000);
+    if (!loaded && !appPortOpen) return;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error("旧版远程服务未在 10 秒内完全退出，已停止切换以避免端口冲突。");
@@ -503,26 +419,6 @@ async function fetchJson(url, timeoutMs) {
       : { ok: false, error: data?.error || `HTTP ${response.status}` };
   } catch (error) {
     return { ok: false, error: describeError(error), connectionRefused: error?.cause?.code === "ECONNREFUSED" };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function fetchJsonWithBearer(url, token, timeoutMs) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      cache: "no-store",
-      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-      signal: controller.signal
-    });
-    const data = await response.json().catch(() => null);
-    return response.ok
-      ? { ok: true, data }
-      : { ok: false, error: data?.error || `HTTP ${response.status}` };
-  } catch (error) {
-    return { ok: false, error: describeError(error) };
   } finally {
     clearTimeout(timeout);
   }
@@ -637,14 +533,6 @@ function launchTarget() {
   return `${launchDomain()}/${serviceLabel}`;
 }
 
-function assertCommand(name, message) {
-  if (!commandExists(name)) throw new Error(message);
-}
-
-function commandExists(name) {
-  return capture("/usr/bin/env", ["which", name]).ok;
-}
-
 function capture(executable, args, options = {}) {
   const result = spawnSync(executable, args, {
     cwd: options.cwd || root,
@@ -695,16 +583,6 @@ async function exists(target) {
 
 function summarizeOutput(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 500) || "未知错误";
-}
-
-function hasNonEmptyJson(value) {
-  try {
-    const parsed = JSON.parse(value);
-    if (Array.isArray(parsed)) return parsed.length > 0;
-    return Boolean(parsed && typeof parsed === "object" && Object.keys(parsed).length);
-  } catch {
-    return Boolean(String(value || "").trim());
-  }
 }
 
 function describeError(error) {

@@ -63,28 +63,6 @@ test("B站日期分页大小固定，只有截止日期时继续读取历史页"
   assert.equal(result.videos.length, 1);
 });
 
-test("远程转写使用调用前 revision，取消后不保存", async () => {
-  const events: string[] = [];
-  const conflict = Object.assign(new Error("冲突"), { statusCode: 409 });
-  const controller = new AbortController();
-  let cancel = false;
-  const transcription = load<{ transcribeVideo: typeof transcribeVideo }>("src/lib/transcription.ts", {
-    child_process: { execFile: () => { throw new Error("禁止真实进程"); } },
-    "./storage": {
-      getTranscriptSnapshot: async () => { events.push("snapshot"); return { revision: "old" }; },
-      saveTranscript: async ({ expectedRevision }: { expectedRevision: string }) => { events.push("save"); assert.equal(expectedRevision, "old"); throw conflict; }
-    },
-    "./remote-capabilities": { hasRemoteCapabilityBridge: () => true, callRemoteCapability: async () => { events.push("remote-edit"); if (cancel) controller.abort(); return { text: "新稿" }; } }
-  }, "", { SITES_RUNTIME: "cloud" });
-  const input = { platform: "douyin" as const, accountId: "test", videoId: "a" };
-  await assert.rejects(transcription.transcribeVideo(input), (error) => error === conflict);
-  assert.deepEqual(events, ["snapshot", "remote-edit", "save"]);
-  events.length = 0;
-  cancel = true;
-  await assert.rejects(transcription.transcribeVideo({ ...input, signal: controller.signal }), { name: "AbortError" });
-  assert.deepEqual(events, ["snapshot", "remote-edit"]);
-});
-
 test("本地 ASR 保存冲突保留 409 且不标记旧稿失败", async () => {
   let marked = 0;
   const conflict = Object.assign(new Error("冲突"), { statusCode: 409 });

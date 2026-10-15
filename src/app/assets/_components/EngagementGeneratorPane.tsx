@@ -108,7 +108,7 @@ export function EngagementGeneratorPane({
                 <input checked={includeDanmaku} disabled={!supportsDanmaku} name="includeDanmaku" type="checkbox" onChange={(event) => onIncludeDanmakuChange(event.target.checked)} />
                 <span>
                   <strong>弹幕</strong>
-                  <small>{supportsDanmaku ? "B站 · 按正文节点生成" : "仅支持 B站"}</small>
+                  <small>{supportsDanmaku ? "B站 · 围绕正文批量生成" : "仅支持 B站"}</small>
                 </span>
                 <BoundedNumberInput
                   ariaLabel="弹幕条数"
@@ -172,7 +172,7 @@ function progressStageLabel(stage: string) {
   if (stage === "source") return "读取目标视频正文";
   if (stage === "brief") return "提取人物、事件与桥段";
   if (stage === "research") return "采集并检查平台语料";
-  if (stage === "generate") return "按真实语料补齐";
+  if (stage === "generate") return "批量生成互动素材";
   if (stage === "filter") return "保存生成结果";
   return "评论生成中";
 }

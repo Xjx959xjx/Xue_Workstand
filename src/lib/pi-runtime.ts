@@ -23,28 +23,22 @@ export function piEnabled() { return process.env.PI_ENABLED !== "0"; }
 
 export type PiImageRequest = { prompt: string; size: string; quality: string; images: string[] };
 export async function piImageConfigured(): Promise<boolean> {
-  if (!piEnabled() || process.env.SITES_RUNTIME === "cloud" || process.env.SITES_STORAGE_MODE === "cloud") return false;
+  if (!piEnabled()) return false;
   return (await import("./pi-runtime-local")).piImageConfigured();
 }
 export async function runPiImage(input: PiImageRequest, signal?: AbortSignal): Promise<Buffer> {
   if (!piEnabled()) throw new Error("订阅服务已关闭，请启用 Pi 或选择图片中转来源");
-  if (process.env.SITES_RUNTIME === "cloud" || process.env.SITES_STORAGE_MODE === "cloud") return (await import("./pi-runtime-cloud")).runPiImage();
   return (await import("./pi-runtime-local")).runPiImage(input, signal);
 }
 
-// Vite replaces the local adapter with the capability-bridge adapter for Workers.
 export async function runPiModel(input: PiRequest, options: PiOptions = {}): Promise<PiResult> {
   options.signal?.throwIfAborted();
-  if (process.env.SITES_RUNTIME === "cloud" || process.env.SITES_STORAGE_MODE === "cloud") {
-    return (await import("./pi-runtime-cloud")).runPiModel(piRequestSchema.parse(input), options);
-  }
   return (await import("./pi-runtime-local")).runPiModel(piRequestSchema.parse(input), options);
 }
 
 export async function getPiStatus(): Promise<PiStatus> {
   if (!piEnabled()) return { enabled: false, configured: false, message: "Pi 已关闭，使用原中转站链路" };
   try {
-    if (process.env.SITES_RUNTIME === "cloud" || process.env.SITES_STORAGE_MODE === "cloud") return await (await import("./pi-runtime-cloud")).getPiStatus();
     return await (await import("./pi-runtime-local")).getPiStatus();
   }
   catch (error) {

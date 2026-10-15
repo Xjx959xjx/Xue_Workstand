@@ -1,18 +1,11 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-// 显式覆盖 .env，隔离资料与桥接凭证；不启动公网能力网关。
+// 显式覆盖 .env 中的资料路径，隔离正式资料库。
 const env = {
   ...process.env,
   WORKSPACE_DEV_SANDBOX: "1",
   STYLE_LIBRARY_DIR: path.resolve(".dev-sandbox/library"),
-  SITES_STORAGE_MODE: "",
-  SITES_RUNTIME: "",
-  SITES_WORKSPACE_SOURCE: "",
-  SITES_EXTERNAL_CAPABILITY_URL: "",
-  SITES_EXTERNAL_CAPABILITY_TOKEN: "",
-  SITES_CAPABILITY_BRIDGE_TOKEN: "",
-  SITES_CAPABILITY_BRIDGE_PUBLIC_URL: "",
   APP_MODE: "workspace",
   PORT: "3002"
 };

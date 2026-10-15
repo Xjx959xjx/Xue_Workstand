@@ -56,7 +56,7 @@ test("分组检索覆盖全部对象，最多三路并发；失败或取消不�
     }, scope.includes("型号1") ? 30 : 10);
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|SITES_|OPENCLI_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|OPENCLI_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, WEB_RESEARCH_ENABLED: "1", WEB_RESEARCH_API_KEY: "fixture",
     WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, WEB_RESEARCH_MODEL: "fixture" });
   try {

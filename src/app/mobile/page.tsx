@@ -222,7 +222,7 @@ function connectionMessage(remote: ReturnType<typeof useRemoteStatus>) {
   }
   if (remote.connection === "degraded") return "工作台可访问，部分采集或生成能力需要处理。";
   if (remote.connection === "offline") return remote.error;
-  return "正在确认 MacBook、Tailscale 和本地服务状态。";
+  return "正在确认 MacBook 和本地服务状态。";
 }
 
 function formatCheckedAt(value?: string) {

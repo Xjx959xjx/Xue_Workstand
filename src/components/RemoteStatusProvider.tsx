@@ -131,14 +131,14 @@ export function useRemoteStatus() {
 
 function describeConnectionError(error: unknown) {
   if (error instanceof DOMException && error.name === "AbortError") {
-    return "后台连接超时。请确认 Tailscale 已连接，MacBook 正在开机且没有休眠。";
+    return "后台连接超时。请确认 MacBook 正在开机且没有休眠。";
   }
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return "iPhone 当前没有网络连接。";
   }
   const message = error instanceof Error ? error.message : "";
   if (/Failed to fetch|无法连接|NetworkError|Load failed/i.test(message)) {
-    return "无法连接后台。请确认 Tailscale 已连接，MacBook 正在开机且没有休眠。";
+    return "无法连接后台。请确认 MacBook 正在开机且没有休眠。";
   }
   return message || "后台暂时不可用，请稍后重试。";
 }

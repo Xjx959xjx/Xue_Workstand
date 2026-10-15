@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ServiceMode, ServiceModeStatus } from "./types";
-import { isCloudStorageMode, writeTextFileAtomic } from "./storage/fs";
+import { writeTextFileAtomic } from "./storage/fs";
 import { withMutationLock } from "./storage/mutation-lock";
 
 const exec = promisify(execFile);
@@ -39,7 +39,7 @@ export function serviceModePlist(root: string, mode: ServiceMode) {
 }
 
 async function controlRoot() {
-  if (process.platform !== "darwin" || isCloudStorageMode() || process.env.WORKSPACE_DEV_SANDBOX === "1") return null;
+  if (process.platform !== "darwin" || process.env.WORKSPACE_DEV_SANDBOX === "1") return null;
   const root = process.env.WORKBENCH_SOURCE_ROOT || process.cwd();
   try {
     await fs.access(path.join(root, "scripts", "remote-server.mjs"));

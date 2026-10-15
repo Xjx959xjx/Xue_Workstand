@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { proxyToLocalWorkspace, usesLocalWorkspace } from "./src/lib/workspace-bridge";
 
 const grossMarginAllowedPrefixes = [
   "/api/health",
@@ -12,11 +11,6 @@ const grossMarginAllowedPrefixes = [
 ];
 
 export function middleware(request: NextRequest) {
-  if (usesLocalWorkspace() && request.nextUrl.pathname.startsWith("/api/") &&
-      !request.nextUrl.pathname.startsWith("/api/capability-bridge") &&
-      (process.env.APP_MODE !== "gross-margin" || isAllowedGrossMarginPath(request.nextUrl.pathname))) {
-    return proxyToLocalWorkspace(request);
-  }
   if (process.env.APP_MODE !== "gross-margin") {
     return NextResponse.next();
   }

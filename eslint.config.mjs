@@ -8,9 +8,8 @@ const eslintConfig = [
   {
     ignores: [
       ".next/**",
-      ".vinext/**",
-      ".wrangler/**",
       ".dev-server/**",
+      ".dev-sandbox/**",
       ".remote-server/**",
       "dist/**",
       "node_modules/**",

@@ -78,12 +78,10 @@ test("项目同步沿用任务中心契约且不能混入监控刷新", () => {
 
 test("隔离资料库中的项目缓存校验、取消及远端失败保持原有缓存", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gross-project-test-"));
-  const envKeys = ["STYLE_LIBRARY_DIR", "WECOM_CLI_BIN", "WECOM_PROJECT_SHEET_URL", "SITES_RUNTIME", "SITES_STORAGE_MODE"] as const;
+  const envKeys = ["STYLE_LIBRARY_DIR", "WECOM_CLI_BIN", "WECOM_PROJECT_SHEET_URL"] as const;
   const before = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
   try {
     process.env.STYLE_LIBRARY_DIR = dir;
-    process.env.SITES_RUNTIME = "";
-    process.env.SITES_STORAGE_MODE = "";
     process.env.WECOM_PROJECT_SHEET_URL = "https://doc.weixin.qq.com/sheet/test";
     const cli = path.join(dir, "fake-wecom");
     process.env.WECOM_CLI_BIN = cli;

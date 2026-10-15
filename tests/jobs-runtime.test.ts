@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { compactJobForPersistence, isResumableJobKind } from "../src/lib/job-persistence";
 import { applyJobListResponse, isActiveJob, isTerminalJob, selectJobList } from "../src/lib/job-sync";
-import { CloudJobConflictError } from "../src/lib/jobs-cloud";
 import { resolveWriteBatchOutcome, writeVariantFailure } from "../src/lib/ai";
 import { startJobSchema } from "../src/lib/job-validation";
 import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "../src/lib/storage/schemas";
@@ -37,14 +35,13 @@ function localJobs(mocks: Record<string, unknown> = {}) {
     "./storage": { libraryRoot: () => "/virtual" },
     "./storage/core": { normalizeStorageSegment: (id: string) => id },
     "./storage/schemas": { parseStoredRecord, STORAGE_SCHEMA_VERSION },
-    "./storage/fs": { isCloudStorageMode: () => false, fileExists: async (p: string) => disk.has(p),
+    "./storage/fs": { fileExists: async (p: string) => disk.has(p),
       readJsonFile: async (p: string) => disk.get(p) ?? null,
       writeJsonFile: async (p: string, value: unknown) => { if (failing) throw new Error("模拟落盘失败"); disk.set(p, value); },
       storageFs: { mkdir: async () => {}, readdir: async () => [], stat: async () => ({ mtimeMs: 0, size: 0 }), rm: async () => {} } },
     "./job-sync": { isActiveJob, isTerminalJob, selectJobList },
     "./job-persistence": { compactJobForPersistence, isResumableJobKind },
     "./job-validation": { startJobSchema },
-    "./jobs-cloud": { CloudJobConflictError },
     "./app-mode": { isJobKindAllowedForAppMode: () => true, assertJobKindAllowedForAppMode: () => {} },
     "./utils": { nowIso: () => new Date().toISOString() },
     "./concurrency": { mapWithConcurrency: async (items: unknown[], _limit: number, run: (item: unknown) => unknown) => Promise.all(items.map(run)) },
@@ -160,20 +157,6 @@ test("批次执行器先持久化候选，再逐条发布数据版本；空候�
   assert.equal((disk.get("/virtual/jobs/batch.json") as JobRecord).dataChange?.videoId, "one");
 });
 
-test("云端恢复先检查存活租约，不能读取或覆盖其他执行器的任务", async () => {
-  let payloadReads = 0;
-  const original = record("leased");
-  const { jobs } = localJobs({
-    "./storage/fs": { isCloudStorageMode: () => true, readJsonFile: async () => { payloadReads++; throw new Error("不应读取"); } },
-    "./jobs-cloud": { CloudJobConflictError, readCloudJob: async () => original,
-      readCloudJobLease: async () => ({ state: "running", lease_expires_at: Date.now() + 60000 }) }
-  });
-  const recovered = await jobs.audit.recoverStaleDiskJobs([{ ...original, filePath: "" }]);
-  assert.equal(recovered.length, 0);
-  assert.equal(payloadReads, 0);
-  assert.equal(jobs.audit.runtime.readErrors.size, 0);
-});
-
 test("无独立资产的大结果完整保留，已保存草稿才可压缩", () => {
   const result = { text: "文".repeat(40000) };
   for (const kind of ["single-video-transcribe", "publish-copy", "image-prompt-assist", "write-copy"] as const) {
@@ -203,53 +186,6 @@ test("批量候选先保存且恢复沿用 IDs；结果检查点失败不污染�
   processed.length = 0;
   await batch.runBatchTranscribe({ platform: "bilibili", accountId: "test", limit: "all", videoIds: [] });
   assert.deepEqual(processed, []);
-});
-
-test("云端原子容量、租约续期、取消与旧执行器写入保护", async () => {
-  const sqlite = new DatabaseSync(":memory:");
-  sqlite.exec(readFileSync("drizzle/0000_clear_wendigo.sql", "utf8"));
-  const DB = {
-    prepare(sql: string) {
-      return { bind(...values: (string | number | null)[]) {
-        return {
-          first: async () => sqlite.prepare(sql).get(...values) ?? null,
-          all: async () => ({ results: sqlite.prepare(sql).all(...values) }),
-          run: async () => ({ meta: { changes: Number(sqlite.prepare(sql).run(...values).changes) } })
-        };
-      } };
-    },
-    async batch(statements: { run: () => Promise<unknown> }[]) {
-      sqlite.exec("BEGIN");
-      try { const result = []; for (const s of statements) result.push(await s.run()); sqlite.exec("COMMIT"); return result; }
-      catch (error) { sqlite.exec("ROLLBACK"); throw error; }
-    }
-  };
-  const cloud = load("src/lib/jobs-cloud.ts", { "cloudflare:workers": { env: { DB } }, "./storage/schemas": { parseStoredRecord, STORAGE_SCHEMA_VERSION } });
-  try {
-    await cloud.writeCloudJob(record("one", "queued"));
-    await cloud.writeCloudJob(record("two", "queued"));
-    assert.equal(await cloud.claimCloudJob("one", "owner", 1), true);
-    assert.equal(await cloud.claimCloudJob("two", "other", 1), false);
-    assert.equal(await cloud.claimCloudJob("one", "other", 2), false);
-    assert.equal(await cloud.renewCloudJobLease("one", "owner"), "active");
-    await assert.rejects(cloud.writeCloudJob({ ...record("one", "queued"), updatedAt: new Date().toISOString() }), /租约已变化/);
-    await cloud.writeCloudJob({ ...record("one", "cancelled"), updatedAt: new Date().toISOString() });
-    assert.equal(await cloud.renewCloudJobLease("one", "owner"), "cancelled");
-    await assert.rejects(cloud.writeCloudJob({ ...record("one"), updatedAt: new Date().toISOString() }, "owner"), /租约已变化/);
-    assert.equal((await cloud.readCloudJob("one")).status, "cancelled");
-    await cloud.writeCloudJob({ ...record("one", "cancelled"), dataRevision: 1,
-      dataChange: { resource: "library-account", accountId: "account", at: new Date().toISOString() }, updatedAt: new Date().toISOString() }, "owner", true);
-    assert.equal((await cloud.readCloudJob("one")).dataRevision, 1, "取消后仍发布在途保存的数据版本");
-    assert.equal(await cloud.claimCloudJob("two", "other", 1), false, "取消后执行器退出前仍占容量");
-    await cloud.releaseCloudJobLease("one", "owner");
-    assert.equal(await cloud.claimCloudJob("two", "other", 1), true);
-    sqlite.prepare("UPDATE cloud_jobs SET lease_expires_at=0 WHERE id='two'").run();
-    assert.equal(await cloud.renewCloudJobLease("two", "other"), "lost");
-    assert.equal(await cloud.claimCloudJob("two", "new-owner", 1), true);
-    await assert.rejects(cloud.writeCloudJob({ ...record("two", "completed"), updatedAt: new Date().toISOString() }, "other"), /租约已变化/);
-    await cloud.writeCloudJob({ ...record("two", "completed"), updatedAt: new Date().toISOString() }, "new-owner");
-    assert.equal((await cloud.readCloudJob("two")).status, "completed");
-  } finally { sqlite.close(); }
 });
 
 test("并行批次检查点失败停止领新项，并等待在途保存", async () => {

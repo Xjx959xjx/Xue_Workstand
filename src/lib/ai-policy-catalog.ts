@@ -13,7 +13,7 @@ export const AI_POLICIES = [
   { id: "comment_plan", group: "评论与弹幕", title: "正文理解与关键词规划", description: "读完整正文，自主决定检索词和数量。", model: "gpt-6.1-sol", effort: "low" },
   { id: "comment_generate", group: "评论与弹幕", title: "评论生成与补齐", description: "生成评论，重试与自动补齐共用此配置。", model: "gpt-6-astra", effort: "low" },
   { id: "comment_output_review", group: "评论与弹幕", title: "历史新评论审核", description: "正式生成已停用，仅保留历史设置与离线诊断兼容。", model: "gpt-6.1-sol", effort: "low", retired: true },
-  { id: "danmaku", group: "评论与弹幕", title: "B站弹幕", description: "按时间槽生成即时弹幕，包含重试与补齐。", model: "gpt-6.1-sol", effort: "medium" },
+  { id: "danmaku", group: "评论与弹幕", title: "B站弹幕", description: "围绕正文批量生成弹幕，包含重试与补齐。", model: "gpt-6.1-sol", effort: "low" },
   { id: "publish_plan", group: "发布工具", title: "发布检索规划", description: "提取同类选题关键词，搜索平台参考。", model: "", effort: "medium" },
   { id: "publish_generate", group: "发布工具", title: "标题与发布文案", description: "提炼参考框架，生成标题及发布文案。", model: "", effort: "medium" },
   { id: "image_prompt", group: "图片与素材", title: "图片提示词辅助", description: "将创作想法整理为可执行的生图提示词。", model: "gpt-6.1-sol", effort: "high" },

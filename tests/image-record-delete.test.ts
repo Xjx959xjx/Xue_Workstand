@@ -9,7 +9,7 @@ import { restoreLibraryTrashOperation } from "../src/lib/storage/transactions";
 test("删除记录可恢复，保留原图与子记录的来源引用", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "image-record-delete-"));
   const env = { ...process.env };
-  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, SITES_STORAGE_MODE: "", SITES_RUNTIME: "" });
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root });
   try {
     const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
     const image = await saveImageFile(bytes, "原图");

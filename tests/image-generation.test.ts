@@ -31,7 +31,7 @@ test("生图使用 JSON 文生图和 multipart 参考图；部分失败保留图
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
-  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, SITES_STORAGE_MODE: "", SITES_RUNTIME: "", IMAGE_API_KEY: "test-key", IMAGE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, IMAGE_MODEL: "gpt-image-2.5", IMAGE_PROXY_URL: "", CHAT_PROXY_URL: "" });
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, IMAGE_API_KEY: "test-key", IMAGE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, IMAGE_MODEL: "gpt-image-2.5", IMAGE_PROXY_URL: "", CHAT_PROXY_URL: "" });
   try {
     assert.deepEqual(await listImageRecords(), { records: [], total: 0 });
     const changes: boolean[] = [];

@@ -24,7 +24,7 @@ test("C 规划支持完整流、网络重试、鉴权失败与取消，两种模
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address === "object");
-  for (const k of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(k)) delete process.env[k];
+  for (const k of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_)/.test(k)) delete process.env[k];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_BASE_URL: "http://127.0.0.1:" + address.port, CHAT_MODEL: "fixture", CHAT_WIRE_API: "chat_completions", CHAT_FALLBACK_ENABLED: "0" });
   const brief = { fullText: "折叠手机的取舍", summary: "", topic: "", subjects: [], keyFacts: [], discussionAngles: [], skepticalAngles: [], anchorTerms: [] };
   try {

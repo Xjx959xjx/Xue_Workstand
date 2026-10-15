@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
@@ -8,6 +10,38 @@ const source = readFileSync(new URL("../scripts/remote-server.mjs", import.meta.
 const ast = ts.createSourceFile("remote-server.mjs", source, ts.ScriptTarget.Latest, true);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && ["assertNoActiveJobs", "fetchJson"].includes(node.name?.text || ""))
   .map(node => node.getText(ast)).join("\n");
+
+test("本机正式服务可首次安装并复用已有版本，不要求额外网络入口", async () => {
+  const temporaryRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "workbench-service-setup-"));
+  const launchAgentPath = path.join(temporaryRoot, "LaunchAgents", "workbench.plist");
+  const setupSource = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "setup")!.getText(ast);
+  try {
+    for (const hasRelease of [false, true]) {
+      const commands: string[][] = [];
+      let starts = 0;
+      const setup = vm.runInNewContext(setupSource + "\nsetup", {
+        fs, path, process: { platform: "darwin", pid: process.pid },
+        releasesRoot: path.join(temporaryRoot, "releases"), launchAgentPath,
+        currentLink: path.join(temporaryRoot, "current"),
+        capture: (executable: string, args: string[]) => {
+          commands.push([executable, ...args]);
+          return { ok: true };
+        },
+        launchAgentPlist: () => "local-service-config",
+        exists: async () => hasRelease,
+        start: async () => { starts += 1; },
+        console: { log: () => undefined }
+      }) as () => Promise<void>;
+      await setup();
+      assert.equal(await fs.promises.readFile(launchAgentPath, "utf8"), "local-service-config");
+      assert.deepEqual(commands, [["/usr/bin/env", "which", "node"], ["/usr/bin/env", "which", "caffeinate"]]);
+      assert.equal(starts, hasRelease ? 1 : 0);
+      assert.deepEqual(await fs.promises.readdir(path.dirname(launchAgentPath)), ["workbench.plist"]);
+    }
+  } finally {
+    await fs.promises.rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
 
 // Evaluate the real guard without invoking launchctl, deployment or a live workbench.
 function guard(response: unknown, portOpen = false) {

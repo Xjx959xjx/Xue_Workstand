@@ -41,7 +41,7 @@ test("C 正式入口双平台各取200条，固定参考补足150条且不重跑
     res.end("data: " + JSON.stringify({ choices: [{ delta: { content } }] }) + '\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)); const address = server.address(); assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_|OPENCLI_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|OPENCLI_)/.test(key)) delete process.env[key];
   const eventFile = path.join(root, "events.jsonl");
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "secret-token-for-audit-test", CHAT_MODEL: "fixture", CHAT_WIRE_API: "chat_completions", CHAT_BASE_URL: "http://127.0.0.1:" + address.port, CHAT_FALLBACK_ENABLED: "0", OPENCLI_NODE_BIN: process.execPath, OPENCLI_SCRIPT: path.resolve("tests/fixtures/engagement-c-cli.mjs"), OPENCLI_BROWSER_SESSION: "comment-c-fixture", COMMENT_TEST_EVENTS: eventFile });
   try {

@@ -302,10 +302,6 @@ export async function postModelRequest(
   payload: unknown,
   signal?: AbortSignal
 ) {
-  const cloudRuntime = process.env.SITES_STORAGE_MODE === "cloud" || process.env.SITES_RUNTIME === "cloud";
-  if (cloudRuntime && config.proxyUrl) {
-    throw new Error("Sites 云端不能使用本机模型代理，请清除云端 CHAT_PROXY_URL 等代理配置并使用可直连的模型地址。");
-  }
   const init: FetchInitWithDispatcher = {
     method: "POST",
     headers: {
@@ -316,13 +312,7 @@ export async function postModelRequest(
     dispatcher: chatDispatcher(config.proxyUrl),
     signal
   };
-  // Workers 使用原生 fetch；本机保留 Undici 的代理与连接管理。
-  const response = cloudRuntime
-    ? await globalThis.fetch(modelEndpoint(config, pathName), {
-        method: "POST", headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify(payload), signal
-      })
-    : await undiciFetch(modelEndpoint(config, pathName), init);
+  const response = await undiciFetch(modelEndpoint(config, pathName), init);
   if (!response.ok) {
     throw new ModelHttpError(response.status, await response.text(), response.headers.get("content-type"));
   }

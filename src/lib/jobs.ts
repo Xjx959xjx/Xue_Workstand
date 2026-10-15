@@ -33,25 +33,12 @@ import { buildEngagementRecordHref, defaultJobHref } from "./job-links";
 import { compactJobForPersistence, DEFAULT_JOB_RESULT_PERSIST_BYTES, isResumableJobKind } from "./job-persistence";
 import { libraryRoot, resolveDraft } from "./storage";
 import { generatePublishCopy } from "./publish-copy";
-import { fileExists, isCloudStorageMode, readJsonFile, storageFs as fs, writeJsonFile } from "./storage/fs";
+import { fileExists, readJsonFile, storageFs as fs, writeJsonFile } from "./storage/fs";
 import { normalizeStorageSegment } from "./storage/core";
 import { parseStoredRecord, STORAGE_SCHEMA_VERSION } from "./storage/schemas";
 import { mapWithConcurrency } from "./concurrency";
 import { startJobSchema } from "./job-validation";
 import { isActiveJob, isTerminalJob, selectJobList } from "./job-sync";
-import {
-  claimCloudJob,
-  CloudJobConflictError,
-  deleteCloudJob,
-  getCloudJobEventBounds,
-  listCloudJobEvents,
-  listCloudJobs,
-  readCloudJob,
-  readCloudJobLease,
-  releaseCloudJobLease,
-  renewCloudJobLease,
-  writeCloudJob
-} from "./jobs-cloud";
 import { transcribeLinkSource, transcribeVideo } from "./transcription";
 import {
   BatchTranscribeResult,
@@ -77,7 +64,6 @@ type JobRuntime = {
   pending: Map<string, JobStartInput>;
   records: Map<string, JobRecord>;
   readErrors: Map<string, string>;
-  cloudOwners: Map<string, string>;
   changeEpoch: string;
   changeRevision: number;
   changeLog: Array<{ revision: number; jobId: string; removed?: boolean }>;
@@ -112,7 +98,6 @@ const runtime = (() => {
     existing.pending ||= new Map();
     existing.records ||= new Map();
     existing.readErrors ||= new Map();
-    existing.cloudOwners ||= new Map();
     existing.changeEpoch ||= "";
     existing.changeRevision ||= 0;
     existing.changeLog ||= [];
@@ -127,7 +112,6 @@ const runtime = (() => {
     pending: new Map(),
     records: new Map(),
     readErrors: new Map(),
-    cloudOwners: new Map(),
     changeEpoch: "",
     changeRevision: 0,
     changeLog: []
@@ -202,19 +186,11 @@ export function getJobRecoveryErrors() {
     .map(([target, message]) => [path.basename(target, ".json"), message]));
 }
 
-async function readCloudJobsForList() {
-  const { jobs, readErrors } = await listCloudJobs();
-  for (const key of runtime.readErrors.keys()) if (key.startsWith("cloud_jobs/")) runtime.readErrors.delete(key);
-  for (const [id, message] of Object.entries(readErrors)) runtime.readErrors.set(`cloud_jobs/${id}`, message);
-  return jobs;
-}
-
 async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
   job = { ...parseStoredRecord<JobRecord>(jobJsonPath(job.id), job, "job"), schemaVersion: STORAGE_SCHEMA_VERSION };
-  if (options.persist !== false || isCloudStorageMode()) {
+  if (options.persist !== false) {
     const persisted = compactJobForPersistence(job, jobResultPersistBytes());
-    if (isCloudStorageMode()) await writeCloudJob(persisted, runtime.cloudOwners.get(job.id), options.recordSavedData);
-    else await writeJsonFile(jobJsonPath(job.id), persisted);
+    await writeJsonFile(jobJsonPath(job.id), persisted);
     invalidateJobSummaryCache();
   }
   runtime.records.set(job.id, job);
@@ -223,7 +199,7 @@ async function writeJob(job: JobRecord, options: PatchJobOptions = {}) {
 
 async function patchJob(jobId: string, patch: Partial<JobRecord>, options: PatchJobOptions = {}) {
   return enqueueJobWrite(jobId, async () => {
-    const current = isCloudStorageMode() ? await readCloudJob(jobId) : runtime.records.get(jobId) || await readJobRecord(jobJsonPath(jobId));
+    const current = runtime.records.get(jobId) || await readJobRecord(jobJsonPath(jobId));
     if (!current) throw new Error("找不到任务记录");
     const terminal = isTerminalJob(current);
     if (terminal && !options.recordSavedData) return current;
@@ -296,7 +272,7 @@ async function enqueueJobWrite<T>(jobId: string, run: () => Promise<T>) {
 }
 
 async function ensureInitialized() {
-  if (runtime.initialized && !isCloudStorageMode()) return;
+  if (runtime.initialized) return;
   if (runtime.initializing) return runtime.initializing;
 
   runtime.initializing = initializeRuntimeJobs().finally(() => {
@@ -314,11 +290,6 @@ async function initializeRuntimeJobs() {
 }
 
 async function listJobsFromDisk() {
-  if (isCloudStorageMode()) {
-    return (await readCloudJobsForList())
-      .filter((job) => isJobKindAllowedForAppMode(job.kind))
-      .sort(compareJobsByUpdatedAtDesc);
-  }
   await ensureJobs();
   const files = await fs.readdir(jobsPath());
   const jobs = await mapWithConcurrency(files.filter((file) => file.endsWith(".json")), 6, (file) => readJobForList(path.join(jobsPath(), file)));
@@ -329,12 +300,6 @@ async function listJobsFromDisk() {
 }
 
 async function listJobSummariesFromDisk() {
-  if (isCloudStorageMode()) {
-    return (await readCloudJobsForList())
-      .filter((job) => isJobKindAllowedForAppMode(job.kind))
-      .sort(compareJobsByUpdatedAtDesc)
-      .map((job) => ({ ...toJobListItem(job), filePath: "" }));
-  }
   await ensureJobs();
   const files = await fs.readdir(jobsPath());
   const stats = await fs.stat(jobsPath());
@@ -382,12 +347,8 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
       let job: JobRecord | null;
       let input: JobStartInput | null;
       try {
-        job = isCloudStorageMode() ? await readCloudJob(summary.id) : await readJobRecord(summary.filePath);
+        job = await readJobRecord(summary.filePath);
         if (!job || isTerminalJob(job) || runtime.active.has(job.id)) return;
-        if (isCloudStorageMode()) {
-          const lease = await readCloudJobLease(job.id);
-          if (!lease || (lease.lease_expires_at || 0) > Date.now()) return;
-        }
         input = job.kind === "project-style" || job.kind === "image-cover" ? null : await readJobPayload(job.id, job.kind);
       } catch (error) {
         runtime.readErrors.set(jobPayloadPath(summary.id), `任务 ${summary.id} 未恢复：${error instanceof Error ? error.message : "读取恢复参数失败，请检查素材库。"}`);
@@ -396,9 +357,8 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
       const removedFeature = job.kind === "project-style" || job.kind === "image-cover";
       const legacyBatch = input?.kind === "batch-transcribe" && !input.input.videoIds &&
         (job.status === "running" || (job.attempt || 0) > 0);
-      const unstartedCloudJob = isCloudStorageMode() && job.status === "queued" && !job.attempt;
-      if (input && (unstartedCloudJob || isResumableJobKind(job.kind, input)) && !legacyBatch) {
-        try { await writeJob({
+      if (input && isResumableJobKind(job.kind, input) && !legacyBatch) {
+        await writeJob({
           ...job,
           status: "queued",
           stage: "queued",
@@ -410,12 +370,8 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
         });
         resumable.push({ jobId: job.id, input });
         return;
-        } catch (error) {
-          if (error instanceof CloudJobConflictError) return; // Another isolate acquired the task during recovery.
-          throw error;
-        }
       }
-      try { await writeJob({
+      await writeJob({
         ...job,
         status: "interrupted",
         progress: job.progress || 0,
@@ -423,10 +379,7 @@ async function recoverStaleDiskJobs(jobs: JobSummaryRead[]) {
         error: removedFeature ? "项目写作与草稿封面功能已移除，无法继续此任务。" : legacyBatch ? "缺少原批次候选，无法安全自动恢复。" : input ? "任务已中断，可重试。" : "任务恢复参数缺失，请重新发起。",
         updatedAt: interruptedAt,
         completedAt: interruptedAt
-      }); } catch (error) {
-        if (error instanceof CloudJobConflictError) return; // Keep the state owned by another isolate.
-        throw error;
-      }
+      });
     })
   );
   return resumable;
@@ -441,7 +394,7 @@ export async function listJobs() {
   await ensureInitialized();
   const jobs = new Map((await listJobsFromDisk()).map((job) => [job.id, job]));
   for (const job of runtime.records.values()) {
-    if (!isCloudStorageMode() && isJobKindAllowedForAppMode(job.kind)) jobs.set(job.id, job);
+    if (isJobKindAllowedForAppMode(job.kind)) jobs.set(job.id, job);
   }
   return [...jobs.values()].map(withJobRecoveryError).sort(compareJobsByUpdatedAtDesc);
 }
@@ -456,7 +409,7 @@ export async function listJobSummaries(options: { all?: boolean } = {}) {
     (await listJobSummariesFromDisk()).map((job) => [job.id, stripSummaryFilePath(job)])
   );
   for (const job of runtime.records.values()) {
-    if (!isCloudStorageMode() && isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
+    if (isJobKindAllowedForAppMode(job.kind)) summaries.set(job.id, toJobListItem(job));
   }
   const sorted = [...summaries.values()].sort(compareJobsByUpdatedAtDesc);
   return options.all ? sorted : selectJobList(sorted);
@@ -464,49 +417,6 @@ export async function listJobSummaries(options: { all?: boolean } = {}) {
 
 export async function listJobSummaryChanges(cursor?: string) {
   await ensureInitialized();
-  if (isCloudStorageMode()) {
-    const bounds = await getCloudJobEventBounds();
-    const currentCursor = `d1.${bounds.lastId}`;
-    const parsedId = cursor?.match(/^d1\.(\d+)$/)?.[1];
-    const afterId = parsedId === undefined ? null : Number(parsedId);
-    const invalidCursor = afterId === null || !Number.isSafeInteger(afterId) || afterId < 0 || afterId > bounds.lastId;
-    const expiredCursor = afterId !== null && bounds.firstId !== null && afterId < bounds.firstId - 1;
-    if (invalidCursor || expiredCursor) {
-      return { jobs: await listJobSummaries(), removedJobIds: [], cursor: currentCursor, reset: true };
-    }
-
-    const events = await listCloudJobEvents(afterId);
-    if (events.length > 1200) {
-      return { jobs: await listJobSummaries(), removedJobIds: [], cursor: currentCursor, reset: true };
-    }
-    if (!events.length) return { jobs: [], removedJobIds: [], cursor: currentCursor, reset: false };
-
-    const latestById = new Map<string, { kind: string; id: number }>();
-    for (const event of events) latestById.set(event.job_id, { kind: event.kind, id: event.id });
-    const jobs = await Promise.all(
-      [...latestById.entries()].map(async ([jobId, event]) => {
-        if (event.kind === "removed") return null;
-        const key = `cloud_jobs/${jobId}`;
-        try {
-          const job = await readCloudJob(jobId);
-          runtime.readErrors.delete(key);
-          return job && isJobKindAllowedForAppMode(job.kind) ? toJobListItem(job) : null;
-        } catch (error) {
-          runtime.readErrors.set(key, `云端任务 ${jobId} 无法读取：${error instanceof Error ? error.message : "请检查任务记录。"}`);
-          return null;
-        }
-      })
-    );
-    const removedJobIds = [...latestById.entries()]
-      .filter(([jobId, event]) => event.kind === "removed" || runtime.readErrors.has(`cloud_jobs/${jobId}`))
-      .map(([jobId]) => jobId);
-    return {
-      jobs: jobs.filter((job): job is JobListItem => Boolean(job)),
-      removedJobIds,
-      cursor: currentCursor,
-      reset: false
-    };
-  }
   const currentCursor = jobChangeCursor();
   const parsed = parseJobChangeCursor(cursor);
   const firstRevision = runtime.changeLog[0]?.revision ?? runtime.changeRevision + 1;
@@ -547,19 +457,16 @@ export async function listJobSummaryChanges(cursor?: string) {
 export async function getJob(jobId: string) {
   await ensureInitialized();
   const cached = runtime.records.get(jobId);
-  if (cached && !isCloudStorageMode()) {
+  if (cached) {
     assertJobKindAllowedForAppMode(cached.kind);
     return withJobRecoveryError(cached);
   }
 
-  const job = isCloudStorageMode()
-    ? await readCloudJob(jobId)
-    : await readJobRecord(jobJsonPath(jobId));
+  const job = await readJobRecord(jobJsonPath(jobId));
   if (!job) throw new Error("找不到任务记录");
   assertJobKindAllowedForAppMode(job.kind);
-  const current = cached?.updatedAt === job.updatedAt && cached.status === job.status ? cached : job;
-  runtime.records.set(job.id, current);
-  return withJobRecoveryError(current);
+  runtime.records.set(job.id, job);
+  return withJobRecoveryError(job);
 }
 
 export async function createJob(input: JobStartInput) {
@@ -607,81 +514,10 @@ export async function createJob(input: JobStartInput) {
 function queueBackgroundJob(jobId: string, input: JobStartInput) {
   if (runtime.active.has(jobId) || runtime.pending.has(jobId)) return;
   runtime.pending.set(jobId, input);
-  if (isCloudStorageMode()) {
-    void scheduleCloudJob(jobId, input);
-    return;
-  }
   pumpJobQueue();
 }
 
-async function scheduleCloudJob(jobId: string, input: JobStartInput) {
-  try {
-    const workersModule = "cloudflare:" + "workers";
-    const { waitUntil } = await import(workersModule) as unknown as {
-      waitUntil(promise: Promise<unknown>): void;
-    };
-    waitUntil(runCloudJobAndRelease(jobId, input).catch((error) => reportJobPersistenceError(jobId, error)));
-  } catch (error) {
-    runtime.pending.delete(jobId);
-    await patchJob(jobId, {
-      status: "failed",
-      stage: "error",
-      message: "云端任务调度失败",
-      error: error instanceof Error ? error.message : "无法注册 Worker 后台任务",
-      completedAt: nowIso()
-    }).catch((writeError) => reportJobPersistenceError(jobId, writeError));
-  }
-}
-
-async function runCloudJobAndRelease(jobId: string, input: JobStartInput) {
-  const owner = randomUUID();
-  while (runtime.pending.has(jobId)) {
-    const lease = await readCloudJobLease(jobId);
-    if (!lease || isTerminalJob({ status: lease.state }) || (lease.lease_expires_at || 0) > Date.now()) {
-      runtime.pending.delete(jobId);
-      return;
-    }
-    if (await claimCloudJob(jobId, owner, maxActiveJobs())) break;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  }
-  // A queued cancellation can win while the claim is awaiting D1.
-  if (!runtime.pending.has(jobId)) {
-    await releaseCloudJobLease(jobId, owner);
-    return;
-  }
-  runtime.pending.delete(jobId);
-  runtime.cloudOwners.set(jobId, owner);
-  let checking = false;
-  let heartbeat: Promise<void> = Promise.resolve();
-  const timer = setInterval(() => {
-    if (checking) return;
-    checking = true;
-    heartbeat = renewCloudJobLease(jobId, owner).then((state) => {
-      if (state === "active") return;
-      if (state === "cancelled") runtime.cancelRequests.add(jobId);
-      runtime.abortControllers.get(jobId)?.abort(state === "cancelled" ? new CancelledJobError() : new CloudJobConflictError());
-    }).catch((error) => {
-      runtime.abortControllers.get(jobId)?.abort(new Error(`云端任务租约检查失败：${error instanceof Error ? error.message : "请检查任务存储"}`));
-    }).finally(() => { checking = false; });
-  }, 1500);
-  const promise = runJob(jobId, input);
-  runtime.active.set(jobId, promise);
-  try {
-    await promise;
-  } finally {
-    clearInterval(timer);
-    try {
-      await heartbeat;
-      await releaseCloudJobLease(jobId, owner);
-    } finally {
-      runtime.cloudOwners.delete(jobId);
-      runtime.active.delete(jobId);
-    }
-  }
-}
-
 function pumpJobQueue() {
-  if (isCloudStorageMode()) return;
   while (runtime.active.size < maxActiveJobs()) {
     const next = runtime.pending.entries().next();
     if (next.done) return;
@@ -743,16 +579,13 @@ async function runJob(jobId: string, input: JobStartInput) {
       await runEngagementJob(jobId, input);
     }
   } catch (error) {
-    if (error instanceof CloudJobConflictError || controller.signal.reason instanceof CloudJobConflictError) return;
     if (controller.signal.aborted && controller.signal.reason instanceof Error && !(controller.signal.reason instanceof CancelledJobError) && !runtime.cancelRequests.has(jobId)) {
       error = controller.signal.reason;
     }
     const cancelled = runtime.cancelRequests.has(jobId) || controller.signal.reason instanceof CancelledJobError ||
       (!controller.signal.aborted && isCancelledJobError(error));
     if (cancelled) {
-      const current = runtime.records.get(jobId) || (isCloudStorageMode()
-        ? await readCloudJob(jobId)
-        : await readJobRecord(jobJsonPath(jobId)));
+      const current = runtime.records.get(jobId) || await readJobRecord(jobJsonPath(jobId));
       await patchJob(jobId, {
         status: "cancelled",
         stage: "cancelled",
@@ -1766,8 +1599,7 @@ async function pruneJobHistory() {
 
   for (const job of jobs) {
     const size = await fs.stat(job.filePath).then((stat) => stat.size).catch(() => 0);
-    const leased = isCloudStorageMode() && ((await readCloudJobLease(job.id))?.lease_expires_at || 0) > Date.now();
-    if (!isTerminalJob(job) || isJobExecuting(job.id) || leased) {
+    if (!isTerminalJob(job) || isJobExecuting(job.id)) {
       retainedBytes += size;
       continue;
     }
@@ -1787,8 +1619,7 @@ async function pruneJobHistory() {
     removable.map(async (job) => {
       runtime.records.delete(job.id);
       runtime.pending.delete(job.id);
-      if (isCloudStorageMode()) await deleteCloudJob(job.id);
-      else await fs.rm(job.filePath, { force: true }).catch(() => undefined);
+      await fs.rm(job.filePath, { force: true }).catch(() => undefined);
       await removeJobPayload(job.id);
       recordJobChange(job.id, true);
     })
@@ -1907,7 +1738,6 @@ function withJobRecoveryError<T extends JobRecord>(job: T): T {
 
 function reportJobPersistenceError(jobId: string, error: unknown) {
   runtime.abortControllers.get(jobId)?.abort(error);
-  if (error instanceof CloudJobConflictError) return; // Cancellation or another owner already controls the persisted status.
   runtime.pending.delete(jobId);
   const message = `任务 ${jobId} 状态保存失败：${error instanceof Error ? error.message : "请检查素材库访问权限和剩余空间。"}`;
   runtime.readErrors.set(jobPayloadPath(jobId), message);

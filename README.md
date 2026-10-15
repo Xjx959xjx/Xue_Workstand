@@ -4,7 +4,6 @@
 
 ## 规划文档
 
-- [手机远程工作台设计](./MOBILE_REMOTE_DESIGN.md)：通过 Tailscale 从 iPhone 远程访问本机工作台；第一版手机外壳、状态检测和发布脚本已实现。
 - [任务中心 API](./docs/api/jobs.md)：后台任务的创建、增量轮询、详情、停止与重试。
 
 ## 启动
@@ -28,10 +27,6 @@ npm run dev:stop
 
 后台日志写入 `.dev-server/next-dev.log`，该目录不会提交到 git。
 
-已配置 `capability:setup` 的 Mac 使用 `dev:daemon` / `dev:restart` 时，会从同一钥匙串加载桥接令牌，并随开发服务启动窄网关。Sites 可通过原有桥接地址调用 3000 开发版；停止开发服务时网关一并退出。直接执行 `npm run dev` 仍只启动 Next.js，不启动桥接。令牌不会写入日志或配置文件。
-
-Sites 设置 `SITES_WORKSPACE_SOURCE=local` 后，业务 API 通过上述桥接读取和操作本机同一份资料库，包括账号、项目、草稿、素材及任务。修改沿用本机接口的锁、版本校验和可恢复删除；不会复制或合并已有云端数据。云端与本机必须使用相同 `APP_MODE`，模式不一致时资料桥返回 403；更新资料桥时两端须同步升级。Mac 和开发服务必须在线，断线时页面显示错误，不回退到空的云端库。公开站点的访客拥有这些业务操作权限。单次上传仍受桥接正文大小配置限制。
-
 ## 运行指标与模型评测
 
 任务中心现在会通过 Pino 输出结构化运行日志。每次任务阶段切换会记录任务类型、阶段、平台、排队耗时、阶段耗时、模型、缓存、fallback 和失败信息，但不会记录原文、文案正文或密钥。日志级别可通过 `PINO_LOG_LEVEL` 调整，默认是 `info`。
@@ -53,55 +48,27 @@ npm run eval:writer -- --max-concurrency 1 --no-write
 
 评测样本位于 `evals/`，只应放脱敏、可复用的固定样本。Promptfoo 默认只在本地运行；不要把素材评测结果上传到 Promptfoo Cloud。修改提示词、模型或上下文组装后，先用同一批样本运行评测，再结合 `npm run metrics:pipeline` 观察真实任务的成功率和耗时。
 
-## iPhone 私人远程访问
+## 本机正式服务
 
-Mac 和 iPhone 安装 Tailscale、登录同一个私人账号后，在项目目录执行：
+正式服务通过 macOS LaunchAgent 运行在 `127.0.0.1:3000`；Cloudflare Tunnel 和自定义域名由工作区外的 Caddy、`cloudflared` 配置维护。
 
 ```bash
-npm run remote:setup
-npm run remote:deploy
-npm run remote:status
+npm run remote:setup      # 首次安装本机常驻服务（macOS）
+npm run remote:start      # 启动当前正式版本
+npm run remote:stop       # 停止正式服务
+npm run remote:status     # 查看正式服务和本地健康状态
+npm run remote:dev        # 切回开发服务
+npm run remote:deploy     # 检查、构建、发布并健康检查
+npm run remote:rollback   # 回退上一可用版本
 ```
-
-`remote:setup` 配置 Tailscale Serve 和 macOS LaunchAgent；Next.js 仍只监听
-`127.0.0.1:3000`，完整工作台不会开放公网。正式服务通过
-`caffeinate` 在 Mac 插电、开盖时保持运行。然后在 iPhone 的 Tailscale 中找到该
-Mac 的私人 HTTPS 地址，用 Safari 打开并“添加到主屏幕”。
 
 常驻服务按 Next.js 生产环境优先级读取项目根目录的 `.env.production.local`、
 `.env.local`、`.env.production`、`.env`（进程已有环境变量优先），支持 `$变量名` 引用。
 修改模型或联网检索配置后，执行 `npm run remote:start` 重启当前正式版本即可生效。
 
-日常命令：
+日常开发可执行 `npm run remote:dev`，代码修改自动更新，无需逐次发布。桌面侧栏底部的“服务模式”按钮也可切换开发服务或上次发布的正式服务；仅在 Mac 本机 `localhost:3000` 页面可操作，有运行或排队任务时拒绝切换。按钮切到正式服务不会重新构建或发布代码，正式版须先通过 `remote:deploy` 更新。隔离测试服务不能控制本机服务。
 
-```bash
-npm run remote:start      # 启动当前正式版本
-npm run remote:stop       # 停止正式服务
-npm run remote:status     # 查看 Next / Tailscale / 版本状态
-npm run remote:dev        # 切回开发服务
-npm run remote:deploy     # 检查、临时构建、发布并健康检查
-npm run remote:rollback   # 回退上一可用版本
-```
-
-开发阶段执行一次 `npm run remote:dev`，之后原来的 `localhost:3000` 和手机私人地址直接访问开发服务，代码修改自动更新，无需逐次发布。桌面侧栏底部的“服务模式”按钮也可切换开发服务或上次发布的正式服务；仅在 Mac 本机 `localhost:3000` 页面可操作，有运行或排队任务时拒绝切换。按钮切到正式服务不会重新构建或发布代码，正式版须先通过 `remote:deploy` 更新。隔离测试服务和 Sites 云端不能控制本机服务。
-
-发布前若存在运行或排队任务会直接拒绝。正式产物保存在
-`.remote-server/releases/<buildId>`，保留最近两个版本；启动失败会自动恢复上一版。
-正式服务始终读取当前项目的真实 `style-library`，不会创建第二份可写数据。
-
-如果 Sites 云端需要调用当前 Mac 的 OpenCLI、FFmpeg、转写、飞书或企业微信能力，额外执行：
-
-```bash
-npm run capability:setup
-npm run remote:deploy
-npm run capability:status
-```
-
-`capability:setup` 会在 macOS 钥匙串生成独立强令牌，并用 Tailscale Funnel 的
-`8443` 端口只公开一个窄网关；它只接受 `/api/capability-bridge` 和带一次性下载凭证的
-素材路径，其他页面与 API 一律返回 404。完整工作台仍只通过私人 Serve 访问。
-如果当前 Tailscale 账号尚未允许 Funnel，命令会明确停止并要求在 Tailscale 管理页完成一次授权，
-不会自动扩大公网范围。令牌不会写入 `.env`、源码或日志。
+发布前若存在运行或排队任务会直接拒绝。正式产物保存在 `.remote-server/releases/<buildId>`，保留最近两个版本；启动失败会自动恢复上一版。正式服务始终读取当前项目的真实 `style-library`，不会创建第二份可写数据。服务通过 `caffeinate` 在 Mac 插电、开盖时保持运行。
 
 如果要把“数据维护”和“数据监控”单独交付给 Windows 用户，使用专用发行模式：
 
@@ -157,8 +124,6 @@ Pi 没有默认模型、登录失效、额度不足、限流或请求失败且�
 
 `/ai-settings` 提供 Pi 订阅登录与默认模型选择；旧的逐业务链路编辑 API 返回 410。原 `settings/ai-models.json` 保留，供旧中转站兜底读取。联网检索继续走明确支持 `web_search` 的 Responses 节点；生图与火山 ASR 继续使用原专用接口。
 
-Sites 通过本机能力桥的 `pi-model` / `pi-status` 操作使用本机 Pi 并读取默认模型状态，凭证留在本机；必须同步更新桥接端。该桥接返回完整文字后一次性展示，失败会显式回退原中转站。没有本机能力桥时同样显式兜底，不在 Worker 内访问 Pi 本机文件。
-
 ## 配置
 
 - `OPENCLI_BIN`：默认使用 `opencli`，用于 B站 / 抖音采集。
@@ -169,14 +134,6 @@ Sites 通过本机能力桥的 `pi-model` / `pi-status` 操作使用本机 Pi �
 - `GROSS_MARGIN_MONITOR_REFRESH_CONCURRENCY`：数据监控刷新并发数，默认 `6`，允许 `1-6`；B站优先并发读取公开统计接口，仅在公开接口失败时进入 OpenCLI 兜底。
 - `FFMPEG_BIN`：默认使用 `ffmpeg`，抖音和无字幕 B站回退转写时会先抽取音频。
 - `STYLE_LIBRARY_DIR`：本地风格库目录，默认 `./style-library`。
-- `SITES_STORAGE_MODE`：Sites 云端运行时由构建配置设为 `cloud`；本地文件模式留空。
-- `npm run build:sites`：在临时目录构建，完成后将产物放回 `dist/`；不会覆盖本地 Next.js 的 `.next/` 或 `next-env.d.ts`，不复制 `.env` 和真实素材库。构建环境变量仍由调用进程提供。
-- `SITES_EXTERNAL_CAPABILITY_URL`、`SITES_EXTERNAL_CAPABILITY_TOKEN`：可选的受鉴权 HTTP 能力桥。云端 OpenCLI、FFmpeg 抽帧、ASR/链接转写、媒体下载、飞书和企业微信文档调用会以 `{ operation, payload }` POST 到该地址；令牌只放在部署环境变量中，不要提交到仓库。
-- `SITES_CAPABILITY_BRIDGE_TOKEN`、`SITES_CAPABILITY_BRIDGE_PUBLIC_URL`：能力提供方主机使用。将本地工作台通过受保护的 HTTPS 反向代理暴露到 `/api/capability-bridge`，令牌至少 32 个字符；Sites 端的 `SITES_EXTERNAL_CAPABILITY_*` 使用同一地址和令牌。该入口在 Sites Worker 内会强制关闭，媒体文件通过短期、一次性下载凭证传输，不会返回本机路径。
-- 当前 Mac 常驻模式会从 macOS 钥匙串读取能力桥令牌，并把 `SITES_CAPABILITY_BRIDGE_PUBLIC_URL` 指向独立的 Tailscale Funnel `8443` 窄网关；不要把令牌复制进仓库或聊天。
-- `SITES_CAPABILITY_BRIDGE_TIMEOUT_MS`、`SITES_CAPABILITY_BRIDGE_BODY_LIMIT_BYTES`、`SITES_CAPABILITY_BRIDGE_ASSET_TTL_MS`：能力提供方的单次执行超时、JSON 请求上限和临时媒体有效期；默认分别为 20 分钟、2MB 和 10 分钟。
-- 云端健康检查会使用 Bearer 令牌 GET capability URL，并核对服务实际声明的操作列表；仅填写地址和令牌但服务不可达、鉴权失败或缺少操作时，状态页会显示真实故障，不会标记为已配置。
-- `npm run prepare:sites:migration`：安全的 Sites 数据迁移预检，默认不读取素材库。只有明确授权后附加 `-- --include-library` 才会在本地 `dist/` 生成哈希清单；该命令本身永不上传素材。
 - `WECOM_ACCOUNT_SHEET_URL`：可选。配置企业微信在线表格链接后，数据维护里的抖音 / B站账号配对和报价以在线表为准，通过 `wecom-cli` 读取。普通打开会立即展示最后一次成功缓存并在后台刷新，不再等待远端；手动点击刷新才会等待最新结果。在线表暂时不可用时继续显示上次成功缓存或本地缓存，并给出可见警告。
 - `WECOM_PROJECT_SHEET_URL`：可选，覆盖数据维护使用的“自孵化 - 短视频一口价锁档及执行情况”项目表。按上海时区当月工作表、平台和账号匹配项目；链接唯一匹配或只有一个项目时自动选择，多项目可切换。折前价格取下单金额，返点比例为返点金额除以下单金额，折后价格直接取最终合作价格。页面只读取按来源和年月保存的成功缓存；进入页面、缓存过期或新月份无缓存时均不自动同步，点击项目右侧刷新按钮才同步。同步使用任务中心，支持停止和重试；缺失或无效金额显式提示，远端失败保留成功缓存。
 - `WECOM_CLI_BIN`、`WECOM_ACCOUNT_SHEET_CACHE_TTL_MS`、`WECOM_ACCOUNT_SHEET_FALLBACK_LOCAL`：在线账号表读取命令、缓存时长和本地回退开关。后台同步失败后普通读取冷却 5 分钟，手动刷新可立即重试；非法报价或缓存落盘失败不会覆盖最后成功数据。回退关闭时读取显式报错。
@@ -323,7 +280,7 @@ npm run package:release -- --include-library
 
 生图工作台支持模型配置选择、自定义宽高（256–4096）、16 倍数对齐和常用比例 / 2K / 4K 预设。尺寸是否可用由对应图片服务决定。新增服务使用 `.env.local` 的 `IMAGE_PROFILES` JSON 数组，例如 `[{"id":"provider2","label":"第二套服务","model":"模型名","baseUrl":"https://example.com/v1","apiKey":"服务密钥"}]`。每套配置有独立密钥和地址，页面只接收名称与 ID；原 `IMAGE_*` 配置保留为 `default`，`IMAGE_DEFAULT_PROFILE` 可指定新建任务默认选择的配置 ID。历史记录保留所选配置 ID，旧记录继续使用默认配置；修改配置后重启服务生效。
 
-本机订阅生图：在 AI 模型配置连接「ChatGPT 订阅（Codex）」，将「图片生成」来源保存为「仅订阅」，重新打开生图工作台。该路径通过 Pi 调用 Codex 的 `image_generation` 工具，支持参考图、逐张保存和取消，使用订阅额度；不依赖 OpenAI 直连资格，不自动切换中转。中转型号覆盖仅对「仅中转」生效。图片记录保留实际来源；Sites 云端暂不支持此路径，会明确提示使用本机或中转。
+本机订阅生图：在 AI 模型配置连接「ChatGPT 订阅（Codex）」，将「图片生成」来源保存为「仅订阅」，重新打开生图工作台。该路径通过 Pi 调用 Codex 的 `image_generation` 工具，支持参考图、逐张保存和取消，使用订阅额度；不依赖 OpenAI 直连资格，不自动切换中转。中转型号覆盖仅对「仅中转」生效。图片记录保留实际来源。
 
 ### 游戏热点雷达
 
@@ -337,6 +294,6 @@ AI 兴趣筛选沿用 TrendRadar 的标签提取、相关度分类、兴趣变�
 
 容器配置位于 `~/Applications/trendradar/config`；除了 `config.yaml`、`frequency_words.txt`，须有官方 `ai_analysis_prompt.txt` 与 `ai_filter/{prompt,extract_prompt,update_tags_prompt}.txt`。工作台在容器临时目录运行，读取当天上游数据库的 SQLite 一致性副本，后续沿用工作台已保存的原生数据库状态；仅采集配置内来源，不读取工作台抖音/B站视频热榜。上游每 30 分钟的独立采集继续运行，手动生成报告也会执行原生采集。工作台报告保存于资料库 `hotspots/trendradar-native.json`，不会覆盖容器原有报告或旧选题文件。
 
-与上游的集成边界：工作台明确展示采集异常与备用模型状态；AI 筛选或分析失败直接报错，不静默退回关键词或原始模型文本。标题翻译沿用容器中的 `ai_translation` 设置与官方提示词，翻译失败显式报错；报告分析使用中文。工作台只生成本地报告，不调用原生通知渠道发送消息。Sites 使用本机资料桥转发到本机 Docker；未连接本机时显式失败。默认发行包不附带 TrendRadar 引擎，需另行安装官方容器及配置。
+与上游的集成边界：工作台明确展示采集异常与备用模型状态；AI 筛选或分析失败直接报错，不静默退回关键词或原始模型文本。标题翻译沿用容器中的 `ai_translation` 设置与官方提示词，翻译失败显式报错；报告分析使用中文。工作台只生成本地报告，不调用原生通知渠道发送消息。默认发行包不附带 TrendRadar 引擎，需另行安装官方容器及配置。
 
 旧 `/api/hotspots/trendradar` 只读候选接口仍可通过 `TRENDRADAR_OUTPUT_DIR` 读取上游数据库，`127.0.0.1:8081` 仍是独立容器的报告页，不是工作台控制 API。工作台新报告可在页面阅读或独立打开。

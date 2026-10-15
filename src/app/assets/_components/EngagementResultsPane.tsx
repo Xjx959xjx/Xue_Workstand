@@ -28,6 +28,8 @@ export function EngagementResultsPane({
 }: EngagementResultsPaneProps) {
   const activeComments = previewComments.length ? previewComments : resultRecord?.comments?.items || [];
   const activeDanmaku = resultRecord?.danmaku?.items || [];
+  const danmakuTexts = activeDanmaku.map((item) => typeof item.timeSec === "number"
+    ? `${formatTime(item.timeSec)}\t${item.text}` : item.text);
   const diagnostics = resultRecord?.comments?.diagnostics;
   const generation = diagnostics?.generation;
   const sourceBrief = diagnostics?.sourceBrief;
@@ -102,7 +104,7 @@ export function EngagementResultsPane({
         {resultRecord?.danmaku && !isGenerating ? (
           <div className="engagement-diagnostics">
             <span>B站弹幕</span>
-            <span>{resultRecord.danmaku.timingBasis === "source_segments" ? "语音分段时间" : "文案节奏估时"}</span>
+            <span>{resultRecord.danmaku.timingBasis === "none" ? "正文批量生成" : resultRecord.danmaku.timingBasis === "source_segments" ? "语音分段时间" : "文案节奏估时"}</span>
             {resultRecord.danmaku.durationSec ? <span>时长 {formatDuration(resultRecord.danmaku.durationSec * 1000)}</span> : null}
             {typeof resultRecord.danmaku.styleSampleCount === "number" ? <span>真实样本 {resultRecord.danmaku.styleSampleCount}</span> : null}
             {resultRecord.danmaku.styleVideoCount ? <span>标杆视频 {resultRecord.danmaku.styleVideoCount}</span> : null}
@@ -141,13 +143,13 @@ export function EngagementResultsPane({
         />
         <AssetTextList
           empty={includeDanmaku || activeDanmaku.length ? "生成后会在这里显示弹幕。" : "勾选弹幕后会生成弹幕。"}
-          items={activeDanmaku.map((item) => `${formatTime(item.timeSec)}  ${item.text}`)}
+          items={danmakuTexts}
           title={`弹幕 ${activeDanmaku.length}${missingDanmakuCount ? `/${requestedDanmakuCount}` : ""}`}
-          onCopy={() => onCopyText(activeDanmaku.map((item) => `${formatTime(item.timeSec)}\t${item.text}`).join("\n"), "弹幕已复制。")}
+          onCopy={() => onCopyText(danmakuTexts.join("\n"), "弹幕已复制。")}
           onPublish={() =>
             onPublishAssetText(
               "danmaku",
-              activeDanmaku.map((item) => `${formatTime(item.timeSec)}\t${item.text}`),
+              danmakuTexts,
               "导出弹幕失败"
             )
           }

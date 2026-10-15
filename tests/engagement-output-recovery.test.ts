@@ -56,7 +56,7 @@ test("评论生成与质检只恢复失败批次，失败有界且用户取消�
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|SITES_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, CHAT_API_KEY: "fixture", CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, CHAT_MODEL: "fixture-model", CHAT_WIRE_API: "chat_completions", CHAT_FALLBACK_ENABLED: "0" });
   const switchMode = (next: string) => { mode = next; received.length = 0; onRequest = undefined; };
   const progress: string[] = [];

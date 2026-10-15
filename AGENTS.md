@@ -54,7 +54,7 @@
 
 ## MUST：API 与客户端契约
 
-- 本地 Next.js 中涉及文件系统、环境变量、外部 CLI 或模型的路由使用 Node.js runtime；Sites / Cloudflare 路径复用现有云端适配器和能力桥接，不假设 Worker 可直接访问本机文件或执行本机 CLI。
+- 本地 Next.js 中涉及文件系统、环境变量、外部 CLI 或模型的路由使用 Node.js runtime。
 - API 路由复用 `apiJson()`、`apiError()`、`parseJsonBody()` 和 `zod` schema，保持 400 校验错误与中文提示。
 - NDJSON 复用 `createNdjsonStream()` / `readNdjsonStream()`，保持 `stage`、`delta`、`result`、`error`、`done` 语义，并传递请求取消信号。
 - 修改前端可见 API 时，同步类型、`src/lib/client.ts`、缓存失效、页面状态和错误展示。
@@ -65,7 +65,6 @@
 - `APP_MODE=workspace`：完整工作台，根路径默认进入 `/douyin-hotlist`。
 - `APP_MODE=gross-margin`：只开放 `/gross-margin`、`/gross-margin/monitor` 及必要 API；`middleware.ts`、`AppModeGuard`、`AppNav` 和任务类型限制必须一致。
 - `APP_START_PATH` 影响交付包启动页；调整模式或启动页时同步检查 README、`.env.example` 和 `scripts/package-release.mjs`。
-- Sites 使用 `SITES_WORKSPACE_SOURCE=local` 时会读写本机真实资料库，必须沿用本机锁、revision 和可恢复删除机制；云端与本机 `APP_MODE` 必须一致，资料桥断线显式失败，不回退到空云端库。桥接协议变更须同步检查两端兼容性。
 - 开发服务运行时不要直接在同一 `.next` 上执行 `npm run build`。需要构建时优先使用隔离临时目录（参考发布脚本）；仅在必须中断用户正在使用的服务且尚未获得授权时请求确认。
 
 ## SHOULD：实现方式
@@ -106,7 +105,7 @@
 | 代码逻辑 | 目标测试、受影响文件的 lint；底层或跨域改动补 `npm test`，全局规则或广泛改动运行 `npm run lint`。 |
 | TypeScript 类型、接口或模块依赖 | `npm run typecheck`。 |
 | 存储结构、删除或引用联动 | `npm run check:library`；未经授权不运行 repair。 |
-| 路由结构、SSR、middleware、运行时配置、跨页面行为或打包 | 按受影响目标构建：本地 Next.js 运行 `npm run build`；Sites 运行 `npm run check:sites`、`npm run build:sites`、`npm run check:sites:release`；共享改动影响两端时覆盖两端。遵守构建隔离规则。 |
+| 路由结构、SSR、middleware、运行时配置、跨页面行为或打包 | 本地 Next.js 运行 `npm run build`，遵守构建隔离规则。 |
 | 路由内部局部逻辑 | 目标测试及适用的类型检查；有构建风险时再补构建。 |
 | 前端交互 | 最小浏览器 smoke test。 |
 

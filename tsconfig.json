@@ -23,9 +23,7 @@
       }
     ],
     "types": [
-      "node",
-      "@cloudflare/workers-types",
-      "vinext/types"
+      "node"
     ],
     "paths": {
       "@/*": [
@@ -46,7 +44,6 @@
     "node_modules",
     "dist",
     "output",
-    "outputs",
-    ".vinext"
+    "outputs"
   ]
 }

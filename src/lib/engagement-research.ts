@@ -83,7 +83,7 @@ export type EngagementCommentResearch = {
   cacheHit: boolean;
 };
 
-const ENGAGEMENT_RESEARCH_VERSION = "engagement-research-v39-douyin-session";
+const ENGAGEMENT_RESEARCH_VERSION = "engagement-research-v40-bilibili-only";
 const RESEARCH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PARTIAL_RESEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_RESEARCH_QUERIES = 2;
@@ -487,7 +487,7 @@ function isUsableResearchCache(cached: {
 }
 
 export function buildPlatformResearchTasks(query: string, targetPlatform: Platform) {
-  const platforms: Platform[] = targetPlatform === "bilibili" ? ["bilibili", "douyin"] : ["douyin", "bilibili"];
+  const platforms: Platform[] = targetPlatform === "bilibili" ? ["bilibili"] : ["douyin", "bilibili"];
   return platforms.map((source) => ({ source, query, videoLimit: TARGET_PLATFORM_VIDEO_LIMIT }));
 }
 

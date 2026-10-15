@@ -134,7 +134,7 @@ export type DraftCommentAsset = {
 
 export type DraftDanmakuAsset = {
   id: string;
-  timeSec: number;
+  timeSec?: number;
   text: string;
 };
 
@@ -389,7 +389,7 @@ export type DraftAssets = {
     usedModel: string;
     fallback: boolean;
     fallbackReason?: string;
-    timingBasis?: "source_segments" | "estimated_text";
+    timingBasis?: "source_segments" | "estimated_text" | "none";
     durationSec?: number;
     styleSampleCount?: number;
     styleVideoCount?: number;

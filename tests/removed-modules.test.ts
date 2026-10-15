@@ -19,7 +19,7 @@ import { POST as saveRoute } from "../src/app/api/drafts/route";
 test("移除功能拒绝新请求，旧项目、稿件、封面和模型设置仍兼容", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "removed-modules-"));
   const env = { ...process.env };
-  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, APP_MODE: "workspace", SITES_STORAGE_MODE: "", SITES_RUNTIME: "" });
+  Object.assign(process.env, { STYLE_LIBRARY_DIR: root, APP_MODE: "workspace" });
   try {
     await ensureLibrary();
     for (const dir of ["projects", "copy-tools"]) await assert.rejects(access(path.join(root, dir)), { code: "ENOENT" });

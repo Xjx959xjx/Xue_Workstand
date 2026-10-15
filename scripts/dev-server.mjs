@@ -4,9 +4,6 @@ import path from "path";
 import process from "process";
 import { spawn } from "child_process";
 import { fileURLToPath } from "node:url";
-import { once } from "node:events";
-import { readCapabilityBridgeSecret, getCapabilityBridgePublicUrl } from "./capability-bridge-service.mjs";
-import { startCapabilityBridgeGateway } from "./capability-bridge-gateway.mjs";
 
 const root = process.cwd();
 const stateDir = path.join(root, ".dev-server");
@@ -81,35 +78,17 @@ async function start() {
 }
 
 async function serve() {
-  // 令牌只进入子进程环境，不写入配置文件或日志；和正式服务复用同一钥匙串。
-  const token = process.env.SITES_CAPABILITY_BRIDGE_TOKEN?.trim() || readCapabilityBridgeSecret();
-  if (token && token.length < 32) throw new Error("能力桥令牌至少需要 32 个字符。");
-  const publicUrl = token
-    ? process.env.SITES_CAPABILITY_BRIDGE_PUBLIC_URL?.trim() || getCapabilityBridgePublicUrl({ required: true })
-    : "";
-  const gateway = token ? startCapabilityBridgeGateway({ upstreamPort: port }) : null;
-  if (gateway) {
-    await once(gateway, "listening");
-    console.log(`开发模式能力桥已启动，转发到 127.0.0.1:${port}。`);
-  }
   const child = spawn("npm", ["run", "dev", "--", "--hostname", host], {
     cwd: root,
     stdio: "inherit",
     env: {
-      ...process.env, HOST: host, PORT: String(port),
-      ...(token ? {
-        SITES_CAPABILITY_BRIDGE_TOKEN: token,
-        SITES_CAPABILITY_BRIDGE_PUBLIC_URL: publicUrl
-      } : {})
+      ...process.env, HOST: host, PORT: String(port)
     }
   });
   const shutdown = () => child.kill("SIGTERM");
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
   const finish = (code) => {
-    // 强制关闭仅属于此开发进程的网关连接，不影响正式服务的网关。
-    gateway?.closeAllConnections();
-    gateway?.close();
     process.exitCode = code;
     process.removeListener("SIGTERM", shutdown);
     process.removeListener("SIGINT", shutdown);
@@ -119,11 +98,6 @@ async function serve() {
     finish(1);
   });
   child.once("exit", (code, signal) => finish(code ?? (signal === "SIGTERM" || signal === "SIGINT" ? 0 : 1)));
-  gateway?.on("error", (error) => {
-    console.error(`开发模式能力桥失败：${error.message}`);
-    child.kill("SIGTERM");
-    process.exitCode = 1;
-  });
 }
 
 async function stop(options = {}) {

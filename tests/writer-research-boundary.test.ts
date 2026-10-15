@@ -51,7 +51,7 @@ test("原生检索失败直接停止，不兜底或缓存失败；旧备用缓�
     }
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|SITES_|OPENCLI_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|OPENCLI_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, WEB_RESEARCH_ENABLED: "1", WEB_RESEARCH_API_KEY: "fixture",
     WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, WEB_RESEARCH_MODEL: "fixture",
     OPENCLI_BIN: path.join(root, "unavailable-opencli") });
@@ -110,7 +110,7 @@ test("写作检索两分钟后仍可完成；三分钟预算到期明确失败�
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|SITES_|OPENCLI_)/.test(key)) delete process.env[key];
+  for (const key of Object.keys(process.env)) if (/^(CHAT_|OPENAI_|FHL_|WEB_RESEARCH_|OPENCLI_)/.test(key)) delete process.env[key];
   Object.assign(process.env, { STYLE_LIBRARY_DIR: root, WEB_RESEARCH_ENABLED: "1", WEB_RESEARCH_API_KEY: "fixture",
     WEB_RESEARCH_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, WEB_RESEARCH_MODEL: "fixture",
     // The regression must never launch the user's browser when the old deadline fires.

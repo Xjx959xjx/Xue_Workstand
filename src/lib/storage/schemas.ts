@@ -516,7 +516,7 @@ export const engagementModelCallSchema = z.object({
 
 export const danmakuBatchCheckpointSchema = z.object({
   schemaVersion: z.literal(1), signature: z.string().min(1),
-  index: z.number().int().nonnegative(), texts: z.array(z.string()).min(1).max(16),
+  index: z.number().int().nonnegative(), texts: z.array(z.string()).min(1).max(100),
   model: z.string(), attempts: z.number().int().positive().max(2), fallbackReason: z.string().optional()
 });
 
