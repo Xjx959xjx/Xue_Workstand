@@ -83,6 +83,8 @@ export async function resolveGrossMarginVideoAccount(
   return {
     platform,
     accountName,
+    videoTitle: fetched.title?.trim() || "",
+    currentPlayCount: normalizeFetchedStatsForMonitor(platform, fetched.stats).play ?? null,
     videoUrl: fetched.url || normalizedUrl
   };
 }

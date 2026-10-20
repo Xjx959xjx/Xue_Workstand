@@ -552,6 +552,8 @@ export function resolveGrossMarginVideoAccount(videoUrl: string, options: { sign
   return requestJson<{
     platform: GrossMarginPriceTable["platform"];
     accountName: string;
+    videoTitle: string;
+    currentPlayCount: number | null;
     videoUrl: string;
   }>("/api/gross-margin", {
     method: "POST",
@@ -563,6 +565,8 @@ export function resolveGrossMarginVideoAccount(videoUrl: string, options: { sign
 export function saveGrossMarginMonitorRecord(input: {
   platform: GrossMarginPriceTable["platform"];
   accountName: string;
+  projectName?: string;
+  projectOrderId?: string;
   videoUrl: string;
   sourceText: string;
   targetStats: Partial<Record<GrossMarginServiceKind, number>>;
@@ -630,6 +634,26 @@ export function updateGrossMarginMonitorPlayCurrent(recordId: string, current: n
     method: "POST",
     body: JSON.stringify({ action: "updateMonitorPlayCurrent", recordId, current })
   }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
+  });
+}
+
+export function updateGrossMarginMonitorMustFireCurrent(recordId: string, current: number, revision: number) {
+  return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "updateMonitorMustFireCurrent", recordId, current, revision })
+  }).then((result) => {
+    rememberGrossMarginLibrary(result.library);
+    return result;
+  });
+}
+
+export function updateGrossMarginMonitorProject(recordId: string, projectOrderId: string | undefined, revision: number, projectName?: string) {
+  return requestJson<{ record: GrossMarginMonitorRecord; library: GrossMarginLibrary }>("/api/gross-margin", {
+    method: "POST",
+    body: JSON.stringify({ action: "updateMonitorProject", recordId, projectOrderId, projectName, revision })
+  }).then(result => {
     rememberGrossMarginLibrary(result.library);
     return result;
   });

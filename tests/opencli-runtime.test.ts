@@ -144,3 +144,13 @@ test("路由模块重新加载仍共享浏览器串行队列", async () => {
   }
   assert.deepEqual(events, ["collect", "collected", "hydrate"]);
 });
+
+test("OpenCLI 2 browser session and envelopes retain the application's payload contract", async () => {
+  const { buildOpenCliBrowserArgs, unwrapOpenCliOutput } = await import("../src/lib/opencli-runtime");
+  assert.deepEqual(buildOpenCliBrowserArgs("sample", "eval", ["JSON.stringify({a:1})"], { window: "background" }),
+    ["browser", "--session", "sample", "--window", "background", "eval", "JSON.stringify({a:1})"]);
+  assert.deepEqual(JSON.parse(unwrapOpenCliOutput('{"ok":true,"data":[{"id":1}]}')), [{ id: 1 }]);
+  assert.equal(JSON.parse(unwrapOpenCliOutput('{"ok":true,"data":"正文"}')), "正文");
+  assert.equal(unwrapOpenCliOutput('[{"id":1}]'), '[{"id":1}]');
+  assert.throws(() => unwrapOpenCliOutput('{"ok":false,"error":{"message":"登录失效"}}'), /登录失效/);
+});

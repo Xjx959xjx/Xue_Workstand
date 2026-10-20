@@ -9,6 +9,7 @@ import { z } from "zod";
 import * as apiRoute from "../src/lib/api-route";
 import * as platformLinks from "../src/lib/platform-links";
 import * as utils from "../src/lib/utils";
+import * as grossMarginProjects from "../src/lib/gross-margin-projects";
 import { parseDate } from "@internationalized/date";
 import { calculateGrossMargin, makeEmptyQuantityInputs, parseGrossMarginAmount, parseGrossMarginMetric } from "../src/lib/gross-margin-calculator";
 import { buildGrossMarginTemplateValues, formatImportedQuantity } from "../src/app/gross-margin/_lib/gross-margin-workbench-model";
@@ -83,13 +84,14 @@ function deferred<T>() {
 }
 
 test("导出监控和保存单价接受必火字段，仍拒绝未知服务", async () => {
-  const saved: Array<{ targetStats?: { mustFire?: number }; items?: Array<{ service: string }> }> = [];
+  const saved: Array<{ projectName?: string; targetStats?: { mustFire?: number }; items?: Array<{ service: string }> }> = [];
   const route = load<typeof import("../src/app/api/gross-margin/route")>("src/app/api/gross-margin/route.ts", {
     zod: { z },
     "@/lib/api-route": apiRoute,
     "@/lib/gross-margin-monitor-template": {},
     "@/lib/gross-margin-refresh": {},
     "@/lib/storage/gross-margin-projects": {},
+    "@/lib/gross-margin-projects": grossMarginProjects,
     "@/lib/platform-links": platformLinks,
     "@/lib/utils": utils,
     "@/lib/gross-margin-calculator": { parseGrossMarginAmount, parseGrossMarginMetric },
@@ -103,10 +105,11 @@ test("导出监控和保存单价接受必火字段，仍拒绝未知服务", as
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
   }));
   const monitor = { action: "saveMonitorRecord", platform: "bilibili", accountName: "测试",
-    videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk", sourceText: "【B站】\n账号：测试", targetStats: { mustFire: 2000 } };
+    videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk", sourceText: "【B站】\n账号：测试", projectName: "所选项目", targetStats: { mustFire: 2000 } };
   const result = await post(monitor);
   assert.equal(result.status, 200, JSON.stringify(await result.json()));
   assert.equal(saved[0].targetStats?.mustFire, 2000);
+  assert.equal(saved[0].projectName, "所选项目");
   const price = await post({ action: "savePriceTable", platform: "bilibili", items: [{
     id: "bilibili-must-fire", service: "mustFire", name: "默认", unitPrice: 1, quantityUnit: "元"
   }] });
@@ -143,11 +146,11 @@ test("连续筛选合并最新 URL，清空时保留无关参数", () => {
     URLSearchParams, pathname: location.pathname, window: { location, history: { replaceState: (_state: unknown, _title: string, href: string) => { location.search = new URL(href, "http://localhost").search; } } }
   });
   update({ from: "2026-09-01" });
-  update({ platform: "bilibili" });
+  update({ account: "海电工厂" });
   update({ to: "2026-09-30", q: "测试" });
   assert.equal(new URLSearchParams(location.search).get("from"), "2026-09-01");
-  assert.equal(new URLSearchParams(location.search).get("platform"), "bilibili");
-  update({ q: "", platform: "", project: "", from: "", to: "" });
+  assert.equal(new URLSearchParams(location.search).get("account"), "海电工厂");
+  update({ q: "", account: "", project: "", from: "", to: "" });
   assert.equal(location.search, "?keep=1");
 });
 
@@ -323,7 +326,7 @@ test("剪贴板受限仍保存监控并提供手动复制入口，保存失败�
         busy: "", validationError: "", videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk", renderedReviewTemplate: { error: "" },
         effectiveReviewTemplate: "昨日文案", reviewTemplate: { content: "日期：{{date}}" }, reviewTemplateValues: {},
         renderGrossMarginReviewTemplate: () => "当日文案",
-        platform: "bilibili", matchedAccount: null, accountName: "测试", calculation: { lines: [] },
+        platform: "bilibili", matchedAccount: null, accountName: "测试", selectedProject: null, calculation: { lines: [] },
         copyText: async (text: string) => { assert.equal(text, "当日文案"); if (clipboardMode !== "allowed") throw new Error("NotAllowedError"); },
         saveGrossMarginMonitorRecord: async (input: { sourceText: string }) => {
           assert.equal(input.sourceText, "当日文案");
@@ -342,5 +345,86 @@ test("剪贴板受限仍保存监控并提供手动复制入口，保存失败�
         assert.equal(opened, true);
       }
     }
+  }
+});
+
+test("必火手动金额复用记录锁与revision，接受零，拒绝非法输入和版本冲突", async () => {
+  const initial = { id: "bilibili-manual", revision: 2, platform: "bilibili", targetStats: { mustFire: 2000 }, currentStats: { play: 100 }, updatedAt: timestamp };
+  let current = { ...initial, currentStats: { ...initial.currentStats } } as unknown as GrossMarginMonitorRecord;
+  const route = load<typeof import("../src/app/api/gross-margin/route")>("src/app/api/gross-margin/route.ts", {
+    zod: { z }, "@/lib/api-route": apiRoute,
+    "@/lib/gross-margin-monitor-template": {}, "@/lib/gross-margin-refresh": {},
+    "@/lib/storage/gross-margin-projects": {},
+    "@/lib/gross-margin-projects": grossMarginProjects, "@/lib/platform-links": platformLinks,
+    "@/lib/utils": utils, "@/lib/gross-margin-calculator": { parseGrossMarginAmount, parseGrossMarginMetric },
+    "@/lib/storage": {
+      getGrossMarginLibrary: async () => ({}),
+      updateGrossMarginMonitorRecord: async (_id: string, update: (record: GrossMarginMonitorRecord) => GrossMarginMonitorRecord, revision: number) => {
+        if (revision !== current.revision) throw Object.assign(new Error("记录已更新，请刷新"), { statusCode: 409 });
+        current = { ...update(current), revision: revision + 1 };
+        return current;
+      }
+    }
+  });
+  const post = (amount: number, revision = current.revision) => route.POST(new Request("http://localhost/api/gross-margin", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "updateMonitorMustFireCurrent", recordId: current.id, current: amount, revision })
+  }));
+  assert.equal((await post(600)).status, 200);
+  assert.equal(current.currentStats?.mustFire, 600);
+  assert.equal(current.currentStats?.play, 100);
+  assert.equal((await post(0)).status, 200);
+  assert.equal(current.currentStats?.mustFire, 0);
+  assert.equal((await post(-1)).status, 400);
+  assert.equal((await post(1.5)).status, 400);
+  assert.equal((await post(100_000_001)).status, 400);
+  assert.equal((await post(900, 2)).status, 409);
+  assert.equal(current.currentStats?.mustFire, 0);
+  current = { ...current, platform: "douyin" };
+  assert.equal((await post(600)).status, 400);
+});
+
+test("维护项目独立持久化；导出与补选读取同一项目表，保留指标和分组并校验 revision", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "monitor-project-choice-"));
+  const previous = process.env.STYLE_LIBRARY_DIR;
+  process.env.STYLE_LIBRARY_DIR = dir;
+  try {
+    const source = { month: "2026-10", stale: false, orders: [
+      { id: "edifier-order", month: "2026-10", platform: "bilibili" as const, accountName: "上官北丶", projectName: "漫步者耳机", orderAmount: null, rebateAmount: null, finalPrice: null, videoUrl: "", date: "10月15日" },
+      { id: "kaidu-order", month: "2026-10", platform: "bilibili" as const, accountName: "上官北", projectName: "凯度微蒸烤箱", orderAmount: null, rebateAmount: null, finalPrice: null, videoUrl: "", date: "" },
+      { id: "other-account", month: "2026-10", platform: "bilibili" as const, accountName: "其他账号", projectName: "不可选项目", orderAmount: null, rebateAmount: null, finalPrice: null, videoUrl: "", date: "" }
+    ] };
+    const videoUrl = "https://www.bilibili.com/video/BV12Vpt62ERk";
+    const created = await upsertGrossMarginMonitorRecord({ platform: "bilibili", accountName: "上官北", projectId: "batch-1", projectName: "批量监控分组", videoUrl, videoKey: platformLinks.getVideoComparableKey(videoUrl), sourceText: "原目标文案", targetStats: { play: 10000 } });
+    const current = await updateGrossMarginMonitorRecord(created.id, record => ({ ...record, title: "原视频标题", currentStats: { play: 1234 }, playSamples: [{ value: 1234, capturedAt: timestamp, source: "refresh" }] }), created.revision);
+    const route = load<typeof import("../src/app/api/gross-margin/route")>("src/app/api/gross-margin/route.ts", {
+      zod: { z }, "@/lib/api-route": apiRoute, "@/lib/gross-margin-monitor-template": {}, "@/lib/gross-margin-refresh": {},
+      "@/lib/storage/gross-margin-projects": { getGrossMarginProjectSource: async () => source },
+      "@/lib/gross-margin-projects": grossMarginProjects, "@/lib/platform-links": platformLinks, "@/lib/utils": utils,
+      "@/lib/gross-margin-calculator": { parseGrossMarginAmount, parseGrossMarginMetric },
+      "@/lib/storage": { upsertGrossMarginMonitorRecord, updateGrossMarginMonitorRecord, getGrossMarginLibrary: readLibrary }
+    });
+    const post = (body: unknown) => route.POST(new Request("http://localhost/api/gross-margin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+    const choice = { action: "updateMonitorProject", recordId: current.id, projectOrderId: "edifier-order", revision: current.revision };
+    const chosenResponse = await post(choice);
+    assert.equal(chosenResponse.status, 200);
+    const chosen = (await chosenResponse.json()).record as GrossMarginMonitorRecord;
+    assert.deepEqual(chosen.maintenanceProject, { orderId: "edifier-order", name: "漫步者耳机" });
+    assert.equal(chosen.projectName, "批量监控分组");
+    assert.equal(chosen.title, "原视频标题");
+    assert.deepEqual(chosen.currentStats, current.currentStats);
+    assert.deepEqual(chosen.playSamples, current.playSamples);
+    assert.equal((await post(choice)).status, 409);
+    assert.equal((await post({ ...choice, revision: chosen.revision, projectOrderId: "other-account" })).status, 400);
+    assert.equal((await post({ ...choice, revision: chosen.revision, projectOrderId: "" })).status, 400);
+    const reloaded = (await readLibrary({ cachedAccountsOnly: true })).monitorRecords.find(record => record.id === chosen.id)!;
+    assert.deepEqual(reloaded.maintenanceProject, chosen.maintenanceProject);
+    assert.throws(() => parseStoredRecord("record.json", { ...chosen, maintenanceProject: { orderId: "", name: "" } }, "gross-margin-monitor"), /存储记录结构无效/);
+    const exportedResponse = await post({ action: "saveMonitorRecord", platform: "bilibili", accountName: "上官北", videoUrl, sourceText: "【B站】\n账号：上官北", targetStats: { play: 10000 }, projectOrderId: "kaidu-order" });
+    assert.equal(exportedResponse.status, 200);
+    assert.deepEqual((await exportedResponse.json()).record.maintenanceProject, { orderId: "kaidu-order", name: "凯度微蒸烤箱" });
+  } finally {
+    if (previous === undefined) delete process.env.STYLE_LIBRARY_DIR;
+    else process.env.STYLE_LIBRARY_DIR = previous;
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });

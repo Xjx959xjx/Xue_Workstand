@@ -116,7 +116,7 @@ type CommentEntityCorrection = {
   stage: "brief" | "relatedResearch" | "comment";
 };
 
-const ENGAGEMENT_ENGINE_VERSION = "engagement-v16-bilibili-only";
+const ENGAGEMENT_ENGINE_VERSION = "engagement-v17-over-200";
 const ENGAGEMENT_DANMAKU_ENGINE_VERSION = "danmaku-v3-text-batch";
 const ENGAGEMENT_SOURCE_CACHE_VERSION = "engagement-v3";
 const COMMENT_OUTPUT_REVIEW_BATCH_SIZE = 48;

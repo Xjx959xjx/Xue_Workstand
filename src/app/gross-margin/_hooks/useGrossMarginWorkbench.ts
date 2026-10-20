@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFeedback } from "@/components/FeedbackProvider";
+import { getGrossMarginAccountDisplayName, getGrossMarginAccountOptions } from "@/lib/gross-margin-account-names";
 import { copyText } from "@/lib/copy-text";
 import {
   bulkSaveGrossMarginMonitorRecords,
@@ -68,6 +69,10 @@ export function useGrossMarginWorkbench() {
   const [busy, setBusy] = useState<BusyState>("");
   const [accountName, setAccountName] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
+  const [resolvedVideo, setResolvedVideo] = useState<{ url: string; title: string; currentPlayCount: number | null } | null>(null);
+  const currentVideo = resolvedVideo?.url === normalizeVideoUrlInput(videoUrl) ? resolvedVideo : null;
+  const videoTitle = currentVideo?.title || "";
+  const currentPlayCount = currentVideo?.currentPlayCount ?? null;
   const [originalPrice, setOriginalPrice] = useState("");
   const [accountPriceKind, setAccountPriceKind] = useState<AccountPriceKind>("custom");
   const [rebateRate, setRebateRate] = useState("");
@@ -117,7 +122,7 @@ export function useGrossMarginWorkbench() {
   );
   const reviewTemplate = useMemo(() => getPlatformReviewTemplate(library, platform), [library, platform]);
   const platformAccounts = useMemo(
-    () => (library?.accounts || []).filter((account) => account.platform === platform),
+    () => getGrossMarginAccountOptions((library?.accounts || []).filter((account) => account.platform === platform)),
     [library, platform]
   );
   const matchedAccount = useMemo(
@@ -155,11 +160,13 @@ export function useGrossMarginWorkbench() {
       account: matchedAccount,
       accountName,
       calculation,
+      currentPlayCount,
       platform,
       splitDeliveryEnabled,
+      videoTitle,
       videoUrl
     }),
-    [accountName, calculation, matchedAccount, platform, splitDeliveryEnabled, videoUrl]
+    [accountName, calculation, currentPlayCount, matchedAccount, platform, splitDeliveryEnabled, videoTitle, videoUrl]
   );
   const renderedReviewTemplate = useMemo(() => {
     try {
@@ -201,6 +208,7 @@ export function useGrossMarginWorkbench() {
 
   useEffect(() => {
     const nextUrl = normalizeVideoUrlInput(videoUrl);
+    setResolvedVideo(null);
     if (!libraryLoaded || !nextUrl || !detectVideoPlatform(nextUrl)) {
       setVideoAccountLookup({ status: "idle", message: "" });
       return;
@@ -214,7 +222,8 @@ export function useGrossMarginWorkbench() {
       setVideoAccountLookup({ status: "loading", message: "正在从视频链接识别账号…" });
       resolveGrossMarginVideoAccount(nextUrl, { signal: controller.signal })
         .then((result) => {
-          if (videoAccountLookupRequestRef.current !== requestId) return;
+          if (controller.signal.aborted || videoAccountLookupRequestRef.current !== requestId) return;
+          setResolvedVideo({ url: nextUrl, title: result.videoTitle, currentPlayCount: result.currentPlayCount });
           if (accountNameRef.current !== accountNameBeforeLookup) {
             setVideoAccountLookup({ status: "idle", message: "" });
             return;
@@ -222,7 +231,7 @@ export function useGrossMarginWorkbench() {
 
           const accounts = (libraryRef.current?.accounts || []).filter((account) => account.platform === result.platform);
           const resolvedAccount = findGrossMarginAccount(accounts, result.accountName);
-          const resolvedName = resolvedAccount?.name || result.accountName;
+          const resolvedName = getGrossMarginAccountDisplayName(resolvedAccount?.name || result.accountName);
           accountNameRef.current = resolvedName;
           setAccountName(resolvedName);
           const matchingProjects = findGrossMarginProjectOrders(projectSourceRef.current?.orders || [], result.platform, resolvedName);
@@ -289,7 +298,8 @@ export function useGrossMarginWorkbench() {
     if (nextAccount) applyAccountPrice(nextAccount, "custom");
   }
 
-  function handleAccountNameChange(value: string) {
+  function handleAccountNameChange(rawValue: string) {
+    const value = getGrossMarginAccountDisplayName(rawValue);
     if (value === accountNameRef.current) return;
     clearProjectPrices();
     accountNameRef.current = value;
@@ -438,9 +448,21 @@ export function useGrossMarginWorkbench() {
       } catch {
         // 剪贴板权限失败不应阻止保存，保存后提供手动复制入口。
       }
+      if (platform === "douyin") {
+        notify(copied
+          ? { tone: "success", message: "文案已复制" }
+          : {
+            tone: "warning",
+            message: "浏览器未允许复制，请打开文案后手动复制。",
+            action: { label: "查看文案", onClick: () => setTemplateModalOpen(true) },
+            durationMs: 15000
+          });
+        return;
+      }
       const result = await saveGrossMarginMonitorRecord({
         platform,
         accountName: matchedAccount?.name || accountName,
+        projectOrderId: selectedProject?.id,
         videoUrl,
         sourceText: reviewText,
         targetStats: Object.fromEntries(
@@ -461,7 +483,9 @@ export function useGrossMarginWorkbench() {
     } catch (error) {
       notify({
         tone: "error",
-        message: `${copied ? "文案已复制，但监控保存失败" : "文案未复制，监控保存失败"}：${error instanceof Error ? error.message : "请稍后重试"}`
+        message: platform === "douyin"
+          ? `导出文案失败：${error instanceof Error ? error.message : "请稍后重试"}`
+          : `${copied ? "文案已复制，但监控保存失败" : "文案未复制，监控保存失败"}：${error instanceof Error ? error.message : "请稍后重试"}`
       });
     } finally {
       setBusy("");
@@ -531,7 +555,7 @@ export function useGrossMarginWorkbench() {
   return {
     projectOrders,
     selectedProject,
-    projectSelectionValue: selectedProject?.id || (projectSelection?.context === projectContext && projectSelection.id === "manual" ? "manual" : "choose"),
+    projectSelectionValue: selectedProject?.id || (projectSelection?.context === projectContext ? projectSelection.id : "choose"),
     projectMonth: projects.source?.month || "",
     projectSourceError: projects.error,
     projectSourceLoading: projects.loading,

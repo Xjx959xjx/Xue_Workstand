@@ -1,3 +1,4 @@
+import { getGrossMarginAccountDisplayName, normalizeGrossMarginAccountName } from "@/lib/gross-margin-account-names";
 import {
   parseGrossMarginMetric,
   formatThreshold,
@@ -116,7 +117,7 @@ export function buildImportedMaintenanceState({
     }
   }
 
-  const nextAccountName = template.accountName || accountName;
+  const nextAccountName = getGrossMarginAccountDisplayName(template.accountName || accountName);
   const platformAccounts = accounts.filter((account) => account.platform === platform);
 
   return {
@@ -132,13 +133,14 @@ export function buildImportedMaintenanceState({
 }
 
 export function findGrossMarginAccount(accounts: GrossMarginAccountPrice[], rawName: string) {
-  const name = normalizeAccountName(rawName);
+  const name = normalizeGrossMarginAccountName(rawName);
   if (!name) return null;
   return (
-    accounts.find((account) => normalizeAccountName(account.name) === name) ||
-    accounts.find((account) =>
-      normalizeAccountName(account.name).includes(name) || name.includes(normalizeAccountName(account.name))
-    ) ||
+    accounts.find((account) => normalizeGrossMarginAccountName(account.name) === name) ||
+    accounts.find((account) => {
+      const candidate = normalizeGrossMarginAccountName(account.name);
+      return candidate && (candidate.includes(name) || name.includes(candidate));
+    }) ||
     null
   );
 }
@@ -165,21 +167,24 @@ export function buildGrossMarginTemplateValues({
   account,
   accountName,
   calculation,
+  currentPlayCount,
   platform,
   splitDeliveryEnabled,
+  videoTitle = "",
   videoUrl
 }: {
   account: GrossMarginAccountPrice | null;
   accountName: string;
   calculation: GrossMarginCalculationResult;
+  currentPlayCount?: number | null;
   platform: PlatformKey;
   splitDeliveryEnabled: boolean;
+  videoTitle?: string;
   videoUrl: string;
 }): GrossMarginReviewTemplateValues {
   const lines = new Map(calculation.lines.map((line) => [line.service, line]));
-  const displayName = account?.name || accountName.trim();
+  const displayName = getGrossMarginAccountDisplayName(account?.name || accountName);
   const displayVideoUrl = videoUrl.trim();
-  const reviewFooter = "@罗娜 @姚琳琳(Lin.) @罗雪莲 @翁林湑(空白) @罗月琴 辛苦审核";
   const splitRoundLine = splitDeliveryEnabled ? buildSplitRoundLine(lines, platform) : "";
   const playLine = lines.get("play");
   const likeLine = lines.get("like");
@@ -198,6 +203,10 @@ export function buildGrossMarginTemplateValues({
     cooperationCode: account?.cooperationCode || "",
     bilibiliUid: account?.bilibiliUid || "",
     videoUrl: displayVideoUrl,
+    videoTitle: videoTitle.trim(),
+    currentPlayValue: typeof currentPlayCount === "number" && Number.isFinite(currentPlayCount) && currentPlayCount >= 0
+      ? String(currentPlayCount)
+      : "未获取",
     playLabel: platform === "bilibili" ? formatBilibiliPlayChannel(playLine) : formatReviewLabelSuffix(playLine),
     playValue: formatReviewMetricValue(playLine, platform),
     likeLabel: formatReviewLabelSuffix(likeLine),
@@ -216,8 +225,7 @@ export function buildGrossMarginTemplateValues({
     maintenanceCost: formatReviewMoney(calculation.maintenanceCost),
     grossProfit: formatReviewMoney(calculation.grossProfit),
     grossMarginRate: formatReviewPercent(calculation.grossMarginRate),
-    splitRoundLine,
-    reviewFooter
+    splitRoundLine
   };
 }
 
@@ -315,10 +323,6 @@ export function formatImportedQuantity(rawValue: string, quantityUnit: string) {
   if (absolute === null) throw new Error(`维护数量「${rawValue}」无效，请填写非负数字及万、千或个单位。`);
   const divisor = quantityUnit === "万" ? 10000 : quantityUnit === "千" ? 1000 : 1;
   return String(absolute / divisor);
-}
-
-function normalizeAccountName(value: string) {
-  return value.trim().replace(/\s+/g, "").toLowerCase();
 }
 
 function formatReviewLabelSuffix(line?: GrossMarginCalculationLine) {

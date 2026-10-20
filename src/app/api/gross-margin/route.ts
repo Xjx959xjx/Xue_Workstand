@@ -2,6 +2,7 @@ import { z } from "zod";
 import { apiJson, formatApiError, parseJsonBody } from "@/lib/api-route";
 import { parseGrossMarginBulkMonitorTemplate } from "@/lib/gross-margin-monitor-template";
 import { getGrossMarginProjectSource } from "@/lib/storage/gross-margin-projects";
+import { findGrossMarginProjectOrders } from "@/lib/gross-margin-projects";
 import {
   refreshGrossMarginMonitorRecord,
   refreshGrossMarginMonitorRecords,
@@ -71,6 +72,8 @@ const mutationSchema = z.discriminatedUnion("action", [
     action: z.literal("saveMonitorRecord"),
     platform: platformSchema,
     accountName: z.string().trim().optional(),
+    projectName: z.string().trim().optional(),
+    projectOrderId: z.string().trim().min(1, "请选择维护项目").optional(),
     videoUrl: z.string().trim().min(1, "请填写视频链接"),
     sourceText: z.string().min(1, "监控记录缺少维护目标文案"),
     targetStats: z.record(serviceSchema, amountSchema).optional()
@@ -98,6 +101,19 @@ const mutationSchema = z.discriminatedUnion("action", [
     action: z.literal("updateMonitorPlayCurrent"),
     recordId: z.string().trim().min(1, "缺少监控记录 ID"),
     current: amountSchema
+  }),
+  z.object({
+    action: z.literal("updateMonitorMustFireCurrent"),
+    recordId: z.string().trim().min(1, "缺少监控记录 ID"),
+    current: amountSchema.refine(Number.isInteger, "必火已投金额请填写整元"),
+    revision: z.number().int().nonnegative("记录版本无效")
+  }),
+  z.object({
+    action: z.literal("updateMonitorProject"),
+    recordId: z.string().trim().min(1, "缺少监控记录 ID"),
+    projectOrderId: z.string().trim().min(1, "项目报价 ID 无效").optional(),
+    projectName: z.string().trim().max(80, "项目名太长").optional(),
+    revision: z.number().int().nonnegative("记录版本无效")
   }),
   z.object({
     action: z.literal("deleteMonitorRecord"),
@@ -147,6 +163,34 @@ export async function POST(request: Request) {
       const record = await updateMonitorPlayCurrent(input.recordId, input.current);
       return { record, library: await getGrossMarginLibrary() };
     }
+    if (input.action === "updateMonitorMustFireCurrent") {
+      const record = await updateGrossMarginMonitorRecord(input.recordId, current => {
+        if (current.platform !== "bilibili" || !current.targetStats.mustFire) {
+          throw Object.assign(new Error("该记录没有必火目标，无法填写已投金额。"), { statusCode: 400 });
+        }
+        return { ...current, currentStats: { ...current.currentStats, mustFire: input.current }, updatedAt: new Date().toISOString() };
+      }, input.revision);
+      return { record, library: await getGrossMarginLibrary() };
+    }
+    if (input.action === "updateMonitorProject") {
+      const source = await getGrossMarginProjectSource();
+      const record = await updateGrossMarginMonitorRecord(input.recordId, current => {
+        const order = input.projectOrderId
+          ? findGrossMarginProjectOrders(source.orders, current.platform, current.accountName).find(item => item.id === input.projectOrderId)
+          : undefined;
+        const projectName = input.projectName?.trim() || order?.projectName;
+        if (!projectName) throw Object.assign(new Error("请选择维护项目或填写自定义项目名称。"), { statusCode: 400 });
+        return {
+          ...current,
+          maintenanceProject: {
+            orderId: order?.id || `custom-${shortHash(`${current.platform}:${current.accountName}:${projectName}`)}`,
+            name: projectName
+          },
+          updatedAt: new Date().toISOString()
+        };
+      }, input.revision);
+      return { record, library: await getGrossMarginLibrary() };
+    }
     if (input.action === "deleteMonitorRecord") {
       const result = await deleteGrossMarginMonitorRecord(input.recordId);
       return { ...result, library: await getGrossMarginLibrary() };
@@ -191,9 +235,17 @@ async function saveMonitorRecordFromInput(input: z.infer<typeof mutationSchema> 
   const videoUrl = normalizeVideoUrlInput(resolvedVideo.url);
   const platform = resolveMonitorPlatform(videoUrl, parsed.platform, input.platform);
   const videoKey = getVideoComparableKey(videoUrl);
+  const accountName = input.accountName || parsed.accountName;
+  const order = input.projectOrderId
+    ? findGrossMarginProjectOrders((await getGrossMarginProjectSource()).orders, platform, accountName)
+      .find(item => item.id === input.projectOrderId)
+    : undefined;
+  if (input.projectOrderId && !order) throw Object.assign(new Error("项目报价已更新，请在数据维护中重新选择项目后导出。"), { statusCode: 400 });
   return upsertGrossMarginMonitorRecord({
     platform,
-    accountName: input.accountName || parsed.accountName,
+    accountName,
+    projectName: input.projectName,
+    maintenanceProject: order ? { orderId: order.id, name: order.projectName } : undefined,
     videoUrl,
     videoKey,
     sourceText: input.sourceText,

@@ -83,7 +83,7 @@ export type EngagementCommentResearch = {
   cacheHit: boolean;
 };
 
-const ENGAGEMENT_RESEARCH_VERSION = "engagement-research-v40-bilibili-only";
+const ENGAGEMENT_RESEARCH_VERSION = "engagement-research-v41-over-200";
 const RESEARCH_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PARTIAL_RESEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_RESEARCH_QUERIES = 2;
@@ -501,7 +501,8 @@ async function collectPlatformResearch(
   const targetPlatform = platform || "douyin";
   const collectionBudget = createCommentCollectionBudget(600);
   const results = await Promise.allSettled(buildPlatformResearchTasks("", targetPlatform).map(async ({ source }) => {
-    await onProgress?.(`正在搜索${formatSource(source)}的全部检索方向，先尝试 2 个视频，语料不足继续补来源（每平台最多 4 个）`);
+    const searchScope = targetPlatform === "bilibili" ? "仅搜索 B站" : `正在搜索${formatSource(source)}`;
+    await onProgress?.(`${searchScope}，按关键词查找相关视频，先尝试 2 个视频，语料不足继续补来源（每平台最多 4 个）`);
     return [await collectPlatformResearchRow({ source, queries, videoLimit: TARGET_PLATFORM_VIDEO_LIMIT }, excludedVideoIds, signal, collectionBudget)];
   }));
   throwIfAborted(signal);

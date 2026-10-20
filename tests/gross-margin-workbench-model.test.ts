@@ -76,6 +76,8 @@ test("审核模板值会保留账号标识并按服务粒度生成首轮目标",
     calculation,
     platform: "douyin",
     splitDeliveryEnabled: true,
+    videoTitle: " 视频标题 ",
+    currentPlayCount: 12345,
     videoUrl: " https://www.douyin.com/video/123 "
   });
 
@@ -86,6 +88,18 @@ test("审核模板值会保留账号标识并按服务粒度生成首轮目标",
   assert.equal(values.grossProfit, "700");
   assert.equal(values.splitRoundLine, "分两轮维护：第一轮，播放1万，点赞8000，抖加61元");
   assert.equal(values.videoUrl, "https://www.douyin.com/video/123");
+  assert.equal(values.videoTitle, "视频标题");
+  assert.equal(values.currentPlayValue, "12345");
+});
+
+test("当前播放量保留真实零值，缺失或非法数据显式显示未获取", () => {
+  for (const currentPlayCount of [0, null, undefined, NaN, -1]) {
+    const values = buildGrossMarginTemplateValues({
+      account: null, accountName: "", calculation: makeCalculation([]), platform: "bilibili",
+      splitDeliveryEnabled: false, videoUrl: "", currentPlayCount
+    });
+    assert.equal(values.currentPlayValue, currentPlayCount === 0 ? "0" : "未获取");
+  }
 });
 
 test("评论弹幕目标只在有数量时生成跳转参数", () => {

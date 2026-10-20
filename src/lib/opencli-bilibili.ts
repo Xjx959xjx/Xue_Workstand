@@ -1,4 +1,4 @@
-import { selectEligibleCommentSources, sourceCommentCount, collectCommentSources, type CommentCollectionAttempt, type CommentCollectionBudget } from "./engagement-source-selection";
+import { SOURCE_VIDEO_COMMENT_THRESHOLD, selectEligibleCommentSources, sourceCommentCount, collectCommentSources, type CommentCollectionAttempt, type CommentCollectionBudget } from "./engagement-source-selection";
 import { mapWithConcurrency } from "./concurrency";
 import { getBilibiliSourceCommentCount, getBilibiliExpandedComments } from "./opencli-bilibili-comments";
 import { promises as fs } from "fs";
@@ -10,7 +10,6 @@ import {
   mergeTimingMeta,
   opencliBin,
   parseJsonish,
-  runOpenCli,
   runPersistentOpenCliBrowserAdapter,
   stringField,
   timeOpenCliOperation,
@@ -236,7 +235,7 @@ export async function getBilibiliRelatedTopicComments(
     (video) => getBilibiliSourceCommentCount(video.id, options.signal), options.signal);
   const candidates = eligible.videos;
   searchErrors.push(...eligible.errors);
-  if (!candidates.length) throw new Error(`B站没有评论总数至少 300 条的可用视频：${searchErrors.join("；")}`);
+  if (!candidates.length) throw new Error(`B站没有评论总数超过 ${SOURCE_VIDEO_COMMENT_THRESHOLD} 条的可用视频：${searchErrors.join("；")}`);
   const commentErrors: string[] = [...searchErrors];
   const collectionAttempts: CommentCollectionAttempt[] = [];
   let accessError = "";
@@ -310,7 +309,7 @@ async function getBilibiliCommentReplies(bvid: string, rpid: string, limit: numb
   return resolveBilibiliCommentRows(
     () => getBilibiliPublicCommentReplies(bvid, rpid, limit, signal),
     async () => {
-      const stdout = await runOpenCli([
+      const stdout = await runPersistentOpenCliBrowserAdapter([
         "bilibili",
         "comments",
         bvid,
@@ -361,7 +360,7 @@ export async function getBilibiliComments(
   return resolveBilibiliCommentRows(
     () => getBilibiliPublicComments(bvid, normalizedLimit, options.signal),
     async () => {
-      const stdout = await runOpenCli([
+      const stdout = await runPersistentOpenCliBrowserAdapter([
         "bilibili",
         "comments",
         bvid,
@@ -527,6 +526,22 @@ export async function hydrateBilibiliVideoStats(video: Video, options: OpenCliTi
   };
 }
 
+// Avatar lookup only uses the public endpoint; rendering a card must not start a CLI task.
+export async function getBilibiliVideoAuthorAvatarByUrl(url: string, signal?: AbortSignal) {
+  const source = new URL(url);
+  if (source.protocol !== "https:" || !["bilibili.com", "www.bilibili.com", "b23.tv"].includes(source.hostname) || source.port || source.username || source.password) {
+    throw new Error("头像加载仅支持有效的 B站视频链接。");
+  }
+  const resolvedUrl = await resolveBilibiliVideoUrl(url, { signal });
+  const bvid = extractBvid(resolvedUrl);
+  if (!bvid) throw new Error("无法识别 B站视频，请刷新监控数据后重试头像加载。");
+  const metadata = await getBilibiliPublicVideoFields(bvid, { signal });
+  const owner = metadata.owner && typeof metadata.owner === "object" ? metadata.owner as Record<string, unknown> : {};
+  const avatarUrl = stringField(owner.face);
+  if (!avatarUrl) throw new Error("B站未返回账号头像，请稍后刷新页面重试。");
+  return avatarUrl;
+}
+
 export async function getBilibiliVideoStatsByUrl(
   url: string,
   options: OpenCliTimingOptions = {}
@@ -620,10 +635,10 @@ function normalizeBilibiliRelatedVideo(row: unknown): BilibiliRelatedCommentVide
     title,
     commentCount: sourceCommentCount(object.review, object.comment_count, object.comments, (object.stat as Record<string, unknown> | undefined)?.reply),
     author: String(object.author || object.owner || object.uname || ""),
-    score: toNumber(object.views || object.play || object.view) + toNumber(object.likes || object.like) * 2,
-    views: toNumber(object.views || object.play || object.view),
+    score: toNumber(object.plays || object.views || object.play || object.view) + toNumber(object.likes || object.like) * 2,
+    views: toNumber(object.plays || object.views || object.play || object.view),
     likes: toNumber(object.likes || object.like),
-    publishedAt: normalizeTimestamp(object.date || object.pubdate || object.created_at || object.publish_time),
+    publishedAt: normalizeTimestamp(object.pubdate_ts || object.date || object.pubdate || object.created_at || object.publish_time),
     url: url || `https://www.bilibili.com/video/${id}`
   };
 }
@@ -693,7 +708,7 @@ async function normalizeBilibiliVideo(
     url,
     coverUrl: stringField(metadata.thumbnail) || stringField(metadata.pic) || stringField(metadata.cover) || stringField(object.thumbnail) || stringField(object.pic),
     duration: String(metadata.duration || object.duration || ""),
-    publishedAt: normalizeTimestamp(object.date || object.pubdate || object.created_at || metadata.publish_time || metadata.pubdate),
+    publishedAt: normalizeTimestamp(object.pubdate_ts || object.date || object.pubdate || object.created_at || metadata.publish_time || metadata.pubdate),
     stats: { views, likes, comments, favorites },
     hotScore: 0,
     relativeViewRate: 0,

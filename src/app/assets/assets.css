@@ -501,6 +501,10 @@
   color: var(--muted);
 }
 
+.asset-text-list[hidden] {
+  display: none;
+}
+
 .asset-text-list p {
   padding: 9px 10px;
   border: 1px solid color-mix(in oklch, var(--line-subtle) 84%, var(--panel-raised));

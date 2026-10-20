@@ -231,6 +231,7 @@ const grossMarginTableSchema = versionedObject.extend({
 const grossMarginMonitorSchema = versionedObject.extend({
   id: z.string().min(1), revision: z.number().int().nonnegative().optional(), platform: platformSchema,
   accountName: z.string(), videoUrl: z.string(), videoKey: z.string(), sourceText: z.string(),
+  maintenanceProject: z.object({ orderId: z.string().trim().min(1), name: z.string().trim().min(1) }).optional(),
   targetStats: grossMarginStatsSchema, currentStats: grossMarginStatsSchema.optional(),
   previousStats: grossMarginStatsSchema.optional(),
   playSamples: z.array(z.object({ value: grossMarginAmountSchema, capturedAt: timestampSchema, source: z.enum(["manual", "refresh"]) })).optional(),

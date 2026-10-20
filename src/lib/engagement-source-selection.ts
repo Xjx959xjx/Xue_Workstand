@@ -1,4 +1,4 @@
-export const MIN_SOURCE_VIDEO_COMMENTS = 300;
+export const SOURCE_VIDEO_COMMENT_THRESHOLD = 200;
 
 /** 只接受明确的评论计数；缺失值不能当成零或用点赞、弹幕数替代。 */
 export function sourceCommentCount(...values: unknown[]): number | undefined {
@@ -21,8 +21,8 @@ export async function selectEligibleCommentSources<T extends { id: string; comme
     try {
       const count = sourceCommentCount(video.commentCount ?? await resolveCount(video));
       signal?.throwIfAborted();
-      if (count === undefined || count < MIN_SOURCE_VIDEO_COMMENTS) {
-        errors.push(`${video.id}：${count === undefined ? "无法确认评论总数" : `评论总数 ${count} 条`}，不满足至少 ${MIN_SOURCE_VIDEO_COMMENTS} 条，已跳过`);
+      if (count === undefined || count <= SOURCE_VIDEO_COMMENT_THRESHOLD) {
+        errors.push(`${video.id}：${count === undefined ? "无法确认评论总数" : `评论总数 ${count} 条`}，要求超过 ${SOURCE_VIDEO_COMMENT_THRESHOLD} 条，已跳过`);
         continue;
       }
       videos.push({ ...video, commentCount: count });

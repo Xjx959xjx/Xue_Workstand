@@ -846,6 +846,7 @@ export type GrossMarginMonitorRecord = {
   accountName: string;
   projectId?: string;
   projectName?: string;
+  maintenanceProject?: { orderId: string; name: string };
   videoUrl: string;
   videoKey: string;
   title?: string;

@@ -5,6 +5,7 @@ import vm from "node:vm";
 import * as React from "react";
 import * as jsx from "react/jsx-runtime";
 import ts from "typescript";
+import * as accountNames from "../src/lib/gross-margin-account-names";
 
 // 检查真实组件传给现成控件的集合和回调，不启动浏览器或外部能力。
 function load(file: string, expose = "") {
@@ -15,6 +16,7 @@ function load(file: string, expose = "") {
     if (name === "react") return React;
     if (name === "react/jsx-runtime") return jsx;
     if (name === "react-aria-components" || name === "lucide-react") return new Proxy({}, { get: (_, key) => String(key) });
+    if (name === "@/lib/gross-margin-account-names") return accountNames;
     if (name.startsWith("@/") || name === "../_lib/gross-margin-workbench-model") return new Proxy({}, { get: (_, key) => String(key) });
     throw new Error(`未 mock 的依赖：${name}`);
   } });
@@ -51,6 +53,8 @@ test("账号搜索保留空白归一化、手动输入和选择的共用回调",
   const filter = combo.defaultFilter as (name: string, query: string) => boolean;
   assert.equal(filter("A B账号", " ab "), true);
   assert.equal(filter("A B账号", "其他"), false);
+  assert.equal(filter("上官北丶", "上官北"), true);
+  assert.equal(filter("上官北", "上官北丶"), true);
   assert.equal(combo.allowsCustomValue, true);
   assert.equal(combo.defaultItems, accounts);
   (combo.onInputChange as (value: string) => void)("A B账号");

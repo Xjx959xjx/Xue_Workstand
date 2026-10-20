@@ -12,6 +12,7 @@ import {
 type GrossMarginResultPaneProps = Pick<
   GrossMarginWorkbenchController,
   | "busy"
+  | "platform"
   | "calculation"
   | "engagementTarget"
   | "handleExportReview"
@@ -28,6 +29,7 @@ type GrossMarginResultPaneProps = Pick<
 export function GrossMarginResultPane({
   busy,
   calculation,
+  platform,
   engagementTarget,
   handleExportReview,
   openBulkMonitorModal,
@@ -116,7 +118,7 @@ export function GrossMarginResultPane({
               type="button"
             >
               <Copy aria-hidden="true" size={15} />
-              {busy === "export" ? "导出中" : "导出并监控"}
+              {busy === "export" ? "导出中" : platform === "douyin" ? "导出文案" : "导出并监控"}
             </button>
           </div>
           {appMode === "workspace" ? <EngagementJump engagementTarget={engagementTarget} /> : null}

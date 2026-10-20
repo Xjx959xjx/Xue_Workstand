@@ -7,14 +7,16 @@ import { CalendarRange, ChevronDown, ChevronLeft, ChevronRight } from "lucide-re
 
 export function MonitorDateFilter({ from, to, onChange }: { from: string; to: string; onChange: (from: string, to: string) => void }) {
   const [open, setOpen] = useState(false);
+  const rangeLabel = from || to ? `${from || "不限"} → ${to || "不限"}` : "不限日期";
+  const compactLabel = from || to ? `${from?.slice(5) || "不限"}–${to?.slice(5) || "不限"}` : "日期";
   const selectRange = (start: string, end: string) => { onChange(start, end); setOpen(false); };
   return (
     <I18nProvider locale="zh-CN">
-      <div className="gross-monitor-date-range">
+      <div className="gross-monitor-date-range" title={`发布日期：${rangeLabel}`}>
         <DialogTrigger isOpen={open} onOpenChange={setOpen}>
-          <Button className="workbench-select-trigger gross-monitor-date-trigger" aria-label="按发布日期筛选">
+          <Button className="workbench-select-trigger gross-monitor-date-trigger" aria-label={`按发布日期筛选：${rangeLabel}`}>
             <CalendarRange aria-hidden="true" size={16} />
-            <span><small>发布日期</small><strong>{from || to ? `${from || "不限"} → ${to || "不限"}` : "不限日期"}</strong></span>
+            <span>{compactLabel}</span>
             <ChevronDown aria-hidden="true" size={14} />
           </Button>
           <Popover className="workbench-select-popover gross-monitor-calendar-popover" placement="bottom end" offset={6}>

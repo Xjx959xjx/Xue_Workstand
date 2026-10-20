@@ -83,7 +83,7 @@ export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}
         timeout: options.timeout,
         signal: options.signal
       });
-      stdout = result.stdout;
+      stdout = unwrapOpenCliOutput(result.stdout);
       stderr = result.stderr;
       break;
     } catch (error) {
@@ -109,6 +109,21 @@ export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}
 
   if (!timingRecorded) recordTiming(options, startedAt, true);
   return stdout.trim();
+}
+
+// OpenCLI 2 returns an envelope; keep existing callers on the payload contract.
+export function unwrapOpenCliOutput(stdout: string): string {
+  let payload: unknown;
+  try { payload = JSON.parse(stdout); } catch { return stdout; }
+  if (!payload || typeof payload !== "object") return stdout;
+  const envelope = payload as Record<string, unknown>;
+  if (envelope.ok === false && "error" in envelope) {
+    throw new Error(`OpenCLI 执行失败：${JSON.stringify(envelope.error)}`);
+  }
+  if (envelope.ok === true && "data" in envelope) {
+    return JSON.stringify(envelope.data) ?? "null";
+  }
+  return stdout;
 }
 
 export function sharedOpenCliBrowserSession() {
@@ -212,7 +227,7 @@ export function buildOpenCliBrowserArgs(
     window?: OpenCliBrowserWindowMode;
   } = {}
 ) {
-  const args = ["browser", session];
+  const args = ["browser", "--session", session];
   if (options.window) {
     args.push("--window", options.window);
   }
@@ -356,7 +371,7 @@ async function dismissOpenCliJavaScriptDialog(
 ) {
   const session = getOpenCliBrowserSessionArg(args);
   if (!session) return;
-  await execFileAsync(runtime.command, [...runtime.argsPrefix, "browser", session, "dialog", "dismiss"], {
+  await execFileAsync(runtime.command, [...runtime.argsPrefix, ...buildOpenCliBrowserArgs(session, "dialog", ["dismiss"])], {
     ...HIDDEN_CHILD_PROCESS_OPTIONS,
     env: withOpenCliBackgroundWindow(process.env),
     maxBuffer: 1024 * 1024,
@@ -366,7 +381,8 @@ async function dismissOpenCliJavaScriptDialog(
 }
 
 function getOpenCliBrowserSessionArg(args: string[]) {
-  return args[0] === "browser" && args[1]?.trim() ? args[1].trim() : "";
+  const index = args.indexOf("--session");
+  return args[0] === "browser" && index >= 0 ? args[index + 1]?.trim() || "" : "";
 }
 
 function isOpenCliJavaScriptDialogError(error: unknown) {

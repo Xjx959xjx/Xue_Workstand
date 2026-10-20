@@ -1,4 +1,5 @@
-import type { GrossMarginProjectOrder, GrossMarginProjectSource, JobRecord } from "./types";
+import type { GrossMarginMonitorRecord, GrossMarginProjectOrder, GrossMarginProjectSource, JobRecord } from "./types";
+import { normalizeGrossMarginAccountName } from "./gross-margin-account-names";
 import { getVideoComparableKey } from "./platform-links";
 
 export function getGrossMarginProjectSyncError(job: JobRecord, source: GrossMarginProjectSource) {
@@ -83,19 +84,27 @@ export function parseWecomProjectSheet(markdown: string, month: string): GrossMa
   return orders;
 }
 
-function normalizeProjectAccountName(value: string) {
-  return value.normalize("NFKC").replace(/\s+/g, "").replace(/[-_—–]+$/, "").toLocaleLowerCase("zh-CN");
-}
-
 export function findGrossMarginProjectOrders(orders: GrossMarginProjectOrder[], platform: GrossMarginProjectOrder["platform"], accountName: string) {
-  const name = normalizeProjectAccountName(accountName);
-  return name ? orders.filter(order => order.platform === platform && normalizeProjectAccountName(order.accountName) === name) : [];
+  const name = normalizeGrossMarginAccountName(accountName);
+  return name ? orders.filter(order => order.platform === platform && normalizeGrossMarginAccountName(order.accountName) === name) : [];
 }
 
 export function chooseGrossMarginProjectOrder(orders: GrossMarginProjectOrder[], videoUrl: string) {
   const key = videoUrl ? getVideoComparableKey(videoUrl) : "";
   const matches = key ? orders.filter(order => order.videoUrl && getVideoComparableKey(order.videoUrl) === key) : [];
   return matches.length === 1 ? matches[0] : orders.length === 1 ? orders[0] : null;
+}
+
+export function getGrossMarginMonitorProjectName(record: GrossMarginMonitorRecord, orders: GrossMarginProjectOrder[]) {
+  if (record.maintenanceProject?.name.trim()) return record.maintenanceProject.name.trim();
+  // Earlier exports briefly saved the product name here; grouped imports use this field for a batch name.
+  if (!record.projectId && record.projectName?.trim()) return record.projectName.trim();
+  const candidates = findGrossMarginProjectOrders(orders, record.platform, record.accountName);
+  const key = getVideoComparableKey(record.videoUrl);
+  const exact = key ? candidates.filter(order => order.videoUrl && getVideoComparableKey(order.videoUrl) === key) : [];
+  const names = [...new Set(exact.map(order => order.projectName.trim()).filter(Boolean))];
+  // Even a single current-month project cannot identify an older video by account alone.
+  return names.length === 1 ? names[0] : "";
 }
 
 export function getGrossMarginProjectPrices(order: GrossMarginProjectOrder) {

@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeGrossMarginAccountName } from "@/lib/gross-margin-account-names";
 import { WorkbenchSelect, WorkbenchSelectPopover } from "@/components/WorkbenchSelect";
 
 import { Check, ChevronDown, RefreshCw } from "lucide-react";
@@ -62,14 +63,10 @@ type GrossMarginAccountComboboxProps = {
   value: string;
 };
 
-function normalizeAccountQuery(value: string) {
-  return value.trim().replace(/\s+/g, "").toLocaleLowerCase("zh-CN");
-}
-
 function GrossMarginAccountCombobox({ accounts, busy, onChange, value }: GrossMarginAccountComboboxProps) {
   return (
     <ComboBox aria-label="账号名" className="gross-account-combobox" allowsCustomValue menuTrigger="focus"
-      defaultItems={accounts} defaultFilter={(name, query) => normalizeAccountQuery(name).includes(normalizeAccountQuery(query))}
+      defaultItems={accounts} defaultFilter={(name, query) => normalizeGrossMarginAccountName(name).includes(normalizeGrossMarginAccountName(query))}
       inputValue={value} onInputChange={onChange}>
       <div className="gross-account-input-row">
         <Input aria-busy={busy} autoComplete="off" id="gross-account-name" name="accountName" placeholder="输入账号名自动带价格…" />

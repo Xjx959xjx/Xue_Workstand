@@ -1,4 +1,4 @@
-import { selectEligibleCommentSources, sourceCommentCount, collectCommentSources, type CommentCollectionAttempt, type CommentCollectionBudget, type CommentPageTrace } from "./engagement-source-selection";
+import { SOURCE_VIDEO_COMMENT_THRESHOLD, selectEligibleCommentSources, sourceCommentCount, collectCommentSources, type CommentCollectionAttempt, type CommentCollectionBudget, type CommentPageTrace } from "./engagement-source-selection";
 import { Account, CollectOrder, Platform, Video } from "./types";
 import {
   asArray,
@@ -263,7 +263,7 @@ export async function getDouyinRelatedTopicComments(
       async (video) => (await getDouyinVideoDetailSnapshot(workspace, video.id, options))?.commentCount, options.signal);
     const candidates = eligible.videos;
     searchErrors.push(...eligible.errors);
-    if (!candidates.length) throw new Error(`抖音没有评论总数至少 300 条的可用视频：${searchErrors.join("；")}`);
+    if (!candidates.length) throw new Error(`抖音没有评论总数超过 ${SOURCE_VIDEO_COMMENT_THRESHOLD} 条的可用视频：${searchErrors.join("；")}`);
     const comments: string[] = [];
     const commentSamples: DouyinRelatedCommentSample[] = [];
     const commentErrors: string[] = [...searchErrors];

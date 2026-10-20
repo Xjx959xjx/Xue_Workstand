@@ -188,6 +188,7 @@ export async function upsertGrossMarginMonitorRecord(input: {
   accountName: string;
   projectId?: string;
   projectName?: string;
+  maintenanceProject?: GrossMarginMonitorRecord["maintenanceProject"];
   videoUrl: string;
   videoKey: string;
   sourceText: string;
@@ -211,6 +212,7 @@ export async function upsertGrossMarginMonitorRecord(input: {
       accountName: input.accountName.trim() || existing?.accountName || "",
       projectId: projectId || existing?.projectId,
       projectName: input.projectName?.trim() || existing?.projectName,
+      maintenanceProject: input.maintenanceProject || existing?.maintenanceProject,
       videoUrl: input.videoUrl.trim(),
       videoKey,
       title: existing?.title,
@@ -484,6 +486,9 @@ function normalizeGrossMarginMonitorRecord(record: GrossMarginMonitorRecord): Gr
     accountName: record.accountName?.trim() || "",
     projectId: record.projectId?.trim() || undefined,
     projectName: record.projectName?.trim() || undefined,
+    maintenanceProject: record.maintenanceProject
+      ? { orderId: record.maintenanceProject.orderId.trim(), name: record.maintenanceProject.name.trim() }
+      : undefined,
     videoUrl: record.videoUrl?.trim() || "",
     videoKey: record.videoKey?.trim() || record.videoUrl?.trim() || "",
     title: record.title?.trim() || undefined,

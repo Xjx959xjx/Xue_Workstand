@@ -59,6 +59,7 @@ test("弹幕批次取消恢复、永久失败和两路失败落盘", async (t) =
   let generated = 0;
   let planCalls = 0;
   let releasePlan: (() => void) | undefined;
+  let releaseDanmaku: (() => void) | undefined;
   let planFinished = false;
   let activeBatches = 0;
   let maxActiveBatches = 0;
@@ -68,12 +69,26 @@ test("弹幕批次取消恢复、永久失败和两路失败落盘", async (t) =
     const body = JSON.parse(raw);
     const system: string = body.messages[0].content;
     const prompt: string = body.messages[1].content;
+    const reply = (value: unknown) => {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.end("data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify(value) } }] })
+        + '\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    };
     if (system.includes("搜索计划")) {
       planCalls += 1;
+      if (mode === "both") {
+        reply({ queries: ["折叠手机"], sources: [{ query: "折叠手机", videoType: "实机体验", discussion: "价格取舍" }] });
+        return;
+      }
       if (mode === "hold-plan") await new Promise<void>((resolve) => { releasePlan = resolve; });
       planFinished = true;
       res.writeHead(401); res.end("unauthorized"); return;
     }
+    if (mode === "both" && system.startsWith("为")) {
+      reply(["屏幕看起来挺方便", "价格还是要再看看"]);
+      return;
+    }
+    if (mode === "both") await new Promise<void>((resolve) => { releaseDanmaku = resolve; });
     prompts.push(prompt);
     if (mode === "benchmark") {
       activeBatches += 1;
@@ -166,6 +181,33 @@ test("弹幕批次取消恢复、永久失败和两路失败落盘", async (t) =
         assert.equal(observedSaved, true);
         assert.equal((await resolveEngagementRecord(`run-${shortHash("early-danmaku")}`)).fallback, true);
       } finally { clearTimeout(timeout); releasePlan?.(); mode = "success"; }
+    });
+    await t.test("评论先保存，两路成功后保留同一历史中的全部结果", async () => {
+      mode = "both";
+      let observedSaved = false;
+      process.env.OPENCLI_NODE_BIN = process.execPath;
+      process.env.OPENCLI_SCRIPT = path.resolve("tests/fixtures/engagement-c-cli.mjs");
+      process.env.OPENCLI_BROWSER_SESSION = "split-save-fixture";
+      const timeout = setTimeout(() => releaseDanmaku?.(), 5000);
+      try {
+        const result = await generateEngagement({ sourceType: "text", text: "折叠手机的屏幕和价格取舍。", targetPlatform: "bilibili", includeComments: true, commentCount: 2, includeDanmaku: true, danmakuCount: 2 }, {
+          checkpointId: "both",
+          async onProgress(progress) {
+            if (!progress.message.startsWith("评论结果已保存")) return;
+            const record = await resolveEngagementRecord(`run-${shortHash("both")}`);
+            assert.equal(record.comments?.items.length, 2);
+            assert.equal(record.danmaku, undefined);
+            observedSaved = true;
+            releaseDanmaku?.();
+          }
+        });
+        assert.equal(observedSaved, true);
+        assert.equal(result.record.comments?.items.length, 2);
+        assert.equal(result.record.danmaku?.items.length, 2);
+        const record = await resolveEngagementRecord(result.record.id);
+        assert.equal(record.comments?.items.length, 2);
+        assert.equal(record.danmaku?.items.length, 2);
+      } finally { clearTimeout(timeout); releaseDanmaku?.(); mode = "success"; }
     });
     await t.test("允许表情、相似观点、长反应和少量复读，不触发补齐", async () => {
       mode = "relaxed"; prompts.length = 0;

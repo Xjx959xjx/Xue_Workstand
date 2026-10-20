@@ -1,7 +1,6 @@
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { extractLinksFromInput } from "./platform-links";
-import { resolveOpenCliCommand } from "./opencli";
 import { clampText } from "./utils";
 
 const execFileAsync = promisify(execFile);
@@ -21,10 +20,9 @@ export type FeishuFetchedDocument = {
 };
 
 function feishuConfig(): FeishuConfig {
-  const runtime = resolveOpenCliCommand();
   return {
     folderToken: process.env.FEISHU_FOLDER_TOKEN || "",
-    opencliBin: runtime.command,
+    opencliBin: process.env.LARK_CLI_BIN?.trim() || "lark-cli",
     identity: process.env.FEISHU_OPENCLI_AS || "user"
   };
 }
@@ -44,8 +42,7 @@ export async function checkFeishuRuntime() {
   const config = feishuConfig();
   const runtimeConfig = getFeishuRuntimeConfig();
   try {
-    const runtime = resolveOpenCliCommand();
-    const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, "lark-cli", "doctor", "--offline"], {
+    const { stdout, stderr } = await execFileAsync(config.opencliBin, ["doctor", "--offline"], {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024,
       timeout: 10000
@@ -73,7 +70,7 @@ export async function checkFeishuRuntime() {
 }
 
 export async function publishFeishuDocument(input: { title: string; content: string }) {
-  return publishWithOpenCli(feishuConfig(), input);
+  return publishWithLarkCli(feishuConfig(), input);
 }
 
 export async function fetchFeishuSupportDocuments(input: string, options: { signal?: AbortSignal } = {}) {
@@ -98,22 +95,22 @@ export function extractFeishuSupportDocumentRefs(input?: string) {
   return uniqueFeishuDocRefs(input || "");
 }
 
-async function publishWithOpenCli(config: FeishuConfig, input: { title: string; content: string }) {
+async function publishWithLarkCli(config: FeishuConfig, input: { title: string; content: string }) {
   const args = [
-    "lark-cli",
     "docs",
     "+create",
     "--title",
     input.title || "写作台生成文档",
-    "--markdown",
+    "--doc-format",
+    "markdown",
+    "--content",
     "-",
     "--as",
     config.identity
   ];
-  if (config.folderToken) args.push("--folder-token", config.folderToken);
-  const runtime = resolveOpenCliCommand();
+  if (config.folderToken) args.push("--parent-token", config.folderToken);
 
-  const { stdout, stderr } = await spawnWithInput(config.opencliBin, [...runtime.argsPrefix, ...args], input.content, {
+  const { stdout, stderr } = await spawnWithInput(config.opencliBin, args, input.content, {
     maxBuffer: 1024 * 1024 * 20,
     timeout: 120000
   });
@@ -121,11 +118,12 @@ async function publishWithOpenCli(config: FeishuConfig, input: { title: string; 
   const payload = parseJsonish(output);
   const data = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const nested = data.data && typeof data.data === "object" ? (data.data as Record<string, unknown>) : {};
-  const documentId = String(nested.doc_id || nested.document_id || data.doc_id || data.document_id || "");
-  const url = String(nested.doc_url || nested.url || data.doc_url || data.url || "");
+  const document = nested.document && typeof nested.document === "object" ? nested.document as Record<string, unknown> : {};
+  const documentId = String(document.document_id || nested.doc_id || nested.document_id || data.doc_id || data.document_id || "");
+  const url = String(document.url || nested.doc_url || nested.url || data.doc_url || data.url || "");
 
   if (!documentId && !url) {
-    throw new Error(`飞书文档创建失败：${stderr.trim() || output || "opencli 未返回文档链接"}`);
+    throw new Error(`飞书文档创建失败：${stderr.trim() || output || "lark-cli 未返回文档链接"}`);
   }
 
   return {
@@ -141,11 +139,8 @@ async function fetchFeishuDocument(
   options: { signal?: AbortSignal } = {}
 ): Promise<FeishuFetchedDocument> {
   const args = [
-    "lark-cli",
     "docs",
     "+fetch",
-    "--api-version",
-    "v2",
     "--doc",
     url,
     "--doc-format",
@@ -157,11 +152,10 @@ async function fetchFeishuDocument(
     "--as",
     config.identity
   ];
-  const runtime = resolveOpenCliCommand();
 
   try {
     throwIfAborted(options.signal);
-    const { stdout, stderr } = await execFileAsync(config.opencliBin, [...runtime.argsPrefix, ...args], {
+    const { stdout, stderr } = await execFileAsync(config.opencliBin, args, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 20,
       timeout: 60000,
@@ -434,7 +428,7 @@ function summarizeFeishuFetchError(error: unknown) {
   if (/field validation failed|99992402|400/i.test(message)) {
     return "文档标识无效。请粘贴浏览器地址栏里的飞书文档链接，或 docx/doxcn/wikcn 开头的文档 token";
   }
-  if (/not found: opencli|ENOENT/i.test(message)) return "没有找到 opencli，请检查 OPENCLI_BIN";
+  if (/not found: lark-cli|ENOENT/i.test(message)) return "没有找到 lark-cli，请检查 LARK_CLI_BIN";
   return message || "lark-cli 读取失败";
 }
 

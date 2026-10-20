@@ -1,12 +1,13 @@
 "use client";
 
+import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { WorkbenchSelect } from "@/components/WorkbenchSelect";
-import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
-  CalendarClock,
   CheckCircle2,
+  ChevronDown,
   Copy,
   CircleDollarSign,
   Clock3,
@@ -33,14 +34,21 @@ import {
   getGrossMarginLibrary,
   refreshGrossMarginLibraryCache,
   refreshGrossMarginMonitorRecord,
+  updateGrossMarginMonitorMustFireCurrent,
+  updateGrossMarginMonitorProject,
   updateGrossMarginMonitorPlayCurrent,
   updateGrossMarginMonitorPlayTarget
 } from "@/lib/client";
-import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRecord } from "@/lib/types";
-import { parseGrossMarginMetric } from "@/lib/gross-margin-calculator";
+import type { GrossMarginLibrary, GrossMarginMonitorMetric, GrossMarginMonitorRecord, GrossMarginProjectOrder } from "@/lib/types";
+import { findGrossMarginProjectOrders, getGrossMarginMonitorProjectName } from "@/lib/gross-margin-projects";
+import { getGrossMarginAccountDisplayName, getGrossMarginAccountNameOptions, normalizeGrossMarginAccountName } from "@/lib/gross-margin-account-names";
+import { parseGrossMarginAmount, parseGrossMarginMetric } from "@/lib/gross-margin-calculator";
 import { parseDate } from "@internationalized/date";
+import { formatPlaySampleCoverage, formatSampleDuration, getMonitorPlayGrowth, type PlayGrowthRange } from "../_lib/monitor-growth";
+import { getAutomaticMonitorRefreshRecordIds, MONITOR_AUTO_REFRESH_TITLE } from "../_lib/monitor-refresh-policy";
 import { MonitorDateFilter } from "../_components/MonitorDateFilter";
 import { useGrossMarginAccountRefresh } from "../_hooks/useGrossMarginAccountRefresh";
+import { useGrossMarginProjects } from "../_hooks/useGrossMarginProjects";
 
 export default function GrossMarginMonitorPage() {
   return (
@@ -52,7 +60,7 @@ export default function GrossMarginMonitorPage() {
 
 function GrossMarginMonitorPageContent() {
   const { notify } = useFeedback();
-  const { activeJobs, recentJobs, startTask } = useScopedTasks({
+  const { activeJobs, recentJobs, startTask, loading: tasksLoading } = useScopedTasks({
     href: "/gross-margin/monitor",
     kinds: ["gross-margin-refresh"]
   });
@@ -61,14 +69,31 @@ function GrossMarginMonitorPageContent() {
   const [library, setLibrary] = useState<GrossMarginLibrary | null>(null);
   useGrossMarginAccountRefresh(library, setLibrary);
   const [loading, setLoading] = useState(true);
+  const projects = useGrossMarginProjects(!loading);
   const [busy, setBusy] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    // 只更新数据时效的展示，不触发采集；所有卡片共用一个时钟。
+    const updateNow = () => setNow(Date.now());
+    updateNow();
+    const timer = window.setInterval(updateNow, 60_000);
+    document.addEventListener("visibilitychange", updateNow);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", updateNow);
+    };
+  }, [library]);
   const accountFilter = searchParams.get("q") || "";
-  const platformFilter = parsePlatformFilter(searchParams.get("platform"));
+  const rawSelectedAccount = searchParams.get("account") || "all";
+  const selectedAccount = rawSelectedAccount === "all" ? "all" : normalizeGrossMarginAccountName(rawSelectedAccount);
   const projectFilter = searchParams.get("project") || "all";
   const dateFromFilter = parseDateFilter(searchParams.get("from"));
   const dateToFilter = parseDateFilter(searchParams.get("to"));
   const [deleteTarget, setDeleteTarget] = useState<GrossMarginMonitorRecord | null>(null);
   const [activeRefreshJobId, setActiveRefreshJobId] = useState("");
+  const startingRefreshRef = useRef(false);
+  const lastAutomaticAttemptRef = useRef(0);
   const syncedRefreshDataRevisionsRef = useRef<Map<string, number>>(new Map());
   const trackedRefreshJob = useMemo(
     () =>
@@ -79,17 +104,19 @@ function GrossMarginMonitorPageContent() {
   );
 
   const records = useMemo(() => library?.monitorRecords || [], [library]);
+  const accountOptions = useMemo(() => getGrossMarginAccountNameOptions(records.map(record => record.accountName)), [records]);
   const filteredRecords = useMemo(() => {
     const keyword = accountFilter.trim().toLowerCase();
+    const accountKeyword = normalizeGrossMarginAccountName(accountFilter);
     const fromTime = getDayBoundaryTime(dateFromFilter, "start");
     const toTime = getDayBoundaryTime(dateToFilter, "end");
 
     return records.filter((record) => {
-      if (platformFilter !== "all" && record.platform !== platformFilter) return false;
+      if (selectedAccount !== "all" && normalizeGrossMarginAccountName(record.accountName) !== selectedAccount) return false;
       if (projectFilter !== "all" && record.projectId !== projectFilter) return false;
       if (keyword) {
         const haystack = `${record.accountName || ""} ${record.title || ""} ${record.videoUrl || ""} ${record.videoKey || ""}`.toLowerCase();
-        if (!haystack.includes(keyword)) return false;
+        if (!haystack.includes(keyword) && (!accountKeyword || !normalizeGrossMarginAccountName(record.accountName).includes(accountKeyword))) return false;
       }
 
       if (fromTime !== null || toTime !== null) {
@@ -101,7 +128,7 @@ function GrossMarginMonitorPageContent() {
 
       return true;
     });
-  }, [accountFilter, dateFromFilter, dateToFilter, platformFilter, projectFilter, records]);
+  }, [accountFilter, dateFromFilter, dateToFilter, selectedAccount, projectFilter, records]);
   const sortedRecords = useMemo(
     () =>
       [...filteredRecords].sort((left, right) => {
@@ -112,7 +139,7 @@ function GrossMarginMonitorPageContent() {
     [filteredRecords]
   );
   const monitorProjects = useMemo(() => library?.monitorProjects || [], [library]);
-  const hasActiveFilters = Boolean(accountFilter.trim() || platformFilter !== "all" || projectFilter !== "all" || dateFromFilter || dateToFilter);
+  const hasActiveFilters = Boolean(accountFilter.trim() || selectedAccount !== "all" || projectFilter !== "all" || dateFromFilter || dateToFilter);
   const overview = useMemo(() => {
     let highGapCount = 0;
     let refreshIssueCount = 0;
@@ -143,8 +170,9 @@ function GrossMarginMonitorPageContent() {
     };
   }, [notify]);
 
-  function updateFilters(updates: Partial<Record<"q" | "platform" | "project" | "from" | "to", string>>) {
+  function updateFilters(updates: Partial<Record<"q" | "account" | "project" | "from" | "to", string>>) {
     const params = new URLSearchParams(window.location.search);
+    params.delete("platform");
     for (const [key, value] of Object.entries(updates)) setOptionalQueryParam(params, key, value);
     const queryString = params.toString();
     const nextHref = queryString ? `${pathname}?${queryString}` : pathname;
@@ -169,12 +197,40 @@ function GrossMarginMonitorPageContent() {
       .catch((error) => notify({ tone: "error", message: error instanceof Error ? error.message : "刷新进度同步失败" }));
   }, [notify, trackedRefreshJob]);
 
+  useEffect(() => {
+    if (loading || tasksLoading || busy || startingRefreshRef.current || activeRefreshJobId || activeJobs.length) return;
+    const attemptAt = Date.now();
+    const lastAutomaticAttempt = recentJobs.reduce((latest, job) => job.title === MONITOR_AUTO_REFRESH_TITLE
+      ? Math.max(latest, Date.parse(job.createdAt) || 0) : latest, lastAutomaticAttemptRef.current);
+    // 自动抓取覆盖全部到期记录，不随临时的账号、项目筛选缩小范围。
+    const recordIds = getAutomaticMonitorRefreshRecordIds(records, attemptAt, lastAutomaticAttempt);
+    if (!recordIds.length) return;
+    lastAutomaticAttemptRef.current = attemptAt;
+    startingRefreshRef.current = true;
+    setBusy("refresh-all");
+    async function startAutomaticRefresh() {
+      try {
+        const job = await startTask({
+          kind: "gross-margin-refresh", title: MONITOR_AUTO_REFRESH_TITLE,
+          href: "/gross-margin/monitor", input: { recordIds }
+        });
+        setActiveRefreshJobId(job.id);
+      } catch (error) {
+        notify({ tone: "error", message: error instanceof Error ? `自动抓取启动失败：${error.message}` : "自动抓取启动失败，请手动刷新或稍后重试" });
+        setBusy("");
+      } finally { startingRefreshRef.current = false; }
+    }
+    void startAutomaticRefresh();
+  }, [activeJobs.length, activeRefreshJobId, busy, loading, now, notify, recentJobs, records, startTask, tasksLoading]);
+
   async function handleRefreshAll() {
+    if (busy || startingRefreshRef.current || activeRefreshJobId || activeJobs.length) return;
     const targetRecordIds = sortedRecords.map((record) => record.id);
     if (!targetRecordIds.length) {
       notify({ tone: "warning", message: "当前筛选下没有可刷新的监控记录" });
       return;
     }
+    startingRefreshRef.current = true;
     setBusy("refresh-all");
     try {
       const job = await startTask({
@@ -187,7 +243,7 @@ function GrossMarginMonitorPageContent() {
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "刷新全部失败" });
       setBusy("");
-    }
+    } finally { startingRefreshRef.current = false; }
   }
 
   useEffect(() => {
@@ -210,6 +266,8 @@ function GrossMarginMonitorPageContent() {
   }, [activeJobs, activeRefreshJobId, notify, recentJobs]);
 
   async function handleRefreshOne(recordId: string) {
+    if (busy || startingRefreshRef.current || activeRefreshJobId || activeJobs.length) return;
+    startingRefreshRef.current = true;
     setBusy(`refresh-${recordId}`);
     try {
       const result = await refreshGrossMarginMonitorRecord(recordId);
@@ -226,6 +284,7 @@ function GrossMarginMonitorPageContent() {
     } catch (error) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "刷新监控记录失败" });
     } finally {
+      startingRefreshRef.current = false;
       setBusy("");
     }
   }
@@ -272,6 +331,37 @@ function GrossMarginMonitorPageContent() {
     }
   }
 
+  async function handleUpdateMustFireCurrent(recordId: string, current: number, revision: number) {
+    setBusy(`must-fire-${recordId}`);
+    try {
+      const result = await updateGrossMarginMonitorMustFireCurrent(recordId, current, revision);
+      setLibrary(result.library);
+      notify({ tone: "success", message: "必火已投金额已保存" });
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "保存必火金额失败" });
+      throw error;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleUpdateProject(recordId: string, orderId: string | undefined, revision: number, projectName?: string) {
+    setBusy(`project-${recordId}`);
+    try {
+      const result = await updateGrossMarginMonitorProject(recordId, orderId, revision, projectName);
+      setLibrary(result.library);
+      notify({ tone: "success", message: "维护项目已保存" });
+      return true;
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "保存维护项目失败，请重试" });
+      return false;
+    } finally { setBusy(""); }
+  }
+
+  useEffect(() => {
+    if (projects.error) notify({ tone: "error", message: projects.error });
+  }, [notify, projects.error]);
+
   async function handleCopyDifference(record: GrossMarginMonitorRecord) {
     try {
       await navigator.clipboard.writeText(buildMonitorDifferenceText(record));
@@ -286,20 +376,15 @@ function GrossMarginMonitorPageContent() {
       <h1 className="sr-only">数据监控</h1>
       <div className="gross-monitor-topbar">
         <div className="page-header-meta gross-monitor-overview" aria-label="监控概览">
-          <span className="stat-pill gross-monitor-stat">
-            <strong>{sortedRecords.length}</strong>
-            {hasActiveFilters ? `/ ${records.length} 条记录` : "条记录"}
+          <span className="gross-monitor-count">
+            <strong>{sortedRecords.length}</strong>{hasActiveFilters ? `/${records.length}` : ""}条
           </span>
-          <span className={`stat-pill gross-monitor-stat danger ${overview.highGapCount ? "" : "quiet"}`}>
-            <AlertTriangle aria-hidden="true" size={12} />
-            <strong>{overview.highGapCount}</strong>
-            高缺口
-          </span>
-          <span className={`stat-pill gross-monitor-stat warning ${overview.refreshIssueCount ? "" : "quiet"}`}>
-            <RefreshCw aria-hidden="true" size={12} />
-            <strong>{overview.refreshIssueCount}</strong>
-            刷新异常
-          </span>
+          {overview.highGapCount > 0 ? (
+            <span className="stat-pill gross-monitor-stat danger"><AlertTriangle aria-hidden="true" size={12} />高缺口 <strong>{overview.highGapCount}</strong></span>
+          ) : null}
+          {overview.refreshIssueCount > 0 ? (
+            <span className="stat-pill gross-monitor-stat warning"><AlertTriangle aria-hidden="true" size={12} />异常 <strong>{overview.refreshIssueCount}</strong></span>
+          ) : null}
         </div>
         <div className="gross-monitor-toolbar">
           <div className="gross-monitor-inline-filters" role="group" aria-label="监控筛选">
@@ -312,28 +397,27 @@ function GrossMarginMonitorPageContent() {
                 id="gross-monitor-account-filter"
                 name="grossMonitorAccountFilter"
                 onChange={(event) => updateFilters({ q: event.target.value })}
-                placeholder="账号 / 标题 / 链接"
+                placeholder="搜索账号或视频"
                 type="search"
                 value={accountFilter}
               />
             </span>
             <span className="gross-monitor-filter-group" aria-label="范围筛选">
               <label className="gross-monitor-filter-control">
-                <span>平台</span>
+                <span className="sr-only">账号</span>
                 <WorkbenchSelect
-                  aria-label="按平台筛选"
+                  aria-label="按账号筛选"
                   className="gross-monitor-inline-select"
-                  id="gross-monitor-platform-filter"
-                  onValueChange={(value) => updateFilters({ platform: value === "all" ? "" : value })}
-                  value={platformFilter}
+                  id="gross-monitor-account-select"
+                  onValueChange={(value) => updateFilters({ account: value === "all" ? "" : value })}
+                  value={selectedAccount}
                 >
-                  <option value="all">全部平台</option>
-                  <option value="bilibili">B站</option>
-                  <option value="douyin">抖音</option>
+                  <option value="all">全部账号</option>
+                  {accountOptions.map(account => <option key={account.value} value={account.value}>{account.label}</option>)}
                 </WorkbenchSelect>
               </label>
               <label className="gross-monitor-filter-control gross-monitor-project-control">
-                <span>项目</span>
+                <span className="sr-only">项目</span>
                 <WorkbenchSelect
                   aria-label="按项目筛选"
                   className="gross-monitor-inline-select gross-monitor-project-select"
@@ -354,7 +438,7 @@ function GrossMarginMonitorPageContent() {
             {hasActiveFilters ? (
               <button
                 className="btn subtle compact"
-                onClick={() => updateFilters({ q: "", platform: "", project: "", from: "", to: "" })}
+                onClick={() => updateFilters({ q: "", account: "", project: "", from: "", to: "" })}
                 type="button"
               >
                 清空
@@ -362,9 +446,9 @@ function GrossMarginMonitorPageContent() {
             ) : null}
           </div>
           <div className="button-row gross-monitor-primary-action">
-            <button className="btn primary compact" disabled={busy === "refresh-all" || !sortedRecords.length} onClick={() => void handleRefreshAll()} type="button">
+            <button className="btn primary compact" title="自动每小时抓取；点击立即刷新当前范围" aria-label={hasActiveFilters ? "立即刷新筛选记录" : "立即刷新全部记录"} disabled={busy === "refresh-all" || !sortedRecords.length} onClick={() => void handleRefreshAll()} type="button">
               <RefreshCw aria-hidden="true" size={15} />
-              {busy === "refresh-all" ? "刷新中" : hasActiveFilters ? "刷新当前" : "刷新全部"}
+              {busy === "refresh-all" ? "刷新中" : "刷新"}
             </button>
           </div>
         </div>
@@ -378,7 +462,7 @@ function GrossMarginMonitorPageContent() {
           </div>
         ) : hasActiveFilters && !sortedRecords.length ? (
           <div className="gross-monitor-empty">
-            <p>没有符合当前筛选条件的监控记录，请调整账号、链接、平台、项目或日期范围。</p>
+            <p>没有符合当前筛选条件的监控记录，请调整账号、链接、项目或日期范围。</p>
           </div>
         ) : records.length ? (
           <div className="gross-monitor-card-grid" onWheel={handleHorizontalWheel}>
@@ -387,9 +471,13 @@ function GrossMarginMonitorPageContent() {
                 busy={busy}
                 key={record.id}
                 record={record}
+                projectOrders={findGrossMarginProjectOrders(projects.source?.orders || [], record.platform, record.accountName)}
+                onUpdateProject={handleUpdateProject}
+                now={now}
                 onDelete={setDeleteTarget}
                 onCopy={handleCopyDifference}
                 onRefresh={handleRefreshOne}
+                onUpdateMustFireCurrent={handleUpdateMustFireCurrent}
                 onUpdatePlayCurrent={handleUpdatePlayCurrent}
                 onUpdatePlayTarget={handleUpdatePlayTarget}
               />
@@ -438,10 +526,6 @@ function handleHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
   event.preventDefault();
 }
 
-function parsePlatformFilter(value: string | null): "all" | GrossMarginMonitorRecord["platform"] {
-  return value === "bilibili" || value === "douyin" ? value : "all";
-}
-
 function parseDateFilter(value: string | null) {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
   try { return parseDate(value).toString(); }
@@ -460,32 +544,58 @@ function shouldFocusInlineEdit() {
   return typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
 }
 
+function MonitorAccountAvatar({ recordId }: { recordId: string }) {
+  const src = `/api/gross-margin/avatar?recordId=${encodeURIComponent(recordId)}`;
+  const [failedSrc, setFailedSrc] = useState("");
+  const failed = failedSrc === src;
+  return (
+    <span className="gross-monitor-avatar" title={failed ? "头像加载失败，请刷新页面重试" : undefined} aria-hidden="true">
+      <UserRound size={17} />
+      {!failed ? (
+        // Local binary cache, with fixed dimensions to avoid shifting card content.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img alt="" src={src} width={34} height={34} loading="lazy" decoding="async" onError={() => setFailedSrc(src)} />
+      ) : null}
+    </span>
+  );
+}
+
 function MonitorCard({
   busy,
   record,
+  projectOrders,
+  onUpdateProject,
+  now,
   onDelete,
   onCopy,
   onRefresh,
+  onUpdateMustFireCurrent,
   onUpdatePlayCurrent,
   onUpdatePlayTarget
 }: {
   busy: string;
   record: GrossMarginMonitorRecord;
+  projectOrders: GrossMarginProjectOrder[];
+  onUpdateProject: (recordId: string, orderId: string | undefined, revision: number, projectName?: string) => Promise<boolean>;
+  now: number;
   onDelete: (record: GrossMarginMonitorRecord) => void;
   onCopy: (record: GrossMarginMonitorRecord) => Promise<void>;
   onRefresh: (recordId: string) => Promise<void>;
+  onUpdateMustFireCurrent: (recordId: string, current: number, revision: number) => Promise<void>;
   onUpdatePlayCurrent: (recordId: string, current: number) => Promise<void>;
   onUpdatePlayTarget: (recordId: string, target: number) => Promise<void>;
 }) {
-  const title = record.title || record.videoUrl;
+  const videoTitle = record.title || record.videoUrl;
+  const projectTitle = getGrossMarginMonitorProjectName(record, projectOrders);
+  const title = projectTitle || videoTitle;
+  const [editingProject, setEditingProject] = useState(false);
+  const showProjectPicker = editingProject || !projectTitle;
   const metrics = getDisplayMetrics(record);
   const overallGap = getOverallGap(record);
   const overallGapTone = getOverallGapTone(overallGap.percent, record.status);
-  const changedMetricCount = metrics.filter((metric) => {
-    const delta = getMetricRefreshDelta(record, metric.service);
-    return delta !== null && delta !== 0;
-  }).length;
-  const dailyPlayGain = getDailyPlayGainSummary(record);
+  const playGrowth = getMonitorPlayGrowth(record.playSamples, now);
+  const hasPlay = metrics.some((metric) => metric.service === "play");
+  const activity = getPlayActivity(playGrowth);
   const visibleWarnings = record.warnings.filter((warning) => !isBlueLinkFetchWarning(warning));
   const [editingPlay, setEditingPlay] = useState(false);
   const playMetric = metrics.find((metric) => metric.service === "play");
@@ -497,6 +607,9 @@ function MonitorCard({
   const [playEditError, setPlayEditError] = useState("");
   const playCurrentInputRef = useRef<HTMLInputElement>(null);
   const playTargetInputRef = useRef<HTMLInputElement>(null);
+  const playEditSubmittedRef = useRef(false);
+  const [customProjectName, setCustomProjectName] = useState("");
+  const [customProjectEditing, setCustomProjectEditing] = useState(false);
 
   useEffect(() => {
     if (!editingPlay && playMetric) {
@@ -536,10 +649,11 @@ function MonitorCard({
     if (nextTarget !== playMetric.target) {
       await onUpdatePlayTarget(record.id, nextTarget);
     }
-    if (canEditPlayCurrent && nextCurrent !== null && nextCurrent !== playMetric.current) {
+    // 手动确认相同数值也是一次有效采样，用于判断采样间没有增长。
+    if (canEditPlayCurrent && nextCurrent !== null) {
       await onUpdatePlayCurrent(record.id, nextCurrent);
     }
-    if (nextTarget === playMetric.target && (!canEditPlayCurrent || nextCurrent === playMetric.current)) {
+    if (nextTarget === playMetric.target && !canEditPlayCurrent) {
       setEditingPlay(false);
       return;
     }
@@ -547,11 +661,20 @@ function MonitorCard({
   }
 
   async function handleSubmitPlayEdit() {
+    // Enter 提交后收起输入框也会触发 blur，同一轮编辑只提交一次。
+    if (playEditSubmittedRef.current) return;
+    playEditSubmittedRef.current = true;
     try {
       await submitPlayEdit();
     } catch (error) {
+      playEditSubmittedRef.current = false;
       setPlayEditError(error instanceof Error ? error.message : "播放量保存失败");
     }
+  }
+
+  function startPlayEdit() {
+    playEditSubmittedRef.current = false;
+    setEditingPlay(true);
   }
 
   function resetPlayEdit(metric: GrossMarginMonitorMetric) {
@@ -562,88 +685,86 @@ function MonitorCard({
   }
 
   return (
-    <article className={`gross-monitor-card ${overallGapTone === "danger" ? "high-risk" : overallGapTone === "warning" ? "mid-risk" : ""}`}>
+    <article className={`gross-monitor-card ${overallGapTone === "danger" ? "high-risk" : overallGapTone === "warning" ? "mid-risk" : ""}`} aria-busy={busy === `refresh-${record.id}` || busy === "refresh-all"}>
       <div className="gross-monitor-card-main">
         <div className="gross-monitor-card-title">
+          {record.platform === "bilibili" ? <MonitorAccountAvatar recordId={record.id} /> : null}
           <span className="gross-monitor-card-copy">
             <span className="gross-monitor-eyebrow">
-              <UserRound aria-hidden="true" size={13} />
-              {record.accountName || "未命名账号"}
-              <em>{formatPlatform(record.platform)}</em>
+              {record.platform !== "bilibili" ? <UserRound aria-hidden="true" size={13} /> : null}
+              <span className="gross-monitor-account-name">{getGrossMarginAccountDisplayName(record.accountName) || "未命名账号"}</span>
               <em className="gross-monitor-publish-date">{formatMonthDay(record.publishedAt)}</em>
+              <MenuTrigger>
+                <Button className="btn compact gross-monitor-action-trigger" aria-label="监控操作">操作<ChevronDown aria-hidden="true" size={12} /></Button>
+                <Popover isNonModal className="workbench-select-popover gross-monitor-action-popover" placement="bottom end" offset={4}>
+                  <Menu className="workbench-select-options" aria-label="监控操作">
+                    {record.videoUrl ? <MenuItem className="workbench-select-option" textValue="打开视频" href={record.videoUrl} target="_blank" rel="noreferrer"><Link2 aria-hidden="true" size={14} /><span>打开视频</span></MenuItem> : null}
+                    <MenuItem className="workbench-select-option" textValue="复制差额" onAction={() => void onCopy(record)}><Copy aria-hidden="true" size={14} /><span>复制差额</span></MenuItem>
+                    <MenuItem className="workbench-select-option" textValue="刷新数据" isDisabled={busy === `refresh-${record.id}` || busy === "refresh-all"} onAction={() => void onRefresh(record.id)}><RefreshCw aria-hidden="true" size={14} /><span>刷新数据</span></MenuItem>
+                    <MenuItem className="workbench-select-option" textValue="修改维护项目" onAction={() => setEditingProject(true)}><Video aria-hidden="true" size={14} /><span>修改维护项目</span></MenuItem>
+                    {canEditPlayCurrent && playMetric ? <MenuItem className="workbench-select-option" textValue="录入播放量" onAction={startPlayEdit}><Eye aria-hidden="true" size={14} /><span>录入播放量</span></MenuItem> : null}
+                    <MenuItem className="workbench-select-option gross-monitor-delete-action" textValue="删除记录" isDisabled={busy === `delete-${record.id}`} onAction={() => onDelete(record)}><Trash2 aria-hidden="true" size={14} /><span>删除记录</span></MenuItem>
+                  </Menu>
+                </Popover>
+              </MenuTrigger>
             </span>
-            <strong>{title}</strong>
+            {showProjectPicker ? (
+              <span className="gross-monitor-project-picker" title={`原视频：${videoTitle}`}>
+                <WorkbenchSelect aria-label="选择维护项目" className="gross-monitor-project-trigger" value="" disabled={busy === `project-${record.id}`} onValueChange={orderId => {
+                  if (orderId === "daily") {
+                    void onUpdateProject(record.id, undefined, record.revision || 0, "日常").then(saved => { if (saved) setEditingProject(false); });
+                  } else if (orderId === "custom") {
+                    setCustomProjectEditing(true);
+                    setCustomProjectName("");
+                  } else {
+                    void onUpdateProject(record.id, orderId, record.revision || 0).then(saved => { if (saved) setEditingProject(false); });
+                  }
+                }}>
+                  <option value="" disabled>{busy === `project-${record.id}` ? "保存中…" : projectTitle || "选择维护项目"}</option>
+                  {projectOrders.map(order => <option key={order.id} value={order.id}>{order.projectName}{order.date ? ` · ${order.date}` : ""}</option>)}
+                  <option value="daily">日常</option>
+                  <option value="custom">自定义</option>
+                </WorkbenchSelect>
+                {customProjectEditing ? <span className="gross-monitor-custom-project-edit"><input aria-label="自定义维护项目名称" autoFocus maxLength={80} placeholder="输入项目名称" value={customProjectName} onChange={event => setCustomProjectName(event.target.value)} onKeyDown={event => {
+                  if (event.key === "Enter" && customProjectName.trim()) void onUpdateProject(record.id, undefined, record.revision || 0, customProjectName.trim()).then(saved => { if (saved) { setEditingProject(false); setCustomProjectEditing(false); } });
+                  if (event.key === "Escape") { setCustomProjectEditing(false); setEditingProject(false); }
+                }} /><button className="btn compact" disabled={!customProjectName.trim() || busy === `project-${record.id}`} onClick={() => void onUpdateProject(record.id, undefined, record.revision || 0, customProjectName.trim()).then(saved => { if (saved) { setEditingProject(false); setCustomProjectEditing(false); } })} type="button">保存</button></span> : null}
+              </span>
+            ) : <strong title={projectTitle ? `${projectTitle}｜${videoTitle}` : videoTitle}>{title}</strong>}
           </span>
         </div>
       </div>
 
-      <div className="gross-monitor-risk-line">
-        <span
-          className={`gross-monitor-risk-dial ${overallGapTone} ${record.platform}`}
-          aria-label={`整体缺口 ${formatOverallGap(overallGap, record.status)}，${getOverallGapLabel(overallGap, overallGapTone, record.status)}`}
-          role="img"
-          style={{ "--risk-fill": `${overallGap.percent * 100}%` } as CSSProperties}
-        >
-          <strong>{formatOverallGap(overallGap, record.status)}</strong>
-          <small>整体缺口</small>
+      <div className="gross-monitor-summary-line">
+        <span className={`gross-monitor-gap-summary ${overallGapTone}`} title={getOverallGapLabel(overallGap, overallGapTone, record.status)}>
+          {overallGapTone === "danger" || overallGapTone === "warning" ? <AlertTriangle aria-hidden="true" size={13} /> : null}
+          {overallGapTone === "danger" ? "高缺口" : "目标缺口"} <strong>{formatOverallGap(overallGap, record.status)}</strong>
         </span>
-        <span className="gross-monitor-risk-meta">
-          <span className="gross-monitor-risk-status-line">
-            <em className={`gross-monitor-gap-level ${overallGapTone}`}>
-              {overallGapTone === "danger" || overallGapTone === "warning" ? <AlertTriangle aria-hidden="true" size={11} /> : null}
-              {getOverallGapLabel(overallGap, overallGapTone, record.status)}
-            </em>
-            <em className={`gross-monitor-refresh-state ${record.status}`}>
-              {renderStatusIcon(record.status)}
-              {formatStatus(record.status)}
-            </em>
-            <span className="gross-monitor-refresh-time">
-              <CalendarClock aria-hidden="true" size={12} />
-              {formatDateTime(record.lastRefreshedAt || record.updatedAt)}
-            </span>
+        {record.status === "failed" || record.status === "partial" ? (
+          <span className={`gross-monitor-refresh-state ${record.status}`}>{renderStatusIcon(record.status)}{formatStatus(record.status)}</span>
+        ) : hasPlay ? (
+          <span className={`gross-monitor-activity ${activity.tone}`} aria-live="polite" title={playGrowth.latest ? `播放采样：${formatDateTime(playGrowth.latest.capturedAt)}` : "暂无播放采样"}>
+            <span aria-hidden="true" />{activity.label}
           </span>
-          <span className="gross-monitor-risk-insights">
-            {record.status === "completed" ? (
-              <em className={`gross-monitor-refresh-summary ${changedMetricCount ? "changed" : "stable"}`}>
-                {changedMetricCount ? `${changedMetricCount} 项变化` : "本次无变化"}
-              </em>
-            ) : null}
-            {dailyPlayGain ? (
-              <em
-                className={`gross-monitor-daily-pill ${dailyPlayGain.state}`}
-                title={formatDailyPlayGainTitle(dailyPlayGain, record.platform)}
-              >
-                <Gauge aria-hidden="true" size={12} />
-                当天 {formatDailyPlayGainSummary(dailyPlayGain, record.platform)}
-              </em>
-            ) : null}
-          </span>
-          <span className="gross-monitor-card-actions">
-            {record.videoUrl ? (
-              <a aria-label="打开视频链接" className="btn icon-btn icon-only" href={record.videoUrl} rel="noreferrer" target="_blank">
-                <Link2 aria-hidden="true" size={14} />
-              </a>
-            ) : null}
-            <button aria-label="复制差额文案" className="btn compact" onClick={() => void onCopy(record)} type="button">
-              <Copy aria-hidden="true" size={14} />
-              差额
-            </button>
-            <button className="btn compact" disabled={busy === `refresh-${record.id}`} onClick={() => void onRefresh(record.id)} type="button">
-              <RefreshCw aria-hidden="true" size={14} />
-              {busy === `refresh-${record.id}` ? "刷新中" : "刷新"}
-            </button>
-            <button
-              aria-label="删除监控记录"
-              className="btn danger icon-btn icon-only"
-              disabled={busy === `delete-${record.id}`}
-              onClick={() => onDelete(record)}
-              type="button"
-            >
-              <Trash2 aria-hidden="true" size={14} />
-            </button>
-          </span>
-        </span>
+        ) : null}
       </div>
+
+      {hasPlay ? (
+        <section className="gross-monitor-growth" aria-label="播放增长监测">
+          <div className="gross-monitor-growth-values">
+            <div title={formatPlayGrowthTitle(playGrowth.recent, record.platform)}>
+              <span>最近变化</span>
+              <strong className={playGrowth.stale ? "muted" : getGrowthTone(playGrowth.recent)}>{formatPlayGrowth(playGrowth.recent, record.platform)}</strong>
+              <small>{playGrowth.recent ? `间隔${formatSampleDuration(playGrowth.recent.durationMs)}` : "待对比"}</small>
+            </div>
+            <div title={formatPlayGrowthTitle(playGrowth.day, record.platform)}>
+              <span>24h采样增长</span>
+              <strong className={playGrowth.stale ? "muted" : getGrowthTone(playGrowth.day)}>{formatPlayGrowth(playGrowth.day, record.platform)}</strong>
+              <small className="gross-monitor-coverage">{playGrowth.day ? formatPlaySampleCoverage(playGrowth.day) : "待采样"}</small>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="gross-monitor-metric-list" aria-label={formatTargetSummary(record)}>
         {metrics.map((metric) => {
@@ -669,10 +790,12 @@ function MonitorCard({
               </span>
               <span className="gross-monitor-metric-cell-values">
                 <span className="gross-monitor-metric-cell-value-main">
-                  {metric.service === "play" ? (
+                  {metric.service === "mustFire" ? (
+                    <MustFireCurrentEditor metric={metric} record={record} onSave={onUpdateMustFireCurrent} />
+                  ) : metric.service === "play" ? (
                     <em
                       className={`gross-monitor-play-edit ${editingPlay ? "editing" : ""}`}
-                      onDoubleClick={() => setEditingPlay(true)}
+                      onDoubleClick={startPlayEdit}
                       title="双击修改播放目标"
                     >
                       {editingPlay ? (
@@ -776,6 +899,60 @@ function MonitorCard({
   );
 }
 
+function MustFireCurrentEditor({ metric, record, onSave }: {
+  metric: GrossMarginMonitorMetric;
+  record: GrossMarginMonitorRecord;
+  onSave: (recordId: string, current: number, revision: number) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const revision = useRef(0);
+  const submitted = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editing && shouldFocusInlineEdit()) { input.current?.focus(); input.current?.select(); }
+  }, [editing]);
+  function start() {
+    revision.current = record.revision ?? 0;
+    submitted.current = false;
+    setDraft(typeof metric.current === "number" ? String(metric.current) : "");
+    setError("");
+    setEditing(true);
+  }
+  async function save() {
+    if (submitted.current) return;
+    const current = parseGrossMarginAmount(draft);
+    if (!draft.trim() || current === null || !Number.isInteger(current)) { setError("请填写非负整元金额"); return; }
+    submitted.current = true;
+    setSaving(true);
+    try {
+      await onSave(record.id, current, revision.current);
+      setEditing(false);
+    } catch (cause) {
+      submitted.current = false;
+      setError(cause instanceof Error ? cause.message : "保存必火金额失败");
+    } finally { setSaving(false); }
+  }
+  return editing ? (
+    <span className="gross-monitor-manual-edit">
+      <input aria-label="必火已投金额（元）" aria-busy={saving} autoComplete="off" inputMode="numeric" className="gross-monitor-play-input" ref={input} value={draft} disabled={saving}
+        onChange={event => { setDraft(event.target.value); setError(""); }} onBlur={() => void save()}
+        onKeyDown={event => {
+          if (event.key === "Enter") { event.preventDefault(); void save(); }
+          if (event.key === "Escape") { event.preventDefault(); submitted.current = true; setEditing(false); }
+        }} />
+      {error ? <span className="gross-monitor-play-error" role="alert">{error}</span> : null}
+    </span>
+  ) : (
+    <em className="gross-monitor-play-edit" role="button" tabIndex={0} aria-label="填写必火已投金额" title="双击填写累计已投金额（元）" onDoubleClick={start}
+      onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); start(); } }}>
+      {typeof metric.current === "number" ? `${metric.current.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}元` : "双击填写"} / {metric.target.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}元
+    </em>
+  );
+}
+
 function formatTargetSummary(record: GrossMarginMonitorRecord) {
   return record.metrics
     .slice(0, 4)
@@ -788,13 +965,13 @@ function buildMonitorDifferenceText(record: GrossMarginMonitorRecord) {
     .filter((metric) => metric.difference > 0)
     .map((metric) => `${getMetricLabel(metric)}：${formatGapMetric(metric.difference, metric.service, record.platform)}`)
     .filter(Boolean);
-  const dailyPlayGain = getDailyPlayGainSummary(record);
-  const dailyGainLines =
-    dailyPlayGain?.state === "ready"
-      ? [`当天新增：${formatDailyPlayGainSummary(dailyPlayGain, record.platform)}`]
-      : [];
+  const growth = getMonitorPlayGrowth(record.playSamples, Date.now());
+  const growthLines = growth.day ? [
+    `近24小时采样增长：${formatPlayGrowth(growth.day, record.platform)}`,
+    `采样时段：${formatDateTime(growth.day.first.capturedAt)} 至 ${formatDateTime(growth.day.latest.capturedAt)}（实测${formatSampleDuration(growth.day.durationMs)}）${growth.stale ? "，数据待更新" : ""}`
+  ] : [];
 
-  return ["目前差额：", ...lines, ...dailyGainLines].join("\n");
+  return ["目前差额：", ...lines, ...growthLines].join("\n");
 }
 
 function isBlueLinkFetchWarning(warning: string) {
@@ -807,68 +984,22 @@ function getMetricLabel(metric: GrossMarginMonitorMetric) {
 }
 
 function getDisplayMetrics(record: GrossMarginMonitorRecord) {
-  const order: GrossMarginMonitorMetric["service"][] = ["play", "danmaku", "comment", "like", "favorite", "coin", "share", "blueLink"];
+  const order: GrossMarginMonitorMetric["service"][] = ["play", "danmaku", "comment", "like", "favorite", "coin", "share", "blueLink", "douPlus", "mustFire"];
   const index = new Map(order.map((service, position) => [service, position]));
   return [...record.metrics].sort((left, right) => (index.get(left.service) ?? 999) - (index.get(right.service) ?? 999));
 }
 
-type DailyPlayGainSummary =
-  | {
-      state: "ready";
-      delta: number;
-      sampleCount: number;
-      firstValue: number;
-      latestValue: number;
-      firstCapturedAt: string;
-      latestCapturedAt: string;
-    }
-  | {
-      state: "pending";
-      sampleCount: number;
-      reason: "empty" | "single";
-    };
-
-function getDailyPlayGainSummary(record: GrossMarginMonitorRecord): DailyPlayGainSummary | null {
-  if (!record.metrics.some((metric) => metric.service === "play")) return null;
-  const samples = normalizePlaySamplesForDisplay(record);
-  if (!samples.length) return { state: "pending", sampleCount: 0, reason: "empty" };
-  const latest = samples[samples.length - 1];
-  const sameDaySamples = samples.filter((sample) => isSameLocalDay(sample.capturedAt, latest.capturedAt));
-  if (sameDaySamples.length < 2) return { state: "pending", sampleCount: sameDaySamples.length, reason: "single" };
-
-  const first = sameDaySamples[0];
-  const latestSameDay = sameDaySamples[sameDaySamples.length - 1];
-  const delta = latestSameDay.value - first.value;
-  return {
-    state: "ready",
-    delta,
-    sampleCount: sameDaySamples.length,
-    firstValue: first.value,
-    latestValue: latestSameDay.value,
-    firstCapturedAt: first.capturedAt,
-    latestCapturedAt: latestSameDay.capturedAt
-  };
+function getPlayActivity(growth: ReturnType<typeof getMonitorPlayGrowth>) {
+  if (!growth.latest) return { label: "待采样", tone: "pending" };
+  if (growth.stale) return { label: "待更新", tone: "pending" };
+  if (!growth.recent) return { label: "待对比", tone: "pending" };
+  if (growth.recent.delta > 0) return { label: "有增长", tone: "positive" };
+  if (growth.recent.delta < 0) return { label: "有回落", tone: "negative" };
+  return { label: "未增长", tone: "neutral" };
 }
 
-function isSameLocalDay(left: string, right: string) {
-  const leftDate = new Date(left);
-  const rightDate = new Date(right);
-  if (Number.isNaN(+leftDate) || Number.isNaN(+rightDate)) return false;
-  return (
-    leftDate.getFullYear() === rightDate.getFullYear() &&
-    leftDate.getMonth() === rightDate.getMonth() &&
-    leftDate.getDate() === rightDate.getDate()
-  );
-}
-
-function normalizePlaySamplesForDisplay(record: GrossMarginMonitorRecord) {
-  return (record.playSamples || [])
-    .map((sample) => ({
-      value: Number(sample.value),
-      capturedAt: sample.capturedAt
-    }))
-    .filter((sample) => Number.isFinite(sample.value) && Number.isFinite(+new Date(sample.capturedAt)))
-    .sort((left, right) => +new Date(left.capturedAt) - +new Date(right.capturedAt));
+function getGrowthTone(range: PlayGrowthRange | null) {
+  return range === null ? "muted" : range.delta > 0 ? "positive" : range.delta < 0 ? "negative" : "";
 }
 
 function getOverallGap(record: GrossMarginMonitorRecord) {
@@ -884,8 +1015,8 @@ function getOverallGap(record: GrossMarginMonitorRecord) {
 
 function getOverallGapTone(percent: number, status: GrossMarginMonitorRecord["status"]) {
   if (status === "pending") return "neutral";
-  if (status === "partial") return "warning";
   if (percent >= 0.75) return "danger";
+  if (status === "partial") return "warning";
   if (percent >= 0.45) return "warning";
   if (percent >= 0.0005) return "calm";
   return "neutral";
@@ -906,10 +1037,6 @@ function getOverallGapLabel(
   return "已达目标";
 }
 
-function formatPlatform(platform: GrossMarginMonitorRecord["platform"]) {
-  return platform === "bilibili" ? "B站" : "抖音";
-}
-
 function formatStatus(status: GrossMarginMonitorRecord["status"]) {
   if (status === "completed") return "已刷新";
   if (status === "partial") return "部分刷新";
@@ -923,12 +1050,14 @@ function formatOverallGap(gap: { percent: number; target: number }, status: Gros
 }
 
 function formatMetricPercent(metric: GrossMarginMonitorMetric) {
-  if (metric.manualOnly) return "/";
+  if (metric.manualOnly && metric.service !== "mustFire") return "/";
+  if (metric.service === "mustFire" && typeof metric.current !== "number") return "待填写";
   if (typeof metric.current !== "number") return "待刷新";
   return formatPercent(metric.differencePercent);
 }
 
 function formatMetricCurrentValue(metric: GrossMarginMonitorMetric, platform: GrossMarginMonitorRecord["platform"]) {
+  if (metric.service === "mustFire" && typeof metric.current === "number") return `${metric.current.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}元`;
   if (metric.manualOnly && typeof metric.current !== "number") return "手动确认";
   if (typeof metric.current !== "number") return "未刷新";
   return formatMetric(metric.current, platform);
@@ -941,9 +1070,10 @@ function getMetricProgress(metric: GrossMarginMonitorMetric) {
 
 function getMetricRefreshDelta(record: GrossMarginMonitorRecord, service: GrossMarginMonitorMetric["service"]) {
   const current = record.currentStats?.[service];
-  if (typeof current !== "number") return null;
+  if (typeof current !== "number" || record.status === "failed" || record.status === "pending") return null;
+  if (service === "mustFire" || (service === "play" && record.platform === "douyin")) return null;
   const previous = record.previousStats?.[service];
-  return current - (typeof previous === "number" ? previous : 0);
+  return typeof previous === "number" ? current - previous : null;
 }
 
 function renderStatusIcon(status: GrossMarginMonitorRecord["status"]) {
@@ -984,19 +1114,13 @@ function formatMetricRefreshDelta(value: number, service: GrossMarginMonitorMetr
   return `${sign}${formatGapMetric(absolute, service, platform)}`;
 }
 
-function formatDailyPlayGainSummary(summary: DailyPlayGainSummary, platform: GrossMarginMonitorRecord["platform"]) {
-  if (summary.state === "pending") {
-    return summary.reason === "single" ? "待二次采样" : "待采样";
-  }
-  return formatMetricRefreshDelta(summary.delta, "play", platform);
+function formatPlayGrowth(range: PlayGrowthRange | null, platform: GrossMarginMonitorRecord["platform"]) {
+  return range ? formatMetricRefreshDelta(range.delta, "play", platform) : "—";
 }
 
-function formatDailyPlayGainTitle(summary: DailyPlayGainSummary, platform: GrossMarginMonitorRecord["platform"]) {
-  if (summary.state === "pending") {
-    return summary.sampleCount ? "当天需要至少两次播放量采样后计算实际新增。" : "刷新或手动填写当前播放量后开始积累播放采样。";
-  }
-
-  return `按最新采样当天内第一条与最新一条计算：${formatMetric(summary.firstValue, platform)} 到 ${formatMetric(summary.latestValue, platform)}，${summary.sampleCount} 次采样。`;
+function formatPlayGrowthTitle(range: PlayGrowthRange | null, platform: GrossMarginMonitorRecord["platform"]) {
+  if (!range) return "至少需要两次有效播放采样；未采样不代表没有增长。";
+  return `${formatDateTime(range.first.capturedAt)} 至 ${formatDateTime(range.latest.capturedAt)}：${formatMetric(range.first.value, platform)} → ${formatMetric(range.latest.value, platform)}。实测${formatSampleDuration(range.durationMs)}，${range.sampleCount}次采样。仅计算实际采样差值，不推算未覆盖时段，也不代表投放带来的净增长。`;
 }
 
 function formatPercent(value: number) {

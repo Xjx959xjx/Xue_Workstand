@@ -1,7 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { Copy, FileUp } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp, Copy, FileUp } from "lucide-react";
 
 type AssetTextListProps = {
   title: string;
@@ -26,11 +26,26 @@ export function AssetTextList({
   publishDisabled,
   publishing
 }: AssetTextListProps) {
+  const [collapsed, setCollapsed] = useState(false);
+  const contentId = useId();
+
   return (
     <div className="asset-list-block">
       <div className="section-title-row">
         <h3>{title}</h3>
         <div className="button-row">
+          <button
+            aria-controls={contentId}
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? "展开" : "收起"}${title}`}
+            className="btn compact"
+            disabled={!items.length}
+            onClick={() => setCollapsed((current) => !current)}
+            type="button"
+          >
+            {collapsed ? <ChevronDown aria-hidden="true" size={16} /> : <ChevronUp aria-hidden="true" size={16} />}
+            {collapsed ? "展开" : "收起"}
+          </button>
           {leadingActions}
           <button
             aria-label={`复制${title}`}
@@ -57,8 +72,8 @@ export function AssetTextList({
           ) : null}
         </div>
       </div>
-      <div className={`asset-text-list ${items.length ? "" : "empty"}`}>
-        {items.length ? items.map((item, index) => {
+      <div className={`asset-text-list ${items.length ? "" : "empty"}`} hidden={collapsed} id={contentId}>
+        {!collapsed && (items.length ? items.map((item, index) => {
           const origin = itemOrigins?.[index];
           const originLabel = origin === "reused_hot_comment"
             ? "相关原评"
@@ -71,7 +86,7 @@ export function AssetTextList({
               {originLabel ? <span className={`asset-item-origin origin-${origin}`}>{originLabel}</span> : null}
             </p>
           );
-        }) : empty}
+        }) : empty)}
       </div>
     </div>
   );

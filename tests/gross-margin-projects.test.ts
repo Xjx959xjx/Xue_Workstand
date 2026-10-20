@@ -3,8 +3,8 @@ import test from "node:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chooseGrossMarginProjectOrder, findGrossMarginProjectOrders, getGrossMarginProjectMonth, getGrossMarginProjectPrices, getGrossMarginProjectSyncError, parseWecomProjectSheet } from "../src/lib/gross-margin-projects";
-import type { GrossMarginProjectSource, JobRecord } from "../src/lib/types";
+import { chooseGrossMarginProjectOrder, findGrossMarginProjectOrders, getGrossMarginMonitorProjectName, getGrossMarginProjectMonth, getGrossMarginProjectPrices, getGrossMarginProjectSyncError, parseWecomProjectSheet } from "../src/lib/gross-margin-projects";
+import type { GrossMarginMonitorRecord, GrossMarginProjectSource, JobRecord } from "../src/lib/types";
 import { getGrossMarginProjectSource, syncGrossMarginProjectSource } from "../src/lib/storage/gross-margin-projects";
 import { startJobSchema } from "../src/lib/job-validation";
 
@@ -51,6 +51,22 @@ test("链接唯一匹配才自动选择，多项目待选择，同名项目保�
   const duplicate = { ...matches[0], id: "other", finalPrice: 9500 };
   assert.equal(chooseGrossMarginProjectOrder([...matches, duplicate], chosen!.videoUrl), null);
   assert.equal(chooseGrossMarginProjectOrder([matches[1]], "")?.id, matches[1].id);
+});
+
+test("监控标题使用维护产品项目，分组不冒充产品，旧记录只做明确匹配", () => {
+  const orders = parseWecomProjectSheet(fixture, "2026-10");
+  const base = { platform: "bilibili", accountName: "薛定谔的机丶", videoUrl: orders[0].videoUrl,
+    projectId: "batch-1", projectName: "0831 批量监控 4 条", title: "原视频标题" } as GrossMarginMonitorRecord;
+  assert.equal(getGrossMarginMonitorProjectName(base, orders), "凯度微蒸烤箱");
+  assert.equal(getGrossMarginMonitorProjectName({ ...base, maintenanceProject: { orderId: "chosen", name: "漫步者耳机" } }, orders), "漫步者耳机");
+  const unknown = { ...base, videoUrl: "https://www.bilibili.com/video/BV12Vpt62ERk" };
+  assert.equal(getGrossMarginMonitorProjectName(unknown, orders), "");
+  assert.equal(getGrossMarginMonitorProjectName(unknown, []), "");
+  assert.equal(getGrossMarginMonitorProjectName({ ...unknown, projectId: undefined, projectName: "已保存产品名" }, []), "已保存产品名");
+  const single = [{ ...orders[0], videoUrl: "" }];
+  assert.equal(getGrossMarginMonitorProjectName(unknown, single), "");
+  assert.equal(getGrossMarginMonitorProjectName(unknown, [orders[0]]), "");
+  assert.equal(getGrossMarginMonitorProjectName({ ...unknown, platform: "douyin" }, single), "");
 });
 
 test("折后金额直接取最终合作价格，缺失/异常金额显式提示且不会编造成零", () => {

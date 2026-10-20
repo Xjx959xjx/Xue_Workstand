@@ -433,12 +433,12 @@ async function collectDouyinBenchmarks() {
 
 async function fetchDouyinVideoComments(candidate) {
   await runOpenCli([
-    "browser", OPENCLI_BROWSER_SESSION, "open", candidate.url, "--window", "background"
+    "browser", "--session", OPENCLI_BROWSER_SESSION, "open", candidate.url, "--window", "background"
   ], 30_000);
-  await runOpenCli(["browser", OPENCLI_BROWSER_SESSION, "wait", "time", "2"], 10_000).catch(() => undefined);
-  await runOpenCli(["browser", OPENCLI_BROWSER_SESSION, "state"], 20_000);
+  await runOpenCli(["browser", "--session", OPENCLI_BROWSER_SESSION, "wait", "time", "2"], 10_000).catch(() => undefined);
+  await runOpenCli(["browser", "--session", OPENCLI_BROWSER_SESSION, "state"], 20_000);
   const result = await runOpenCliJson([
-    "browser", OPENCLI_BROWSER_SESSION, "eval", buildDouyinCommentEvalJs(candidate.videoId, DOUYIN_SEARCH_COMMENT_LIMIT)
+    "browser", "--session", OPENCLI_BROWSER_SESSION, "eval", buildDouyinCommentEvalJs(candidate.videoId, DOUYIN_SEARCH_COMMENT_LIMIT)
   ], 30_000);
   return asArray(result?.comments).map(normalizeComment).filter(Boolean);
 }
@@ -585,7 +585,9 @@ async function fetchBilibiliDanmaku(cid, durationSec) {
 
 async function runOpenCliJson(args, timeout) {
   const stdout = await runOpenCli(args, timeout);
-  return JSON.parse(stdout.trim());
+  const payload = JSON.parse(stdout.trim());
+  if (payload?.ok === false) throw new Error(`OpenCLI 执行失败：${JSON.stringify(payload.error)}`);
+  return payload?.ok === true && "data" in payload ? payload.data : payload;
 }
 
 async function runOpenCli(args, timeout) {
@@ -606,7 +608,7 @@ async function runOpenCli(args, timeout) {
     } catch (error) {
       lastError = error;
       if (isOpenCliJavaScriptDialogError(error) && args[0] === "browser" && args[1]) {
-        await dismissOpenCliDialog(args[1]).catch(() => undefined);
+        await dismissOpenCliDialog(args[args.indexOf("--session") + 1]).catch(() => undefined);
       }
       if (attempt < 3) await wait(attempt * 750);
     }
@@ -615,7 +617,7 @@ async function runOpenCli(args, timeout) {
 }
 
 async function dismissOpenCliDialog(session) {
-  const { command, commandArgs } = resolveOpenCliCommand(["browser", session, "dialog", "dismiss"]);
+  const { command, commandArgs } = resolveOpenCliCommand(["browser", "--session", session, "dialog", "dismiss"]);
   await execFileAsync(command, commandArgs, {
     cwd: process.cwd(),
     env: process.env.OPENCLI_WINDOW?.trim()
