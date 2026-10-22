@@ -881,6 +881,11 @@
   background: color-mix(in oklch, var(--accent-tint) 34%, var(--panel-raised));
 }
 
+.writer-page .writer-draft-preview {
+  cursor: text;
+  user-select: text;
+}
+
 .writer-result:has(.project-progress) .result-box.empty {
   border-color: color-mix(in oklch, var(--accent) 32%, transparent);
   background: color-mix(in oklch, var(--accent-tint) 82%, var(--panel-raised));

@@ -1,3 +1,4 @@
+import { getDouyinSingleVideoReference } from "./opencli-douyin-detail";
 import { SOURCE_VIDEO_COMMENT_THRESHOLD, selectEligibleCommentSources, sourceCommentCount, collectCommentSources, type CommentCollectionAttempt, type CommentCollectionBudget, type CommentPageTrace } from "./engagement-source-selection";
 import { Account, CollectOrder, Platform, Video } from "./types";
 import {
@@ -707,26 +708,17 @@ export async function refreshDouyinVideoDownloadUrl(
   const awemeId = resolveDouyinAwemeId(video);
   if (!awemeId) return "";
   const excludedUrls = new Set(options.excludeUrls || []);
-  if (options.preferBrowser) {
-    const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId, { signal: options.signal }).catch((error) => {
-      if (isAbortError(error)) throw error;
-      return "";
-    });
-    if (browserUrl && !excludedUrls.has(browserUrl)) return browserUrl;
+  // An explicit browser retry can find a different stream after an audio extraction failure.
+  // Normal single-work refreshes use detail directly, never scan the author's latest works.
+  try {
+    const mediaUrl = options.preferBrowser
+      ? await getDouyinVideoDownloadUrlWithBrowser(awemeId, { signal: options.signal })
+      : (await getDouyinSingleVideoReference(awemeId, { signal: options.signal })).mediaUrl;
+    return mediaUrl && !excludedUrls.has(mediaUrl) ? mediaUrl : "";
+  } catch (error) {
+    if (options.signal?.aborted || isAbortError(error)) throw error;
+    throw new Error(`刷新抖音账号「${account.name}」的作品媒体地址失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
-
-  const limit = resolveDouyinVideoLookupLimit(video);
-  const urls = await getDouyinVideoDownloadUrlsWithUserVideos(account, { limit, signal: options.signal }).catch((error) => {
-    if (isAbortError(error)) throw error;
-    return new Map<string, string>();
-  });
-  const opencliUrl = urls.get(awemeId);
-  if (opencliUrl && !excludedUrls.has(opencliUrl)) return opencliUrl;
-  const browserUrl = await getDouyinVideoDownloadUrlWithBrowser(awemeId, { signal: options.signal }).catch((error) => {
-    if (isAbortError(error)) throw error;
-    return "";
-  });
-  return browserUrl && !excludedUrls.has(browserUrl) ? browserUrl : "";
 }
 
 export async function checkDouyinVideoAvailability(

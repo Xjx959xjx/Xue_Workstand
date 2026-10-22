@@ -1,3 +1,4 @@
+import { getDouyinSingleVideoReference } from "./opencli-douyin-detail";
 import { execFile } from "child_process";
 import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
@@ -582,7 +583,7 @@ export async function resolveLinkSourceMedia(input: {
   });
   return {
     url: input.url,
-    resolvedUrl,
+    resolvedUrl: platform === "douyin" && media.mediaId ? buildDouyinVideoUrl(media.mediaId) : resolvedUrl,
     platform,
     title: media.title,
     sourceAccountName: media.sourceAccountName,
@@ -1137,6 +1138,11 @@ function formatErrorDetail(error: unknown) {
 }
 
 async function resolveShareUrl(url: string, options: AbortableOptions = {}) {
+  throwIfAborted(options.signal);
+  // Full Douyin work links already identify the target; avoid a redundant page GET.
+  if (detectPlatformFromLink(url) === "douyin" && extractDouyinAwemeId(url)) {
+    return buildDouyinVideoUrl(extractDouyinAwemeId(url));
+  }
   const controller = new AbortController();
   const abort = () => controller.abort();
   const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -1169,8 +1175,7 @@ async function resolveLinkMediaUrl(input: {
 }): Promise<LinkMediaInfo> {
   throwIfAborted(input.signal);
   if (input.platform === "douyin") {
-    const media = await resolveDouyinLinkMedia(input.resolvedUrl || input.url, { signal: input.signal });
-    return hydrateLinkMediaInfo(media, input.resolvedUrl || input.url, input.platform, { signal: input.signal });
+    return resolveDouyinLinkMedia(input.resolvedUrl || input.url, { signal: input.signal });
   }
 
   if (input.platform === "bilibili") {
@@ -1279,42 +1284,15 @@ async function resolveBilibiliLinkMedia(url: string, options: AbortableOptions =
   }, { signal: options.signal });
 }
 
-async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {}) {
-  const pageUrl = buildDouyinVideoUrl(extractDouyinAwemeId(url)) || url;
-
-  return withSharedOpenCliBrowserSession(async (workspace) => {
-    try {
-      throwIfAborted(options.signal);
-      const openArgs = buildOpenCliBrowserArgs(workspace, "open", [pageUrl], {
-        window: "background"
-      });
-      await runOpenCli(openArgs, {
-        timeout: 30_000,
-        signal: options.signal
-      });
-      await runOpenCli(buildOpenCliBrowserArgs(workspace, "wait", ["time", "2"]), {
-        timeout: 10_000,
-        signal: options.signal
-      }).catch(ignoreNonAbortError);
-      const stdout = await runOpenCli(buildOpenCliBrowserArgs(workspace, "eval", [DOUYIN_LINK_MEDIA_EXTRACT_JS]), {
-        timeout: 30_000,
-        signal: options.signal
-      });
-      const data = parseOpenCliJsonish(stdout);
-      const object = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
-      const mediaUrls = Array.isArray(object.mediaUrls) ? object.mediaUrls.map((value) => String(value || "")) : [];
-      return {
-        mediaId: String(object.awemeId || ""),
-        title: normalizeTitle(String(object.title || object.description || "")),
-        sourceAccountName: normalizeTitle(String(object.sourceAccountName || "")),
-        coverUrl: normalizeRemoteImageUrl(String(object.coverUrl || "")),
-        mediaUrls: sortRemoteAudioMediaUrls(mediaUrls)
-      };
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-      throw formatLinkBrowserResolutionError("抖音", error);
-    }
-  }, { signal: options.signal });
+async function resolveDouyinLinkMedia(url: string, options: AbortableOptions = {}): Promise<LinkMediaInfo> {
+  const reference = await getDouyinSingleVideoReference(url, options);
+  return {
+    mediaId: reference.id,
+    title: normalizeTitle(reference.title),
+    sourceAccountName: normalizeTitle(reference.authorName),
+    coverUrl: reference.coverUrl,
+    mediaUrls: [reference.mediaUrl]
+  };
 }
 
 function formatLinkBrowserResolutionError(platformLabel: "B站" | "抖音", error: unknown) {
@@ -1381,220 +1359,6 @@ async function downloadFirstAvailableRemoteAudio(
 
   throw lastError instanceof Error ? lastError : new Error("音频提取失败：没有可用媒体地址");
 }
-
-const DOUYIN_LINK_MEDIA_EXTRACT_JS = `
-(async () => {
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-  const normalizeUrl = (url) => {
-    if (!url) return "";
-    if (url.startsWith("//")) return "https:" + url;
-    return url;
-  };
-  const trimCandidateUrl = (url) => (String(url || "").split(/[\\s|<>]/)[0] || "").replace(/,https?:\\/\\/.+$/i, "");
-  const isImageCandidate = (url) => {
-    try {
-      const parsed = new URL(normalizeUrl(trimCandidateUrl(url)));
-      const text = (parsed.hostname + " " + parsed.pathname + " " + parsed.search).toLowerCase();
-      return (
-        /douyinpic|pstatp|byteimg|tos-cn|image|img/.test(text) &&
-        !/avatar|profile|user|emoji|icon|logo/.test(text) &&
-        /(cover|poster|origin|image|img|tplv|tos-cn|\\.jpe?g|\\.png|\\.webp|\\.gif)/.test(text)
-      );
-    } catch {
-      return false;
-    }
-  };
-  const coverKeyWeight = (keyHint) => {
-    const key = String(keyHint || "").toLowerCase();
-    let score = 0;
-    if (/origin[_-]?cover|origincover/.test(key)) score += 90;
-    if (/cover|poster/.test(key)) score += 65;
-    if (/image|img/.test(key)) score += 25;
-    if (/thumb/.test(key)) score -= 10;
-    if (/avatar|author|user|profile|icon|logo/.test(key)) score -= 140;
-    return score;
-  };
-  const coverUrlScore = (url, keyHint = "", weight = 0) => {
-    const text = String(url || "").toLowerCase();
-    let score = weight + coverKeyWeight(keyHint);
-    if (/origin|orig|raw/.test(text)) score += 35;
-    if (/cover|poster/.test(text)) score += 30;
-    if (/douyinpic|pstatp|byteimg/.test(text)) score += 20;
-    if (/avatar|profile|user|emoji|icon|logo/.test(text)) score -= 160;
-    if (/resize|thumb|q\\d{2}|autoq|aq:|walign/.test(text)) score -= 15;
-    for (const match of text.matchAll(/(?:^|[^\\d])([1-9]\\d{2,4})(?:x|:|%3a|_)([1-9]\\d{2,4})(?:[^\\d]|$)/g)) {
-      const width = Number(match[1]);
-      const height = Number(match[2]);
-      if (Number.isFinite(width) && Number.isFinite(height)) score += Math.min(90, Math.max(width, height) / 20);
-    }
-    return score;
-  };
-  const collect = () => {
-    const urls = [];
-    const coverCandidates = [];
-    let sourceAccountName = "";
-    const pushUrl = (value) => {
-      const normalized = normalizeUrl(String(value || ""));
-      if (/^https?:\\/\\//i.test(normalized)) urls.push(normalized);
-    };
-    const pushCoverUrl = (value, keyHint = "", weight = 0) => {
-      const normalized = normalizeUrl(trimCandidateUrl(String(value || "").replaceAll("\\\\/", "/")));
-      if (!/^https?:\\/\\//i.test(normalized) || !isImageCandidate(normalized)) return;
-      coverCandidates.push({ url: normalized, score: coverUrlScore(normalized, keyHint, weight) });
-    };
-    const collectCoverDeep = (value, depth = 0, keyHint = "") => {
-      if (!value || depth > 8) return;
-      if (typeof value === "string") {
-        pushCoverUrl(value, keyHint);
-        return;
-      }
-      if (Array.isArray(value)) {
-        for (const item of value.slice(0, 220)) collectCoverDeep(item, depth + 1, keyHint);
-        return;
-      }
-      if (typeof value !== "object") return;
-      for (const [key, item] of Object.entries(value)) {
-        const nextKey = keyHint ? keyHint + "." + key : key;
-        if (/cover|poster|image|img|url|uri|origin|thumb|video|aweme|detail|data/i.test(key)) {
-          collectCoverDeep(item, depth + 1, nextKey);
-        }
-      }
-    };
-    const collectAuthorDeep = (value, depth = 0) => {
-      if (!value || sourceAccountName || depth > 8) return;
-      if (Array.isArray(value)) {
-        for (const item of value.slice(0, 200)) collectAuthorDeep(item, depth + 1);
-        return;
-      }
-      if (typeof value !== "object") return;
-      const object = value;
-      const candidates = [
-        object.nickname,
-        object.name,
-        object.unique_id,
-        object.author_name,
-        object.user_name
-      ].map(clean).filter(Boolean);
-      if (candidates.length && (object.sec_uid || object.uid || object.user_id || object.short_id || object.avatar_thumb)) {
-        sourceAccountName = candidates[0];
-        return;
-      }
-      if (object.author && typeof object.author === "object") collectAuthorDeep(object.author, depth + 1);
-      if (object.user && typeof object.user === "object") collectAuthorDeep(object.user, depth + 1);
-      for (const [key, item] of Object.entries(object)) {
-        if (/author|user|owner|account|aweme|detail|item/i.test(key)) collectAuthorDeep(item, depth + 1);
-        if (sourceAccountName) return;
-      }
-    };
-    const collectUrlsDeep = (value, depth = 0) => {
-      if (!value || depth > 8) return;
-      if (typeof value === "string") {
-        if (/^https?:|^\\/\\//i.test(value) && /douyinvod|mime_type=video|mime_type=audio|\\/aweme\\/v1\\/play\\//i.test(value)) {
-          pushUrl(value);
-        }
-        return;
-      }
-      if (Array.isArray(value)) {
-        for (const item of value.slice(0, 200)) collectUrlsDeep(item, depth + 1);
-        return;
-      }
-      if (typeof value === "object") {
-        for (const [key, item] of Object.entries(value)) {
-          if (/url|addr|play|download|audio|video/i.test(key)) collectUrlsDeep(item, depth + 1);
-        }
-      }
-    };
-    for (const video of Array.from(document.querySelectorAll("video"))) {
-      for (const value of [video.currentSrc, video.src]) {
-        if (value) pushUrl(value);
-      }
-      for (const source of Array.from(video.querySelectorAll("source"))) {
-        const value = source.src || source.getAttribute("src") || "";
-        if (value) pushUrl(value);
-      }
-    }
-    for (const entry of performance.getEntriesByType("resource")) {
-      const name = normalizeUrl(entry.name || "");
-      if (/douyinvod|mime_type=video|mime_type=audio|\\/aweme\\/v1\\/play\\//i.test(name)) pushUrl(name);
-    }
-    const stateValues = [
-      window.__INITIAL_STATE__,
-      window.__INITIAL_DATA__,
-      window.__RENDER_DATA__,
-      window.__UNIVERSAL_DATA_FOR_REHYDRATION__,
-      window.__NEXT_DATA__
-    ];
-    for (const value of stateValues) collectUrlsDeep(value);
-    for (const value of stateValues) collectCoverDeep(value);
-    for (const value of stateValues) collectAuthorDeep(value);
-    for (const script of Array.from(document.querySelectorAll("script"))) {
-      const text = script.textContent || "";
-      if (!/aweme|play_addr|download_addr|douyinvod|url_list|douyinpic|origin_cover|cover/.test(text)) continue;
-      const matches = text.match(/https?:\\\\?\\/\\\\?\\/[^"'<>\\\\]+/g) || [];
-      for (const match of matches) {
-        const url = match.replaceAll("\\\\/", "/");
-        pushUrl(url);
-        pushCoverUrl(url, "script.url");
-      }
-      const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);
-      if (jsonMatch && jsonMatch[0].length < 8_000_000) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          collectUrlsDeep(parsed);
-          collectCoverDeep(parsed);
-          collectAuthorDeep(parsed);
-        } catch {}
-      }
-    }
-    const metas = Object.fromEntries(
-      Array.from(document.querySelectorAll("meta[property], meta[name]"))
-        .map((meta) => [meta.getAttribute("property") || meta.getAttribute("name") || "", meta.getAttribute("content") || ""])
-        .filter(([key, value]) => key && value)
-    );
-    const metaAccountName = clean(
-      metas.author ||
-      metas["article:author"] ||
-      metas["og:author"] ||
-      document.querySelector('[data-e2e="user-name"], [class*="author"], [class*="account"]')?.textContent ||
-      ""
-    );
-    for (const image of Array.from(document.images)) {
-      const width = Number(image.naturalWidth || image.width || 0);
-      const height = Number(image.naturalHeight || image.height || 0);
-      if (width < 200 || height < 200) continue;
-      const imageUrl = image.currentSrc || image.src || "";
-      const weight = /AWEME_DETAIL/i.test(imageUrl)
-        ? 180
-        : /RELATED_AWEME/i.test(imageUrl)
-          ? -80
-          : Math.min(80, Math.max(width, height) / 10);
-      pushCoverUrl(imageUrl, "dom.image", weight);
-    }
-    pushCoverUrl(metas["og:image"] || "", "meta.og:image", 40);
-    pushCoverUrl(metas["twitter:image"] || "", "meta.twitter:image", 35);
-    pushCoverUrl(document.querySelector("video")?.poster || "", "video.poster", 55);
-    const coverUrl = coverCandidates.sort((left, right) => right.score - left.score)[0]?.url || "";
-    const awemeId = (location.href.match(/\\/video\\/(\\d{10,})/) || [])[1] || "";
-    return {
-      awemeId,
-      title: clean(metas["og:title"] || document.title || ""),
-      sourceAccountName: sourceAccountName || metaAccountName,
-      coverUrl,
-      description: clean(metas.description || metas["og:description"] || ""),
-      mediaUrls: Array.from(new Set(urls)).filter((value) => /^https?:\\/\\//i.test(value))
-    };
-  };
-  for (let i = 0; i < 8; i += 1) {
-    const data = collect();
-    if (data.mediaUrls.length) return data;
-    const video = document.querySelector("video");
-    if (video) video.play().catch(() => undefined);
-    await sleep(1000);
-  }
-  return collect();
-})()
-`;
 
 const BILIBILI_LINK_MEDIA_EXTRACT_JS = `
 (async () => {

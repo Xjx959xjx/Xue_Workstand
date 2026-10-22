@@ -65,6 +65,7 @@ import {
   splitWriterSourceInput
 } from "@/lib/source-extraction";
 import { appendWriterSourceFiles, WRITER_SOURCE_FILE_ACCEPT } from "@/lib/source-file-import";
+import { formatLongDraftForDisplay, LONG_DRAFT_DISPLAY_THRESHOLD } from "@/lib/writer-display";
 import type {
   AccountListItem,
   Draft,
@@ -111,6 +112,7 @@ function WriterPageContent() {
   const [sourceDragActive, setSourceDragActive] = useState(false);
   const [sourceImporting, setSourceImporting] = useState(false);
   const [sessionDraftHydrated, setSessionDraftHydrated] = useState(false);
+  const [draftEditing, setDraftEditing] = useState(false);
   const loadedDraftParamRef = useRef("");
   const appliedSearchParamRef = useRef("");
   const draftEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -297,10 +299,16 @@ function WriterPageContent() {
     } finally { setBusy(""); }
   };
   const draftCharacterCount = lastContent.replace(/\s/g, "").length;
+  const longDraftDisplay = draftCharacterCount > LONG_DRAFT_DISPLAY_THRESHOLD;
+  const formattedDraftContent = useMemo(() => formatLongDraftForDisplay(lastContent), [lastContent]);
 
   useEffect(() => {
     setResearchOpen(false);
   }, [lastDraftId]);
+
+  useEffect(() => {
+    setDraftEditing(false);
+  }, [activeVariantKey, lastDraftId]);
 
   const sourceFiles = useMemo(() => splitWriterSourceItems(sourceText).filter((item) => item.kind === "file"), [sourceText]);
   const sourceFileCount = sourceFiles.length;
@@ -749,6 +757,10 @@ function WriterPageContent() {
                   {lastContent ? (
                     <>
                     <div className="writer-document-tools" role="group" aria-label="稿件操作">
+                    {longDraftDisplay ? <button className="btn ghost compact" type="button" onClick={() => setDraftEditing((editing) => !editing)}>
+                      <PenLine aria-hidden="true" size={15} />
+                      {draftEditing ? "查看排版" : "编辑原文"}
+                    </button> : null}
                     <button className="btn ghost icon-only writer-tool" aria-label="复制稿件" title="复制稿件" onClick={copyLast} type="button">
                       <Copy aria-hidden="true" size={16} />
                     </button>
@@ -809,11 +821,12 @@ function WriterPageContent() {
                   ))}
                 </div>
               ) : null}
-              {lastContent ? (
+              {lastContent && (!longDraftDisplay || draftEditing || busy === "generate") ? (
                 <textarea
                   aria-label="当前稿件"
                   className="result-box writer-draft-editor"
                   onChange={(event) => {
+                    setDraftEditing(true);
                     handleContentChange(event.target.value);
                     setSelectedDraftText("");
                     setRevisionScope("full");
@@ -825,6 +838,10 @@ function WriterPageContent() {
                   spellCheck={false}
                   value={lastContent}
                 />
+              ) : lastContent ? (
+                <div aria-label="当前稿件（排版预览）" className="result-box writer-draft-preview" tabIndex={0}>
+                  {formattedDraftContent}
+                </div>
               ) : (
                 <div className="writer-result-empty">
                   <span aria-hidden="true"><Sparkles size={20} /></span>
