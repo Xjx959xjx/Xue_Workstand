@@ -54,6 +54,9 @@ const navGroupCodes: Record<NavItem["group"], string> = {
 const grossMarginNavItems = navItems.filter((item) => item.href.startsWith("/gross-margin"));
 const ROUTE_BUSY_DELAY_MS = 200;
 const ROUTE_INTENT_DELAY_MS = 180;
+// 正式服务的页面已预构建，按 Next 默认在可视区预取，点击导航无需再等隧道往返；
+// 开发服务仍关闭自动预取，避免首次访问触发全站编译。
+const navPrefetch = process.env.NODE_ENV === "production" ? undefined : false;
 
 export function AppNav({ appMode }: { appMode: AppMode }) {
   const router = useRouter();
@@ -155,7 +158,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
       {showRouteBusy ? <span className="route-progress" aria-hidden="true" /> : null}
       <Link
         href={brandHref}
-        prefetch={false}
+        prefetch={navPrefetch}
         className="brand"
         onFocus={() => void prewarmRoute(brandHref)}
         onClick={(event) => handleNavClick(event, brandHref)}
@@ -194,7 +197,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
                     <div className="nav-group" key={item.href}>
                       <Link
                         href={item.href}
-                        prefetch={false}
+                        prefetch={navPrefetch}
                         className={`nav-link ${active ? "active" : ""} ${pending ? "pending" : ""}`}
                         aria-current={active ? "page" : undefined}
                         onFocus={() => void prewarmRoute(item.href)}
@@ -224,7 +227,7 @@ export function AppNav({ appMode }: { appMode: AppMode }) {
         {!grossMarginMode && !navigation.hidden.includes("/ai-settings") ? (
           <Link
             href="/ai-settings"
-            prefetch={false}
+            prefetch={navPrefetch}
             className={`btn ghost nav-link sidebar-settings ${activeHref === "/ai-settings" ? "active" : ""} ${pendingHref === "/ai-settings" && activeHref !== "/ai-settings" ? "pending" : ""}`}
             style={{ width: "100%", justifyContent: "flex-start" }}
             aria-current={activeHref === "/ai-settings" ? "page" : undefined}

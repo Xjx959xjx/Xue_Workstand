@@ -55,6 +55,7 @@ import { HotlistGroupFilter } from "./_components/HotlistGroupFilter";
 import { RefreshLogMenu } from "./_components/RefreshLogMenu";
 
 const REFRESH_LIMIT = 10;
+const HOTLIST_AUTO_REFRESH_CHECK_MS = 5 * 60_000;
 
 export default function DouyinHotlistPage() {
   return (
@@ -339,7 +340,8 @@ function DouyinHotlistPageContent() {
       if (Date.now() - lastCheck >= 3 * 60 * 60 * 1000) void refreshHotlist(true);
     };
     void check();
-    const timer = window.setInterval(check, 60_000);
+    // 自动抓取阈值是 3 小时，5 分钟检查一次足够；其他设备的刷新会经任务中心同步。
+    const timer = window.setInterval(check, HOTLIST_AUTO_REFRESH_CHECK_MS);
     document.addEventListener("visibilitychange", check);
     return () => {
       window.clearInterval(timer);

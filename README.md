@@ -14,7 +14,7 @@ cp .env.example .env
 npm run dev
 ```
 
-打开 `http://localhost:3000`，默认进入视频热榜页 `/douyin-hotlist`（历史路径保留）。开发服务默认使用 Turbopack，侧栏仅在鼠标停留或键盘聚焦目标模块时预热该页面，不再自动遍历全站和业务 API；离开目标或点击导航时取消预热，让真实导航优先。开发模式首次访问未编译模块仍可能需要等待编译。
+打开 `http://localhost:3000`，默认进入视频热榜页 `/douyin-hotlist`（历史路径保留）。开发服务默认使用 Turbopack，侧栏仅在鼠标停留或键盘聚焦目标模块时预热该页面，不再自动遍历全站和业务 API；离开目标或点击导航时取消预热，让真实导航优先。开发模式首次访问未编译模块仍可能需要等待编译。正式服务下侧栏按 Next.js 默认在可视区预取页面，经公网链接切页时不必再等一次网络往返。
 
 如果希望服务退出终端后仍然保持运行，可以使用后台启动：
 
@@ -50,7 +50,7 @@ npm run eval:writer -- --max-concurrency 1 --no-write
 
 ## 本机正式服务
 
-正式服务通过 macOS LaunchAgent 运行在 `127.0.0.1:3000`；Cloudflare Tunnel 和自定义域名由工作区外的 Caddy、`cloudflared` 配置维护。
+正式服务通过 macOS LaunchAgent 运行在 `127.0.0.1:3000`；Cloudflare Tunnel 和自定义域名由工作区外的 Caddy、`cloudflared` 配置维护（链路：`work.xjxwork.online` → Cloudflare → Caddy `127.0.0.1:3001` → `127.0.0.1:3000`）。Caddy 只给页面和 API 设置 `private, no-store`，`/_next/static/*` 沿用 Next.js 的长期缓存头，不要覆盖，否则每次打开页面都要经隧道重新确认全部 JS/CSS。公网入口目前没有登录。
 
 ```bash
 npm run remote:setup      # 首次安装本机常驻服务（macOS）

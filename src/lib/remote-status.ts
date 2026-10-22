@@ -13,24 +13,35 @@ import type { RemoteServiceHealth, RemoteStatusResponse } from "./types";
 const execFileAsync = promisify(execFile);
 const startedAt = process.env.APP_STARTED_AT || new Date().toISOString();
 const CACHE_TTL_MS = 60_000;
+// 过期但不太旧的结果先返回，后台再体检；体检要启动 opencli / ffmpeg，约 1 秒。
+const STALE_MAX_MS = 10 * 60_000;
 
 let cached: { expiresAt: number; value: RemoteStatusResponse } | null = null;
 let pending: Promise<RemoteStatusResponse> | null = null;
 
 export async function getRemoteStatus(options: { fresh?: boolean } = {}) {
-  if (!options.fresh && cached && cached.expiresAt > Date.now()) return cached.value;
+  const now = Date.now();
+  if (!options.fresh && cached && cached.expiresAt > now) return cached.value;
+  if (!options.fresh && cached && cached.expiresAt + STALE_MAX_MS > now) {
+    if (!pending) void startRemoteStatusRefresh().catch(() => undefined);
+    return cached.value;
+  }
   if (!options.fresh && pending) return pending;
+  return startRemoteStatusRefresh();
+}
 
-  pending = buildRemoteStatus().then((value) => {
+function startRemoteStatusRefresh(): Promise<RemoteStatusResponse> {
+  const request: Promise<RemoteStatusResponse> = buildRemoteStatus().then((value) => {
     cached = {
       expiresAt: Date.now() + CACHE_TTL_MS,
       value
     };
     return value;
   }).finally(() => {
-    pending = null;
+    if (pending === request) pending = null;
   });
-  return pending;
+  pending = request;
+  return request;
 }
 
 async function buildRemoteStatus(): Promise<RemoteStatusResponse> {

@@ -342,7 +342,8 @@ function handleJobDataSync(
   for (const job of jobs) {
     const dataRevision = job.dataRevision || 0;
     nextDataRevision.set(job.id, dataRevision);
-    const dataChanged = dataRevision > (previousDataRevision.get(job.id) || 0);
+    // 首次读取没有基线版本，历史任务的 dataRevision 不代表数据刚变；只按“最近完成”判断，避免进页即清缓存重拉。
+    const dataChanged = !isFirstLoad && dataRevision > (previousDataRevision.get(job.id) || 0);
     const becameCompleted = job.status === "completed" && previousStatus.get(job.id) !== "completed";
     const recentCompletedOnFirstLoad = isFirstLoad && job.status === "completed" && isRecentJob(job);
     if (!dataChanged && !becameCompleted && !recentCompletedOnFirstLoad) continue;

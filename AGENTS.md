@@ -1,116 +1,86 @@
 # AGENTS.md
 
-## 适用范围与规则级别
+适用于整个仓库；子目录 `AGENTS.md` 只在其作用域内覆盖冲突条款。**MUST** 必须遵守；**SHOULD** 为默认做法，偏离时说明理由并验证。只写稳定、跨模块、难以从源码看出的高风险规则；实现细节以源码和测试为准。
 
-本文件适用于整个仓库；子目录 `AGENTS.md` 仅在其作用域内覆盖冲突条款，其余根级规则继续生效。本地项目数据位于 `STYLE_LIBRARY_DIR` 或 `./style-library`，其中账号、项目、转写稿、草稿、互动记录、封面和毛利数据可能无法重建。
+## 文档分工
 
-- **MUST**：数据安全、兼容性和交付边界，必须遵守。
-- **SHOULD**：默认工程方式；有充分理由可以调整，但要说明影响并验证。
-- **REFERENCE**：易变的产品和实现细节以文档、源码为准。
+`AGENTS.md` 管怎样安全地改仓库；`PRODUCT.md` 管为谁做、取舍原则；`DESIGN.md` 管界面与交互；`README.md` 管启动、配置、发布；`docs/api/` 是接口契约；`docs/superpowers/`、`.superpowers/` 是历史记录，不是现行规则。
 
-技能和插件流程服从用户明确指令与本项目规则；不得削弱 MUST 约束。
+冲突时依次服从：用户当次指令 > 本文件 > `PRODUCT.md` > `DESIGN.md` > 其他文档。文档与源码、测试不一致时以源码为准，并在同一改动里修正文档。
 
 ## 沟通
 
-- 默认中文回复，称用户为“老大！”，先给结论和风险，保持简短、可执行。解释复杂问题后追加一小段 `白话版：`；不要把回复格式要求写进文档、代码或提交信息。
+默认中文回复，称用户为“老大！”。先给结论和风险，简短可执行；复杂解释后附一小段 `白话版：`。这些格式要求不写进文档、代码或提交信息。
 
-## 接手与上下文
+## 工作方式
 
-涉及仓库操作时先运行 `git status --short`。需要定位文件时按目标范围运行 `rg --files`；已知文件则直接读取相关片段。
+- 仓库操作前先看 `git status --short`。工作树常有他人未提交改动：不回滚、覆盖、重排或格式化无关改动；必须改已改动的文件时，先读 diff 再叠加。
+- 目标明确就直接做，做完验证再交付；只在缺失信息会实质改变结果、或需要新授权时询问。不因技能模板额外要求确认、写计划文档、提交或建分支。
+- 故障先拿证据定位根因，再做最小修复。改共享逻辑前查调用方，同步类型、测试、配置和导出；不顺带重构、加依赖或扩功能。
 
-- 工作树经常包含用户或其他 Agent 的未提交改动。不得回滚、覆盖、重排或格式化无关改动；必须触碰已有改动文件时，先读 diff 再叠加。
-- 只读取当前任务需要的上下文。用 `rg` 定位目标调用链后，按需查看 `README.md`、`DESIGN.md`、目标页面 / API、对应的 `src/lib` 模块和测试；不要固定通读大型文件。
+## MUST：用户资产
 
-## 任务推进与技能协作
+本地数据在 `STYLE_LIBRARY_DIR`（默认 `./style-library`），很多无法重建。
 
-- 目标和边界明确时直接推进，完成相关验证后交付。复用当前任务已有授权和选择；仅在缺失信息会实质改变目标、参数或影响，或下一步需要尚未获得的授权时询问。
-- 故障先复现或收集证据，沿调用链定位根因，再做最小修复。中等以上改动先明确目标 / 根因、影响范围、方案和验证；范围清楚的小改动不要求独立设计或计划文档。
-- 修改共享逻辑前检查调用方；同步受影响的类型、测试、配置和导出。优先复用现有实现，不顺带重构、增加依赖或扩展功能。
-- 按任务需要选用技能：排错重证据，跨模块改动重接口与计划，交付重验证。不因技能模板额外要求反复确认、文档落盘、提交或新建分支 / worktree；确有隔离或协作需要时再采用对应流程。
+- `style.md`、转写稿、草稿、`*.assets`、互动历史、毛利数据：未经明确授权不得删除、迁移、批量重写、重新生成或打包外发。
+- 删除走现有可恢复删除 / 事务机制并同步跨引用；不绕过锁、不直接递归删目录。
+- 写入复用 `writeJsonFile` / `writeTextFileAtomic` / `writeFileAtomic` 或现有事务（临时文件 + `rename`）。路径段一律经 `normalizeStorageSegment` 等 normalize 函数，不拼接 URL、标题或用户输入。
+- 持久化记录保留 `schemaVersion`，读取经 `src/lib/storage/schemas.ts` 校验。只有首次初始化的可选文件可视为空；其余缺失、损坏、越界、写入失败都要显式报错。
+- 转写覆盖 / 恢复用 per-video 串行锁 + revision 校验，保留 `transcripts/.history/<video-id>/`，冲突返回 409；重新转写失败时旧稿保持可用。
+- 草稿资产用 `updateDraftAssets()` / `withDraftAssetsLock()`；watchlist、身份映射等共享文件复用已有锁。同一资产的读改写不得改成 `Promise.all()`。
+- `npm run check:library:repair` 只在用户同意后对真实库运行，先备份。
+- 发行包默认不含 `style-library`，仅用户要求时加 `--include-library`；毛利包只带毛利数据源，缺失即失败。
 
-## MUST：数据与文件安全
+## MUST：错误与外部能力
 
-- `style.md`、转写稿、草稿、`*.assets`、互动历史和毛利数据是用户资产；未经明确授权不得删除、迁移、批量重写、重新生成或打包外发。
-- 删除账号、视频、项目、素材或草稿必须走现有可恢复删除 / 事务机制，并保持跨引用同步；不得绕过锁、直接递归删除业务目录。
-- JSON、文本和二进制写入复用 `writeJsonFile`、`writeTextFileAtomic`、`writeFileAtomic` 或现有事务封装，保持临时文件 + `rename` 的原子落盘。
-- 所有路径段经过 `normalizeStorageSegment` 或现有 normalize 函数；不得把 URL、标题或用户输入直接拼进路径。
-- 持久化记录保留 `schemaVersion`，读取经过 `src/lib/storage/schemas.ts` 运行时校验。仅允许首次初始化的可选文件缺失时返回空状态；已有记录或必需文件丢失、损坏 JSON、路径越界和写入失败必须显式报错。
-- 转写覆盖与恢复必须使用 per-video 串行锁和 revision 校验，并保留 `transcripts/.history/<video-id>/` 历史；冲突返回 409，不得覆盖并发编辑。
-- 重新转写失败时已有稿保持可用；毛利在线账号表远端解析失败时只允许显式可见的缓存回退，不覆盖可用账号数据。
-- 草稿资产更新走 `updateDraftAssets()` / `withDraftAssetsLock()`；watchlist、身份映射和其他共享文件复用已有串行锁。
-- `npm run check:library:repair` 只在用户明确同意后对真实素材库执行；修复前必须备份，不能自动处理无法安全推导的问题。
-- 默认发行包不得包含完整 `style-library`。只有用户明确要求时使用 `--include-library`；毛利包只允许携带毛利数据源，缺失时默认失败。
+- 外部能力（opencli、ffmpeg、火山、模型、图片模型、飞书、企业微信、本地文件）失败时给可操作的中文错误；不加空 catch、假成功或模板兜底。可忽略的清理失败要注释说明。
+- fallback 显式返回或持久化 `fallback` / `fallbackReason`；模型失败就失败，不用本地通用文案顶替。
+- OpenCLI 走 `src/lib/opencli-runtime.ts`（`execFile` + 参数数组 + timeout / `AbortSignal`），不拼 shell 字符串。
+- 模型和备用节点走 `src/lib/model-runtime.ts`；联网检索只发给支持 Responses `web_search` 的节点。
+- 支持文档走 `src/lib/support-documents.ts`，正文读取失败显式失败。
+- 长任务接入 `src/lib/jobs.ts` 任务中心（进度、取消、中断恢复、持久化），不用 `after()` 或未等待的 Promise。
 
-## MUST：错误、外部能力与并发
+## MUST：API、服务与公网入口
 
-- 涉及 `opencli`、`ffmpeg`、火山、模型、图片模型、飞书、企业微信或本地文件时，错误必须是可见、可操作的中文信息；不得新增吞掉业务失败的空 catch、假成功或无关模板兜底。仅忽略可选解析 / 清理失败时要用注释说明边界。
-- fallback 必须显式返回或持久化 `fallback`、`fallbackReason` 等状态。模型失败应失败，不得用通用本地文案覆盖当前结果。
-- OpenCLI 执行复用 `src/lib/opencli-runtime.ts`，使用 `execFile` 和参数数组，传递 timeout / `AbortSignal`；不得用 shell 字符串拼接用户输入。
-- 对话模型与备用节点复用 `src/lib/model-runtime.ts` 的统一配置链。联网检索只发送到明确支持 Responses `web_search` 的节点，不得发给普通 Chat Completions。
-- 支持文档复用 `src/lib/support-documents.ts`：飞书走 Lark CLI，企业微信走官方 `wecom-cli doc`，其他来源沿用现有适配器；正文读取失败必须显式失败。
-- 长任务接入 `src/lib/jobs.ts` 和任务中心，保留进度、取消、重启中断恢复和持久化，不能以 `after()` 或未等待的 Promise 替代。终态前分批落盘时同步递增 `dataRevision` 并写明 `dataChange`。
-- 并行操作必须保留并发上限、串行锁、revision 校验和取消信号；同一资产的读改写不得直接改为 `Promise.all()`。
-- 将“客户端缓存失效”和“立即重新请求”分开；页面不消费某资源时只失效缓存，避免后台任务触发无关全量读取。
+- 改前端可见 API 时同步类型、`src/lib/client.ts`、缓存失效、页面状态和错误展示。
+- 改 `APP_MODE` 或 `APP_START_PATH` 时同步检查 `middleware.ts`、`AppModeGuard`、`AppNav`、任务类型限制、README、`.env.example`、`scripts/package-release.mjs`。
+- 发布、回滚、切换正式 / 开发服务只在用户明确要求时执行。开发服务运行时不在同一 `.next` 上 `npm run build`，用隔离目录构建。
+- 公网入口 `work.xjxwork.online` 没有登录，任何人都能调用全部 API。服务切换、模型授权、读写密钥或系统配置的接口必须限本机同源访问（复用 `isLocalServiceRequest()` 或 `api/pi-settings` 的检查）；破坏性接口不用 GET。
+- 工作区外的网关配置（`~/.config/xjxwork-public/`、`~/.cloudflared/`、`~/Library/LaunchAgents/com.xjxwork.*`）只在用户明确要求时修改，改前留带日期的备份。网关不得覆盖 `/_next/static/*` 的缓存头。
 
-## MUST：API 与客户端契约
+## 业务规则
 
-- 本地 Next.js 中涉及文件系统、环境变量、外部 CLI 或模型的路由使用 Node.js runtime。
-- API 路由复用 `apiJson()`、`apiError()`、`parseJsonBody()` 和 `zod` schema，保持 400 校验错误与中文提示。
-- NDJSON 复用 `createNdjsonStream()` / `readNdjsonStream()`，保持 `stage`、`delta`、`result`、`error`、`done` 语义，并传递请求取消信号。
-- 修改前端可见 API 时，同步类型、`src/lib/client.ts`、缓存失效、页面状态和错误展示。
+- **MUST** 视频热榜账号存于 `douyin-hotlist/accounts`，不写入主账号库；刷新走后台任务 + watchlist 锁。
+- **MUST** B站统计经 `/api/videos/hydrate` 二次补全，改列表 / 详情不得绕过。
+- **MUST** 写作台多选风格卡时每卡独立成稿、只存自身风格引用，续改沿用该稿风格；首稿、续改、手动编辑构成不可变版本链。`originalSourceInput` 存输入框原貌供恢复，模型用解析后的 `input` / `sourceDigest`。
+- **MUST** 评论 / 弹幕输入含视频链接时先取文稿；链接标识不进 Brief 或成稿；真实平台样本缺失时显式失败。
+- **SHOULD** 多卡生成有界并发；续改复用父稿资料，不重复转写、抓文档或联网。批量转写先筛待转写项再限量。评论 / 弹幕部分成功按现有机制补齐；毛利在线账号表优先返回最后成功缓存并后台刷新。
 
-## MUST：运行模式与交付
+## SHOULD：实现约定
 
-- 日常开发调试默认保持开发服务；隔离验证或构建检查结束后不得自动发布或切回正式服务。只有用户明确要求发布、回滚或切换正式服务时才执行对应操作；隔离测试不改变日常服务模式。
-- `APP_MODE=workspace`：完整工作台，根路径默认进入 `/douyin-hotlist`。
-- `APP_MODE=gross-margin`：只开放 `/gross-margin`、`/gross-margin/monitor` 及必要 API；`middleware.ts`、`AppModeGuard`、`AppNav` 和任务类型限制必须一致。
-- `APP_START_PATH` 影响交付包启动页；调整模式或启动页时同步检查 README、`.env.example` 和 `scripts/package-release.mjs`。
-- 开发服务运行时不要直接在同一 `.next` 上执行 `npm run build`。需要构建时优先使用隔离临时目录（参考发布脚本）；仅在必须中断用户正在使用的服务且尚未获得授权时请求确认。
+- API 路由复用 `apiJson()` / `apiError()` / `parseJsonBody()` + `zod`；NDJSON 复用 `createNdjsonStream()` / `readNdjsonStream()`，保持 `stage/delta/result/error/done` 语义并传递取消信号。
+- 任务分批落盘时递增 `dataRevision` 并写 `dataChange`。
+- 缓存失效与重新请求分开：页面不消费的资源只失效、不重拉。
 
-## SHOULD：实现方式
+## SHOULD：前端
 
-- 列表 API 和 `getLibraryOverview()` 保持轻量，返回摘要；全文转写、素材正文、完整草稿、research、评论、弹幕和资产等重字段按 ID 懒加载。
-- 优先扩展现有存储、校验、任务、缓存和 fallback 机制；并行优化仅用于互不依赖的操作。
-- 本地 Next.js 开发服务默认使用 Turbopack；预热属于可测量的性能实现，不是不可变产品规则。修改时用冷启动 / 路由切换数据验证。
-
-## 业务规则（逐条标级）
-
-- **MUST**：视频热榜账号与视频保存在资料库独立的 `douyin-hotlist/accounts` 下，不得写入主账号库；刷新继续使用后台任务和 watchlist 锁。
-- **MUST**：账号库的 B站统计继续通过 `/api/videos/hydrate` 二次补全；修改视频列表或详情时不得绕过该链路。
-- **SHOULD**：批量转写先筛选待转写项再应用数量上限。
-- **MUST**：写作台多选风格卡时，每张卡生成一篇互不混合的独立草稿；单篇草稿只保存自身风格引用，续改沿用该稿风格。首稿、续改和手动编辑保持不可变版本链；`originalSourceInput` 保存写作台素材输入框原貌，历史恢复优先使用它，模型仍使用已解析的 `input` / `sourceDigest`。
-- **SHOULD**：多选风格卡生成采用有界并发；续改复用父稿已保存资料，不重复转写链接、抓支持文档或联网。
-- **MUST**：评论 / 弹幕输入包含支持的视频链接时先取得视频文稿；链接标识只用于采集追踪，不进入 Brief 或最终文案。真实平台样本缺失时显式失败。
-- **SHOULD**：评论 / 弹幕部分成功结果按现有有界机制自动补齐；毛利在线账号表普通读取优先返回最后成功缓存并后台刷新。
-
-## SHOULD：前端与 React
-
-- `DESIGN.md` 是视觉单一来源；复用 token、primitives、`16-workbench-system.css` 和既有工作台组件，不创建第二套按钮、卡片、状态或动效系统。
-- 根级全局 CSS 只承载 token、基础样式、通用 primitives 和 shell；路由专属布局与响应式样式尽量与页面 / layout 共置，避免所有页面加载全部业务 CSS。
-- 使用 `lucide-react`；纯图标按钮提供 `aria-label`，表单有可见 label，异步状态有 `aria-live` / `aria-busy`，键盘焦点清晰，动效尊重 `prefers-reduced-motion`。
-- 弹窗统一处理 `role="dialog"`、`aria-modal`、焦点进入 / 恢复、Tab 约束、Escape 和背景滚动。
-- 模块间导航、刷新和关闭页面均不弹浏览器离页确认；不得通过 beforeunload 的 preventDefault / returnValue 恢复此类提示，输入暂存监听不得阻止离页。生成结果自动保存与输入暂存沿用现有机制，手动保存区域不得宣称自动保存；危险操作与主操作区分，并提供确认或可恢复机制。
-- 长列表使用分页、增量渲染、虚拟化或 `content-visibility`。筛选、排序、分页和当前选择等可恢复状态优先写入 URL。
-- 大页面按页面编排、controller hook、业务组件和纯函数拆分；不为拆行数或套用模式引入无语义组件、第二套组件系统或状态库。仅在真实共享状态需求下增加 Context / Provider。
-- React / Next.js 工作按需参考 `vercel-react-best-practices`；重构组件接口时参考 `vercel-composition-patterns`，只读相关规则，核对已安装版本与服务端 / 客户端边界。
-- 优化以测得的瓶颈为依据，请求去重和缓存沿用现有客户端机制。
+- `DESIGN.md` 是视觉与交互的唯一来源；复用 token、primitives、`16-workbench-system.css` 和现有组件，不建第二套组件 / 状态 / 动效系统。路由专属样式与页面共置。
+- 导航、刷新、关闭页面一律不弹离页确认（不用 beforeunload）；手动保存区域不得宣称自动保存。
+- 列表 API 和 `getLibraryOverview()` 只返回摘要，重字段按 ID 懒加载；长列表分页或虚拟化，可恢复的筛选 / 排序 / 选择状态写入 URL。
+- 按公网慢链路（每请求 0.5–2 秒）设计，规则见 `DESIGN.md`「慢网络下的体验」。窗口聚焦等高频事件不触发重型检查或整页重拉；性能优化以测量为依据。
 
 ## 验证
 
-按改动风险选择下表适用项，不要求逐项执行。必要检查通过且请求已完成即停止；只有新改动、失败或未解决的具体风险才扩大或重跑检查，不因技能交付流程重复已通过且仍覆盖当前改动的检查。
+按风险选适用项，通过即停，不重复跑已覆盖的检查。
 
-| 改动范围 | 适用检查 |
+| 改动 | 检查 |
 | --- | --- |
-| 纯文档 | `git diff --check`，人工审查 diff。 |
-| 代码逻辑 | 目标测试、受影响文件的 lint；底层或跨域改动补 `npm test`，全局规则或广泛改动运行 `npm run lint`。 |
-| TypeScript 类型、接口或模块依赖 | `npm run typecheck`。 |
-| 存储结构、删除或引用联动 | `npm run check:library`；未经授权不运行 repair。 |
-| 路由结构、SSR、middleware、运行时配置、跨页面行为或打包 | 本地 Next.js 运行 `npm run build`，遵守构建隔离规则。 |
-| 路由内部局部逻辑 | 目标测试及适用的类型检查；有构建风险时再补构建。 |
-| 前端交互 | 最小浏览器 smoke test。 |
+| 纯文档 | `git diff --check` + 审 diff；规则类文档核对其他文档没有矛盾 |
+| 代码逻辑 | 目标测试 + 相关 lint；跨域或底层改动补 `npm test` |
+| 类型 / 接口 / 依赖 | `npm run typecheck` |
+| 存储结构 / 删除 / 引用 | `npm run check:library`（不跑 repair） |
+| 路由结构、SSR、middleware、运行时配置、打包 | 隔离 `npm run build` |
+| 前端交互 / 视觉 | 最小浏览器 smoke test；视觉改动加桌面与 390×844 截图 |
+| 网关、缓存头、请求数量 | 经公网链接实测 |
 
-会写入业务数据的自动化测试和浏览器验证必须使用隔离资料库，并确认被测服务实际采用该配置。测试使用临时 `STYLE_LIBRARY_DIR`；本地工作台 smoke test 可复用 `npm run dev:sandbox`（启动参数见 `scripts/dev-sandbox.mjs`）。
-
-修复本次改动引入的问题并复验受影响范围；无关既有失败如实报告，不扩展修复范围。交付时说明改动、实际执行的检查及未验证项，不以推测或 Agent 自报代替验证证据。最终审查 diff，确认没有误改用户资产或无关工作树内容，也没有隐藏真实失败。
-
-只有稳定、跨模块且难以从源码推断的高风险规则才更新本文件。具体配置、命令、布局和实现细节以 `README.md`、`PRODUCT.md`、`DESIGN.md`、`package.json`、相关源码与测试为准。
+写业务数据的测试和浏览器验证必须用隔离资料库（临时 `STYLE_LIBRARY_DIR` 或 `npm run dev:sandbox`），并确认服务实际用了该配置。交付时说明改动、实际跑过的检查和未验证项；无关的既有失败如实报告，不扩大修复范围。

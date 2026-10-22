@@ -66,6 +66,13 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   user-select: none;
 }
 
+.douyin-hotlist-refresh-log-time {
+  color: var(--muted);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
 .douyin-hotlist-refresh-log-trigger::-webkit-details-marker {
   display: none;
 }
@@ -888,42 +895,17 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   min-width: 0;
 }
 
+/* 互动指标是并列数据，不是状态：统一中性底色，只让热度作为主指标突出（DESIGN.md §2）。 */
 .douyin-hotlist-metric {
   --metric-color: var(--accent);
-  --metric-soft: var(--accent-tint);
   display: grid;
   gap: 1px;
   min-height: 36px;
   align-content: center;
-  padding: 4px 6px;
-  border: 1px solid color-mix(in oklch, var(--metric-color) 28%, var(--line));
+  padding: 4px 8px;
+  border: 1px solid var(--line-subtle);
   border-radius: 10px;
-  background: color-mix(in oklch, var(--metric-soft) 44%, var(--panel));
-}
-
-.douyin-hotlist-metric.tone-likes {
-  --metric-color: var(--rose);
-  --metric-soft: var(--rose-soft);
-}
-
-.douyin-hotlist-metric.tone-views {
-  --metric-color: var(--green);
-  --metric-soft: var(--green-soft);
-}
-
-.douyin-hotlist-metric.tone-comments {
-  --metric-color: var(--blue);
-  --metric-soft: var(--blue-soft);
-}
-
-.douyin-hotlist-metric.tone-favorites {
-  --metric-color: var(--amber);
-  --metric-soft: var(--amber-soft);
-}
-
-.douyin-hotlist-metric.tone-shares {
-  --metric-color: var(--green);
-  --metric-soft: var(--green-soft);
+  background: var(--panel-soft);
 }
 
 .douyin-hotlist-metric small,
@@ -940,7 +922,7 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 
 .douyin-hotlist-metric strong {
   overflow: hidden;
-  color: color-mix(in oklch, var(--metric-color) 72%, var(--text-strong));
+  color: var(--text-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-caption);
@@ -1458,13 +1440,27 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   .douyin-hotlist-page .page-header-meta {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* 三个次级操作并排一行，主操作独占下一行，页头少占一行（DESIGN.md §4.2）。 */
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2);
     justify-content: stretch;
     flex-wrap: wrap;
   }
 
+  .douyin-hotlist-page .page-title-copy p {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .douyin-hotlist-refresh-log-time {
+    display: none;
+  }
+
   .douyin-hotlist-page .page-header-meta .btn {
     min-width: 0;
+    min-height: 44px;
+    padding-inline: var(--space-2);
     justify-content: center;
   }
 
@@ -1607,11 +1603,18 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
   }
 
   .douyin-hotlist-heat {
-    min-height: 48px;
+    min-height: 40px;
   }
 
+  /* 四个互动指标保持一行，卡片高度减少约 40%，一屏可见更多条目。 */
   .douyin-hotlist-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .douyin-hotlist-metric {
+    min-height: 34px;
+    padding: 3px 6px;
   }
 
   .douyin-hotlist-account-drawer {
@@ -1679,7 +1682,8 @@ html[data-skin="shinigami"] .douyin-hotlist-page .page-header {
 .hotlist-group-picker-empty p { margin: 0; font-size: 12px; }
 .hotlist-group-empty { text-align: center; padding: 48px 24px; }
 @media (max-width: 760px) {
-  .hotlist-group-bar { align-items: flex-start; flex-direction: column; padding: 12px; gap: 8px; }
+  .douyin-hotlist-page .page-title-copy h1 { font-size: 24px; }
+  .hotlist-group-bar { align-items: center; flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
   .hotlist-group-editor-header { padding: 16px; }
   .hotlist-group-editor-body { padding: 12px 16px; }
   .hotlist-group-editor-footer { padding: 12px 16px; }

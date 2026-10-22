@@ -19,13 +19,18 @@ export function RefreshLogMenu({
   logs: RefreshLogEntry[];
 }) {
   const latestLog = logs[0];
+  const latestTime = latestLog ? formatLogTime(latestLog.at) : "";
 
   return (
     <div className="douyin-hotlist-refresh-log">
       <DialogTrigger>
-        <Button aria-label="查看刷新日志" className="btn douyin-hotlist-refresh-log-trigger">
+        <Button
+          aria-label={latestTime ? `查看刷新日志，上次 ${latestTime}` : "查看刷新日志"}
+          className="btn douyin-hotlist-refresh-log-trigger"
+        >
           <Clock3 aria-hidden="true" size={13} />
-          <span>{latestLog ? formatLogTime(latestLog.at) : "刷新日志"}</span>
+          <span>刷新日志</span>
+          {latestTime ? <small className="douyin-hotlist-refresh-log-time">{latestTime}</small> : null}
         </Button>
         <Popover className="workbench-select-popover douyin-hotlist-log-popover" placement="bottom end" offset={8}>
           <Dialog className="douyin-hotlist-refresh-log-panel" aria-label="刷新日志">

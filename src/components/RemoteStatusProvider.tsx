@@ -61,17 +61,19 @@ export function RemoteStatusProvider({
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, STATUS_REFRESH_INTERVAL_MS);
+    // 网络恢复时才强制体检；切回窗口只读服务端 60 秒缓存，避免每次聚焦都启动 opencli / ffmpeg 检查。
     const onAvailable = () => void refresh({ fresh: true });
+    const onFocus = () => void refresh();
     const onVisibility = () => {
       if (document.visibilityState === "visible") void refresh();
     };
     window.addEventListener("online", onAvailable);
-    window.addEventListener("focus", onAvailable);
+    window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearInterval(interval);
       window.removeEventListener("online", onAvailable);
-      window.removeEventListener("focus", onAvailable);
+      window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [refresh]);
